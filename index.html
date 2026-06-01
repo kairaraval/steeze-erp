@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13d · Collapsible sidebar groups (remembered per browser)';
+const BUILD = 'Live build 13e · @mention realtime ping + toast + mute toggle';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -133,6 +133,25 @@ const stageMeta = (k) => STAGES.find(s => s.key === k) || STAGES[0];
 const metaFrom = (list, k) => list.find(s => s.key === k) || list[0];
 const peso = (n) => '₱' + (Number(n) || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 });
 const firstName = (p) => ((p && p.name) || '').split(' ')[0] || (p && p.email) || 'user';
+
+// Gentle two-tone ping for @mention notifications. Web Audio (no asset needed).
+function playPing(){
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+    const ctx = new AC(); const now = ctx.currentTime;
+    [880, 1320].forEach((freq,i)=>{
+      const t = now + i*0.13;
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type='sine'; osc.frequency.value=freq;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.18, t+0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0008, t+0.35);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t); osc.stop(t+0.4);
+    });
+    setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 900);
+  } catch(_) {}
+}
 function fmtTime(iso){ if(!iso) return ''; return new Date(iso).toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
 function fmtDate(d){ if(!d) return '—'; return new Date(d+'T00:00:00').toLocaleDateString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', year:'numeric' }); }
 
@@ -1988,6 +2007,13 @@ function App(){
   });
   function toggleGroup(g){ setCollapsedGroups(prev=>{ const n=new Set(prev); if(n.has(g)) n.delete(g); else n.add(g); try{ localStorage.setItem('steeze.sidebar.collapsed', JSON.stringify([...n])); }catch(_){} return n; }); }
 
+  // Mention notifications: mute toggle + toast + ref to keep callback fresh.
+  const [muted,setMuted]=useState(()=>{ try{ return localStorage.getItem('steeze.notifications.muted')==='1'; }catch(_){ return false; } });
+  function toggleMute(){ setMuted(m=>{ const n=!m; try{ localStorage.setItem('steeze.notifications.muted', n?'1':'0'); }catch(_){} return n; }); }
+  const mutedRef=useRef(muted); useEffect(()=>{ mutedRef.current=muted; },[muted]);
+  const [toast,setToast]=useState(null); // { title, body }
+  useEffect(()=>{ if(!toast) return; const t=setTimeout(()=>setToast(null),5000); return ()=>clearTimeout(t); },[toast]);
+
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session)); const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
 
   async function loadAll(){
@@ -2033,6 +2059,26 @@ function App(){
   useEffect(()=>{ setSelectedClient(null); },[view]);
   // Assistants don't have a Dashboard tab — redirect them to Pipeline.
   useEffect(()=>{ if(profile && profile.role==='assistant' && view==='dashboard') setView('pipeline'); },[profile, view]);
+
+  // Realtime: ping + toast the moment someone @mentions you anywhere.
+  useEffect(()=>{
+    if(!profile || !profile.id) return;
+    const me = profile.id;
+    function maybeNotify(row){
+      if(!row || !Array.isArray(row.mentions)) return;
+      if(!row.mentions.includes(me)) return;
+      if(row.actor_id === me) return;             // don't ping yourself
+      if(!mutedRef.current) playPing();
+      const snippet = (row.text||'').replace(/@\[[^\]]+\]\([^)]+\)/g,'@').slice(0,140);
+      setToast({ title:'New @mention', body: snippet || 'You were tagged in a comment.' });
+      loadAll();
+    }
+    const ch = sb.channel('mentions-'+me)
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'lead_activity' },     (p)=>maybeNotify(p.new))
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'dept_job_activity' }, (p)=>maybeNotify(p.new))
+      .subscribe();
+    return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
+  },[profile && profile.id]);
 
   async function sendLeadToPR(lead){
     const payload=buildPRFromLead(profile, lead);
@@ -2113,7 +2159,10 @@ function App(){
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
           <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'}</div></div></div>
-          <button onClick={()=>sb.auth.signOut()} className="w-full text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Sign out</button>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>sb.auth.signOut()} className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Sign out</button>
+            <button onClick={toggleMute} title={muted?'Notifications muted — click to unmute':'Notifications on — click to mute'} className={`text-xs px-2 py-1.5 rounded-lg ${muted?'bg-slate-800 text-slate-500 hover:text-slate-300':'bg-slate-800 text-emerald-400 hover:text-emerald-300'}`}>{muted?'🔕':'🔔'}</button>
+          </div>
         </div>
       </aside>
 
@@ -2143,6 +2192,16 @@ function App(){
         )}
       </main>
 
+      {/* Mention toast */}
+      {toast && (
+        <div className="no-print fixed top-4 right-4 z-50 max-w-sm bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700 overflow-hidden animate-pulse-once">
+          <button onClick={()=>{ setToast(null); setView('inbox'); }} className="block w-full text-left p-4 hover:bg-slate-800">
+            <div className="text-[10px] uppercase tracking-wider text-emerald-400 font-bold mb-1">🔔 {toast.title}</div>
+            <div className="text-sm leading-snug">{toast.body}</div>
+            <div className="text-[10px] text-slate-400 mt-1">Click to open Inbox</div>
+          </button>
+        </div>
+      )}
       {showNew && <LeadForm profile={profile} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
       {liveDetail && !editLead && !activityLead && !sendGraphicLead && (
         <LeadDetail profile={profile} lead={liveDetail} clients={clients} activityCount={activityCounts[liveDetail.id]}
