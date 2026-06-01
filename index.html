@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13h · Assistants restricted to Sales + Production only';
+const BUILD = 'Live build 13i · Inbox: jump to task; Activity: Open lead button';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -262,7 +262,7 @@ function LoginScreen(){
 }
 
 /* ----------------------- Generic activity thread (leads + dept jobs) ----------------------- */
-function Thread({ profile, profiles, table, match, scope, titleText, onClose, onBack, afterChange }){
+function Thread({ profile, profiles, table, match, scope, titleText, onClose, onBack, afterChange, onOpenSource, openSourceLabel }){
   const [rows,setRows]=useState(null); const [text,setText]=useState(''); const [attachment,setAttachment]=useState(null);
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   async function load(){
@@ -285,7 +285,13 @@ function Thread({ profile, profiles, table, match, scope, titleText, onClose, on
   return (
     <Modal title="Activity" onClose={onClose}>
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-2"><div className="text-sm font-semibold truncate">{titleText}</div>{onBack && <button onClick={onBack} className="text-xs text-indigo-600 hover:underline">← Back</button>}</div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold truncate">{titleText}</div>
+          <div className="flex items-center gap-2 shrink-0">
+            {onOpenSource && <button onClick={onOpenSource} className="text-xs px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">→ {openSourceLabel||'Open'}</button>}
+            {onBack && <button onClick={onBack} className="text-xs text-indigo-600 hover:underline">← Back</button>}
+          </div>
+        </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <textarea className="input min-h-[70px]" value={text} onChange={e=>setText(e.target.value)} placeholder="Leave a note. Tag a teammate with @firstname." />
           {attachment && <div className="mt-2 flex items-center gap-2 p-2 bg-white border rounded text-sm"><span>{attachment.type==='image'?'🖼️':attachment.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 truncate">{attachment.name}</span><button onClick={()=>setAttachment(null)} className="text-rose-400">✕</button></div>}
@@ -748,14 +754,16 @@ function SamplingJobForm({ existing, leads, onClose, onSaved }){
 }
 
 /* ----------------------- Inbox ----------------------- */
-function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, productionJobs, mentions, onOpen }){
+function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, mentions, onOpen, onGoToTask }){
   const [filter,setFilter]=useState('all');
   const unread=mentions.filter(m=>!(m.read_by||[]).includes(profile.id));
   const visible=filter==='unread'?unread:mentions;
   function ctx(m){
-    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); return { label:l?.title||'a lead', tag:'Lead' }; }
-    const list=m.job_type==='graphic'?graphicJobs:m.job_type==='printing'?printingJobs:productionJobs;
-    const j=list.find(x=>x.id===m.job_id); return { label:j?`${j.item} · ${j.client_name}`:'a job', tag:m.job_type==='graphic'?'Graphic Design':m.job_type==='printing'?'Printing':'Production' };
+    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); return { label:l?.title||'a lead', tag:'Lead', cta:'Open lead' }; }
+    const list=m.job_type==='graphic'?graphicJobs:m.job_type==='printing'?printingJobs:m.job_type==='sampling'?sampleJobs:productionJobs;
+    const j=list.find(x=>x.id===m.job_id);
+    const tag=m.job_type==='graphic'?'Graphic Design':m.job_type==='printing'?'Printing':m.job_type==='sampling'?'Sampling':'Production';
+    return { label:j?`${j.item} · ${j.client_name}`:'a job', tag, cta:'Open job' };
   }
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -765,12 +773,18 @@ function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, production
       <div className="space-y-2">
         {visible.length===0 && <div className="text-center py-12 border rounded-xl border-dashed bg-white text-slate-400"><div className="text-3xl mb-2">📭</div><div className="text-sm">Nothing here. Mentions with @{firstName(profile)} show up here.</div></div>}
         {visible.map(m=>{ const sender=profiles.find(p=>p.id===m.actor_id); const c=ctx(m); const isUnread=!(m.read_by||[]).includes(profile.id); return (
-          <button key={m.id+m.source} onClick={()=>onOpen(m)} className={`w-full text-left bg-white border rounded-xl p-4 hover:shadow-md flex items-start gap-3 ${isUnread?'border-l-4 border-l-indigo-500 bg-indigo-50/30':''}`}>
+          <div key={m.id+m.source} className={`bg-white border rounded-xl p-4 hover:shadow-md flex items-start gap-3 ${isUnread?'border-l-4 border-l-indigo-500 bg-indigo-50/30':''}`}>
             <Avatar profile={sender} />
-            <div className="flex-1 min-w-0"><div className="flex items-baseline gap-2 flex-wrap"><span className="font-semibold text-sm">{sender?.name}</span><span className="text-xs text-slate-500">mentioned you</span>{isUnread && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold">new</span>}<span className="text-xs text-slate-400 ml-auto">{fmtTime(m.created_at)}</span></div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline gap-2 flex-wrap"><span className="font-semibold text-sm">{sender?.name}</span><span className="text-xs text-slate-500">mentioned you</span>{isUnread && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold">new</span>}<span className="text-xs text-slate-400 ml-auto">{fmtTime(m.created_at)}</span></div>
               <div className="text-xs text-slate-500 mt-0.5"><span className="inline-block mr-1.5 text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">{c.tag}</span>on <strong className="text-slate-700">{c.label}</strong></div>
-              <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">{renderCommentText(m.text, profiles)}</div></div>
-          </button>
+              <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">{renderCommentText(m.text, profiles)}</div>
+              <div className="mt-3 flex items-center gap-2">
+                <button onClick={()=>onGoToTask(m)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">→ {c.cta}</button>
+                <button onClick={()=>onOpen(m)} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 font-medium hover:bg-slate-50">💬 View thread</button>
+              </div>
+            </div>
+          </div>
         ); })}
       </div>
     </div>
@@ -2385,9 +2399,19 @@ function App(){
   const prodActive=prodJobs.filter(j=>j.status!=='delivered').length;
 
   function openDeptActivity(info){ setDeptActivity(info); }
+  // From the Inbox: small "💬 Comments" button → opens the activity thread.
   function openInboxItem(m){
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
-    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:prodJobs;
+    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
+    const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
+  }
+  // From the Inbox: main card click → opens the actual lead detail / board.
+  function openInboxTask(m){
+    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setDetailLead(l); return; }
+    const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' };
+    const v=map[m.source]||'prod'; setView(v);
+    // Also open the job's activity so they can see the context they were mentioned in.
+    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
     const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
 
@@ -2449,7 +2473,7 @@ function App(){
       <main className="no-print ml-60 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} leads={leads} clients={clients} prodJobs={prodJobs} />}
-        {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} mentions={mentions} onOpen={openInboxItem} />}
+        {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
@@ -2493,8 +2517,8 @@ function App(){
       {techpackLead && <TechpackEditor profile={profile} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
       {editLead && <LeadForm profile={profile} clients={clients} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
       {sendGraphicLead && <SendToGraphicModal profile={profile} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
-      {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
-      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
+      {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
+      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
 
       <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
     </div>
