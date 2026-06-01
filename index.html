@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13f · Inventory CSV import (auto-create dept + supplier)';
+const BUILD = 'Live build 13g · Supplier CSV import (skip duplicates by company name)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1705,7 +1705,7 @@ function ItemForm({ existing, suppliers, departments, onClose, onSaved }){
 }
 
 function SuppliersView({ suppliers, reload }){
-  const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
+  const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [importing,setImporting]=useState(false);
   const rows=(suppliers||[]).filter(s=>!search||`${s.company} ${s.contact} ${s.email}`.toLowerCase().includes(search.toLowerCase()));
   async function del(id){ if(!confirm('Delete this supplier?')) return; const {error}=await sb.from('suppliers').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   return (
@@ -1715,6 +1715,7 @@ function SuppliersView({ suppliers, reload }){
           <div><h1 className="text-2xl font-bold">⚒ Suppliers</h1><p className="text-slate-500 text-sm">{suppliers.length} supplier{suppliers.length===1?'':'s'}</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
+            <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New supplier</button>
           </div>
         </div>
@@ -1724,7 +1725,128 @@ function SuppliersView({ suppliers, reload }){
         <tbody>{rows.map(s=>(<tr key={s.id} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-medium">{s.company}</td><td className="px-3 py-2">{s.contact||'—'}</td><td className="px-3 py-2 text-xs text-indigo-600">{s.email||'—'}</td><td className="px-3 py-2 text-xs">{s.phone||'—'}</td><td className="px-3 py-2 text-xs">{s.payment_terms||'—'}</td><td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(s)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(s.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td></tr>))}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No suppliers yet. Click "+ New supplier" to add one.</td></tr>}</tbody>
       </table></div>
       {(creating||editing) && <SupplierForm existing={editing} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {importing && <SupplierImportModal suppliers={suppliers} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
+  );
+}
+
+function SupplierImportModal({ suppliers, onClose, onDone }){
+  const TEMPLATE = 'company,contact,email,phone,address,payment_terms,notes\nTexstyle Trading,Anna Cruz,anna@texstyle.com,+63 917 123 4567,Quezon City,30 Days,Main fabric supplier\nYKK Manila,Boy Reyes,sales@ykk.com.ph,+63 2 8888 1234,Makati,COD,';
+  const [csv,setCsv]=useState(''); const [parsed,setParsed]=useState(null);
+  const [step,setStep]=useState('paste'); // paste | preview | importing | done
+  const [results,setResults]=useState(null); const [busy,setBusy]=useState(false);
+  const [progress,setProgress]=useState({ done:0, total:0 });
+  const [skipDupes,setSkipDupes]=useState(true);
+
+  function onFile(e){ const f=e.target.files && e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>setCsv(String(r.result||'')); r.readAsText(f); }
+  function copyTemplate(){ if(navigator.clipboard) navigator.clipboard.writeText(TEMPLATE).then(()=>{},()=>{}); else setCsv(TEMPLATE); }
+  function getVal(row, headers, col){ const idx=headers.indexOf(col); return idx>=0 ? String(row[idx]||'').trim() : ''; }
+  function doParse(){
+    const rows=parseCSV(csv.trim());
+    if(rows.length<2){ alert('Need at least a header row + one data row.'); return; }
+    const headers=rows[0].map(h=>String(h||'').trim().toLowerCase());
+    if(!headers.includes('company')){ alert('CSV must have a "company" column.'); return; }
+    setParsed({ headers, dataRows:rows.slice(1) });
+    setStep('preview');
+  }
+  async function doImport(){
+    setBusy(true); setStep('importing');
+    const { headers, dataRows } = parsed;
+    const existing=new Set((suppliers||[]).map(s=>String(s.company||'').toLowerCase()));
+    let inserted=0, skipped=0; const errors=[];
+    const payloads=[];
+    for(const r of dataRows){
+      const company=getVal(r,headers,'company'); if(!company) continue;
+      if(skipDupes && existing.has(company.toLowerCase())){ skipped++; continue; }
+      existing.add(company.toLowerCase()); // also dedupe within the file
+      payloads.push({
+        company,
+        contact: getVal(r,headers,'contact'),
+        email:   getVal(r,headers,'email'),
+        phone:   getVal(r,headers,'phone'),
+        address: getVal(r,headers,'address'),
+        payment_terms: getVal(r,headers,'payment_terms') || getVal(r,headers,'payment terms'),
+        notes:   getVal(r,headers,'notes'),
+      });
+    }
+    setProgress({ done:0, total:payloads.length });
+    const chunkSize=100;
+    for(let i=0;i<payloads.length;i+=chunkSize){
+      const chunk=payloads.slice(i,i+chunkSize);
+      const { error }=await sb.from('suppliers').insert(chunk);
+      if(error){ errors.push(`Batch ${Math.floor(i/chunkSize)+1}: ${error.message}`); }
+      else inserted+=chunk.length;
+      setProgress({ done:Math.min(i+chunkSize, payloads.length), total:payloads.length });
+    }
+    setResults({ inserted, skipped, total:dataRows.length, errors });
+    setStep('done'); setBusy(false);
+  }
+
+  return (
+    <Modal title="Import Suppliers from CSV" onClose={onClose} wide>
+      {step==='paste' && (
+        <div className="space-y-3">
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-700">
+            <div className="font-semibold mb-1">Required column:</div>
+            <div className="mb-2"><code className="bg-white px-1 py-0.5 rounded border">company</code></div>
+            <div className="font-semibold mb-1">Optional columns (any order):</div>
+            <div className="leading-relaxed">
+              <code className="bg-white px-1 py-0.5 rounded border">contact</code>, <code className="bg-white px-1 py-0.5 rounded border">email</code>, <code className="bg-white px-1 py-0.5 rounded border">phone</code>, <code className="bg-white px-1 py-0.5 rounded border">address</code>, <code className="bg-white px-1 py-0.5 rounded border">payment_terms</code>, <code className="bg-white px-1 py-0.5 rounded border">notes</code>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="px-3 py-2 rounded-lg bg-white border text-sm font-medium hover:bg-slate-50 cursor-pointer">📁 Upload .csv file<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onFile} /></label>
+            <button onClick={()=>setCsv(TEMPLATE)} className="px-3 py-2 rounded-lg bg-white border text-sm font-medium hover:bg-slate-50">Load template</button>
+            <button onClick={copyTemplate} className="px-3 py-2 rounded-lg bg-white border text-sm font-medium hover:bg-slate-50">Copy template</button>
+            <label className="ml-auto inline-flex items-center gap-1.5 text-xs text-slate-600 bg-white border rounded-lg px-3 py-2"><input type="checkbox" checked={skipDupes} onChange={e=>setSkipDupes(e.target.checked)} /> Skip duplicates (by company name)</label>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wide text-slate-500">Or paste CSV here</label>
+            <textarea className="input font-mono text-xs" rows="10" value={csv} onChange={e=>setCsv(e.target.value)} placeholder="company,contact,email,…" />
+          </div>
+          <div className="flex justify-end gap-2"><button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-sm">Cancel</button><button onClick={doParse} disabled={!csv.trim()} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">Parse →</button></div>
+        </div>
+      )}
+
+      {step==='preview' && parsed && (
+        <div className="space-y-3">
+          <div className="text-sm text-slate-700">Found <b>{parsed.dataRows.length}</b> rows. Detected columns: <span className="font-mono text-xs">{parsed.headers.join(', ')}</span></div>
+          <div className="border rounded-lg overflow-hidden max-h-96 overflow-y-auto"><table className="w-full text-xs">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr>{parsed.headers.map(h=><th key={h} className="text-left px-2 py-1.5">{h}</th>)}</tr></thead>
+            <tbody>{parsed.dataRows.slice(0,50).map((r,i)=>(
+              <tr key={i} className="border-t">{parsed.headers.map((h,j)=>(<td key={j} className="px-2 py-1 text-slate-700 truncate max-w-[10rem]">{r[j]||''}</td>))}</tr>
+            ))}</tbody>
+          </table></div>
+          {parsed.dataRows.length>50 && <div className="text-xs text-slate-500">Showing first 50 of {parsed.dataRows.length} rows. All will be imported.</div>}
+          <div className="flex justify-between"><button onClick={()=>setStep('paste')} className="px-3 py-2 rounded-lg bg-white border text-sm">← Back</button><button onClick={doImport} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Importing…':`Import ${parsed.dataRows.length} suppliers`}</button></div>
+        </div>
+      )}
+
+      {step==='importing' && (
+        <div className="py-8 text-center space-y-3">
+          <div className="text-slate-700 font-semibold">Importing…</div>
+          <div className="text-xs text-slate-500">{progress.done} of {progress.total} processed</div>
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="bg-indigo-600 h-2 rounded-full transition-all" style={{ width:`${progress.total?Math.round(progress.done/progress.total*100):0}%` }}></div></div>
+        </div>
+      )}
+
+      {step==='done' && results && (
+        <div className="space-y-3">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+            <div className="font-semibold mb-1">Import complete</div>
+            <div>✓ Inserted <b>{results.inserted}</b> new supplier{results.inserted===1?'':'s'}</div>
+            {results.skipped>0 && <div className="text-amber-700">↷ Skipped <b>{results.skipped}</b> duplicate{results.skipped===1?'':'s'} (already exist)</div>}
+          </div>
+          {results.errors.length>0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-xs text-rose-800 max-h-40 overflow-y-auto">
+              <div className="font-semibold mb-1">{results.errors.length} warning{results.errors.length===1?'':'s'}:</div>
+              <ul className="list-disc pl-4 space-y-0.5">{results.errors.map((e,i)=><li key={i}>{e}</li>)}</ul>
+            </div>
+          )}
+          <div className="flex justify-end gap-2"><button onClick={onDone} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Done</button></div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
