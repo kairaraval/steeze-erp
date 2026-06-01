@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13g · Supplier CSV import (skip duplicates by company name)';
+const BUILD = 'Live build 13h · Assistants restricted to Sales + Production only';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2325,8 +2325,13 @@ function App(){
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
   useEffect(()=>{ setSelectedClient(null); },[view]);
-  // Assistants don't have a Dashboard tab — redirect them to Pipeline.
-  useEffect(()=>{ if(profile && profile.role==='assistant' && view==='dashboard') setView('pipeline'); },[profile, view]);
+  // Assistants only have Sales + Production tabs. If they land anywhere else
+  // (Dashboard, Team, Operations, Purchasing, Other) bounce to Sales Pipeline.
+  useEffect(()=>{
+    if(!profile || profile.role!=='assistant') return;
+    const allowed = new Set(['inbox','pipeline','techpacks','clients','profile','prod','sampling','graphic','printing']);
+    if(!allowed.has(view)) setView('pipeline');
+  },[profile, view]);
 
   // Realtime: ping + toast the moment someone @mentions you anywhere.
   useEffect(()=>{
@@ -2387,8 +2392,14 @@ function App(){
   }
 
   const isAssistant=profile.role==='assistant';
-  const NAV=[
-    { items: isAssistant ? [ ['inbox','Inbox','📥'] ] : [ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
+  const NAV = isAssistant ? [
+    // Sales Assistants only see Sales + Production. No Team Overview, no
+    // Operations / Purchasing / Other modules.
+    { items: [ ['inbox','Inbox','📥'] ] },
+    { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'] ] },
+    { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+  ] : [
+    { items:[ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
     { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
     { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
     { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
