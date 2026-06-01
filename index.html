@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 12a · Inline inventory add returns new item correctly';
+const BUILD = 'Live build 13b · Admin team management: invite, pre-assign roles, change roles inline';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -742,6 +742,7 @@ function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, production
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
   const isAdmin=profile.role==='admin';
+  const isAssistant=profile.role==='assistant';
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   const visible=leads.filter(l=>(mineOnly?l.manager_id===profile.id:true) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
   async function move(l,st){ const patch={ stage:st }; if(st==='won'&&!l.won_at) patch.won_at=new Date().toISOString().slice(0,10); const {error}=await sb.from('leads').update(patch).eq('id',l.id); if(error){ alert(error.message); return; } await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(st).label}"` }); reload(); }
@@ -764,7 +765,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
             <span className={`text-sm font-bold ${st.key==='qualified'?'text-blue-700':st.key==='proposal'?'text-indigo-700':st.key==='negotiation'?'text-amber-700':st.key==='sampling'?'text-purple-700':st.key==='won'?'text-emerald-700':st.key==='lost'?'text-rose-700':'text-slate-700'}`}>{st.label}</span>
             <span className="text-xs text-slate-500">{col.length} · {peso(colTotal)}</span>
           </div>
-          <div className="bg-slate-100/70 rounded-b-xl border border-t-0 p-2 space-y-2 min-h-[140px]">{col.map(l=>{ const mgr=profiles.find(p=>p.id===l.manager_id); const canEdit=isAdmin||l.manager_id===profile.id; return (
+          <div className="bg-slate-100/70 rounded-b-xl border border-t-0 p-2 space-y-2 min-h-[140px]">{col.map(l=>{ const mgr=profiles.find(p=>p.id===l.manager_id); const canEdit=isAdmin||isAssistant||l.manager_id===profile.id; return (
             <div key={l.id} className="bg-white border rounded-xl p-3 shadow-sm">
               <div className="flex items-start justify-between gap-2">
                 <button onClick={()=>onOpenLead(l)} className="text-left min-w-0 flex-1"><div className="font-semibold text-sm leading-tight text-slate-900 truncate">{l.title}</div><div className="text-xs text-slate-500 truncate">{clientName(l.client_id)}</div></button>
@@ -775,7 +776,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                 {canEdit ? <select value={l.stage} onChange={e=>move(l,e.target.value)} className="text-xs border rounded-md px-2 py-1 flex-1 bg-white">{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
                   : <div className="text-xs flex-1 px-2 py-1 rounded-md bg-slate-50 text-slate-500">{stageMeta(l.stage).label}</div>}
                 <button onClick={()=>onOpenLead(l)} title="Attachments / details" className="text-slate-400 hover:text-indigo-600 text-xs px-1 relative">📎{(l.attachments||[]).length>0 && <span className="text-[9px] text-indigo-600 font-semibold">{l.attachments.length}</span>}</button>
-                {canEdit && <button onClick={()=>del(l)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs px-1">✕</button>}
+                {canEdit && !isAssistant && <button onClick={()=>del(l)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs px-1">✕</button>}
               </div>
               <button onClick={()=>onOpenLead(l)} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">{activityCounts[l.id]?`💬 ${activityCounts[l.id]} · `:''}Open lead</button>
               {onOpenTechpack && <button onClick={(e)=>{e.stopPropagation(); onOpenTechpack(l);}} className="w-full mt-1 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold">📋 {l.techpack ? 'Techpack' : 'Create techpack'}</button>}
@@ -950,7 +951,7 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   return (
     <div className="p-6">
-      <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':'Sales Manager'} · {profile.email}</p></div></div>
+      <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'} · {profile.email}</p></div></div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} leads</div></div>
         <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won (all-time)</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonVal)}</div><div className="text-xs text-slate-500">{won.length} deals</div></div>
@@ -984,16 +985,153 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 }
 
 /* ----------------------- Team Overview ----------------------- */
-function TeamOverview({ profiles, leads }){
+function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
+  const isAdmin = profile && profile.role==='admin';
   const rows=profiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>l.stage==='won'); const open=mine.filter(l=>!['won','lost'].includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
+
+  const [inviteEmail,setInviteEmail]=useState('');
+  const [inviteRole,setInviteRole]=useState('manager');
+  const [inviteNote,setInviteNote]=useState('');
+  const [inviting,setInviting]=useState(false);
+  const [msg,setMsg]=useState('');
+  const [copied,setCopied]=useState('');
+  const appUrl = typeof window!=='undefined' ? window.location.origin : '';
+
+  const roleLabel = (r) => r==='admin'?'Administrator' : r==='assistant'?'Sales Assistant' : 'Sales Manager';
+  const roleBadge = (r) => {
+    const cls = r==='admin'?'bg-indigo-100 text-indigo-700' : r==='assistant'?'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+    return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(r)}</span>;
+  };
+
+  async function sendInvite(e){
+    e.preventDefault();
+    if(!inviteEmail.trim()){ setMsg('Enter an email.'); return; }
+    setInviting(true); setMsg('');
+    const payload = { email: inviteEmail.trim().toLowerCase(), role: inviteRole, invited_by: profile.id, note: inviteNote.trim() };
+    const { error } = await sb.from('pending_invites').upsert(payload, { onConflict:'email' });
+    setInviting(false);
+    if(error){ setMsg(error.message); return; }
+    setInviteEmail(''); setInviteNote(''); setInviteRole('manager');
+    setMsg(`Invite ready for ${payload.email}. Share the link below — when they sign up with that email, they'll be a ${roleLabel(payload.role)} automatically.`);
+    reload && reload();
+  }
+
+  async function cancelInvite(email){
+    if(!confirm(`Cancel invite for ${email}?`)) return;
+    const { error } = await sb.from('pending_invites').delete().eq('email', email);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
+
+  async function changeRole(p, newRole){
+    if(p.id===profile.id && newRole!=='admin'){ if(!confirm("You're about to remove your own admin access. Continue?")) return; }
+    const { error } = await sb.from('profiles').update({ role:newRole }).eq('id', p.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
+
+  function copyTo(target, value){
+    if(!navigator.clipboard){ alert(value); return; }
+    navigator.clipboard.writeText(value).then(()=>{ setCopied(target); setTimeout(()=>setCopied(''),1500); });
+  }
+
+  const inviteMessage = (email) => `Hi — you're invited to Steeze ERP.\n\n1. Open ${appUrl}\n2. Click "Create one"\n3. Register with this email: ${email}\n\nYou'll be set up automatically and land in your dashboard. Any questions, ping me.`;
+
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold text-slate-900 mb-1">Team Overview</h1>
-      <p className="text-slate-500 text-sm mb-4">Every manager's numbers, side by side.</p>
-      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Manager</th><th className="text-right px-3 py-2">Total leads</th><th className="text-right px-3 py-2">Open value</th><th className="text-right px-3 py-2">Won deals</th><th className="text-right px-3 py-2">Won value</th></tr></thead>
-        <tbody>{rows.map(({p,total,openVal,wonVal,wonCount})=>(<tr key={p.id} className="border-t"><td className="px-3 py-2"><span className="inline-flex items-center gap-2"><Avatar profile={p} size="sm" /><span className="font-medium text-slate-800">{p.name}</span>{p.role==='admin'&&<span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">admin</span>}</span></td><td className="px-3 py-2 text-right">{total}</td><td className="px-3 py-2 text-right">{peso(openVal)}</td><td className="px-3 py-2 text-right">{wonCount}</td><td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(wonVal)}</td></tr>))}</tbody>
-      </table></div></div>
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900 mb-1">Team Overview</h1>
+        <p className="text-slate-500 text-sm">Every manager's numbers, side by side.{isAdmin && ' Invite teammates and assign roles below.'}</p>
+      </div>
+
+      {isAdmin && (
+        <div className="bg-white border rounded-xl p-4">
+          <div className="font-semibold text-slate-900 mb-1">Invite someone new</div>
+          <p className="text-xs text-slate-500 mb-3">Pre-assign their role here. When they self-register with this email, they'll automatically get that role.</p>
+          <form onSubmit={sendInvite} className="grid md:grid-cols-12 gap-2 items-end">
+            <div className="md:col-span-5"><label className="text-[10px] uppercase tracking-wide text-slate-500">Email</label><input className="input" type="email" placeholder="them@steeze.com" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} /></div>
+            <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Role</label>
+              <select className="input" value={inviteRole} onChange={e=>setInviteRole(e.target.value)}>
+                <option value="admin">Administrator</option>
+                <option value="manager">Sales Manager</option>
+                <option value="assistant">Sales Assistant</option>
+              </select>
+            </div>
+            <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
+            <div className="md:col-span-1"><button type="submit" disabled={inviting} className="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{inviting?'…':'Invite'}</button></div>
+          </form>
+          {msg && <div className="mt-3 text-xs text-slate-600 bg-slate-50 border rounded-lg p-2">{msg}</div>}
+
+          <div className="mt-4 grid md:grid-cols-2 gap-3 text-xs">
+            <div className="bg-slate-50 border rounded-lg p-3">
+              <div className="font-semibold text-slate-700 mb-1">Sign-up link</div>
+              <div className="flex items-center gap-2"><code className="flex-1 bg-white border rounded px-2 py-1 text-[11px] truncate">{appUrl}</code><button type="button" onClick={()=>copyTo('url',appUrl)} className="px-2 py-1 rounded bg-white border hover:bg-slate-100 text-[11px]">{copied==='url'?'Copied':'Copy'}</button></div>
+            </div>
+            <div className="bg-slate-50 border rounded-lg p-3">
+              <div className="font-semibold text-slate-700 mb-1">Invite message template</div>
+              <div className="flex items-center gap-2"><span className="flex-1 text-[11px] text-slate-500 truncate">Pre-filled with the URL + their email.</span><button type="button" onClick={()=>copyTo('msg',inviteMessage(inviteEmail||'their.email@steeze.com'))} className="px-2 py-1 rounded bg-white border hover:bg-slate-100 text-[11px]">{copied==='msg'?'Copied':'Copy message'}</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && pendingInvites && pendingInvites.length>0 && (
+        <div className="bg-white border rounded-xl p-4">
+          <div className="font-semibold text-slate-900 mb-2">Pending invites <span className="text-xs text-slate-500 font-normal">· {pendingInvites.length}</span></div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Email</th><th className="text-left py-1.5">Role on signup</th><th className="text-left py-1.5">Note</th><th className="text-left py-1.5">Invited</th><th className="text-right py-1.5">Actions</th></tr></thead>
+            <tbody>{pendingInvites.map(inv=>(
+              <tr key={inv.email} className="border-t">
+                <td className="py-1.5 text-slate-800 font-medium">{inv.email}</td>
+                <td className="py-1.5">{roleBadge(inv.role)}</td>
+                <td className="py-1.5 text-slate-500">{inv.note||'—'}</td>
+                <td className="py-1.5 text-xs text-slate-500">{inv.created_at?fmtDate(inv.created_at):''}</td>
+                <td className="py-1.5 text-right space-x-2">
+                  <button onClick={()=>copyTo('inv-'+inv.email, inviteMessage(inv.email))} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">{copied===('inv-'+inv.email)?'Copied':'Copy invite'}</button>
+                  <button onClick={()=>cancelInvite(inv.email)} className="text-xs px-2 py-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100">Cancel</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="px-4 py-3 border-b font-semibold text-slate-900">Team members</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+            <th className="text-left px-3 py-2">Name</th>
+            <th className="text-left px-3 py-2">Role</th>
+            <th className="text-right px-3 py-2">Total leads</th>
+            <th className="text-right px-3 py-2">Open value</th>
+            <th className="text-right px-3 py-2">Won deals</th>
+            <th className="text-right px-3 py-2">Won value</th>
+          </tr></thead>
+          <tbody>{rows.map(({p,total,openVal,wonVal,wonCount})=>(
+            <tr key={p.id} className="border-t">
+              <td className="px-3 py-2">
+                <span className="inline-flex items-center gap-2"><Avatar profile={p} size="sm" />
+                  <span className="font-medium text-slate-800">{p.name||p.email}</span>
+                </span>
+                <div className="text-[11px] text-slate-500">{p.email}</div>
+              </td>
+              <td className="px-3 py-2">
+                {isAdmin ? (
+                  <select value={p.role||'manager'} onChange={e=>changeRole(p,e.target.value)} className="text-xs border rounded-md px-2 py-1 bg-white">
+                    <option value="admin">Administrator</option>
+                    <option value="manager">Sales Manager</option>
+                    <option value="assistant">Sales Assistant</option>
+                  </select>
+                ) : roleBadge(p.role||'manager')}
+              </td>
+              <td className="px-3 py-2 text-right">{total}</td>
+              <td className="px-3 py-2 text-right">{peso(openVal)}</td>
+              <td className="px-3 py-2 text-right">{wonCount}</td>
+              <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(wonVal)}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      </div>
     </div>
   );
 }
@@ -1832,6 +1970,7 @@ function App(){
   const [styles,setStyles]=useState([]);
   const [items,setItems]=useState([]); const [suppliers,setSuppliers]=useState([]); const [departments,setDepartments]=useState([]);
   const [requests,setRequests]=useState([]); const [orders,setOrders]=useState([]);
+  const [pendingInvites,setPendingInvites]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('dashboard');
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
@@ -1847,7 +1986,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -1867,8 +2006,11 @@ function App(){
       sb.from('size_charts').select('*').order('name'),
       sb.from('garment_mockups').select('*').order('name'),
       sb.from('styles').select('*').order('created_at',{ascending:false}),
+      sb.from('pending_invites').select('*').order('created_at',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
+    // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
+    setPendingInvites(pi && pi.data ? pi.data : []);
     if(pf.data) setProfile(pf.data); setProfiles(pr.data||[]); setClients(cl.data||[]); setLeads(ld.data||[]);
     const leadMentions=(lm.data||[]).map(r=>({ ...r, source:'lead' }));
     const deptMentions=(dm.data||[]).map(r=>({ ...r, source:r.job_type }));
@@ -1922,8 +2064,10 @@ function App(){
     const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
 
+  const isAssistant=profile.role==='assistant';
+  useEffect(()=>{ if(isAssistant && view==='dashboard') setView('pipeline'); },[isAssistant, view]);
   const NAV=[
-    { items:[ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
+    { items: isAssistant ? [ ['inbox','Inbox','📥'] ] : [ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
     { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
     { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
     { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -1952,7 +2096,7 @@ function App(){
           ))}
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
-          <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':'Sales Manager'}</div></div></div>
+          <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'}</div></div></div>
           <button onClick={()=>sb.auth.signOut()} className="w-full text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Sign out</button>
         </div>
       </aside>
@@ -1967,7 +2111,7 @@ function App(){
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
           : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} />)}
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
-        {view==='team' && <TeamOverview profiles={profiles} leads={leads} />}
+        {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='sampling' && <SamplingBoard profile={profile} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
