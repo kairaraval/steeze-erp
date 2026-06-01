@@ -53,7 +53,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13b · Admin team management: invite, pre-assign roles, change roles inline';
+const BUILD = 'Live build 13c · Team management + assistant role redirect fix';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2025,6 +2025,8 @@ function App(){
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
   useEffect(()=>{ setSelectedClient(null); },[view]);
+  // Assistants don't have a Dashboard tab — redirect them to Pipeline.
+  useEffect(()=>{ if(profile && profile.role==='assistant' && view==='dashboard') setView('pipeline'); },[profile, view]);
 
   async function sendLeadToPR(lead){
     const payload=buildPRFromLead(profile, lead);
@@ -2065,7 +2067,6 @@ function App(){
   }
 
   const isAssistant=profile.role==='assistant';
-  useEffect(()=>{ if(isAssistant && view==='dashboard') setView('pipeline'); },[isAssistant, view]);
   const NAV=[
     { items: isAssistant ? [ ['inbox','Inbox','📥'] ] : [ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
     { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
