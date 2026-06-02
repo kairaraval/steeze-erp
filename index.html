@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14c · Auto-detect images by extension + harden lightbox';
+const BUILD = 'Live build 14d · PDFs preview inline in lightbox (no download)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -221,16 +221,23 @@ function Avatar({ profile, size='md' }){
   const initials = ((profile&&profile.name)||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
   return <div className={`${cls} rounded-full ${avaColor(profile&&profile.id)} text-white flex items-center justify-center font-bold shrink-0`}>{initials}</div>;
 }
-function ImageLightbox({ src, name, onClose }){
+function MediaLightbox({ url, name, kind, onClose }){
+  // kind: 'image' or 'pdf'
   useEffect(()=>{ const k=(e)=>{ if(e.key==='Escape') onClose(); }; window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k); },[onClose]);
+  const isPdf = kind === 'pdf';
+  // Render PDFs through Google's docs viewer so they preview inline regardless of the source
+  // CDN's Content-Disposition header (which would otherwise force a download).
+  const pdfSrc = isPdf ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true` : null;
   return (
     <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-[60] p-4" onClick={onClose}>
       <button onClick={onClose} className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl leading-none">✕</button>
-      <div className="max-w-[92vw] max-h-[92vh] flex flex-col items-center" onClick={e=>e.stopPropagation()}>
-        <img src={src} alt={name} className="max-w-full max-h-[82vh] object-contain rounded shadow-2xl" />
+      <div className="flex flex-col items-center" onClick={e=>e.stopPropagation()}>
+        {isPdf
+          ? <iframe src={pdfSrc} title={name} className="bg-white rounded shadow-2xl" style={{ width:'min(92vw, 1100px)', height:'82vh', border:0 }} />
+          : <img src={url} alt={name} className="max-w-[92vw] max-h-[82vh] object-contain rounded shadow-2xl" />}
         <div className="text-white text-xs mt-3 bg-black/40 px-3 py-1 rounded flex items-center gap-3">
           <span className="font-medium truncate max-w-[60vw]">{name}</span>
-          <a href={src} target="_blank" rel="noopener" className="underline hover:text-white">Open original ↗</a>
+          <a href={url} target="_blank" rel="noopener" className="underline hover:text-white">Open original ↗</a>
           <span className="text-white/60">Esc to close</span>
         </div>
       </div>
@@ -241,17 +248,27 @@ function AttachmentChip({ att, small }){
   const [url,setUrl]=useState(att.url||null);
   const [lightbox,setLightbox]=useState(false);
   useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
-  // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual images).
+  // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual files).
   const ref=String(att.url||att.name||att.path||'').toLowerCase();
   const isImage = att.type==='image' || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(ref);
   const isPdf   = !isImage && (att.type==='pdf' || /\.pdf(?:$|\?)/i.test(ref));
-  const openImg=(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) setLightbox(true); };
-  const openOther=(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) window.open(url,'_blank'); };
+  const openLB   =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) setLightbox(true); };
+  const openTab  =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) window.open(url,'_blank'); };
   if(isImage) return (<>
-    <button type="button" onClick={openImg} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
-    {lightbox && url && <ImageLightbox src={url} name={att.name} onClose={()=>setLightbox(false)} />}
+    <button type="button" onClick={openLB} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
+    {lightbox && url && <MediaLightbox url={url} name={att.name} kind="image" onClose={()=>setLightbox(false)} />}
   </>);
-  return <button type="button" onClick={openOther} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{isPdf?'📄':'🔗'}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
+  if(isPdf) return (<>
+    <button type="button" onClick={openLB} className="block hover:opacity-90 group">
+      <div className={`${small?'w-12 h-12':'w-24 h-32'} bg-gradient-to-br from-rose-50 to-rose-100 border border-rose-200 rounded flex flex-col items-center justify-center text-rose-500`}>
+        <span className={small?'text-xl':'text-3xl'}>📄</span>
+        {!small && <span className="text-[9px] uppercase tracking-wider text-rose-400 font-bold mt-0.5">PDF</span>}
+      </div>
+      {!small && <div className="text-[10px] text-slate-600 truncate max-w-[6rem] mt-1 text-center">{att.name}</div>}
+    </button>
+    {lightbox && url && <MediaLightbox url={url} name={att.name} kind="pdf" onClose={()=>setLightbox(false)} />}
+  </>);
+  return <button type="button" onClick={openTab} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>🔗</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
 }
 function firstImage(atts){ return (atts||[]).find(a=>a.type==='image'); }
 
