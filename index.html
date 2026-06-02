@@ -25,15 +25,20 @@
     }
   </style>
   <script>
-  // Plain-JS catch-all so ANY error (including Babel compile errors) shows on screen.
+  // On-screen fatal-error panel. Only surfaces TRULY fatal errors:
+  //   • thrown JS errors (window.error) — usually means the React tree crashed
+  //   • unhandled promise rejections that look like app bugs
+  // Library noise like Supabase Realtime "Failed to fetch" retries is ignored.
   (function(){
     function box(){ var d=document.getElementById('fatal'); if(!d){ d=document.createElement('div'); d.id='fatal';
       d.style.cssText='position:fixed;bottom:0;left:0;right:0;max-height:45vh;overflow:auto;background:#fee2e2;color:#991b1b;font:12px/1.5 monospace;padding:12px;z-index:99999;white-space:pre-wrap;border-top:3px solid #991b1b;';
       (document.body||document.documentElement).appendChild(d); d.textContent='⚠ ERROR — screenshot this and send it:\n'; } return d; }
     window.__err=function(m){ try{ box().textContent += '\n'+m; }catch(_){}};
-    window.addEventListener('error', function(e){ window.__err('JS: '+(e.message||e.error||e)+(e.filename?'  ['+e.filename+':'+e.lineno+']':'')); });
-    window.addEventListener('unhandledrejection', function(e){ window.__err('PROMISE: '+((e.reason&&e.reason.message)||JSON.stringify(e.reason))); });
-    var _ce=console.error; console.error=function(){ try{ window.__err('CONSOLE: '+Array.prototype.map.call(arguments,function(a){return (a&&a.message)||String(a);}).join(' ')); }catch(_){ } _ce.apply(console,arguments); };
+    // Patterns we want to silence (transient network / realtime / browser noise).
+    var IGNORE=[/Failed to fetch/i, /NetworkError/i, /Load failed/i, /WebSocket/i, /realtime/i, /Channel error/i, /AbortError/i, /ResizeObserver/i];
+    function isNoise(s){ s=String(s||''); return IGNORE.some(function(re){ return re.test(s); }); }
+    window.addEventListener('error', function(e){ var msg=(e.message||e.error||e); if(isNoise(msg)) return; window.__err('JS: '+msg+(e.filename?'  ['+e.filename+':'+e.lineno+']':'')); });
+    window.addEventListener('unhandledrejection', function(e){ var msg=(e.reason&&e.reason.message)||JSON.stringify(e.reason); if(isNoise(msg)) return; window.__err('PROMISE: '+msg); });
   })();
   </script>
 </head>
@@ -53,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 13i · Inbox: jump to task; Activity: Open lead button';
+const BUILD = 'Live build 14a · PO Number + Techpack Number on leads';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -326,6 +331,7 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
   const [newCompany,setNewCompany]=useState(''); const [newContact,setNewContact]=useState('');
   const [title,setTitle]=useState(existing?.title||''); const [stage,setStage]=useState(existing?.stage||'new');
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
+  const [poNumber,setPoNumber]=useState(existing?.po_number||''); const [techpackNumber,setTechpackNumber]=useState(existing?.techpack_number||'');
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
@@ -345,7 +351,7 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
         const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, items:finalItems, attachments, won_at: stage==='won' ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, won_at: stage==='won' ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       if(isEdit){ const {error}=await sb.from('leads').update(payload).eq('id',existing.id); if(error) throw error;
         if(existing.stage!==stage){ await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(stage).label}"` }); } }
       else { const {data,error}=await sb.from('leads').insert({ ...payload, manager_id:profile.id }).select().single(); if(error) throw error;
@@ -377,6 +383,8 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
           <div><label className="text-[10px] text-slate-500 uppercase">Stage</label><select className="input mt-0.5" value={stage} onChange={e=>setStage(e.target.value)}>{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Expected close</label><input type="date" className="input mt-0.5" value={expectedClose||''} onChange={e=>setExpectedClose(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Delivery date</label><input type="date" className="input mt-0.5" value={deliveryDate||''} onChange={e=>setDeliveryDate(e.target.value)} /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">PO Number</label><input className="input mt-0.5" value={poNumber} onChange={e=>setPoNumber(e.target.value)} placeholder="Client's PO #" /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Techpack Number</label><input className="input mt-0.5" value={techpackNumber} onChange={e=>setTechpackNumber(e.target.value)} placeholder="Prod Form / Techpack #" /></div>
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments</div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photo / PDF'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
@@ -422,7 +430,14 @@ function LeadDetail({ profile, lead, clients, onEdit, onOpenActivity, onSendProd
     <Modal title="Lead details" onClose={onClose}>
       <div className="space-y-4">
         <div className="flex items-start justify-between gap-3"><div><div className="text-lg font-bold">{lead.title}</div><div className="text-sm text-slate-500">{client?.company||'—'}</div></div><span className={`text-xs px-2 py-1 rounded font-medium ${stageMeta(lead.stage).color}`}>{stageMeta(lead.stage).label}</span></div>
-        <div className="grid grid-cols-2 gap-3 text-sm"><div><div className="text-[10px] uppercase text-slate-400">Value</div><div className="font-bold">{peso(lead.value)}</div></div><div><div className="text-[10px] uppercase text-slate-400">VAT</div><div>{peso(lead.vat_amount)}</div></div><div><div className="text-[10px] uppercase text-slate-400">Expected close</div><div>{fmtDate(lead.expected_close)}</div></div><div><div className="text-[10px] uppercase text-slate-400">Delivery date</div><div>{fmtDate(lead.delivery_date)}</div></div></div>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div><div className="text-[10px] uppercase text-slate-400">Value</div><div className="font-bold">{peso(lead.value)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">VAT</div><div>{peso(lead.vat_amount)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Expected close</div><div>{fmtDate(lead.expected_close)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Delivery date</div><div>{fmtDate(lead.delivery_date)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">PO Number</div><div>{lead.po_number||'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Techpack Number</div><div>{lead.techpack_number||'—'}</div></div>
+        </div>
         {(lead.items||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Items</div><div className="border rounded-lg divide-y">{lead.items.map((it,i)=>(<div key={i} className="flex justify-between px-3 py-1.5 text-sm"><span>{it.itemType}{it.category?` · ${it.category}`:''} {it.withVat?<span className="text-[10px] text-emerald-600">+VAT</span>:''}</span><span className="font-medium">{it.quantity} × {peso(it.pricePerItem)}</span></div>))}</div></div>)}
         {(lead.attachments||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{lead.attachments.map((a,i)=><AttachmentChip key={i} att={a} small />)}</div></div>)}
         <div className="flex gap-2 pt-2 border-t flex-wrap">
