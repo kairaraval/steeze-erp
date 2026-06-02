@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14e · Admin: pipeline filtered per sales manager';
+const BUILD = 'Live build 14f · Lead CSV Import (ClickUp export → upsert by Task ID)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -851,6 +851,7 @@ function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, production
 /* ----------------------- Pipeline ----------------------- */
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
+  const [importing,setImporting]=useState(false);
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   // Admin-only: pick which manager's pipeline to view.
@@ -895,6 +896,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
             ) : (
               <label className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border rounded-lg px-3 py-2 whitespace-nowrap"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> My leads only</label>
             )}
+            {isAdmin && <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 whitespace-nowrap">⇪ Import CSV</button>}
             <button onClick={onNew} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New lead</button>
           </div>
         </div>
@@ -924,7 +926,232 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           ); })}{col.length===0 && <div className="text-[10px] text-slate-400 text-center py-4">—</div>}</div>
         </div>
       ); })}</div>
+      {importing && <LeadImportModal profiles={profiles} clients={clients} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
+  );
+}
+
+function LeadImportModal({ profiles, clients, onClose, onDone }){
+  const [csv,setCsv]=useState(''); const [parsed,setParsed]=useState(null);
+  const [step,setStep]=useState('paste'); // paste | preview | importing | done
+  const [results,setResults]=useState(null); const [busy,setBusy]=useState(false);
+  const [progress,setProgress]=useState({ done:0, total:0 });
+
+  // ClickUp → ERP email mapping (override here if a teammate registered with a different address).
+  const EMAIL_MAP = {
+    'kairadimatulac@gmail.com'      : 'kaira.raval@steeze.com.ph',
+    'salesmary.steezecorp@gmail.com': 'steezecorp.mary@gmail.com',
+  };
+  // ClickUp status → ERP stage
+  const STAGE_MAP = {
+    'lead in':'new','contacted':'new',
+    'existing sample req.':'qualified','follow-up':'qualified',
+    'quotation sent':'proposal',
+    'negotiation':'negotiation','on hold':'negotiation',
+    'for sampling (techpack )':'sampling','for sampling (techpack)':'sampling',
+    'sample/revision':'sampling','for graphic design works':'sampling',
+    'done deal! (techpack)':'won','for production':'won','delivered - for payment':'won',
+    'closed- lost':'lost','closed - lost':'lost',
+  };
+
+  function onFile(e){ const f=e.target.files && e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>setCsv(String(r.result||'')); r.readAsText(f); }
+  function getVal(row, hdr, ...candidates){
+    for(const c of candidates){ const idx=hdr.indexOf(c.toLowerCase()); if(idx>=0 && row[idx]!=null && String(row[idx]).trim()!=='') return String(row[idx]).trim(); }
+    return '';
+  }
+  function doParse(){
+    const rows=parseCSV(csv.trim());
+    if(rows.length<2){ alert('Need a header row + at least one data row.'); return; }
+    const headers=rows[0].map(h=>String(h||'').trim().toLowerCase());
+    // We need at least Task ID OR Task Name to anchor each row.
+    if(!headers.some(h=>h==='task id'||h==='id'||h==='task name'||h==='name')){
+      alert('CSV needs at least a "Task ID" or "Task Name" column.'); return;
+    }
+    setParsed({ headers, dataRows:rows.slice(1) });
+    setStep('preview');
+  }
+
+  function findClient(name){
+    if(!name) return null;
+    const n=name.toLowerCase().trim();
+    const exact=(clients||[]).find(c=>String(c.company||'').toLowerCase().trim()===n);
+    if(exact) return exact;
+    return (clients||[]).find(c=>String(c.company||'').toLowerCase().trim().startsWith(n)) || null;
+  }
+  function findManager(ownerCell){
+    if(!ownerCell) return null;
+    // Owner cell may be an email, a name, or a comma-separated multi-assignee list. Try email first, then name.
+    const parts=String(ownerCell).split(/[,;]/).map(s=>s.trim()).filter(Boolean);
+    for(const p of parts){
+      const lc=p.toLowerCase();
+      const mapped=EMAIL_MAP[lc]||lc;
+      const byEmail=(profiles||[]).find(pr=>String(pr.email||'').toLowerCase()===mapped);
+      if(byEmail) return byEmail;
+      // try name LIKE
+      const byName=(profiles||[]).find(pr=>String(pr.name||'').toLowerCase().includes(lc) || lc.includes(String(pr.name||'').toLowerCase().split(' ')[0]));
+      if(byName) return byName;
+    }
+    return null;
+  }
+  function parseDate(s){
+    if(!s) return null; const t=String(s).trim(); if(!t||t==='null') return null;
+    // Accept YYYY-MM-DD, MM/DD/YYYY, or ms-since-epoch
+    if(/^\d+$/.test(t)){ const ms=Number(t); if(ms>1e10) return new Date(ms).toISOString().slice(0,10); }
+    const d=new Date(t); if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+    return null;
+  }
+  function parseTitle(name){
+    if(!name) return { company:'', title:'' };
+    let s=String(name).trim();
+    // Strip leading "20XX-XXX |" production prefix
+    s=s.replace(/^\s*20\d{2}-\d{2,5}\s*\|\s*/i,'');
+    const parts=s.split(/\s*\|\s*/);
+    if(parts.length===1) return { company:'', title:parts[0].trim() };
+    return { company:parts[0].trim(), title:parts.slice(1).join(' | ').trim() };
+  }
+
+  async function doImport(){
+    setBusy(true); setStep('importing');
+    const { headers, dataRows } = parsed;
+    let inserted=0, updated=0; const errors=[];
+    setProgress({ done:0, total:dataRows.length });
+
+    for(let i=0;i<dataRows.length;i++){
+      const r=dataRows[i];
+      try {
+        const taskId=getVal(r,headers,'task id','id','custom id');
+        const nameCol=getVal(r,headers,'task name','name');
+        const { company, title }=parseTitle(nameCol);
+        const explicitCompany=getVal(r,headers,'company name','company','client');
+        const finalCompany=explicitCompany||company;
+        const status=getVal(r,headers,'status').toLowerCase();
+        const stage=STAGE_MAP[status]||'new';
+        const due=parseDate(getVal(r,headers,'due date'));
+        const startDue=parseDate(getVal(r,headers,'sample due date'));
+        const owner=getVal(r,headers,'sales owner','assignees','assignee');
+        const productType=getVal(r,headers,'product type');
+        const productCategory=getVal(r,headers,'product category');
+        const qty=Number(getVal(r,headers,'est. qnty','est qty','estimated quantity','quantity'))||0;
+        const unitPrice=Number(getVal(r,headers,'unit price','price'))||0;
+        const totalAmt=Number(getVal(r,headers,'total amount','total'))||(qty*unitPrice);
+        const poNumber=getVal(r,headers,'po number','po');
+        const techpackNo=getVal(r,headers,'prod form no.','prod form no','techpack number','techpack no');
+        const client=findClient(finalCompany);
+        const manager=findManager(owner);
+
+        const items = (productType || productCategory || qty || unitPrice) ? [{
+          itemType: productType||'',
+          category: productCategory||'',
+          quantity: qty,
+          pricePerItem: unitPrice,
+          withVat: false,
+          lineTotal: qty*unitPrice
+        }] : [];
+
+        const payload = {
+          title: title||nameCol||'(untitled)',
+          stage,
+          value: totalAmt,
+          subtotal_amount: totalAmt,
+          expected_close: due,
+          delivery_date: startDue,
+          client_id: client ? client.id : null,
+          manager_id: manager ? manager.id : null,
+          po_number: poNumber,
+          techpack_number: techpackNo,
+          items,
+        };
+
+        if(taskId){
+          // upsert by clickup_id
+          const { data:existing, error:selErr }=await sb.from('leads').select('id').eq('clickup_id', taskId).maybeSingle();
+          if(selErr) throw selErr;
+          if(existing){
+            const { error }=await sb.from('leads').update(payload).eq('id', existing.id);
+            if(error) throw error; updated++;
+          } else {
+            const { error }=await sb.from('leads').insert({ ...payload, clickup_id:taskId });
+            if(error) throw error; inserted++;
+          }
+        } else {
+          const { error }=await sb.from('leads').insert(payload);
+          if(error) throw error; inserted++;
+        }
+      } catch(er){ errors.push(`Row ${i+2}: ${er.message||er}`); }
+      setProgress({ done:i+1, total:dataRows.length });
+    }
+    setResults({ inserted, updated, total:dataRows.length, errors });
+    setStep('done'); setBusy(false);
+  }
+
+  return (
+    <Modal title="Import Leads from ClickUp CSV" onClose={onClose} wide>
+      {step==='paste' && (
+        <div className="space-y-3">
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-700">
+            <div className="font-semibold mb-1">How to export from ClickUp:</div>
+            <ol className="list-decimal pl-4 space-y-0.5 mb-2">
+              <li>Open the <b>Active Sales Pipeline</b> list in ClickUp.</li>
+              <li>Click the <b>"..."</b> menu (top-right of the list) → <b>Export view → CSV</b>.</li>
+              <li>Open the CSV (or just upload it directly here).</li>
+            </ol>
+            <div className="font-semibold mt-2 mb-1">Columns the importer reads (case-insensitive):</div>
+            <div className="leading-relaxed">
+              <code className="bg-white px-1 rounded border">Task ID</code>, <code className="bg-white px-1 rounded border">Task Name</code>, <code className="bg-white px-1 rounded border">Status</code>, <code className="bg-white px-1 rounded border">Due Date</code>, <code className="bg-white px-1 rounded border">Sample Due Date</code>, <code className="bg-white px-1 rounded border">Sales Owner</code>, <code className="bg-white px-1 rounded border">Company Name</code>, <code className="bg-white px-1 rounded border">Product Type</code>, <code className="bg-white px-1 rounded border">Product Category</code>, <code className="bg-white px-1 rounded border">Est. Qnty</code>, <code className="bg-white px-1 rounded border">Unit Price</code>, <code className="bg-white px-1 rounded border">Total Amount</code>, <code className="bg-white px-1 rounded border">PO Number</code>, <code className="bg-white px-1 rounded border">Prod Form No.</code>
+            </div>
+            <div className="mt-2 text-slate-500">Rows with a Task ID that already exists in the ERP are <b>updated</b>; new rows are <b>inserted</b>. Safe to re-run.</div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="px-3 py-2 rounded-lg bg-white border text-sm font-medium hover:bg-slate-50 cursor-pointer">📁 Upload .csv file<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onFile} /></label>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wide text-slate-500">Or paste CSV here</label>
+            <textarea className="input font-mono text-xs" rows="10" value={csv} onChange={e=>setCsv(e.target.value)} placeholder='"Task ID","Task Name","Status",...' />
+          </div>
+          <div className="flex justify-end gap-2"><button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-sm">Cancel</button><button onClick={doParse} disabled={!csv.trim()} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">Parse →</button></div>
+        </div>
+      )}
+
+      {step==='preview' && parsed && (
+        <div className="space-y-3">
+          <div className="text-sm text-slate-700">Found <b>{parsed.dataRows.length}</b> rows. Detected columns: <span className="font-mono text-[10px]">{parsed.headers.join(', ')}</span></div>
+          <div className="border rounded-lg overflow-hidden max-h-80 overflow-y-auto"><table className="w-full text-xs">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr>{parsed.headers.slice(0,8).map(h=><th key={h} className="text-left px-2 py-1.5">{h}</th>)}</tr></thead>
+            <tbody>{parsed.dataRows.slice(0,30).map((r,i)=>(
+              <tr key={i} className="border-t">{parsed.headers.slice(0,8).map((h,j)=>(<td key={j} className="px-2 py-1 text-slate-700 truncate max-w-[10rem]">{r[j]||''}</td>))}</tr>
+            ))}</tbody>
+          </table></div>
+          {(parsed.dataRows.length>30||parsed.headers.length>8) && <div className="text-xs text-slate-500">Showing first 30 rows × first 8 columns. The importer reads all rows and all relevant columns.</div>}
+          <div className="flex justify-between"><button onClick={()=>setStep('paste')} className="px-3 py-2 rounded-lg bg-white border text-sm">← Back</button><button onClick={doImport} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Importing…':`Import / update ${parsed.dataRows.length} leads`}</button></div>
+        </div>
+      )}
+
+      {step==='importing' && (
+        <div className="py-8 text-center space-y-3">
+          <div className="text-slate-700 font-semibold">Importing…</div>
+          <div className="text-xs text-slate-500">{progress.done} of {progress.total} processed</div>
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="bg-indigo-600 h-2 rounded-full transition-all" style={{ width:`${progress.total?Math.round(progress.done/progress.total*100):0}%` }}></div></div>
+        </div>
+      )}
+
+      {step==='done' && results && (
+        <div className="space-y-3">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+            <div className="font-semibold mb-1">Import complete</div>
+            <div>✓ Inserted <b>{results.inserted}</b> new lead{results.inserted===1?'':'s'}</div>
+            <div>✓ Updated <b>{results.updated}</b> existing lead{results.updated===1?'':'s'}</div>
+          </div>
+          {results.errors.length>0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-xs text-rose-800 max-h-40 overflow-y-auto">
+              <div className="font-semibold mb-1">{results.errors.length} row{results.errors.length===1?'':'s'} had errors:</div>
+              <ul className="list-disc pl-4 space-y-0.5">{results.errors.slice(0,30).map((e,i)=><li key={i}>{e}</li>)}</ul>
+              {results.errors.length>30 && <div className="mt-1">…and {results.errors.length-30} more.</div>}
+            </div>
+          )}
+          <div className="flex justify-end gap-2"><button onClick={onDone} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Done</button></div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
