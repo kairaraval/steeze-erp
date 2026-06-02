@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14d · PDFs preview inline in lightbox (no download)';
+const BUILD = 'Live build 14e · Admin: pipeline filtered per sales manager';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -853,18 +853,48 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
+  // Admin-only: pick which manager's pipeline to view.
+  //   '' = use the mineOnly toggle behaviour (default)
+  //   'all' = every manager
+  //   <profile id> = that specific manager
+  const [managerFilter,setManagerFilter]=useState('');
+  const selectedMgr = managerFilter && managerFilter!=='all' ? profiles.find(p=>p.id===managerFilter) : null;
+  const salesPeople = profiles.filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
-  const visible=leads.filter(l=>(mineOnly?l.manager_id===profile.id:true) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
+  function ownerMatch(l){
+    if(isAdmin && managerFilter==='all') return true;
+    if(isAdmin && managerFilter) return l.manager_id===managerFilter;
+    return mineOnly ? l.manager_id===profile.id : true;
+  }
+  const visible=leads.filter(l=>ownerMatch(l) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
   async function move(l,st){ const patch={ stage:st }; if(st==='won'&&!l.won_at) patch.won_at=new Date().toISOString().slice(0,10); const {error}=await sb.from('leads').update(patch).eq('id',l.id); if(error){ alert(error.message); return; } await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(st).label}"` }); reload(); }
   async function del(l){ if(!confirm('Delete this lead?')) return; const {error}=await sb.from('leads').delete().eq('id',l.id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div>
       <div className="sticky top-0 z-20 bg-slate-100/95 backdrop-blur border-b border-slate-200 px-6 pt-5 pb-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div><h1 className="text-2xl font-bold text-slate-900">Sales Pipeline</h1><p className="text-slate-500 text-sm">Active pipeline across all stages. Click a card to view client details.</p></div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Sales Pipeline</h1>
+            <p className="text-slate-500 text-sm">
+              {selectedMgr
+                ? <>Viewing <span className="font-semibold text-slate-700">{selectedMgr.name||selectedMgr.email}'s</span> pipeline</>
+                : (isAdmin && managerFilter==='all')
+                  ? 'Viewing all managers — every active lead, every stage.'
+                  : 'Active pipeline across all stages. Click a card to view client details.'}
+            </p>
+          </div>
           <div className="flex items-center gap-2 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search leads…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-52" />
-            <label className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border rounded-lg px-3 py-2 whitespace-nowrap"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> My leads only</label>
+            {isAdmin ? (
+              <select value={managerFilter} onChange={e=>setManagerFilter(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white whitespace-nowrap">
+                <option value="">My leads only</option>
+                <option value="all">All managers</option>
+                <option disabled>──────────</option>
+                {salesPeople.map(p=>(<option key={p.id} value={p.id}>{p.name||p.email}</option>))}
+              </select>
+            ) : (
+              <label className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border rounded-lg px-3 py-2 whitespace-nowrap"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> My leads only</label>
+            )}
             <button onClick={onNew} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New lead</button>
           </div>
         </div>
