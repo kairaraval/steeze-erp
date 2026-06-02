@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14b · Image attachments preview inline + click for lightbox';
+const BUILD = 'Live build 14c · Auto-detect images by extension + harden lightbox';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -241,13 +241,17 @@ function AttachmentChip({ att, small }){
   const [url,setUrl]=useState(att.url||null);
   const [lightbox,setLightbox]=useState(false);
   useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
-  const openImg=()=>{ if(url) setLightbox(true); };
-  const openOther=()=>{ if(url) window.open(url,'_blank'); };
-  if(att.type==='image') return (<>
-    <button onClick={openImg} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
+  // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual images).
+  const ref=String(att.url||att.name||att.path||'').toLowerCase();
+  const isImage = att.type==='image' || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(ref);
+  const isPdf   = !isImage && (att.type==='pdf' || /\.pdf(?:$|\?)/i.test(ref));
+  const openImg=(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) setLightbox(true); };
+  const openOther=(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) window.open(url,'_blank'); };
+  if(isImage) return (<>
+    <button type="button" onClick={openImg} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
     {lightbox && url && <ImageLightbox src={url} name={att.name} onClose={()=>setLightbox(false)} />}
   </>);
-  return <button onClick={openOther} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{att.type==='pdf'?'📄':'🔗'}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
+  return <button type="button" onClick={openOther} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{isPdf?'📄':'🔗'}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
 }
 function firstImage(atts){ return (atts||[]).find(a=>a.type==='image'); }
 
