@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14a · PO Number + Techpack Number on leads';
+const BUILD = 'Live build 14b · Image attachments preview inline + click for lightbox';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -221,12 +221,33 @@ function Avatar({ profile, size='md' }){
   const initials = ((profile&&profile.name)||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
   return <div className={`${cls} rounded-full ${avaColor(profile&&profile.id)} text-white flex items-center justify-center font-bold shrink-0`}>{initials}</div>;
 }
+function ImageLightbox({ src, name, onClose }){
+  useEffect(()=>{ const k=(e)=>{ if(e.key==='Escape') onClose(); }; window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k); },[onClose]);
+  return (
+    <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-[60] p-4" onClick={onClose}>
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl leading-none">✕</button>
+      <div className="max-w-[92vw] max-h-[92vh] flex flex-col items-center" onClick={e=>e.stopPropagation()}>
+        <img src={src} alt={name} className="max-w-full max-h-[82vh] object-contain rounded shadow-2xl" />
+        <div className="text-white text-xs mt-3 bg-black/40 px-3 py-1 rounded flex items-center gap-3">
+          <span className="font-medium truncate max-w-[60vw]">{name}</span>
+          <a href={src} target="_blank" rel="noopener" className="underline hover:text-white">Open original ↗</a>
+          <span className="text-white/60">Esc to close</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 function AttachmentChip({ att, small }){
   const [url,setUrl]=useState(att.url||null);
+  const [lightbox,setLightbox]=useState(false);
   useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
-  const open=()=>{ if(url) window.open(url,'_blank'); };
-  if(att.type==='image') return <button onClick={open} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>;
-  return <button onClick={open} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{att.type==='pdf'?'📄':'🔗'}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
+  const openImg=()=>{ if(url) setLightbox(true); };
+  const openOther=()=>{ if(url) window.open(url,'_blank'); };
+  if(att.type==='image') return (<>
+    <button onClick={openImg} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
+    {lightbox && url && <ImageLightbox src={url} name={att.name} onClose={()=>setLightbox(false)} />}
+  </>);
+  return <button onClick={openOther} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{att.type==='pdf'?'📄':'🔗'}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
 }
 function firstImage(atts){ return (atts||[]).find(a=>a.type==='image'); }
 
