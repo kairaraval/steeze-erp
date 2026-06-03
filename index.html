@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14g · Stages: Delivered-For Payment + Delivered & Paid';
+const BUILD = 'Live build 14h · Lead dates: Due / Sample Due / Creation';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -378,6 +378,7 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
   const [newCompany,setNewCompany]=useState(''); const [newContact,setNewContact]=useState('');
   const [title,setTitle]=useState(existing?.title||''); const [stage,setStage]=useState(existing?.stage||'new');
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
+  const [creationDate,setCreationDate]=useState(existing?.created_at ? String(existing.created_at).slice(0,10) : new Date().toISOString().slice(0,10));
   const [poNumber,setPoNumber]=useState(existing?.po_number||''); const [techpackNumber,setTechpackNumber]=useState(existing?.techpack_number||'');
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]);
@@ -398,7 +399,7 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
         const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       if(isEdit){ const {error}=await sb.from('leads').update(payload).eq('id',existing.id); if(error) throw error;
         if(existing.stage!==stage){ await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(stage).label}"` }); } }
       else { const {data,error}=await sb.from('leads').insert({ ...payload, manager_id:profile.id }).select().single(); if(error) throw error;
@@ -428,8 +429,9 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-[10px] text-slate-500 uppercase">{hasItems?'Value (auto)':'Value ₱ (manual)'}</label><input className={`input mt-0.5 ${hasItems?'bg-slate-100 text-slate-500':''}`} type="number" disabled={hasItems} value={hasItems?total:manualValue} onChange={e=>setManualValue(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Stage</label><select className="input mt-0.5" value={stage} onChange={e=>setStage(e.target.value)}>{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
-          <div><label className="text-[10px] text-slate-500 uppercase">Expected close</label><input type="date" className="input mt-0.5" value={expectedClose||''} onChange={e=>setExpectedClose(e.target.value)} /></div>
-          <div><label className="text-[10px] text-slate-500 uppercase">Delivery date</label><input type="date" className="input mt-0.5" value={deliveryDate||''} onChange={e=>setDeliveryDate(e.target.value)} /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Due Date</label><input type="date" className="input mt-0.5" value={expectedClose||''} onChange={e=>setExpectedClose(e.target.value)} /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Sample Due Date</label><input type="date" className="input mt-0.5" value={deliveryDate||''} onChange={e=>setDeliveryDate(e.target.value)} /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Creation Date</label><input type="date" className="input mt-0.5" value={creationDate||''} onChange={e=>setCreationDate(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">PO Number</label><input className="input mt-0.5" value={poNumber} onChange={e=>setPoNumber(e.target.value)} placeholder="Client's PO #" /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Techpack Number</label><input className="input mt-0.5" value={techpackNumber} onChange={e=>setTechpackNumber(e.target.value)} placeholder="Prod Form / Techpack #" /></div>
         </div>
@@ -480,8 +482,9 @@ function LeadDetail({ profile, lead, clients, onEdit, onOpenActivity, onSendProd
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div><div className="text-[10px] uppercase text-slate-400">Value</div><div className="font-bold">{peso(lead.value)}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">VAT</div><div>{peso(lead.vat_amount)}</div></div>
-          <div><div className="text-[10px] uppercase text-slate-400">Expected close</div><div>{fmtDate(lead.expected_close)}</div></div>
-          <div><div className="text-[10px] uppercase text-slate-400">Delivery date</div><div>{fmtDate(lead.delivery_date)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Due Date</div><div>{fmtDate(lead.expected_close)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Sample Due Date</div><div>{fmtDate(lead.delivery_date)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Creation Date</div><div>{fmtDate(lead.created_at)}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">PO Number</div><div>{lead.po_number||'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Techpack Number</div><div>{lead.techpack_number||'—'}</div></div>
         </div>
