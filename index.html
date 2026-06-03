@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15f · Activity comments: inline image previews (ClickUp-style)';
+const BUILD = 'Live build 15g · Fix double-upload on paste into activity comment';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -385,7 +385,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   }
   async function onPasteImage(e){
     const f = getPastedImage(e); if(!f) return;
-    e.preventDefault();
+    e.preventDefault(); e.stopPropagation(); // prevent the bubbled wrapper handler from running too
     setReading(true); setErr('');
     try{ const meta=await uploadFile(scope, f); setPending(p=>[...p, meta]); }
     catch(er){ setErr('Upload failed: '+(er.message||er)); }
