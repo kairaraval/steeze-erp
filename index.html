@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15d · Lead detail: side-by-side Activity + multi-attach';
+const BUILD = 'Live build 15e · Techpack: paste image, clearer errors, save diagnostics';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1936,12 +1936,22 @@ function CropModal({ src, onClose, onApply }){
 function TpImage({ scope, value, onChange, label, h }){
   const [url,setUrl]=useState(''); const [working,setWorking]=useState(null); const [busy,setBusy]=useState('');
   const [showCrop,setShowCrop]=useState(false);
-  useEffect(()=>{ let on=true; if(value){ signedUrl(value).then(u=>{ if(on)setUrl(u); }).catch(()=>{}); } else setUrl(''); return ()=>{on=false;}; },[value]);
+  const [loadErr,setLoadErr]=useState(false);
+  useEffect(()=>{ let on=true; setLoadErr(false); setUrl('');
+    if(value){ signedUrl(value).then(u=>{ if(on) setUrl(u); }).catch(()=>{ if(on) setLoadErr(true); }); }
+    return ()=>{on=false;};
+  },[value]);
   async function pick(e){ const f=e.target.files[0]; if(!f) return; try{ setWorking(await readFileAsDataUrl(f)); }catch(err){ alert('Could not read file.'); } e.target.value=''; }
+  async function onPaste(e){
+    const f = getPastedImage(e); if(!f) return;
+    e.preventDefault();
+    try{ setWorking(await readFileAsDataUrl(f)); }
+    catch(err){ alert('Could not read pasted image.'); }
+  }
   async function editExisting(){ if(!url) return; try{ const blob=await (await fetch(url)).blob(); setWorking(await readFileAsDataUrl(blob)); }catch(err){ alert('Could not load image for editing.'); } }
   async function removeBg(){ if(!working) return; setBusy('Starting…'); try{ const data=await removeImageBackground(working, m=>setBusy(m)); setWorking(data); setBusy(''); }catch(err){ setBusy(''); alert('Background removal failed: '+(err.message||err)+'\n\nThe AI model loads from a CDN; if your network blocks it, this will not work.'); } }
-  async function saveWorking(){ setBusy('Saving…'); try{ const path=await uploadDataUrl(scope, working); onChange(path); setWorking(null); setBusy(''); }catch(err){ setBusy(''); alert('Upload failed: '+(err.message||err)); } }
-  return (<div>{label && <div className="text-[10px] uppercase text-slate-400 mb-1">{label}</div>}
+  async function saveWorking(){ setBusy('Saving…'); try{ const path=await uploadDataUrl(scope, working); onChange(path); setWorking(null); setBusy(''); }catch(err){ setBusy(''); alert('Upload failed: '+(err.message||err)+'\n\nIf this keeps happening, ask your admin to verify the Attachments storage policies are set up (see steeze-erp-storage-policies.sql).'); } }
+  return (<div onPaste={onPaste} tabIndex={0}>{label && <div className="text-[10px] uppercase text-slate-400 mb-1">{label}</div>}
     {working ? (
       <div>
         <div className={`border-2 border-dashed rounded-lg overflow-hidden bg-slate-100 ${h||'h-32'} flex items-center justify-center`} style={{backgroundImage:'linear-gradient(45deg,#eee 25%,transparent 25%,transparent 75%,#eee 75%),linear-gradient(45deg,#eee 25%,transparent 25%,transparent 75%,#eee 75%)',backgroundSize:'16px 16px',backgroundPosition:'0 0,8px 8px'}}><img src={working} className="w-full h-full object-contain" /></div>
@@ -1954,8 +1964,13 @@ function TpImage({ scope, value, onChange, label, h }){
       </div>
     ) : (
       <div>
-        <div className={`border-2 border-dashed rounded-lg overflow-hidden bg-slate-50 ${h||'h-32'} flex items-center justify-center`}>{url?<img src={url} className="w-full h-full object-contain" />:<span className="text-slate-300 text-xs">No image</span>}</div>
-        <div className="flex gap-1 mt-1 no-print"><label className="text-xs px-2 py-1 rounded border bg-white cursor-pointer flex-1 text-center hover:bg-slate-50">📎 {value?'Replace':'Upload'}<input type="file" accept="image/*" className="hidden" onChange={pick} /></label>{value && <button onClick={editExisting} className="text-xs px-2 py-1 rounded border bg-white" title="Crop / remove background">✎</button>}{value && <button onClick={()=>onChange('')} className="text-xs px-2 py-1 rounded border bg-white text-rose-500">✕</button>}</div>
+        <div className={`border-2 border-dashed rounded-lg overflow-hidden bg-slate-50 ${h||'h-32'} flex flex-col items-center justify-center`}>
+          {url ? <img src={url} className="w-full h-full object-contain" /> :
+           (value && loadErr) ? <span className="text-rose-500 text-xs text-center px-2">⚠ Image not available<div className="text-[10px] text-rose-400 mt-0.5">Storage may not be accessible. Re-upload or contact admin.</div></span> :
+           value ? <span className="text-slate-400 text-xs">Loading…</span> :
+           <span className="text-slate-300 text-xs">No image · paste with ⌘V</span>}
+        </div>
+        <div className="flex gap-1 mt-1 no-print"><label className="text-xs px-2 py-1 rounded border bg-white cursor-pointer flex-1 text-center hover:bg-slate-50">📎 {value?'Replace':'Upload'}<input type="file" accept="image/*" className="hidden" onChange={pick} /></label>{value && !loadErr && <button onClick={editExisting} className="text-xs px-2 py-1 rounded border bg-white" title="Crop / remove background">✎</button>}{value && <button onClick={()=>onChange('')} className="text-xs px-2 py-1 rounded border bg-white text-rose-500">✕</button>}</div>
       </div>
     )}
     {showCrop && <CropModal src={working} onClose={()=>setShowCrop(false)} onApply={(d)=>{ setWorking(d); setShowCrop(false); }} />}
@@ -2008,7 +2023,23 @@ function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, size
   function toggleSection(key,val){ setTp(t=>({...t,[key]:{...t[key],enabled:val}})); }
   function duplicateSection(key){ const id='xp'+Date.now()+Math.random().toString(36).slice(2,5); setTp(t=>({...t, extraPages:[...(t.extraPages||[]), { id, type:key, data:{ ...JSON.parse(JSON.stringify(t[key])), enabled:true } }]})); setActive(id); }
   function removeExtra(id){ if(!confirm('Delete this duplicated page?')) return; setTp(t=>({...t, extraPages:(t.extraPages||[]).filter(p=>p.id!==id)})); if(active===id) setActive('header'); }
-  async function save(){ setSaving(true); const payload={...tp,updatedAt:todayISO()}; const {error}=await sb.from('leads').update({ techpack:payload }).eq('id',lead.id); setSaving(false); if(error){ alert(error.message); return; } reload&&reload(); alert('Techpack saved.'); }
+  async function save(){
+    if(readOnly){ alert("You're viewing this techpack in preview-only mode."); return; }
+    setSaving(true);
+    const payload={...tp,updatedAt:todayISO()};
+    const {error}=await sb.from('leads').update({ techpack:payload }).eq('id',lead.id);
+    setSaving(false);
+    if(error){
+      console.error('Techpack save error:', error, 'lead.id=', lead.id, 'profile.role=', profile?.role);
+      const hint = /row-level security|permission denied|RLS/i.test(error.message||'') ?
+        '\n\nLikely cause: your account does not have permission to edit this lead. Ask an admin to:\n• Confirm your role on Team Overview (Sales Manager or Admin)\n• Re-run steeze-erp-assistant-role.sql in Supabase' :
+        '';
+      alert('Save failed: '+(error.message||error)+hint);
+      return;
+    }
+    reload&&reload();
+    alert('Techpack saved.');
+  }
 
   function editor(){
     switch(pageType){
