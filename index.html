@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15a · + New client, multi-contact, Lead Source + Sales Manager fields';
+const BUILD = 'Live build 15b · Production: Sales Owner column + filter + inline change';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -659,9 +659,12 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
 }
 
 /* ----------------------- Production board ----------------------- */
-function ProductionBoard({ profile, jobs, leads, reload, openActivity, openTechpack }){
+function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack }){
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
+  const [filterOwner,setFilterOwner]=useState('');
+  const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  async function changeOwner(j, ownerId){ const { error } = await sb.from('production_jobs').update({ sales_owner_id: ownerId||null }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
   const active=jobs.filter(j=>!PRODUCTION_DONE.includes(j.status));
   const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
@@ -670,6 +673,7 @@ function ProductionBoard({ profile, jobs, leads, reload, openActivity, openTechp
   const shown=(viewMode==='active'?active:jobs.filter(j=>PRODUCTION_DONE.includes(j.status)))
     .filter(j=>!filterStatus||j.status===filterStatus)
     .filter(j=>{ if(filterDeadline==='overdue') return deadlineInfo(j.due_date,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(j.due_date); return d!==null&&d>=0&&d<=7; } return true; })
+    .filter(j=>{ if(filterOwner==='__mine') return j.sales_owner_id===profile.id; if(filterOwner==='__unassigned') return !j.sales_owner_id; if(filterOwner) return j.sales_owner_id===filterOwner; return true; })
     .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
   async function move(j,st){ const {error}=await sb.from('production_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function sendTo(j, table, status, label){ if(!confirm(`Send ${j.number||''} to ${label}?`)) return;
@@ -701,6 +705,13 @@ function ProductionBoard({ profile, jobs, leads, reload, openActivity, openTechp
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search job#, client, item…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
         <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All statuses</option>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+        <select value={filterOwner} onChange={e=>setFilterOwner(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300">
+          <option value="">All sales owners</option>
+          <option value="__mine">My jobs only</option>
+          <option value="__unassigned">Unassigned</option>
+          <option disabled>──────────</option>
+          {salesPeople.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}
+        </select>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
           <button onClick={()=>setFilterDeadline('')} className={`px-3 py-1.5 rounded-md ${filterDeadline===''?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All</button>
           <button onClick={()=>setFilterDeadline('overdue')} className={`px-3 py-1.5 rounded-md ${filterDeadline==='overdue'?'bg-white shadow-sm font-semibold text-rose-600':'text-slate-600'}`}>Overdue</button>
@@ -709,21 +720,27 @@ function ProductionBoard({ profile, jobs, leads, reload, openActivity, openTechp
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th></th></tr></thead>
-        <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, PRODUCTION_DONE.includes(j.status)); const meta=metaFrom(PRODUCTION_STATUSES,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; return (
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
+        <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, PRODUCTION_DONE.includes(j.status)); const meta=metaFrom(PRODUCTION_STATUSES,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const owner=j.sales_owner_id?(profiles||[]).find(p=>p.id===j.sales_owner_id):null; return (
           <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
             <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label||fmtDate(j.due_date)}</span></td>
+            <td className="px-3 py-2">
+              <select value={j.sales_owner_id||''} onChange={e=>changeOwner(j,e.target.value)} className="text-xs px-2 py-1 rounded border border-slate-300 bg-white max-w-[10rem]">
+                <option value="">— unassigned —</option>
+                {salesPeople.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}
+              </select>
+            </td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'production', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
             </td>
           </tr>
         ); })}
-        {shown.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No jobs here. Won leads arrive via "Send to Production".</td></tr>}
+        {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No jobs here. Won leads arrive via "Send to Production".</td></tr>}
         </tbody></table></div></div>
     </div>
   );
@@ -2940,7 +2957,7 @@ function App(){
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
-    const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||null });
+    const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||null, sales_owner_id: lead.manager_id||null });
     if(error){ alert(error.message); return; } alert('Sent "'+lead.title+'" to Production.'); setDetailLead(null); setView('prod'); loadAll();
   }
 
@@ -3034,7 +3051,7 @@ function App(){
           : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} reload={loadAll} />)}
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='sampling' && <SamplingBoard profile={profile} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
