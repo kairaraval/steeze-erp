@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14j · Dashboard: per-owner Won this month + 6-month bar chart';
+const BUILD = 'Live build 14k · Team: editable names + View profile modal';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1415,7 +1415,7 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 }
 
 /* ----------------------- Team Overview ----------------------- */
-function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
+function TeamOverview({ profile, profiles, leads, clients, pendingInvites, reload }){
   const isAdmin = profile && profile.role==='admin';
   const rows=profiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>SOLD_STAGES.includes(l.stage)); const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
 
@@ -1425,7 +1425,18 @@ function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
   const [inviting,setInviting]=useState(false);
   const [msg,setMsg]=useState('');
   const [copied,setCopied]=useState('');
+  const [editingNameId,setEditingNameId]=useState(null);
+  const [draftName,setDraftName]=useState('');
+  const [viewingMember,setViewingMember]=useState(null);
   const appUrl = typeof window!=='undefined' ? window.location.origin : '';
+
+  async function changeName(p){
+    const n=(draftName||'').trim();
+    if(!n){ alert('Name cannot be empty.'); return; }
+    const { error } = await sb.from('profiles').update({ name:n }).eq('id', p.id);
+    if(error){ alert(error.message); return; }
+    setEditingNameId(null); setDraftName(''); reload && reload();
+  }
 
   const roleLabel = (r) => r==='admin'?'Administrator' : r==='assistant'?'Sales Assistant' : 'Sales Manager';
   const roleBadge = (r) => {
@@ -1536,14 +1547,26 @@ function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
             <th className="text-right px-3 py-2">Open value</th>
             <th className="text-right px-3 py-2">Won deals</th>
             <th className="text-right px-3 py-2">Won value</th>
+            <th className="text-right px-3 py-2">Actions</th>
           </tr></thead>
           <tbody>{rows.map(({p,total,openVal,wonVal,wonCount})=>(
-            <tr key={p.id} className="border-t">
+            <tr key={p.id} className="border-t hover:bg-slate-50/60">
               <td className="px-3 py-2">
-                <span className="inline-flex items-center gap-2"><Avatar profile={p} size="sm" />
-                  <span className="font-medium text-slate-800">{p.name||p.email}</span>
-                </span>
-                <div className="text-[11px] text-slate-500">{p.email}</div>
+                <div className="flex items-center gap-2"><Avatar profile={p} size="sm" />
+                  {editingNameId===p.id ? (
+                    <div className="flex items-center gap-1">
+                      <input autoFocus value={draftName} onChange={e=>setDraftName(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') changeName(p); if(e.key==='Escape'){ setEditingNameId(null); setDraftName(''); } }} className="text-xs px-2 py-1 rounded border border-indigo-300 bg-white w-44" placeholder="Real name (used for @mentions)" />
+                      <button onClick={()=>changeName(p)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">Save</button>
+                      <button onClick={()=>{ setEditingNameId(null); setDraftName(''); }} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100">Cancel</button>
+                    </div>
+                  ) : (
+                    <>
+                      <button onClick={()=>setViewingMember(p)} className="font-medium text-slate-800 hover:text-indigo-700 hover:underline">{p.name||p.email.split('@')[0]}</button>
+                      {isAdmin && <button onClick={()=>{ setEditingNameId(p.id); setDraftName(p.name||''); }} title="Edit name (used for @mentions)" className="text-slate-400 hover:text-indigo-600 text-xs">✎</button>}
+                    </>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-500 ml-7">{p.email}</div>
               </td>
               <td className="px-3 py-2">
                 {isAdmin ? (
@@ -1558,11 +1581,78 @@ function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
               <td className="px-3 py-2 text-right">{peso(openVal)}</td>
               <td className="px-3 py-2 text-right">{wonCount}</td>
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(wonVal)}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                <button onClick={()=>setViewingMember(p)} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">View profile</button>
+              </td>
             </tr>
           ))}</tbody>
         </table></div>
       </div>
+
+      {viewingMember && <MemberProfileModal member={viewingMember} leads={leads} clients={clients} onClose={()=>setViewingMember(null)} />}
     </div>
+  );
+}
+
+function MemberProfileModal({ member, leads, clients, onClose }){
+  const mine=leads.filter(l=>l.manager_id===member.id);
+  const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
+  const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
+  const wonVal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
+  const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
+  const _now=new Date();
+  const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===_now.getMonth()&&d.getFullYear()===_now.getFullYear(); });
+  const wonMonthVal=wonThisMonth.reduce((s,l)=>s+(Number(l.value)||0),0);
+  const months=[];
+  for(let i=5;i>=0;i--){ const d=new Date(_now.getFullYear(), _now.getMonth()-i, 1); months.push({ key:d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
+  won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
+  const maxM=Math.max(1,...months.map(m=>m.total));
+  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.company||'—';
+  const roleLbl = member.role==='admin'?'Administrator' : member.role==='assistant'?'Sales Assistant' : 'Sales Manager';
+  const recentWon=won.slice().sort((a,b)=>(b.won_at||'').localeCompare(a.won_at||'')).slice(0,8);
+  return (
+    <Modal title="Team member" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="flex items-center gap-3"><Avatar profile={member} />
+          <div>
+            <div className="text-xl font-bold text-slate-900">{member.name||member.email}</div>
+            <div className="text-xs text-slate-500">{roleLbl} · {member.email}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Open pipeline</div><div className="text-xl font-bold mt-0.5">{peso(openVal)}</div><div className="text-[11px] text-slate-500">{open.length} lead{open.length===1?'':'s'}</div></div>
+          <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3"><div className="text-[10px] uppercase text-emerald-700">Won this month</div><div className="text-xl font-bold mt-0.5 text-emerald-800">{peso(wonMonthVal)}</div><div className="text-[11px] text-emerald-600">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
+          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Won (all-time)</div><div className="text-xl font-bold mt-0.5 text-emerald-700">{peso(wonVal)}</div><div className="text-[11px] text-slate-500">{won.length} deal{won.length===1?'':'s'}</div></div>
+          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Win rate</div><div className="text-xl font-bold mt-0.5">{mine.length?Math.round(won.length/mine.length*100):0}%</div><div className="text-[11px] text-slate-500">{mine.length} total leads</div></div>
+        </div>
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Closed Won — last 6 months</div>
+          <div className="flex items-end gap-2 h-28">{months.map(m=>(
+            <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1">
+              <div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div>
+              <div className="w-full bg-emerald-500 rounded-t" style={{ height:Math.max(2,(m.total/maxM*100))+'%', minHeight:m.total?'4px':'2px' }}></div>
+              <div className="text-[10px] text-slate-500">{m.label}</div>
+            </div>
+          ))}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Most recent Closed Won</div>
+          {recentWon.length===0 ? <div className="text-xs text-slate-400 py-2">No won deals yet.</div> :
+            <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Client</th><th className="text-left px-2 py-1.5">Lead</th><th className="text-right px-2 py-1.5">Value</th></tr></thead>
+              <tbody>{recentWon.map(l=>(
+                <tr key={l.id} className="border-t">
+                  <td className="px-2 py-1 text-xs text-slate-500">{fmtDate(l.won_at)}</td>
+                  <td className="px-2 py-1">{clientName(l.client_id)}</td>
+                  <td className="px-2 py-1 text-slate-700">{l.title}</td>
+                  <td className="px-2 py-1 text-right font-semibold">{peso(l.value)}</td>
+                </tr>
+              ))}</tbody>
+            </table></div>
+          }
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2856,7 +2946,7 @@ function App(){
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
           : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} />)}
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
-        {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} pendingInvites={pendingInvites} reload={loadAll} />}
+        {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='sampling' && <SamplingBoard profile={profile} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
