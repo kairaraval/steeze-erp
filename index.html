@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14f · Lead CSV Import (ClickUp export → upsert by Task ID)';
+const BUILD = 'Live build 14g · Stages: Delivered-For Payment + Delivered & Paid';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -72,14 +72,19 @@ window.addEventListener('error', e => showFatal(e.message || String(e)));
 window.addEventListener('unhandledrejection', e => showFatal((e.reason && (e.reason.message||e.reason.error_description)) || JSON.stringify(e.reason) || 'Unknown promise rejection'));
 
 const STAGES = [
-  { key: 'new',         label: 'New Lead',      color: 'bg-slate-200 text-slate-700' },
-  { key: 'qualified',   label: 'Qualified',     color: 'bg-blue-100 text-blue-700' },
-  { key: 'proposal',    label: 'Proposal Sent', color: 'bg-indigo-100 text-indigo-700' },
-  { key: 'negotiation', label: 'Negotiation',   color: 'bg-amber-100 text-amber-700' },
-  { key: 'sampling',    label: 'Sampling',      color: 'bg-purple-100 text-purple-700' },
-  { key: 'won',         label: 'Closed Won',    color: 'bg-emerald-100 text-emerald-700' },
-  { key: 'lost',        label: 'Closed Lost',   color: 'bg-rose-100 text-rose-700' },
+  { key: 'new',               label: 'New Lead',               color: 'bg-slate-200 text-slate-700' },
+  { key: 'qualified',         label: 'Qualified',              color: 'bg-blue-100 text-blue-700' },
+  { key: 'proposal',          label: 'Proposal Sent',          color: 'bg-indigo-100 text-indigo-700' },
+  { key: 'negotiation',       label: 'Negotiation',            color: 'bg-amber-100 text-amber-700' },
+  { key: 'sampling',          label: 'Sampling',               color: 'bg-purple-100 text-purple-700' },
+  { key: 'won',               label: 'Closed Won',             color: 'bg-emerald-100 text-emerald-700' },
+  { key: 'delivered_pending', label: 'Delivered - For Payment', color: 'bg-teal-100 text-teal-800' },
+  { key: 'delivered_paid',    label: 'Delivered & Paid',       color: 'bg-green-200 text-green-900 font-semibold' },
+  { key: 'lost',              label: 'Closed Lost',            color: 'bg-rose-100 text-rose-700' },
 ];
+// Stages that count a deal as "sold" (post-won). Used for dashboards / pipeline filters.
+const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
+const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const PAYMENT_OPTS = [
   { key:'unpaid', label:'Not yet paid', chip:'bg-rose-100 text-rose-700',    sel:'bg-rose-50 text-rose-700 border-rose-200' },
@@ -393,7 +398,7 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
         const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, won_at: stage==='won' ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       if(isEdit){ const {error}=await sb.from('leads').update(payload).eq('id',existing.id); if(error) throw error;
         if(existing.stage!==stage){ await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(stage).label}"` }); } }
       else { const {data,error}=await sb.from('leads').insert({ ...payload, manager_id:profile.id }).select().single(); if(error) throw error;
@@ -488,8 +493,8 @@ function LeadDetail({ profile, lead, clients, onEdit, onOpenActivity, onSendProd
           <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
           <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
           {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
-          {lead.stage==='won' && <button onClick={onSendProduction} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">⚙ Send to Production</button>}
-          {lead.stage==='won' && <button onClick={onSendToPR} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">📝 Send to PR</button>}
+          {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendProduction} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">⚙ Send to Production</button>}
+          {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendToPR} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">📝 Send to PR</button>}
           <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -868,7 +873,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
     return mineOnly ? l.manager_id===profile.id : true;
   }
   const visible=leads.filter(l=>ownerMatch(l) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
-  async function move(l,st){ const patch={ stage:st }; if(st==='won'&&!l.won_at) patch.won_at=new Date().toISOString().slice(0,10); const {error}=await sb.from('leads').update(patch).eq('id',l.id); if(error){ alert(error.message); return; } await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(st).label}"` }); reload(); }
+  async function move(l,st){ const patch={ stage:st }; if(SOLD_STAGES.includes(st) && !l.won_at) patch.won_at=new Date().toISOString().slice(0,10); if(st==='delivered_paid') patch.payment_status='paid'; const {error}=await sb.from('leads').update(patch).eq('id',l.id); if(error){ alert(error.message); return; } await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(st).label}"` }); reload(); }
   async function del(l){ if(!confirm('Delete this lead?')) return; const {error}=await sb.from('leads').delete().eq('id',l.id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div>
@@ -950,7 +955,9 @@ function LeadImportModal({ profiles, clients, onClose, onDone }){
     'negotiation':'negotiation','on hold':'negotiation',
     'for sampling (techpack )':'sampling','for sampling (techpack)':'sampling',
     'sample/revision':'sampling','for graphic design works':'sampling',
-    'done deal! (techpack)':'won','for production':'won','delivered - for payment':'won',
+    'done deal! (techpack)':'won','for production':'won',
+    'delivered - for payment':'delivered_pending',
+    'delivered and paid':'delivered_paid','delivered & paid':'delivered_paid','paid':'delivered_paid',
     'closed- lost':'lost','closed - lost':'lost',
   };
 
@@ -1158,9 +1165,9 @@ function LeadImportModal({ profiles, clients, onClose, onDone }){
 /* ----------------------- Dashboard ----------------------- */
 function Dashboard({ profile, leads, clients, prodJobs }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
-  const open=leads.filter(l=>!['won','lost'].includes(l.stage));
+  const open=leads.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
-  const won=leads.filter(l=>l.stage==='won');
+  const won=leads.filter(l=>SOLD_STAGES.includes(l.stage));
   const monthKey=new Date().toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'2-digit', year:'numeric' });
   const wonThisMonth=won.filter(l=>l.won_at && new Date(l.won_at+'T00:00:00').toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'2-digit', year:'numeric' })===monthKey);
   const wonMonthVal=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); const now=new Date(); return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear(); }).reduce((s,l)=>s+(Number(l.value)||0),0);
@@ -1168,7 +1175,7 @@ function Dashboard({ profile, leads, clients, prodJobs }){
   const tiles=[
     { label:'Open pipeline value', value:peso(openVal), sub:`${open.length} active leads` },
     { label:'Won this month', value:peso(wonMonthVal), sub:`${won.length} won all-time` },
-    { label:'My leads', value:mine.length, sub:`${mine.filter(l=>!['won','lost'].includes(l.stage)).length} still open` },
+    { label:'My leads', value:mine.length, sub:`${mine.filter(l=>!CLOSED_STAGES.includes(l.stage)).length} still open` },
     { label:'In production', value:activeProd, sub:'active jobs' },
   ];
   return (
@@ -1179,8 +1186,8 @@ function Dashboard({ profile, leads, clients, prodJobs }){
         <div key={i} className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase tracking-wide text-slate-400">{t.label}</div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub}</div></div>
       ))}</div>
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Pipeline by stage</div>{STAGES.filter(s=>!['won','lost'].includes(s.key)).map(s=>{ const c=open.filter(l=>l.stage===s.key); const v=c.reduce((a,l)=>a+(Number(l.value)||0),0); return (<div key={s.key} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{s.label}</span><span className="text-slate-500">{c.length} · {peso(v)}</span></div>); })}</div>
-        <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Top clients by value</div>{clients.map(c=>({ c, v:leads.filter(l=>l.client_id===c.id&&l.stage==='won').reduce((a,l)=>a+(Number(l.value)||0),0) })).filter(x=>x.v>0).sort((a,b)=>b.v-a.v).slice(0,6).map(({c,v})=>(<div key={c.id} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{c.company}</span><span className="font-medium text-slate-800">{peso(v)}</span></div>))}{clients.every(c=>leads.filter(l=>l.client_id===c.id&&l.stage==='won').length===0) && <div className="text-xs text-slate-400">No won deals yet.</div>}</div>
+        <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Pipeline by stage</div>{STAGES.filter(s=>!CLOSED_STAGES.includes(s.key)).map(s=>{ const c=open.filter(l=>l.stage===s.key); const v=c.reduce((a,l)=>a+(Number(l.value)||0),0); return (<div key={s.key} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{s.label}</span><span className="text-slate-500">{c.length} · {peso(v)}</span></div>); })}</div>
+        <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Top clients by value</div>{clients.map(c=>({ c, v:leads.filter(l=>l.client_id===c.id&&SOLD_STAGES.includes(l.stage)).reduce((a,l)=>a+(Number(l.value)||0),0) })).filter(x=>x.v>0).sort((a,b)=>b.v-a.v).slice(0,6).map(({c,v})=>(<div key={c.id} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{c.company}</span><span className="font-medium text-slate-800">{peso(v)}</span></div>))}{clients.every(c=>leads.filter(l=>l.client_id===c.id&&SOLD_STAGES.includes(l.stage)).length===0) && <div className="text-xs text-slate-400">No won deals yet.</div>}</div>
       </div>
     </div>
   );
@@ -1189,7 +1196,7 @@ function Dashboard({ profile, leads, clients, prodJobs }){
 /* ----------------------- Clients ----------------------- */
 function ClientsView({ profile, profiles, clients, leads, onOpen }){
   const [search,setSearch]=useState(''); const [mgrFilter,setMgrFilter]=useState('');
-  const ltv=(cid)=>leads.filter(l=>l.client_id===cid&&l.stage==='won').reduce((s,l)=>s+(Number(l.value)||0),0);
+  const ltv=(cid)=>leads.filter(l=>l.client_id===cid&&SOLD_STAGES.includes(l.stage)).reduce((s,l)=>s+(Number(l.value)||0),0);
   const rows=clients.filter(c=>(!search||c.company.toLowerCase().includes(search.toLowerCase())||(c.contact||'').toLowerCase().includes(search.toLowerCase()))&&(!mgrFilter||c.manager_id===mgrFilter));
   return (
     <div className="p-6">
@@ -1241,8 +1248,8 @@ function ClientDetail({ client, profile, profiles, leads, reload, onBack, onOpen
   const live=client; // passed fresh from parent
   const mgr=profiles.find(p=>p.id===live.manager_id);
   const cl=leads.filter(l=>l.client_id===live.id);
-  const won=cl.filter(l=>l.stage==='won');
-  const open=cl.filter(l=>!['won','lost'].includes(l.stage));
+  const won=cl.filter(l=>SOLD_STAGES.includes(l.stage));
+  const open=cl.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const ltv=won.reduce((s,l)=>s+(Number(l.value)||0),0);
   const lastOrder=won.map(l=>l.won_at).filter(Boolean).sort().slice(-1)[0];
   const canEdit=profile.role==='admin'||live.manager_id===profile.id;
@@ -1303,11 +1310,11 @@ function ClientDetail({ client, profile, profiles, leads, reload, onBack, onOpen
 /* ----------------------- My Profile ----------------------- */
 function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
-  const won=mine.filter(l=>l.stage==='won');
+  const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
   async function setPayment(l,val){ const {error}=await sb.from('leads').update({ payment_status:val }).eq('id',l.id); if(error){ alert(error.message); return; } reload&&reload(); }
   const payAgg=PAYMENT_OPTS.map(p=>{ const rows=won.filter(l=>(l.payment_status||'unpaid')===p.key); return { ...p, count:rows.length, total:rows.reduce((s,l)=>s+(Number(l.value)||0),0) }; });
   const wonTotal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
-  const open=mine.filter(l=>!['won','lost'].includes(l.stage));
+  const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const wonVal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
   // last 6 months won totals
@@ -1354,7 +1361,7 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 /* ----------------------- Team Overview ----------------------- */
 function TeamOverview({ profile, profiles, leads, pendingInvites, reload }){
   const isAdmin = profile && profile.role==='admin';
-  const rows=profiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>l.stage==='won'); const open=mine.filter(l=>!['won','lost'].includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
+  const rows=profiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>SOLD_STAGES.includes(l.stage)); const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
 
   const [inviteEmail,setInviteEmail]=useState('');
   const [inviteRole,setInviteRole]=useState('manager');
