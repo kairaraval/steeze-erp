@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 14l · Modal: sticky header, top-aligned, scrolls properly on tall forms';
+const BUILD = 'Live build 15a · + New client, multi-contact, Lead Source + Sales Manager fields';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -86,6 +86,7 @@ const STAGES = [
 const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
 const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
+const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
   { key:'unpaid', label:'Not yet paid', chip:'bg-rose-100 text-rose-700',    sel:'bg-rose-50 text-rose-700 border-rose-200' },
   { key:'dp50',   label:'50% DP',       chip:'bg-amber-100 text-amber-700',   sel:'bg-amber-50 text-amber-700 border-amber-200' },
@@ -371,7 +372,7 @@ function Thread({ profile, profiles, table, match, scope, titleText, onClose, on
 }
 
 /* ----------------------- Lead form ----------------------- */
-function LeadForm({ profile, clients, existing, onClose, onSaved }){
+function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const isEdit=!!existing;
   const [clientMode,setClientMode]=useState(isEdit?'existing':(clients.length?'existing':'new'));
   const [clientId,setClientId]=useState(existing?.client_id||clients[0]?.id||'');
@@ -380,6 +381,9 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
   const [creationDate,setCreationDate]=useState(existing?.created_at ? String(existing.created_at).slice(0,10) : new Date().toISOString().slice(0,10));
   const [poNumber,setPoNumber]=useState(existing?.po_number||''); const [techpackNumber,setTechpackNumber]=useState(existing?.techpack_number||'');
+  const [leadSource,setLeadSource]=useState(existing?.lead_source||'');
+  const [managerId,setManagerId]=useState(existing?.manager_id||profile.id);
+  const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
@@ -399,10 +403,10 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
         const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', manager_id: managerId||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       if(isEdit){ const {error}=await sb.from('leads').update(payload).eq('id',existing.id); if(error) throw error;
         if(existing.stage!==stage){ await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(stage).label}"` }); } }
-      else { const {data,error}=await sb.from('leads').insert({ ...payload, manager_id:profile.id }).select().single(); if(error) throw error;
+      else { const {data,error}=await sb.from('leads').insert(payload).select().single(); if(error) throw error;
         await sb.from('lead_activity').insert({ lead_id:data.id, actor_id:profile.id, type:'system', text:'Created the lead' }); }
       onSaved();
     } catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
@@ -434,6 +438,20 @@ function LeadForm({ profile, clients, existing, onClose, onSaved }){
           <div><label className="text-[10px] text-slate-500 uppercase">Creation Date</label><input type="date" className="input mt-0.5" value={creationDate||''} onChange={e=>setCreationDate(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">PO Number</label><input className="input mt-0.5" value={poNumber} onChange={e=>setPoNumber(e.target.value)} placeholder="Client's PO #" /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Techpack Number</label><input className="input mt-0.5" value={techpackNumber} onChange={e=>setTechpackNumber(e.target.value)} placeholder="Prod Form / Techpack #" /></div>
+          <div>
+            <label className="text-[10px] text-slate-500 uppercase">Lead Source</label>
+            <select className="input mt-0.5" value={leadSource} onChange={e=>setLeadSource(e.target.value)}>
+              <option value="">— Select source —</option>
+              {LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-500 uppercase">Sales Manager</label>
+            <select className="input mt-0.5" value={managerId||''} onChange={e=>setManagerId(e.target.value||null)}>
+              <option value="">— Unassigned —</option>
+              {salesPeople.map(p=><option key={p.id} value={p.id}>{p.name||p.email}{p.id===profile.id?' (me)':''}</option>)}
+            </select>
+          </div>
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments</div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photo / PDF'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
@@ -1245,50 +1263,119 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs }){
 }
 
 /* ----------------------- Clients ----------------------- */
-function ClientsView({ profile, profiles, clients, leads, onOpen }){
+function ClientsView({ profile, profiles, clients, leads, onOpen, reload }){
   const [search,setSearch]=useState(''); const [mgrFilter,setMgrFilter]=useState('');
+  const [creating,setCreating]=useState(false);
   const ltv=(cid)=>leads.filter(l=>l.client_id===cid&&SOLD_STAGES.includes(l.stage)).reduce((s,l)=>s+(Number(l.value)||0),0);
-  const rows=clients.filter(c=>(!search||c.company.toLowerCase().includes(search.toLowerCase())||(c.contact||'').toLowerCase().includes(search.toLowerCase()))&&(!mgrFilter||c.manager_id===mgrFilter));
+  function primaryContact(c){ const list=c.contacts; if(Array.isArray(list)&&list.length>0) return list[0]; if(c.contact||c.email||c.phone) return { name:c.contact||'', email:c.email||'', phone:c.phone||'' }; return null; }
+  const rows=clients.filter(c=>{
+    const term=search.toLowerCase();
+    if(mgrFilter && c.manager_id!==mgrFilter) return false;
+    if(!term) return true;
+    const pc=primaryContact(c);
+    const haystack=[c.company, pc?.name, pc?.email, ...(Array.isArray(c.contacts)?c.contacts.map(x=>x.name+' '+x.email):[])].join(' ').toLowerCase();
+    return haystack.includes(term);
+  });
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-slate-900 mb-1">Clients</h1>
-      <p className="text-slate-500 text-sm mb-4">All Steeze clients. Click one to see its leads and lifetime value.</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 mb-1">Clients</h1>
+          <p className="text-slate-500 text-sm">All Steeze clients. Click one to see its leads, contacts and lifetime value.</p>
+        </div>
+        <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New client</button>
+      </div>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search clients…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
         <select value={mgrFilter} onChange={e=>setMgrFilter(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All managers</option>{profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Company</th><th className="text-left px-3 py-2">Contact</th><th className="text-left px-3 py-2">Manager</th><th className="text-right px-3 py-2">Leads</th><th className="text-right px-3 py-2">Lifetime value</th></tr></thead>
-        <tbody>{rows.map(c=>{ const mgr=profiles.find(p=>p.id===c.manager_id); const cnt=leads.filter(l=>l.client_id===c.id).length; return (
-          <tr key={c.id} onClick={()=>onOpen(c)} className="border-t hover:bg-slate-50 cursor-pointer"><td className="px-3 py-2 font-medium text-slate-900">{c.company}</td><td className="px-3 py-2 text-slate-600">{c.contact||'—'}</td><td className="px-3 py-2"><span className="inline-flex items-center gap-1.5"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600">{mgr?firstName(mgr):'—'}</span></span></td><td className="px-3 py-2 text-right">{cnt}</td><td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(ltv(c.id))}</td></tr>
-        ); })}{rows.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-8">No clients yet. Add one when creating a lead.</td></tr>}</tbody>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Company</th><th className="text-left px-3 py-2">Primary contact</th><th className="text-left px-3 py-2">Manager</th><th className="text-right px-3 py-2">Leads</th><th className="text-right px-3 py-2">Lifetime value</th></tr></thead>
+        <tbody>{rows.map(c=>{ const mgr=profiles.find(p=>p.id===c.manager_id); const cnt=leads.filter(l=>l.client_id===c.id).length; const pc=primaryContact(c); const extra=Array.isArray(c.contacts)&&c.contacts.length>1 ? c.contacts.length-1 : 0; return (
+          <tr key={c.id} onClick={()=>onOpen(c)} className="border-t hover:bg-slate-50 cursor-pointer">
+            <td className="px-3 py-2 font-medium text-slate-900">{c.company}</td>
+            <td className="px-3 py-2 text-slate-600">{pc?.name||'—'}{pc?.email && <div className="text-[11px] text-slate-400">{pc.email}</div>}{extra>0 && <div className="text-[10px] text-indigo-600 font-medium mt-0.5">+{extra} more contact{extra===1?'':'s'}</div>}</td>
+            <td className="px-3 py-2"><span className="inline-flex items-center gap-1.5"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600">{mgr?firstName(mgr):'—'}</span></span></td>
+            <td className="px-3 py-2 text-right">{cnt}</td>
+            <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(ltv(c.id))}</td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-8">No clients yet. Click "+ New client" above to add one.</td></tr>}</tbody>
       </table></div></div>
+      {creating && <ClientEditForm profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
     </div>
   );
 }
-function ClientEditForm({ client, onClose, onSaved }){
-  const [f,setF]=useState({ company:client.company||'', contact:client.contact||'', email:client.email||'', phone:client.phone||'', industry:client.industry||'', address:client.address||'', tags:(client.tags||[]).join(', '), notes:client.notes||'' });
+function ClientEditForm({ client, profile, onClose, onSaved }){
+  const isEdit=!!client;
+  // Build initial contacts: existing array, or migrate legacy fields, or one empty row.
+  const initialContacts = (()=>{
+    if(client && Array.isArray(client.contacts) && client.contacts.length>0) return client.contacts.map((c,i)=>({...c, id:'c'+i}));
+    if(client && (client.contact||client.email||client.phone)) return [{ id:'c0', name:client.contact||'', role:'', email:client.email||'', phone:client.phone||'' }];
+    return [{ id:'c0', name:'', role:'', email:'', phone:'' }];
+  })();
+  const [f,setF]=useState({ company:client?.company||'', industry:client?.industry||'', address:client?.address||'', tags:(client?.tags||[]).join(', '), notes:client?.notes||'' });
+  const [contacts,setContacts]=useState(initialContacts);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function setContact(idx,k,v){ setContacts(arr=>arr.map((c,i)=>i===idx?{...c,[k]:v}:c)); }
+  function addContact(){ setContacts(arr=>[...arr,{ id:'c'+Date.now(), name:'', role:'', email:'', phone:'' }]); }
+  function removeContact(idx){ setContacts(arr=>arr.length===1?[{ id:'c'+Date.now(), name:'', role:'', email:'', phone:'' }]:arr.filter((_,i)=>i!==idx)); }
+  function moveToPrimary(idx){ setContacts(arr=>{ const next=[...arr]; const [c]=next.splice(idx,1); next.unshift(c); return next; }); }
   async function save(){ if(!f.company.trim()){ setMsg('Company is required.'); return; } setBusy(true); setMsg('');
     const tags=f.tags.split(',').map(t=>t.trim()).filter(Boolean);
-    const {error}=await sb.from('clients').update({ company:f.company.trim(), contact:f.contact.trim(), email:f.email.trim(), phone:f.phone.trim(), industry:f.industry.trim(), address:f.address.trim(), tags, notes:f.notes }).eq('id',client.id);
-    setBusy(false); if(error){ setMsg(error.message); return; } onSaved&&onSaved(); }
+    const cleanContacts = contacts.map(({id,...rest})=>({ name:(rest.name||'').trim(), role:(rest.role||'').trim(), email:(rest.email||'').trim(), phone:(rest.phone||'').trim() })).filter(c=>c.name||c.email||c.phone);
+    const primary = cleanContacts[0] || { name:'', email:'', phone:'' };
+    const payload = {
+      company: f.company.trim(),
+      contact: primary.name,    // legacy fields kept in sync with primary contact
+      email:   primary.email,
+      phone:   primary.phone,
+      industry: f.industry.trim(),
+      address:  f.address.trim(),
+      tags, notes:f.notes,
+      contacts: cleanContacts,
+    };
+    if(isEdit){
+      const {error}=await sb.from('clients').update(payload).eq('id',client.id);
+      setBusy(false); if(error){ setMsg(error.message); return; } onSaved&&onSaved();
+    } else {
+      const insertPayload = { ...payload, manager_id: profile?.id || null };
+      const {error}=await sb.from('clients').insert(insertPayload);
+      setBusy(false); if(error){ setMsg(error.message); return; } onSaved&&onSaved();
+    }
+  }
   return (
-    <Modal title="Edit client" onClose={onClose}>
+    <Modal title={isEdit?'Edit client':'New client'} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Company"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} /></TpLbl>
-          <TpLbl t="Contact name"><input className="input" value={f.contact} onChange={e=>up('contact',e.target.value)} /></TpLbl>
-          <TpLbl t="Email"><input className="input" value={f.email} onChange={e=>up('email',e.target.value)} /></TpLbl>
-          <TpLbl t="Phone"><input className="input" value={f.phone} onChange={e=>up('phone',e.target.value)} /></TpLbl>
+          <TpLbl t="Company *"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} placeholder="Acme Corp" /></TpLbl>
           <TpLbl t="Industry"><input className="input" value={f.industry} onChange={e=>up('industry',e.target.value)} /></TpLbl>
+        </div>
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">Contacts <span className="text-slate-400 font-normal">· first row is the primary contact</span></div>
+            <button onClick={addContact} className="text-xs text-indigo-600 hover:underline font-medium">+ Add contact</button>
+          </div>
+          <div className="space-y-2">{contacts.map((c,idx)=>(
+            <div key={c.id} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Name {idx===0 && <span className="text-indigo-600">· primary</span>}</label><input className="input mt-0.5" value={c.name} onChange={e=>setContact(idx,'name',e.target.value)} placeholder="Drew Siapco" /></div>
+              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Role</label><input className="input mt-0.5" value={c.role||''} onChange={e=>setContact(idx,'role',e.target.value)} placeholder="HR / Procurement" /></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Email</label><input className="input mt-0.5" value={c.email} onChange={e=>setContact(idx,'email',e.target.value)} placeholder="drew@acme.com" /></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Phone</label><input className="input mt-0.5" value={c.phone} onChange={e=>setContact(idx,'phone',e.target.value)} placeholder="+63 917…" /></div>
+              <div className="col-span-1 flex flex-col items-end gap-1">
+                {idx>0 && <button title="Make primary" onClick={()=>moveToPrimary(idx)} className="text-slate-400 hover:text-indigo-600 text-xs">↑</button>}
+                <button onClick={()=>removeContact(idx)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button>
+              </div>
+            </div>
+          ))}</div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Address"><input className="input" value={f.address} onChange={e=>up('address',e.target.value)} /></TpLbl>
           <TpLbl t="Tags (comma-separated)"><input className="input" value={f.tags} onChange={e=>up('tags',e.target.value)} placeholder="VIP, repeat" /></TpLbl>
         </div>
-        <TpLbl t="Address"><input className="input" value={f.address} onChange={e=>up('address',e.target.value)} /></TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save changes'}</button>
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create client')}</button>
       </div>
     </Modal>
   );
@@ -2944,7 +3031,7 @@ function App(){
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
-          : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} />)}
+          : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} reload={loadAll} />)}
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
@@ -2972,7 +3059,7 @@ function App(){
           </button>
         </div>
       )}
-      {showNew && <LeadForm profile={profile} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
+      {showNew && <LeadForm profile={profile} profiles={profiles} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
       {liveDetail && !editLead && !activityLead && !sendGraphicLead && (
         <LeadDetail profile={profile} lead={liveDetail} clients={clients} activityCount={activityCounts[liveDetail.id]}
           onEdit={()=>setEditLead(liveDetail)} onOpenActivity={()=>setActivityLead(liveDetail)}
@@ -2982,7 +3069,7 @@ function App(){
           onOpenTechpack={()=>{ const l=liveDetail; setDetailLead(null); openTechpackEdit(l); }} onClose={()=>setDetailLead(null)} />
       )}
       {techpackLead && <TechpackEditor profile={profile} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
-      {editLead && <LeadForm profile={profile} clients={clients} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
+      {editLead && <LeadForm profile={profile} profiles={profiles} clients={clients} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
       {sendGraphicLead && <SendToGraphicModal profile={profile} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
       {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
