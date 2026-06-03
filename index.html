@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15b · Production: Sales Owner column + filter + inline change';
+const BUILD = 'Live build 15c · Paste images with Cmd/Ctrl+V (Activity, Lead form, Job form)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -220,6 +220,22 @@ async function uploadFile(scope, file){
   return { type: file.type==='application/pdf'?'pdf':(file.type.startsWith('image/')?'image':'file'), name:file.name, path, mime:file.type };
 }
 
+// Extract a pasted image (screenshot / Cmd+V) from a clipboard event.
+// Returns a File ready to feed into uploadFile, or null if no image was pasted.
+function getPastedImage(e){
+  const items = e.clipboardData && e.clipboardData.items; if(!items) return null;
+  for(let i=0;i<items.length;i++){
+    const item=items[i];
+    if(item.kind==='file' && (item.type||'').startsWith('image/')){
+      const blob = item.getAsFile(); if(!blob) continue;
+      const ext = ((item.type.split('/')[1]||'png').toLowerCase()).replace('jpeg','jpg');
+      const fname = (blob.name && blob.name!=='image.png') ? blob.name : `pasted-${Date.now()}.${ext}`;
+      return new File([blob], fname, { type: item.type });
+    }
+  }
+  return null;
+}
+
 const AVA_COLORS=['bg-blue-500','bg-emerald-500','bg-amber-500','bg-purple-500','bg-rose-500','bg-cyan-500','bg-indigo-500','bg-pink-500','bg-teal-500','bg-orange-500'];
 function avaColor(id){ if(!id) return 'bg-slate-400'; let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return AVA_COLORS[h%AVA_COLORS.length]; }
 function Avatar({ profile, size='md' }){
@@ -328,6 +344,14 @@ function Thread({ profile, profiles, table, match, scope, titleText, onClose, on
   useEffect(()=>{ load(); },[JSON.stringify(match)]);
   async function pickFile(e){ const f=e.target.files[0]; if(!f) return; setReading(true); setErr('');
     try{ setAttachment(await uploadFile(scope, f)); } catch(er){ setErr('Upload failed: '+(er.message||er)); } finally{ setReading(false); e.target.value=''; } }
+  async function onPasteImage(e){
+    const f = getPastedImage(e); if(!f) return;
+    e.preventDefault();
+    setReading(true); setErr('');
+    try{ setAttachment(await uploadFile(scope, f)); }
+    catch(er){ setErr('Upload failed: '+(er.message||er)); }
+    finally{ setReading(false); }
+  }
   function addLink(){ const url=(prompt('Link URL:')||'').trim(); if(!url) return; const name=(prompt('Title (optional):')||url).trim(); setAttachment({ type:'link', name, url }); }
   async function post(){ const t=text.trim(); if(!t && !attachment) return; setBusy(true); setErr('');
     try{ const mentions=parseMentions(t, profiles);
@@ -345,13 +369,14 @@ function Thread({ profile, profiles, table, match, scope, titleText, onClose, on
             {onBack && <button onClick={onBack} className="text-xs text-indigo-600 hover:underline">← Back</button>}
           </div>
         </div>
-        <div className="border rounded-lg p-3 bg-slate-50">
-          <textarea className="input min-h-[70px]" value={text} onChange={e=>setText(e.target.value)} placeholder="Leave a note. Tag a teammate with @firstname." />
+        <div className="border rounded-lg p-3 bg-slate-50" onPaste={onPasteImage}>
+          <textarea className="input min-h-[70px]" value={text} onChange={e=>setText(e.target.value)} onPaste={onPasteImage} placeholder="Leave a note. Tag a teammate with @firstname. Paste a screenshot with Cmd/Ctrl+V." />
           {attachment && <div className="mt-2 flex items-center gap-2 p-2 bg-white border rounded text-sm"><span>{attachment.type==='image'?'🖼️':attachment.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 truncate">{attachment.name}</span><button onClick={()=>setAttachment(null)} className="text-rose-400">✕</button></div>}
           <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'…':'Attach'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={pickFile} disabled={reading} /></label>
               <button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button>
+              <span className="text-[10px] text-slate-400">or paste an image · ⌘V</span>
               <span className="text-[11px] text-slate-500">{mentionPreview?'Will notify: '+mentionPreview:'Tag with @firstname'}</span>
             </div>
             <button onClick={post} disabled={busy||(!text.trim()&&!attachment)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold disabled:opacity-50">Post comment</button>
@@ -396,6 +421,14 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   function removeItem(idx){ setItems(items.length===1?[{ id:'i'+Date.now(), itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]:items.filter((_,i)=>i!==idx)); }
   async function addPhoto(e){ const file=e.target.files[0]; if(!file) return; setReading(true); setMsg('');
     try{ const meta = await uploadFile('leads/'+(existing?.id||'misc'), file); setAttachments(a=>[...a, meta]); } catch(err){ setMsg('Upload failed: '+(err.message||err)); } finally{ setReading(false); e.target.value=''; } }
+  async function onPasteLead(e){
+    const f = getPastedImage(e); if(!f) return;
+    e.preventDefault();
+    setReading(true); setMsg('');
+    try{ const meta = await uploadFile('leads/'+(existing?.id||'misc'), f); setAttachments(a=>[...a, meta]); }
+    catch(err){ setMsg('Upload failed: '+(err.message||err)); }
+    finally{ setReading(false); }
+  }
   function addLink(){ const url=(prompt('Link URL (https://…):')||'').trim(); if(!url) return; const name=(prompt('Link title (optional):')||url).trim(); setAttachments(a=>[...a,{ type:'link', name, url }]); }
   function removeAtt(idx){ setAttachments(a=>a.filter((_,i)=>i!==idx)); }
   async function save(){ if(!title.trim()){ setMsg('Lead title is required.'); return; } setBusy(true); setMsg('');
@@ -412,7 +445,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     } catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
     <Modal title={isEdit?'Edit lead':'New lead'} onClose={onClose}>
-      <div className="space-y-3">
+      <div className="space-y-3" onPaste={onPasteLead}>
         {!isEdit && (<div className="flex gap-2 text-xs"><button onClick={()=>setClientMode('existing')} disabled={!clients.length} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='existing'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'} disabled:opacity-40`}>Existing client</button><button onClick={()=>setClientMode('new')} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='new'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>+ New client</button></div>)}
         {clientMode==='existing' ? (<select className="input" value={clientId} onChange={e=>setClientId(e.target.value)}>{clients.map(c=><option key={c.id} value={c.id}>{c.company}</option>)}</select>) : (<div className="grid grid-cols-2 gap-2"><input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} /><input className="input" placeholder="Contact name" value={newContact} onChange={e=>setNewContact(e.target.value)} /></div>)}
         <input className="input" placeholder="Lead title" value={title} onChange={e=>setTitle(e.target.value)} />
@@ -454,8 +487,8 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
           </div>
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments</div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photo / PDF'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
-          {attachments.length===0?<div className="text-xs text-slate-400">No attachments yet.</div>:(<div className="grid grid-cols-3 gap-2">{attachments.map((a,i)=>(<div key={i} className="bg-white border rounded p-1.5 flex items-center gap-2"><span className="text-lg">{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 min-w-0 text-xs truncate" title={a.name}>{a.name}</span><button onClick={()=>removeAtt(i)} className="text-rose-400 text-xs">✕</button></div>))}</div>)}
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments <span className="text-slate-400 font-normal">· paste screenshots with ⌘V</span></div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photo / PDF'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
+          {attachments.length===0?<div className="text-xs text-slate-400">No attachments yet — drop or paste an image here.</div>:(<div className="grid grid-cols-3 gap-2">{attachments.map((a,i)=>(<div key={i} className="bg-white border rounded p-1.5 flex items-center gap-2"><span className="text-lg">{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 min-w-0 text-xs truncate" title={a.name}>{a.name}</span><button onClick={()=>removeAtt(i)} className="text-rose-400 text-xs">✕</button></div>))}</div>)}
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create lead')}</button>
@@ -531,6 +564,14 @@ function DeptJobForm({ profile, table, statuses, graphicTypes, existing, onClose
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function addPhoto(e){ const file=e.target.files[0]; if(!file) return; setReading(true); setMsg('');
     try{ up('attachments',[...(f.attachments||[]), await uploadFile('dept/'+(existing?.id||'new'), file)]); } catch(err){ setMsg('Upload failed: '+(err.message||err)); } finally{ setReading(false); e.target.value=''; } }
+  async function onPasteDept(e){
+    const file = getPastedImage(e); if(!file) return;
+    e.preventDefault();
+    setReading(true); setMsg('');
+    try{ up('attachments',[...(f.attachments||[]), await uploadFile('dept/'+(existing?.id||'new'), file)]); }
+    catch(err){ setMsg('Upload failed: '+(err.message||err)); }
+    finally{ setReading(false); }
+  }
   function addLink(){ const url=(prompt('Link URL:')||'').trim(); if(!url) return; const name=(prompt('Title (optional):')||url).trim(); up('attachments',[...(f.attachments||[]),{ type:'link', name, url }]); }
   function removeAtt(idx){ up('attachments',(f.attachments||[]).filter((_,i)=>i!==idx)); }
   async function save(){ if(!f.client_name&&!f.item){ setMsg('Client or item required.'); return; } setBusy(true); setMsg('');
@@ -540,7 +581,7 @@ function DeptJobForm({ profile, table, statuses, graphicTypes, existing, onClose
       onSaved(); } catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
     <Modal title={isEdit?'Edit job':'New job'} onClose={onClose}>
-      <div className="space-y-3">
+      <div className="space-y-3" onPaste={onPasteDept}>
         <div className="grid grid-cols-2 gap-2"><div><label className="text-[10px] text-slate-500 uppercase">Client</label><input className="input mt-0.5" value={f.client_name} onChange={e=>up('client_name',e.target.value)} /></div><div><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" value={f.item} onChange={e=>up('item',e.target.value)} /></div></div>
         <div className="grid grid-cols-3 gap-2">
           <div><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={f.quantity} onChange={e=>up('quantity',e.target.value)} /></div>
