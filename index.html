@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15i · Sales pipeline Sampling → Send to Printing with picker';
+const BUILD = 'Live build 15l · Techpack numbering reverted to manual';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2302,6 +2302,7 @@ function TpLbl({ t, children }){ return <div><div className="text-[10px] upperca
 function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups }){
   const [tp,setTp]=useState(()=>mergeTechpack(lead.techpack, lead, client, profile));
   const [active,setActive]=useState('header'); const [mode,setMode]=useState(readOnly?'preview':'edit'); const [saving,setSaving]=useState(false);
+
   const [pickingChart,setPickingChart]=useState(false);
   async function saveChartToLibrary(){ const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return; const garment=(prompt('Garment type (optional):')||'').trim(); const s=tp.sizechart||{}; const { error }=await sb.from('size_charts').insert({ name, garment_type:garment, chart_image:s.chartImage||'', title_heading:s.titleHeading||'', fabric_note:s.fabricNote||'', footer_note1:s.footerNote1||'', footer_note2:s.footerNote2||'', created_by:profile.id }); if(error){ alert(error.message); return; } alert('Saved "'+name+'" to library.'); reloadCharts&&reloadCharts(); }
   function applyChart(c){ setSec('sizechart',{ chartImage:c.chart_image||'', titleHeading:c.title_heading||'', fabricNote:c.fabric_note||'', footerNote1:c.footer_note1||'', footerNote2:c.footer_note2||'' }); setPickingChart(false); }
@@ -2324,14 +2325,36 @@ function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, size
     if(readOnly){ alert("You're viewing this techpack in preview-only mode."); return; }
     setSaving(true);
     const payload={...tp,updatedAt:todayISO()};
-    const {error}=await sb.from('leads').update({ techpack:payload }).eq('id',lead.id);
+    // Save and also read back the updated row, so we can detect silent RLS failures
+    // (when an update matches 0 rows because the policy filtered them out, Supabase returns no error).
+    const { data:updated, error } = await sb.from('leads')
+      .update({ techpack: payload })
+      .eq('id', lead.id)
+      .select('id');
     setSaving(false);
     if(error){
-      console.error('Techpack save error:', error, 'lead.id=', lead.id, 'profile.role=', profile?.role);
-      const hint = /row-level security|permission denied|RLS/i.test(error.message||'') ?
-        '\n\nLikely cause: your account does not have permission to edit this lead. Ask an admin to:\n• Confirm your role on Team Overview (Sales Manager or Admin)\n• Re-run steeze-erp-assistant-role.sql in Supabase' :
-        '';
-      alert('Save failed: '+(error.message||error)+hint);
+      console.error('Techpack save error:', error, 'lead.id=', lead.id, 'profile.role=', profile?.role, 'manager_id=', lead.manager_id);
+      const code = error.code || '—';
+      const isRls = /row-level security|permission denied|RLS|42501/i.test(String(error.message||'')+' '+code);
+      const details = `\n\nDetails:\n• code: ${code}\n• your role: ${profile?.role||'—'}\n• your id: ${profile?.id||'—'}\n• lead manager_id: ${lead.manager_id||'(unassigned)'}\n• lead id: ${lead.id}`;
+      const hint = isRls
+        ? '\n\nLikely cause: row-level security is blocking this update. Ask kaira to run steeze-erp-fix-techpack-save.sql in Supabase, then try again.'
+        : '';
+      alert('Save failed: '+(error.message||error)+details+hint);
+      return;
+    }
+    if(!updated || updated.length===0){
+      // No error but no row updated — almost certainly RLS silently filtered it.
+      console.warn('Techpack save: 0 rows updated', 'lead.id=', lead.id, 'profile.role=', profile?.role, 'manager_id=', lead.manager_id);
+      alert(
+        "Save didn't fail, but nothing was updated.\n\n"+
+        "This means your account does not currently have permission to update this lead.\n\n"+
+        `• your role: ${profile?.role||'—'}\n`+
+        `• your id: ${profile?.id||'—'}\n`+
+        `• lead manager_id: ${lead.manager_id||'(unassigned)'}\n`+
+        `• lead id: ${lead.id}\n\n`+
+        "Ask kaira to run steeze-erp-fix-techpack-save.sql in Supabase, then try again."
+      );
       return;
     }
     reload&&reload();
