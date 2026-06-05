@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16q · Activity comments: hover Edit + Delete (own comments / admin)';
+const BUILD = 'Live build 16r · Graphic/Printing roles + Purchasing lands on Inventory';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2676,6 +2676,8 @@ function roleLabel(r){
          r==='production' ? 'Production Team' :
          r==='purchasing' ? 'Purchasing Team' :
          r==='accounting' ? 'Accounting Team' :
+         r==='graphic'    ? 'Graphic Design' :
+         r==='printing'   ? 'Printing Team' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
@@ -2685,6 +2687,8 @@ function RoleBadge({ role }){
     role==='production' ? 'bg-emerald-100 text-emerald-700' :
     role==='purchasing' ? 'bg-violet-100 text-violet-700' :
     role==='accounting' ? 'bg-sky-100 text-sky-700' :
+    role==='graphic'    ? 'bg-pink-100 text-pink-700' :
+    role==='printing'   ? 'bg-purple-100 text-purple-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -2829,12 +2833,14 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'manager',     label:'Sales Manager', count:profiles.filter(p=>p.role==='manager').length },
     { key:'assistant',   label:'Sales Asst.',   count:profiles.filter(p=>p.role==='assistant').length },
     { key:'production',  label:'Production',    count:profiles.filter(p=>p.role==='production').length },
+    { key:'graphic',     label:'Graphic',       count:profiles.filter(p=>p.role==='graphic').length },
+    { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
     { key:'accounting',  label:'Accounting',    count:profiles.filter(p=>p.role==='accounting').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','purchasing','accounting'];
+  const roleOrder = ['admin','manager','assistant','production','graphic','printing','purchasing','accounting'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -2861,6 +2867,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="assistant">Sales Assistant</option>
               <option disabled>──────────</option>
               <option value="production">Production Team</option>
+              <option value="graphic">Graphic Design</option>
+              <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
               <option value="accounting">Accounting Team</option>
             </select>
@@ -4251,9 +4259,15 @@ function App(){
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing']);
       fallback = 'prod';
+    } else if(profile.role==='graphic'){
+      allowed = new Set(['inbox','prod','sampling','graphic','printing']);
+      fallback = 'graphic';
+    } else if(profile.role==='printing'){
+      allowed = new Set(['inbox','prod','sampling','graphic','printing']);
+      fallback = 'printing';
     } else if(profile.role==='purchasing'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','orders','styles']);
-      fallback = 'prod';
+      fallback = 'inventory';
     } else if(profile.role==='accounting'){
       allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','orders','styles']);
       fallback = 'pipeline';
@@ -4336,10 +4350,13 @@ function App(){
   const isPurchasing=profile.role==='purchasing';
   const isAccounting=profile.role==='accounting';
   const isManager=profile.role==='manager';
+  const isGraphicTeam=profile.role==='graphic';
+  const isPrintingTeam=profile.role==='printing';
   // Build the sidebar nav per role.
   let NAV;
-  if(isProduction){
-    // Production team — Production space + inbox only.
+  if(isProduction || isGraphicTeam || isPrintingTeam){
+    // Production / Graphic Design / Printing teams all share the same nav —
+    // Inbox + Production space. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
