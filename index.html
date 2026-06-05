@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16s · PDF preview: native browser viewer (no Google Docs)';
+const BUILD = 'Live build 16t · Invite-only signup + Remove user in Settings';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -357,8 +357,21 @@ function LoginScreen(){
   const [mode,setMode]=useState('signin'); const [name,setName]=useState(''); const [email,setEmail]=useState('');
   const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function submit(e){ e.preventDefault(); setBusy(true); setMsg('');
-    try{ if(mode==='signup'){ const {error}=await sb.auth.signUp({ email, password, options:{ data:{ full_name:name } } }); if(error) throw error; }
-      else { const {error}=await sb.auth.signInWithPassword({ email, password }); if(error) throw error; } }
+    try{
+      if(mode==='signup'){
+        // Invite-only signup — refuse unless the email is in pending_invites.
+        const cleanEmail = (email||'').trim().toLowerCase();
+        const { data: invited, error: chkErr } = await sb.rpc('is_email_invited', { p_email: cleanEmail });
+        if(chkErr){ throw new Error('Could not verify invite: '+chkErr.message); }
+        if(!invited){
+          throw new Error("Steeze OS is invite-only. Ask Kaira to send you an invite for this email, then try again.");
+        }
+        const {error}=await sb.auth.signUp({ email, password, options:{ data:{ full_name:name } } });
+        if(error) throw error;
+      } else {
+        const {error}=await sb.auth.signInWithPassword({ email, password }); if(error) throw error;
+      }
+    }
     catch(err){ setMsg(err.message||String(err)); } finally{ setBusy(false); } }
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -372,6 +385,7 @@ function LoginScreen(){
           </div>
           <div className="text-2xl font-black tracking-tight text-slate-900">Steeze <span className="text-indigo-600">OS</span></div>
           <div className="text-sm text-slate-500 mt-1">{mode==='signup'?'Create your account':'Sign in to your account'}</div>
+          {mode==='signup' && <div className="text-[11px] text-slate-400 mt-1.5">🔒 Invite-only · use the email Kaira sent you</div>}
         </div>
         <form onSubmit={submit} className="space-y-3">
           {mode==='signup' && <input className="input" placeholder="Your full name" value={name} onChange={e=>setName(e.target.value)} required />}
@@ -2816,6 +2830,21 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  async function removeMember(p){
+    if(p.id === profile.id){ alert("You can't remove your own account from here."); return; }
+    const label = p.name || p.email;
+    if(!confirm(
+      `Remove ${label} from Steeze OS?\n\n`+
+      `• Their profile + role will be deleted.\n`+
+      `• Leads they were managing get re-assigned to "Unassigned" — you can re-assign them later in the Sales Pipeline.\n`+
+      `• Their past comments stay (attributed to a deleted user).\n\n`+
+      `To fully block them from signing in again, also delete their auth account in Supabase → Authentication → Users.\n\n`+
+      `Continue?`
+    )) return;
+    const { error } = await sb.from('profiles').delete().eq('id', p.id);
+    if(error){ alert('Remove failed: '+error.message); return; }
+    reload && reload();
+  }
   async function sendInvite(e){
     e.preventDefault();
     if(!inviteEmail.trim()){ setMsg('Enter an email.'); return; }
@@ -2943,9 +2972,10 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
             <th className="text-left px-3 py-2">Email</th>
             <th className="text-left px-3 py-2">Role</th>
             <th className="text-left px-3 py-2">Joined</th>
+            <th className="px-3 py-2"></th>
           </tr></thead>
           <tbody>{sortedRows.map(p=>(
-            <tr key={p.id} className="border-t hover:bg-slate-50/60">
+            <tr key={p.id} className="border-t hover:bg-slate-50/60 group">
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2"><Avatar profile={p} size="sm" />
                   {editingNameId===p.id ? (
@@ -2970,14 +3000,21 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="assistant">Sales Assistant</option>
                   <option disabled>──────────</option>
                   <option value="production">Production Team</option>
+                  <option value="graphic">Graphic Design</option>
+                  <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
                   <option value="accounting">Accounting Team</option>
                 </select>
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                {p.id !== profile.id && (
+                  <button onClick={()=>removeMember(p)} title="Remove from Steeze OS" className="text-xs px-2 py-1 rounded bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-500 opacity-0 group-hover:opacity-100 transition">🗑 Remove</button>
+                )}
+              </td>
             </tr>
           ))}
-          {sortedRows.length===0 && <tr><td colSpan="4" className="text-center text-slate-400 text-sm py-8">No team members match this filter.</td></tr>}
+          {sortedRows.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 text-sm py-8">No team members match this filter.</td></tr>}
           </tbody>
         </table></div>
       </div>
