@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15v · Graphic/Printing: full-width Open lead button on cards';
+const BUILD = 'Live build 15w · Graphic/Printing: always-show Open lead + clearer activity scope';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -850,7 +850,11 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
                         {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} title="Send to Printing" className="text-purple-600 text-xs px-1">🖨</button>}
                       </div>
-                      {lead && openLead && <button onClick={(e)=>{e.stopPropagation(); openLead(lead);}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>}
+                      {openLead && (
+                        lead
+                          ? <button onClick={(e)=>{e.stopPropagation(); openLead(lead);}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
+                          : <div className="w-full mt-2 py-1.5 rounded-lg bg-slate-50 text-slate-300 text-xs font-medium text-center cursor-not-allowed" title="This job isn't linked to a sales lead">No linked lead</div>
+                      )}
                     </div>
                   </div>
                 ); })}
@@ -932,9 +936,12 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                 <button onClick={()=>setDetail(null)} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
               </div>
             </div>
-            {/* Right: live activity (2 cols) */}
+            {/* Right: live activity (2 cols) — scoped to THIS dept job; no lead chatter bleeds in */}
             <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
-              <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">💬 Activity</div>
+              <div className="mb-3">
+                <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">💬 {title} conversation</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">Private to the {title.toLowerCase()} team — the sales lead's chat is not shown here.</div>
+              </div>
               <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: liveDetail.id, job_type: jobType }} scope={'dept/'+liveDetail.id} titleText={`${liveDetail.item} · ${liveDetail.client_name}`} afterChange={reload} headerless embedded />
             </div>
           </div>
