@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15u · Graphic/Printing: Open lead button replaces 💬';
+const BUILD = 'Live build 15v · Graphic/Printing: full-width Open lead button on cards';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -848,9 +848,9 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                       <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.cls}>{di.label}</span></div>
                       <div className="flex items-center gap-1 mt-2">
                         <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                        {lead && openLead && <button onClick={(e)=>{e.stopPropagation(); openLead(lead);}} title="Open the linked sales lead" className="text-indigo-600 text-xs px-1 hover:underline">↗ Open lead</button>}
                         {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} title="Send to Printing" className="text-purple-600 text-xs px-1">🖨</button>}
                       </div>
+                      {lead && openLead && <button onClick={(e)=>{e.stopPropagation(); openLead(lead);}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>}
                     </div>
                   </div>
                 ); })}
