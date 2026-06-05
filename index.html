@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15z · LeadInfoModal: team chat left, sent attachments only, Send-to-Printing';
+const BUILD = 'Live build 16a · LeadInfoModal: order info left, team chat right (ClickUp-style)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -778,20 +778,8 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
   return (
     <Modal title="Lead info" onClose={onClose} xwide>
       <div className="grid md:grid-cols-5 gap-5">
-        {/* Left: dept-team conversation (3/5) */}
-        <div className="md:col-span-3 min-h-0">
-          <div className="mb-3">
-            <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">💬 Team conversation</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Chat with your team about this job. The sales pipeline conversation is not shown here.</div>
-          </div>
-          {job ? (
-            <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: job.id, job_type: jobType }} scope={'dept/'+job.id} titleText={`${job.item||lead.title} · ${job.client_name||client?.company||''}`} afterChange={reload} headerless embedded />
-          ) : (
-            <div className="text-xs text-slate-400 italic p-4 border rounded-lg">No team conversation available — this lead isn't linked to a current graphic/printing job.</div>
-          )}
-        </div>
-        {/* Right: minimal order info (2/5) */}
-        <div className="md:col-span-2 border-l md:pl-5 space-y-4">
+        {/* Left: order info (3/5) */}
+        <div className="md:col-span-3 space-y-4">
           <div>
             <div className="text-lg font-bold truncate" title={lead.title}>{lead.title||'—'}</div>
             <div className="text-sm text-slate-500 truncate">{client?.company||lead.client_name||'—'}</div>
@@ -828,6 +816,18 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
             {canSendToPrinting && job && onSendToPrinting && <button onClick={()=>{ onSendToPrinting(job); onClose(); }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
             <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
           </div>
+        </div>
+        {/* Right: dept-team conversation (2/5) */}
+        <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
+          <div className="mb-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">💬 Team conversation</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Chat with your team — the sales pipeline chat is not shown here.</div>
+          </div>
+          {job ? (
+            <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: job.id, job_type: jobType }} scope={'dept/'+job.id} titleText={`${job.item||lead.title} · ${job.client_name||client?.company||''}`} afterChange={reload} headerless embedded />
+          ) : (
+            <div className="text-xs text-slate-400 italic p-4 border rounded-lg">No team conversation available — this lead isn't linked to a current graphic/printing job.</div>
+          )}
         </div>
       </div>
     </Modal>
