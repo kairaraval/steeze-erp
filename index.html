@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16z · Techpack: bigger Garment Details photos too (6.5in)';
+const BUILD = 'Live build 17b · Notification sound: persistent AudioContext + ▶ test button';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -167,10 +167,26 @@ function parseCSV(text){
 }
 
 // Gentle two-tone ping for @mention notifications. Web Audio (no asset needed).
+// Reuse a single AudioContext and resume it on the first user gesture, because
+// browsers block audio playback until the user has interacted with the page.
+let __steezeAudioCtx = null;
+function getAudioCtx(){
+  if(__steezeAudioCtx) return __steezeAudioCtx;
+  const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return null;
+  __steezeAudioCtx = new AC();
+  return __steezeAudioCtx;
+}
+// Unlock the AudioContext on the next user click/keydown.
+if(typeof window !== 'undefined'){
+  const unlock = ()=>{ const ctx=getAudioCtx(); if(ctx && ctx.state==='suspended') ctx.resume().catch(()=>{}); };
+  window.addEventListener('click', unlock, { once:false });
+  window.addEventListener('keydown', unlock, { once:false });
+}
 function playPing(){
   try {
-    const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
-    const ctx = new AC(); const now = ctx.currentTime;
+    const ctx = getAudioCtx(); if(!ctx) return;
+    if(ctx.state==='suspended') ctx.resume().catch(()=>{});
+    const now = ctx.currentTime;
     [880, 1320].forEach((freq,i)=>{
       const t = now + i*0.13;
       const osc = ctx.createOscillator(); const gain = ctx.createGain();
@@ -3395,12 +3411,84 @@ function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, size
       default: return null;
     }
   }
-  function sizeTableEditor(){ const s=sec; return (<div className="border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-400 mb-1">Size table</div><table className="w-full text-xs"><thead><tr className="text-slate-400"><th className="text-left">Size</th><th>{s.sizeColMale}</th><th>{s.sizeColFemale}</th><th></th></tr></thead><tbody>{s.sizeRows.map((r,i)=>(<tr key={i}><td><input className="input text-xs px-1 py-1" value={r.size} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,size:e.target.value}:x)})} /></td><td><input className="input text-xs px-1 py-1" value={r.male} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,male:e.target.value}:x)})} /></td><td><input className="input text-xs px-1 py-1" value={r.female} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,female:e.target.value}:x)})} /></td><td><button onClick={()=>setSec(pageType,{sizeRows:s.sizeRows.filter((_,j)=>j!==i)})} className="text-rose-400 px-1">✕</button></td></tr>))}</tbody></table><button onClick={()=>setSec(pageType,{sizeRows:[...s.sizeRows,{size:'',male:'',female:''}]})} className="text-xs text-indigo-600 mt-1">+ Add size</button></div>); }
+  function sizeTableEditor(){
+    const s=sec;
+    const sumMale   = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.male)||0),  0);
+    const sumFemale = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.female)||0),0);
+    const grand = sumMale + sumFemale;
+    return (
+      <div className="border rounded-lg p-2">
+        <div className="text-[10px] uppercase text-slate-400 mb-1">Size table</div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-slate-500">
+              <th className="text-left pb-1">Size</th>
+              <th className="pb-1"><input className="input text-xs px-1 py-1 text-center font-semibold" placeholder="MALE" value={s.sizeColMale||''} onChange={e=>setSec(pageType,{sizeColMale:e.target.value})} title="Edit Male category label" /></th>
+              <th className="pb-1"><input className="input text-xs px-1 py-1 text-center font-semibold" placeholder="FEMALE" value={s.sizeColFemale||''} onChange={e=>setSec(pageType,{sizeColFemale:e.target.value})} title="Edit Female category label" /></th>
+              <th className="text-center pb-1 font-semibold text-slate-600">TOTAL</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {s.sizeRows.map((r,i)=>{ const rowTotal=(Number(r.male)||0)+(Number(r.female)||0); return (
+              <tr key={i}>
+                <td><input className="input text-xs px-1 py-1" value={r.size} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,size:e.target.value}:x)})} /></td>
+                <td><input type="number" className="input text-xs px-1 py-1" value={r.male} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,male:e.target.value}:x)})} /></td>
+                <td><input type="number" className="input text-xs px-1 py-1" value={r.female} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,female:e.target.value}:x)})} /></td>
+                <td className="text-center font-semibold text-slate-700 px-1">{rowTotal||''}</td>
+                <td><button onClick={()=>setSec(pageType,{sizeRows:s.sizeRows.filter((_,j)=>j!==i)})} className="text-rose-400 px-1">✕</button></td>
+              </tr>
+            ); })}
+            <tr className="font-bold bg-slate-50">
+              <td className="px-1 py-1">TOTAL</td>
+              <td className="text-center">{sumMale||''}</td>
+              <td className="text-center">{sumFemale||''}</td>
+              <td className="text-center text-indigo-700">{grand||''}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+        <button onClick={()=>setSec(pageType,{sizeRows:[...s.sizeRows,{size:'',male:'',female:''}]})} className="text-xs text-indigo-600 mt-1">+ Add size</button>
+      </div>
+    );
+  }
 
   // ---- preview ----
   const TP={ box:{border:'1px solid #1a1a1a', display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0}, bar:{background:'#e8e8e8', borderBottom:'1px solid #1a1a1a', padding:'4px 10px', fontSize:'9pt', fontWeight:600}, imgWrap:{flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'6px', background:'#fff', minHeight:0, overflow:'hidden'}, cell:{border:'1px solid #1a1a1a', padding:'3px 8px', textAlign:'center'} };
   function bullets(t){ return (t||'').split('\n').filter(Boolean).map((l,i)=><div key={i} style={{fontSize:'9pt'}}>{l}</div>); }
-  function previewSizeTable(s){ return (<table style={{borderCollapse:'collapse', fontSize:'9pt', width:'100%'}}><thead><tr><th style={{...TP.cell, background:'#f0f0f0'}}>SIZE</th><th style={{...TP.cell, background:'#b0c4de'}}>{s.sizeColMale||'MALE'}</th><th style={{...TP.cell, background:'#f7d5d5'}}>{s.sizeColFemale||'FEMALE'}</th></tr></thead><tbody>{(s.sizeRows||[]).map((r,i)=><tr key={i}><td style={TP.cell}>{r.size}</td><td style={TP.cell}>{r.male}</td><td style={TP.cell}>{r.female}</td></tr>)}<tr style={{fontWeight:700, background:'#f5f5f5'}}><td style={TP.cell}>{s.sizeTotalLabel||'TOTAL'}</td><td style={TP.cell}>{s.totalMale}</td><td style={TP.cell}>{s.totalFemale}</td></tr></tbody></table>); }
+  function previewSizeTable(s){
+    const sumMale   = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.male)||0),  0);
+    const sumFemale = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.female)||0),0);
+    const grand = sumMale + sumFemale;
+    return (
+      <table style={{borderCollapse:'collapse', fontSize:'9pt', width:'100%'}}>
+        <thead>
+          <tr>
+            <th style={{...TP.cell, background:'#f0f0f0'}}>SIZE</th>
+            <th style={{...TP.cell, background:'#b0c4de'}}>{s.sizeColMale||'MALE'}</th>
+            <th style={{...TP.cell, background:'#f7d5d5'}}>{s.sizeColFemale||'FEMALE'}</th>
+            <th style={{...TP.cell, background:'#f0f0f0'}}>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(s.sizeRows||[]).map((r,i)=>{ const rowTotal=(Number(r.male)||0)+(Number(r.female)||0); return (
+            <tr key={i}>
+              <td style={TP.cell}>{r.size}</td>
+              <td style={TP.cell}>{r.male}</td>
+              <td style={TP.cell}>{r.female}</td>
+              <td style={{...TP.cell, fontWeight:600}}>{rowTotal||''}</td>
+            </tr>
+          ); })}
+          <tr style={{fontWeight:700, background:'#f5f5f5'}}>
+            <td style={TP.cell}>{s.sizeTotalLabel||'TOTAL'}</td>
+            <td style={TP.cell}>{sumMale||''}</td>
+            <td style={TP.cell}>{sumFemale||''}</td>
+            <td style={TP.cell}>{grand||''}</td>
+          </tr>
+        </tbody>
+      </table>
+    );
+  }
   function sectionBody(type, s){
     if(type==='coverMain') return (<div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'10px', minHeight:0}}><div style={{display:'grid', gridTemplateColumns:(s.frontImage&&s.backImage?'1fr 1fr':'1fr'), gap:'14px', width:'100%', justifyItems:'center', marginBottom:'10px', minHeight:0, flex:1}}><TImg path={s.frontImage} maxH="6in" /><TImg path={s.backImage} maxH="6in" /></div><div style={{textAlign:'center'}}><div style={{fontWeight:700, color:'#d63031', fontSize:'11pt', marginBottom:'4px'}}>{s.mainLine}</div>{bullets(s.details)}</div></div>);
     if(type==='construction') return (<div style={{flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', gap:'8px', padding:'10px', minHeight:0}}>{(s.boxes||[]).map((b,i)=>(<div key={i} style={TP.box}><div style={TP.bar}>{b.title}</div><div style={TP.imgWrap}><TImg path={b.image} /></div></div>))}</div>);
@@ -4559,6 +4647,7 @@ function App(){
           <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'}</div></div></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>sb.auth.signOut()} className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Sign out</button>
+            <button onClick={()=>playPing()} title="Play test sound" className="text-xs px-2 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-emerald-300">▶</button>
             <button onClick={toggleMute} title={muted?'Notifications muted — click to unmute':'Notifications on — click to mute'} className={`text-xs px-2 py-1.5 rounded-lg ${muted?'bg-slate-800 text-slate-500 hover:text-slate-300':'bg-slate-800 text-emerald-400 hover:text-emerald-300'}`}>{muted?'🔕':'🔔'}</button>
           </div>
         </div>
