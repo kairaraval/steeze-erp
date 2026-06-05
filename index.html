@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16h · Steeze logo: tighter lightning paths matching brand';
+const BUILD = 'Live build 16i · Inbox: grouped by date + per-item Clear + Clear all';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1709,38 +1709,150 @@ function SamplingJobForm({ existing, leads, onClose, onSaved }){
 }
 
 /* ----------------------- Inbox ----------------------- */
-function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, mentions, onOpen, onGoToTask }){
+function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, mentions, onOpen, onGoToTask, reload }){
   const [filter,setFilter]=useState('all');
+  const [busyIds,setBusyIds]=useState(new Set());
   const unread=mentions.filter(m=>!(m.read_by||[]).includes(profile.id));
   const visible=filter==='unread'?unread:mentions;
   function ctx(m){
-    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); return { label:l?.title||'a lead', tag:'Lead', cta:'Open lead' }; }
-    const list=m.job_type==='graphic'?graphicJobs:m.job_type==='printing'?printingJobs:m.job_type==='sampling'?sampleJobs:productionJobs;
+    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); return { label:l?.title||'a lead', tag:'Lead', icon:'💼', color:'text-indigo-600' }; }
+    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
-    const tag=m.job_type==='graphic'?'Graphic Design':m.job_type==='printing'?'Printing':m.job_type==='sampling'?'Sampling':'Production';
-    return { label:j?`${j.item} · ${j.client_name}`:'a job', tag, cta:'Open job' };
+    const tag = m.source==='graphic'?'Graphic Design':m.source==='printing'?'Printing':m.source==='sampling'?'Sampling':'Production';
+    const icon = m.source==='graphic'?'🎨':m.source==='printing'?'🖨':m.source==='sampling'?'🧵':'⚙';
+    const color = m.source==='graphic'?'text-pink-600':m.source==='printing'?'text-purple-600':m.source==='sampling'?'text-blue-600':'text-emerald-600';
+    return { label:j?`${j.item} · ${j.client_name}`:'a job', tag, icon, color };
+  }
+  // Mark one mention as read by adding the user to its read_by array.
+  async function clearOne(m){
+    if(busyIds.has(m.id)) return;
+    setBusyIds(p=>{ const n=new Set(p); n.add(m.id); return n; });
+    const table = m.source==='lead' ? 'lead_activity' : 'dept_job_activity';
+    const next = Array.from(new Set([...(m.read_by||[]), profile.id]));
+    const { error } = await sb.from(table).update({ read_by: next }).eq('id', m.id);
+    setBusyIds(p=>{ const n=new Set(p); n.delete(m.id); return n; });
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
+  async function clearAll(){
+    const toClear = visible.filter(m=>!(m.read_by||[]).includes(profile.id));
+    if(toClear.length===0) return;
+    if(!confirm(`Clear ${toClear.length} notification${toClear.length===1?'':'s'}?`)) return;
+    await Promise.all(toClear.map(m=>{
+      const table = m.source==='lead' ? 'lead_activity' : 'dept_job_activity';
+      const next = Array.from(new Set([...(m.read_by||[]), profile.id]));
+      return sb.from(table).update({ read_by: next }).eq('id', m.id);
+    }));
+    reload && reload();
+  }
+  // Group mentions by relative date: Today / Yesterday / Last 7 days / Older
+  function groupKey(iso){
+    const d = new Date(iso); const now = new Date();
+    const oneDay = 24*60*60*1000;
+    const startOfDay = (x)=>{ const c = new Date(x); c.setHours(0,0,0,0); return c.getTime(); };
+    const today = startOfDay(now);
+    const yesterday = today - oneDay;
+    const week = today - 7*oneDay;
+    const t = startOfDay(d);
+    if(t === today) return 'Today';
+    if(t === yesterday) return 'Yesterday';
+    if(t > week) return 'Last 7 days';
+    return 'Older';
+  }
+  const groupOrder = ['Today','Yesterday','Last 7 days','Older'];
+  const grouped = {};
+  groupOrder.forEach(k=>grouped[k]=[]);
+  visible.forEach(m=>{ const k=groupKey(m.created_at); (grouped[k]||grouped['Older']).push(m); });
+  function fmtShortDate(iso){
+    const d = new Date(iso);
+    const now = new Date();
+    const sameDay = d.toDateString()===now.toDateString();
+    if(sameDay) return d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }).toLowerCase();
+    const sameYear = d.getFullYear()===now.getFullYear();
+    return d.toLocaleDateString([], sameYear?{ month:'short', day:'numeric' }:{ month:'short', day:'numeric', year:'numeric' });
   }
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-4"><div><h1 className="text-2xl font-bold">📥 Inbox</h1><p className="text-slate-500 text-sm">{unread.length?`${unread.length} unread`:'All caught up.'}</p></div>
-        <div className="inline-flex rounded border bg-slate-100 p-0.5 text-xs"><button onClick={()=>setFilter('all')} className={`px-3 py-1 rounded ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({mentions.length})</button><button onClick={()=>setFilter('unread')} className={`px-3 py-1 rounded ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button></div>
+    <div className="p-6 max-w-5xl mx-auto">
+      {/* Sticky header with filter + clear all */}
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="text-2xl font-bold">📥 Inbox</h1>
+          <p className="text-slate-500 text-sm">{unread.length?`${unread.length} unread`:'All caught up.'}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+            <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({mentions.length})</button>
+            <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
+          </div>
+          {unread.length>0 && (
+            <button onClick={clearAll} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium">
+              <span className="text-emerald-600">✓</span> Clear all
+            </button>
+          )}
+        </div>
       </div>
-      <div className="space-y-2">
-        {visible.length===0 && <div className="text-center py-12 border rounded-xl border-dashed bg-white text-slate-400"><div className="text-3xl mb-2">📭</div><div className="text-sm">Nothing here. Mentions with @{firstName(profile)} show up here.</div></div>}
-        {visible.map(m=>{ const sender=profiles.find(p=>p.id===m.actor_id); const c=ctx(m); const isUnread=!(m.read_by||[]).includes(profile.id); return (
-          <div key={m.id+m.source} className={`bg-white border rounded-xl p-4 hover:shadow-md flex items-start gap-3 ${isUnread?'border-l-4 border-l-indigo-500 bg-indigo-50/30':''}`}>
-            <Avatar profile={sender} />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-2 flex-wrap"><span className="font-semibold text-sm">{sender?.name}</span><span className="text-xs text-slate-500">mentioned you</span>{isUnread && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-bold">new</span>}<span className="text-xs text-slate-400 ml-auto">{fmtTime(m.created_at)}</span></div>
-              <div className="text-xs text-slate-500 mt-0.5"><span className="inline-block mr-1.5 text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">{c.tag}</span>on <strong className="text-slate-700">{c.label}</strong></div>
-              <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">{renderCommentText(m.text, profiles)}</div>
-              <div className="mt-3 flex items-center gap-2">
-                <button onClick={()=>onGoToTask(m)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">→ {c.cta}</button>
-                <button onClick={()=>onOpen(m)} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 font-medium hover:bg-slate-50">💬 View thread</button>
-              </div>
+
+      {visible.length===0 && (
+        <div className="text-center py-16 border rounded-2xl border-dashed bg-white text-slate-400">
+          <div className="text-4xl mb-2">📭</div>
+          <div className="text-sm">Nothing here. Mentions with @{firstName(profile)} show up here.</div>
+        </div>
+      )}
+
+      <div className="space-y-6">
+        {groupOrder.filter(g=>grouped[g].length>0).map(group=>(
+          <div key={group}>
+            <div className="text-xs font-semibold text-slate-500 mb-2 px-1">{group}</div>
+            <div className="bg-white border rounded-xl divide-y overflow-hidden">
+              {grouped[group].map(m=>{
+                const sender = profiles.find(p=>p.id===m.actor_id);
+                const c = ctx(m);
+                const isUnread = !(m.read_by||[]).includes(profile.id);
+                const replyCount = m.thread_count || 0; // future: real reply count
+                const busy = busyIds.has(m.id);
+                return (
+                  <div key={m.id+m.source} className={`group relative flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition ${isUnread?'':'opacity-70'}`}>
+                    {/* Unread dot + source icon */}
+                    <div className="shrink-0 w-6 flex items-center justify-center">
+                      {isUnread ? (
+                        <span className={`w-5 h-5 rounded-full border-2 ${c.color.replace('text-','border-')} flex items-center justify-center text-[10px] ${c.color}`}>{c.icon}</span>
+                      ) : (
+                        <span className="w-5 h-5 rounded-full border border-slate-200 flex items-center justify-center text-[10px] text-slate-400">{c.icon}</span>
+                      )}
+                    </div>
+                    {/* Task title */}
+                    <button onClick={()=>onGoToTask(m)} className="shrink-0 w-56 truncate text-left font-medium text-sm text-slate-900 hover:underline" title={c.label}>{c.label}</button>
+                    {/* Sender avatar */}
+                    <div className="shrink-0">
+                      {sender ? <Avatar profile={sender} size="sm" /> : <div className="w-7 h-7 rounded-full bg-slate-200" />}
+                    </div>
+                    {/* Message preview */}
+                    <button onClick={()=>onOpen(m)} className="flex-1 min-w-0 text-left text-sm text-slate-600 truncate hover:underline">
+                      {renderCommentText(m.text, profiles)}
+                    </button>
+                    {/* Reply count badge */}
+                    {replyCount>0 && (
+                      <div className="shrink-0 w-6 h-6 rounded-full border border-slate-200 text-[10px] text-slate-500 flex items-center justify-center font-medium">{replyCount}</div>
+                    )}
+                    {/* Date column */}
+                    <div className="shrink-0 w-16 text-right text-xs text-slate-400 whitespace-nowrap">{fmtShortDate(m.created_at)}</div>
+                    {/* Hover-reveal Clear button (only for unread) */}
+                    {isUnread && (
+                      <button
+                        onClick={()=>clearOne(m)}
+                        disabled={busy}
+                        title="Clear notification"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pink-600 text-white text-xs font-semibold hover:bg-pink-700 shadow disabled:opacity-50"
+                      >
+                        <span>✓</span> {busy?'Clearing…':'Clear'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
-        ); })}
+        ))}
       </div>
     </div>
   );
@@ -4058,7 +4170,7 @@ function App(){
       <main className="no-print ml-60 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} />}
-        {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} />}
+        {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
