@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16v · PDF preview: use Supabase SDK download (CORS-safe)';
+const BUILD = 'Live build 16x · fmtDate handles both date and timestamptz columns';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -185,7 +185,16 @@ function playPing(){
   } catch(_) {}
 }
 function fmtTime(iso){ if(!iso) return ''; return new Date(iso).toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
-function fmtDate(d){ if(!d) return '—'; return new Date(d+'T00:00:00').toLocaleDateString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', year:'numeric' }); }
+function fmtDate(d){
+  if(!d) return '—';
+  // Accept either a YYYY-MM-DD date string or a full ISO timestamp (e.g. from
+  // a `timestamptz` column). Bare date strings get parsed at local midnight so
+  // they don't drift to the previous day in PH timezone.
+  const s = String(d);
+  const dt = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s+'T00:00:00') : new Date(s);
+  if(isNaN(dt.getTime())) return '—';
+  return dt.toLocaleDateString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', year:'numeric' });
+}
 
 function deadlineInfo(due, done){
   if(done) return { label:'', cls:'text-slate-400', overdue:false };
@@ -249,35 +258,39 @@ function MediaLightbox({ url, path, name, kind, onClose }){
   // kind: 'image' or 'pdf'
   useEffect(()=>{ const k=(e)=>{ if(e.key==='Escape') onClose(); }; window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k); },[onClose]);
   const isPdf = kind === 'pdf';
-  // PDFs: Supabase Storage often returns Content-Disposition: attachment which
-  // forces the browser to download. Bypass that by downloading the file as a
-  // blob via the SDK (handles auth + bypasses CORS), then create a local
-  // object URL with application/pdf MIME so the browser embeds it inline
-  // using its built-in viewer.
+  // PDFs come from two places:
+  //   • Files uploaded INTO Steeze OS — stored in Supabase Storage (have `path`).
+  //     Download via the SDK to bypass Content-Disposition: attachment, then
+  //     embed via a blob: URL so the browser renders inline.
+  //   • Legacy ClickUp attachments imported during migration (only `url`, no
+  //     `path`). Their CDN doesn't send CORS headers, so JS fetch is blocked.
+  //     For those, point the iframe at the URL directly and let the browser
+  //     load it without going through our JS code.
   const [pdfSrc,setPdfSrc]=useState(null);
   const [pdfErr,setPdfErr]=useState('');
+  const [pdfMode,setPdfMode]=useState(null); // 'blob' | 'direct'
   useEffect(()=>{
-    if(!isPdf){ setPdfSrc(null); return; }
+    if(!isPdf){ setPdfSrc(null); setPdfMode(null); return; }
     if(!path && !url){ setPdfErr('No PDF source.'); return; }
+    setPdfSrc(null); setPdfErr(''); setPdfMode(null);
+    // No Supabase path → external URL, embed it directly. No CORS issue,
+    // browser handles loading. If the host returns Content-Disposition:
+    // attachment, the iframe will be empty but the "Open original" link
+    // still works.
+    if(!path){
+      setPdfSrc(url);
+      setPdfMode('direct');
+      return;
+    }
     let cancelled=false; let objUrl=null;
-    setPdfSrc(null); setPdfErr('');
     (async()=>{
       try{
-        let raw;
-        if(path){
-          // Preferred path — uses the Supabase SDK download, no CORS pre-flight.
-          const { data, error } = await sb.storage.from(BUCKET).download(path);
-          if(error) throw error;
-          raw = data;
-        } else {
-          const resp = await fetch(url);
-          if(!resp.ok) throw new Error('HTTP '+resp.status);
-          raw = await resp.blob();
-        }
-        // Force the PDF mime type even if the source disposition was attachment
+        const { data, error } = await sb.storage.from(BUCKET).download(path);
+        if(error) throw error;
+        const raw = data;
         const pdfBlob = raw.type==='application/pdf' ? raw : new Blob([raw], { type:'application/pdf' });
         objUrl = URL.createObjectURL(pdfBlob);
-        if(!cancelled) setPdfSrc(objUrl);
+        if(!cancelled){ setPdfSrc(objUrl); setPdfMode('blob'); }
       }catch(e){
         console.error('PDF inline-preview failed:', e);
         if(!cancelled) setPdfErr(e.message || String(e));
@@ -291,12 +304,19 @@ function MediaLightbox({ url, path, name, kind, onClose }){
       <div className="flex flex-col items-center" onClick={e=>e.stopPropagation()}>
         {isPdf ? (
           pdfSrc ? (
-            <iframe
-              src={pdfSrc}
-              title={name}
-              className="bg-white rounded shadow-2xl"
-              style={{ width:'min(92vw, 1100px)', height:'82vh', border:0 }}
-            />
+            <>
+              {pdfMode==='direct' && (
+                <div className="text-[11px] text-white/80 mb-2 bg-amber-900/70 border border-amber-700/50 px-3 py-1.5 rounded">
+                  📂 Legacy attachment hosted on ClickUp. If preview doesn't load, click "Open original" below.
+                </div>
+              )}
+              <iframe
+                src={pdfSrc}
+                title={name}
+                className="bg-white rounded shadow-2xl"
+                style={{ width:'min(92vw, 1100px)', height:'82vh', border:0 }}
+              />
+            </>
           ) : pdfErr ? (
             <div className="flex flex-col items-center justify-center bg-white rounded shadow-2xl p-6 text-sm text-slate-700" style={{ width:'min(92vw, 600px)', height:'40vh' }}>
               <div className="text-4xl mb-2">📄</div>
