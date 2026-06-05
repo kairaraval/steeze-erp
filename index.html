@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17b · Notification sound: persistent AudioContext + ▶ test button';
+const BUILD = 'Live build 17c · Notification sound: stop closing the shared AudioContext';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -171,16 +171,19 @@ function parseCSV(text){
 // browsers block audio playback until the user has interacted with the page.
 let __steezeAudioCtx = null;
 function getAudioCtx(){
+  // If the cached context was somehow closed, drop it and make a new one.
+  if(__steezeAudioCtx && __steezeAudioCtx.state==='closed') __steezeAudioCtx = null;
   if(__steezeAudioCtx) return __steezeAudioCtx;
   const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return null;
-  __steezeAudioCtx = new AC();
+  try{ __steezeAudioCtx = new AC(); }catch(_){ __steezeAudioCtx = null; }
   return __steezeAudioCtx;
 }
-// Unlock the AudioContext on the next user click/keydown.
-if(typeof window !== 'undefined'){
-  const unlock = ()=>{ const ctx=getAudioCtx(); if(ctx && ctx.state==='suspended') ctx.resume().catch(()=>{}); };
-  window.addEventListener('click', unlock, { once:false });
-  window.addEventListener('keydown', unlock, { once:false });
+// Unlock the AudioContext on the next user click/keydown — once is enough.
+if(typeof window !== 'undefined' && !window.__steezeAudioUnlockInstalled){
+  window.__steezeAudioUnlockInstalled = true;
+  const unlock = ()=>{ try{ const ctx=getAudioCtx(); if(ctx && ctx.state==='suspended') ctx.resume().catch(()=>{}); }catch(_){ } };
+  window.addEventListener('click', unlock);
+  window.addEventListener('keydown', unlock);
 }
 function playPing(){
   try {
@@ -197,7 +200,7 @@ function playPing(){
       osc.connect(gain).connect(ctx.destination);
       osc.start(t); osc.stop(t+0.4);
     });
-    setTimeout(()=>{ try{ ctx.close(); }catch(_){} }, 900);
+    // Do NOT close the context — we reuse it for every subsequent ping.
   } catch(_) {}
 }
 function fmtTime(iso){ if(!iso) return ''; return new Date(iso).toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
