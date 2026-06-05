@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16o · Deadline column: show actual date alongside today/tomorrow';
+const BUILD = 'Live build 16p · Deadline: due today / tomorrow / N days overdue / date';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -193,11 +193,11 @@ function deadlineInfo(due, done){
   const today = new Date(); today.setHours(0,0,0,0);
   const d = new Date(due+'T00:00:00');
   const days = Math.round((d - today)/86400000);
-  if(days < 0)   return { label:`${-days}d overdue`, cls:'text-rose-600 font-semibold', overdue:true };
-  if(days === 0) return { label:'due today',         cls:'text-amber-600 font-semibold', overdue:false };
-  if(days === 1) return { label:'tomorrow',          cls:'text-amber-600 font-semibold', overdue:false };
-  if(days <= 3)  return { label:`in ${days}d`,       cls:'text-amber-600', overdue:false };
-  return { label:`in ${days}d`, cls:'text-slate-400', overdue:false };
+  if(days < 0)   return { label:`${-days} ${-days===1?'day':'days'} overdue`, cls:'text-rose-600 font-semibold', overdue:true };
+  if(days === 0) return { label:'due today', cls:'text-amber-600 font-semibold', overdue:false };
+  if(days === 1) return { label:'tomorrow',  cls:'text-amber-600 font-semibold', overdue:false };
+  // Anything further out — fall through to the formatted date in the cell.
+  return { label:'', cls:'text-slate-500', overdue:false };
 }
 
 function parseMentions(text, profiles){
@@ -1102,7 +1102,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <td className="px-3 py-2 font-medium">{j.item}{j.graphic_type && <span className="ml-1 text-[9px] uppercase px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">{j.graphic_type}</span>}{(j.attachments||[]).length?<span className="text-[10px] text-slate-400"> 📎{j.attachments.length}</span>:''}</td>
               <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
               <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
-              <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{j.due_date ? (di.label ? `${di.label} · ${fmtDate(j.due_date)}` : fmtDate(j.due_date)) : '—'}</span></td>
+              <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
                 {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType, canSendToPrinting })} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
@@ -1287,7 +1287,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
-            <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{j.due_date ? (di.label ? `${di.label} · ${fmtDate(j.due_date)}` : fmtDate(j.due_date)) : '—'}</span></td>
+            <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
             <td className="px-3 py-2">
               <select value={j.sales_owner_id||''} onChange={e=>changeOwner(j,e.target.value)} className="text-xs px-2 py-1 rounded border border-slate-300 bg-white max-w-[10rem]">
                 <option value="">— unassigned —</option>
@@ -1345,7 +1345,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
                         <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
                         <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
                         <td className="px-3 py-2.5 text-right">{j.quantity||'—'}</td>
-                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{j.due_date ? (di.label ? `${di.label} · ${fmtDate(j.due_date)}` : fmtDate(j.due_date)) : '—'}</span></td>
+                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
                         <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
@@ -1478,7 +1478,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
-            <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{j.due_date ? (di.label ? `${di.label} · ${fmtDate(j.due_date)}` : fmtDate(j.due_date)) : '—'}</span></td>
+            <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
             <td className="px-3 py-2">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
@@ -1529,7 +1529,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
                         <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
                         <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
                         <td className="px-3 py-2.5 text-right">{j.quantity||'—'}</td>
-                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{j.due_date ? (di.label ? `${di.label} · ${fmtDate(j.due_date)}` : fmtDate(j.due_date)) : '—'}</span></td>
+                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
                         <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
