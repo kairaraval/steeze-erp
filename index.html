@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Steeze OS</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230f172a'/><g fill='white'><path d='M 74 4 L 12 64 Q 10 66 10 68 L 10 70 Q 10 72 12 72 L 48 72 Q 50 72 50 70 L 50 56 Z'/><path d='M 26 96 L 88 36 Q 90 34 90 32 L 90 30 Q 90 28 88 28 L 52 28 Q 50 28 50 30 L 50 44 Z'/></g></svg>" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230f172a'/><g fill='white'><path d='M 60 5 L 18 50 L 64 45 Q 68 45 68 41 L 68 38 Z'/><path d='M 40 95 L 82 50 L 36 55 Q 32 55 32 59 L 32 62 Z'/></g></svg>" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16g · Steeze OS — lightning logo + favicon';
+const BUILD = 'Live build 16h · Steeze logo: tighter lightning paths matching brand';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -351,8 +351,8 @@ function LoginScreen(){
         <div className="text-center mb-5">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-slate-900 shadow-lg mb-3">
             <svg viewBox="0 0 100 100" className="w-10 h-10" fill="white" aria-label="Steeze logo" xmlns="http://www.w3.org/2000/svg">
-              <path d="M 74 4 L 12 64 Q 10 66 10 68 L 10 70 Q 10 72 12 72 L 48 72 Q 50 72 50 70 L 50 56 Z" />
-              <path d="M 26 96 L 88 36 Q 90 34 90 32 L 90 30 Q 90 28 88 28 L 52 28 Q 50 28 50 30 L 50 44 Z" />
+              <path d="M 60 5 L 18 50 L 64 45 Q 68 45 68 41 L 68 38 Z" />
+              <path d="M 40 95 L 82 50 L 36 55 Q 32 55 32 59 L 32 62 Z" />
             </svg>
           </div>
           <div className="text-2xl font-black tracking-tight text-slate-900">Steeze <span className="text-indigo-600">OS</span></div>
@@ -4019,8 +4019,8 @@ function App(){
         <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800">
           <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shadow-md shrink-0">
             <svg viewBox="0 0 100 100" className="w-6 h-6" fill="#0f172a" aria-label="Steeze logo" xmlns="http://www.w3.org/2000/svg">
-              <path d="M 74 4 L 12 64 Q 10 66 10 68 L 10 70 Q 10 72 12 72 L 48 72 Q 50 72 50 70 L 50 56 Z" />
-              <path d="M 26 96 L 88 36 Q 90 34 90 32 L 90 30 Q 90 28 88 28 L 52 28 Q 50 28 50 30 L 50 44 Z" />
+              <path d="M 60 5 L 18 50 L 64 45 Q 68 45 68 41 L 68 38 Z" />
+              <path d="M 40 95 L 82 50 L 36 55 Q 32 55 32 59 L 32 62 Z" />
             </svg>
           </div>
           <div>
