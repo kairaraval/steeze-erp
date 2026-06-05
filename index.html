@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15o · Sampling board mirrors Production (owner + sort)';
+const BUILD = 'Live build 15p · Pipeline list: tighter columns (Name/Co/Items/Qty/Value/Owner/Stage)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1445,11 +1445,10 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                     <tr>
                       <th className="text-left px-4 py-2 font-medium">Name</th>
                       <th className="text-left px-3 py-2 font-medium">Company</th>
-                      <th className="text-left px-3 py-2 font-medium">Date created</th>
-                      <th className="text-left px-3 py-2 font-medium">Assignee</th>
-                      <th className="text-left px-3 py-2 font-medium">Lead Source</th>
                       <th className="text-left px-3 py-2 font-medium">Items</th>
+                      <th className="text-right px-3 py-2 font-medium">Qty</th>
                       <th className="text-right px-3 py-2 font-medium">Value</th>
+                      <th className="text-left px-3 py-2 font-medium">Assignee</th>
                       <th className="text-left px-3 py-2 font-medium">Stage</th>
                       <th className="px-3 py-2"></th>
                     </tr>
@@ -1462,6 +1461,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                       const items=l.items||[];
                       const firstItem=items[0];
                       const itemSummary=firstItem ? (firstItem.itemType||'—')+(items.length>1?` +${items.length-1}`:'') : '—';
+                      const totalQty=items.reduce((s,it)=>s+(Number(it.quantity)||0),0);
                       return (
                         <tr key={l.id} className="border-t hover:bg-slate-50 group">
                           <td className="px-4 py-2.5">
@@ -1474,11 +1474,10 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                             </button>
                           </td>
                           <td className="px-3 py-2.5 text-slate-600 truncate max-w-[180px]" title={clientName(l.client_id)}>{clientName(l.client_id)}</td>
-                          <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap text-xs">{l.created_at?fmtDate(l.created_at):'—'}</td>
-                          <td className="px-3 py-2.5">{mgr ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[100px]">{mgr.name||mgr.email}</span></div> : <span className="text-slate-300 text-xs">— Unassigned</span>}</td>
-                          <td className="px-3 py-2.5 text-slate-600 text-xs">{l.lead_source ? <span className="inline-block px-2 py-0.5 rounded bg-teal-100 text-teal-700 font-medium">{l.lead_source}</span> : <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-slate-600 text-xs">{firstItem ? <span className="inline-block px-2 py-0.5 rounded bg-pink-100 text-pink-700 font-medium">{itemSummary}</span> : <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right text-slate-700 whitespace-nowrap">{totalQty>0 ? totalQty : <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-right font-bold text-slate-900 whitespace-nowrap">{l.value?peso(l.value):<span className="text-slate-300 font-normal">—</span>}</td>
+                          <td className="px-3 py-2.5">{mgr ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[100px]">{mgr.name||mgr.email}</span></div> : <span className="text-slate-300 text-xs">— Unassigned</span>}</td>
                           <td className="px-3 py-2.5">
                             {canEdit ? <select value={l.stage} onChange={e=>move(l,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white min-w-[110px]">{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
                               : <span className={`text-xs px-2 py-1 rounded font-medium ${stagePillBg} ${stageTextColor}`}>{stageMeta(l.stage).label}</span>}
@@ -1492,7 +1491,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                       );
                     })}
                     {col.length===0 && (
-                      <tr><td colSpan="9" className="text-center text-slate-300 text-xs py-3">— no leads in this stage —</td></tr>
+                      <tr><td colSpan="8" className="text-center text-slate-300 text-xs py-3">— no leads in this stage —</td></tr>
                     )}
                   </tbody>
                 </table>
