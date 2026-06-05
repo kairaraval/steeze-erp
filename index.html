@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15r · Production: List view grouped by status + Delete';
+const BUILD = 'Live build 15s · Sampling: List view + remove Send-to-Printing/Edit';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1122,10 +1122,16 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
   const [filterOwner,setFilterOwner]=useState('');
-  const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
-  const [sendingPrint,setSendingPrint]=useState(null);
+  const [creating,setCreating]=useState(false);
   const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem('sampleSort')||'due_asc'; }catch(e){ return 'due_asc'; } });
   function changeSort(v){ setSortBy(v); try{ localStorage.setItem('sampleSort',v); }catch(e){} }
+  const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('sampleLayout')||'table'; }catch(e){ return 'table'; } });
+  function changeLayout(v){ setLayout(v); try{ localStorage.setItem('sampleLayout',v); }catch(e){} }
+  const [collapsed,setCollapsed]=useState({});
+  function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
+  const isAdmin=profile.role==='admin';
+  const isAssistant=profile.role==='assistant';
+  const canDelete=isAdmin || !isAssistant;
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   // Sampling jobs don't carry their own sales_owner_id — derive it from the linked lead.
   const ownerIdFor=(j)=>{ const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return lead?lead.manager_id||null:null; };
@@ -1204,12 +1210,17 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
           <option value="created_desc">🆕 Newest sample first</option>
           <option value="created_asc">🕒 Oldest sample first</option>
         </select>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm" title="View style">
+          <button onClick={()=>changeLayout('table')} className={`px-3 py-1.5 rounded-md ${layout==='table'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ Table</button>
+          <button onClick={()=>changeLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>≡ Group by status</button>
+        </div>
       </div>
 
+      {layout==='table' && (
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className={`text-left px-3 py-2 ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
         <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, SAMPLING_DONE.includes(j.status)); const meta=metaFrom(SAMPLING_STATUSES,j.status); const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; const ownerId=lead?lead.manager_id:null; const owner=ownerId?(profiles||[]).find(p=>p.id===ownerId):null; return (
-          <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
+          <tr key={j.id} className={`border-t hover:bg-slate-50 group ${di.overdue?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
@@ -1219,16 +1230,75 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
-              <button onClick={()=>setSendingPrint(j)} className="text-xs text-purple-700 hover:underline mr-2" title="Forward selected attachments to Printing">🖨 Printing</button>
-              <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
-              <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline">Delete</button>
+              {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
             </td>
           </tr>
         ); })}
         {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No sample jobs here. Click "+ New sample" or send from a lead in Sampling stage.</td></tr>}
         </tbody></table></div></div>
-      {(creating||editing) && <SamplingJobForm existing={editing} leads={leads} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
-      {sendingPrint && <SendSampleToPrintingModal sample={sendingPrint} lead={sendingPrint.lead_id?leads.find(l=>l.id===sendingPrint.lead_id):null} onClose={()=>setSendingPrint(null)} onSent={(n)=>{ setSendingPrint(null); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); reload(); }} />}
+      )}
+
+      {layout==='list' && (
+      <div className="space-y-4">{SAMPLING_STATUSES.map(st=>{
+        const col=shown.filter(j=>j.status===st.key);
+        const isCollapsed=!!collapsed[st.key];
+        const filterActive = !!(filterStatus || filterDeadline || filterOwner || search);
+        if(col.length===0 && filterActive) return null;
+        const inActiveTab = !SAMPLING_DONE.includes(st.key);
+        if(viewMode==='active' && !inActiveTab) return null;
+        if(viewMode==='delivered' && inActiveTab) return null;
+        return (
+          <div key={st.key} className="bg-white rounded-xl border overflow-hidden">
+            <button onClick={()=>toggleCollapsed(st.key)} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 border-b">
+              <span className={`text-slate-400 text-xs transition-transform inline-block ${isCollapsed?'-rotate-90':''}`}>▼</span>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md ${st.color} text-xs font-bold uppercase tracking-wide`}>{st.label}</span>
+              <span className="text-slate-500 text-sm font-semibold">{col.length}</span>
+            </button>
+            {!isCollapsed && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-[10px] uppercase text-slate-400">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">Ref</th>
+                      <th className="text-left px-3 py-2 font-medium">Client</th>
+                      <th className="text-left px-3 py-2 font-medium">Item</th>
+                      <th className="text-right px-3 py-2 font-medium">Qty</th>
+                      <th className={`text-left px-3 py-2 font-medium ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th>
+                      <th className="text-left px-3 py-2 font-medium">Sales Owner</th>
+                      <th className="text-left px-3 py-2 font-medium">Move to</th>
+                      <th className="px-3 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {col.map(j=>{ const di=deadlineInfo(j.due_date, SAMPLING_DONE.includes(j.status)); const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; const ownerId=lead?lead.manager_id:null; const owner=ownerId?(profiles||[]).find(p=>p.id===ownerId):null; return (
+                      <tr key={j.id} className={`border-t hover:bg-slate-50 group ${di.overdue?'bg-rose-50/40':''}`}>
+                        <td className="px-3 py-2.5 font-mono text-xs">{j.number}</td>
+                        <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
+                        <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
+                        <td className="px-3 py-2.5 text-right">{j.quantity||'—'}</td>
+                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{di.label||fmtDate(j.due_date)}</span></td>
+                        <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
+                        <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
+                          {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                          {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
+                        </td>
+                      </tr>
+                    ); })}
+                    {col.length===0 && (
+                      <tr><td colSpan="8" className="text-center text-slate-300 text-xs py-3">— nothing in this status —</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}</div>
+      )}
+
+      {creating && <SamplingJobForm existing={null} leads={leads} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
     </div>
   );
 }
