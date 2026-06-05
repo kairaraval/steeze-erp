@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15l · Techpack numbering reverted to manual';
+const BUILD = 'Live build 15m · Pipeline List view (ClickUp-style grouped by stage)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1275,6 +1275,10 @@ function Inbox({ profile, profiles, leads, graphicJobs, printingJobs, production
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
   const [importing,setImporting]=useState(false);
+  const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('pipelineLayout')||'board'; }catch(e){ return 'board'; } });
+  function changeLayout(v){ setLayout(v); try{ localStorage.setItem('pipelineLayout',v); }catch(e){} }
+  const [collapsed,setCollapsed]=useState({}); // stage.key -> true if collapsed
+  function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   // Admin-only: pick which manager's pipeline to view.
@@ -1309,6 +1313,10 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search leads…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-52" />
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm" title="View style">
+              <button onClick={()=>changeLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button>
+              <button onClick={()=>changeLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button>
+            </div>
             {isAdmin ? (
               <select value={managerFilter} onChange={e=>setManagerFilter(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white whitespace-nowrap">
                 <option value="">My leads only</option>
@@ -1324,6 +1332,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           </div>
         </div>
       </div>
+      {layout==='board' && (
       <div className="flex gap-3 overflow-x-auto px-6 pt-4 pb-4">{STAGES.map(st=>{ const col=visible.filter(l=>l.stage===st.key); const colTotal=col.reduce((s,l)=>s+(Number(l.value)||0),0); return (
         <div key={st.key} className="flex-shrink-0 w-72">
           <div className="rounded-t-xl px-3 py-2.5 bg-white border border-b-0 flex items-center justify-between">
@@ -1349,6 +1358,87 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           ); })}{col.length===0 && <div className="text-[10px] text-slate-400 text-center py-4">—</div>}</div>
         </div>
       ); })}</div>
+      )}
+
+      {layout==='list' && (
+      <div className="px-6 pt-4 pb-6 space-y-4">{STAGES.map(st=>{
+        const col=visible.filter(l=>l.stage===st.key);
+        const colTotal=col.reduce((s,l)=>s+(Number(l.value)||0),0);
+        const stageTextColor = st.key==='qualified'?'text-blue-700':st.key==='proposal'?'text-indigo-700':st.key==='negotiation'?'text-amber-700':st.key==='sampling'?'text-purple-700':st.key==='won'?'text-emerald-700':st.key==='lost'?'text-rose-700':st.key==='delivered_pending'?'text-amber-700':st.key==='delivered_paid'?'text-emerald-700':'text-slate-700';
+        const stagePillBg  = st.key==='qualified'?'bg-blue-100':st.key==='proposal'?'bg-indigo-100':st.key==='negotiation'?'bg-amber-100':st.key==='sampling'?'bg-purple-100':st.key==='won'?'bg-emerald-100':st.key==='lost'?'bg-rose-100':st.key==='delivered_pending'?'bg-amber-100':st.key==='delivered_paid'?'bg-emerald-100':'bg-slate-100';
+        const isCollapsed=!!collapsed[st.key];
+        return (
+          <div key={st.key} className="bg-white rounded-xl border overflow-hidden">
+            <button onClick={()=>toggleCollapsed(st.key)} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 border-b">
+              <span className={`text-slate-400 text-xs transition-transform inline-block ${isCollapsed?'-rotate-90':''}`}>▼</span>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md ${stagePillBg} ${stageTextColor} text-xs font-bold uppercase tracking-wide`}>{st.label}</span>
+              <span className="text-slate-500 text-sm font-semibold">{col.length}</span>
+              {colTotal>0 && <span className="text-slate-400 text-xs">· {peso(colTotal)}</span>}
+            </button>
+            {!isCollapsed && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-[10px] uppercase text-slate-400">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-medium">Name</th>
+                      <th className="text-left px-3 py-2 font-medium">Company</th>
+                      <th className="text-left px-3 py-2 font-medium">Date created</th>
+                      <th className="text-left px-3 py-2 font-medium">Assignee</th>
+                      <th className="text-left px-3 py-2 font-medium">Lead Source</th>
+                      <th className="text-left px-3 py-2 font-medium">Items</th>
+                      <th className="text-right px-3 py-2 font-medium">Value</th>
+                      <th className="text-left px-3 py-2 font-medium">Stage</th>
+                      <th className="px-3 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {col.map(l=>{
+                      const mgr=profiles.find(p=>p.id===l.manager_id);
+                      const canEdit=isAdmin||isAssistant||l.manager_id===profile.id;
+                      const attCount=(l.attachments||[]).length;
+                      const items=l.items||[];
+                      const firstItem=items[0];
+                      const itemSummary=firstItem ? (firstItem.itemType||'—')+(items.length>1?` +${items.length-1}`:'') : '—';
+                      return (
+                        <tr key={l.id} className="border-t hover:bg-slate-50 group">
+                          <td className="px-4 py-2.5">
+                            <button onClick={()=>onOpenLead(l)} className="text-left flex items-center gap-1.5 min-w-0">
+                              <span className={`w-2.5 h-2.5 rounded-full border-2 ${stageTextColor.replace('text-','border-')}`}></span>
+                              <span className="font-medium text-slate-900 truncate" title={l.title}>{l.title}</span>
+                              {attCount>0 && <span className="text-slate-400 text-xs whitespace-nowrap" title={attCount+' attachment'+(attCount===1?'':'s')}>📎{attCount}</span>}
+                              {l.techpack && <span className="text-teal-600 text-xs" title="Has techpack">📋</span>}
+                              {activityCounts[l.id]>0 && <span className="text-slate-400 text-xs whitespace-nowrap">💬{activityCounts[l.id]}</span>}
+                            </button>
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-600 truncate max-w-[180px]" title={clientName(l.client_id)}>{clientName(l.client_id)}</td>
+                          <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap text-xs">{l.created_at?fmtDate(l.created_at):'—'}</td>
+                          <td className="px-3 py-2.5">{mgr ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[100px]">{mgr.name||mgr.email}</span></div> : <span className="text-slate-300 text-xs">— Unassigned</span>}</td>
+                          <td className="px-3 py-2.5 text-slate-600 text-xs">{l.lead_source ? <span className="inline-block px-2 py-0.5 rounded bg-teal-100 text-teal-700 font-medium">{l.lead_source}</span> : <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2.5 text-slate-600 text-xs">{firstItem ? <span className="inline-block px-2 py-0.5 rounded bg-pink-100 text-pink-700 font-medium">{itemSummary}</span> : <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 whitespace-nowrap">{l.value?peso(l.value):<span className="text-slate-300 font-normal">—</span>}</td>
+                          <td className="px-3 py-2.5">
+                            {canEdit ? <select value={l.stage} onChange={e=>move(l,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white min-w-[110px]">{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+                              : <span className={`text-xs px-2 py-1 rounded font-medium ${stagePillBg} ${stageTextColor}`}>{stageMeta(l.stage).label}</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                            <button onClick={()=>onOpenLead(l)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
+                            {onOpenTechpack && <button onClick={()=>onOpenTechpack(l)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                            {canEdit && !isAssistant && <button onClick={()=>del(l)} title="Delete" className="text-xs text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100">✕</button>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {col.length===0 && (
+                      <tr><td colSpan="9" className="text-center text-slate-300 text-xs py-3">— no leads in this stage —</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}</div>
+      )}
       {importing && <LeadImportModal profiles={profiles} clients={clients} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
   );
