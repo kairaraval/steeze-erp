@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15n · Production: sort by due date (most urgent first)';
+const BUILD = 'Live build 15o · Sampling board mirrors Production (owner + sort)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1018,20 +1018,43 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
 }
 
 /* ----------------------- Sampling board ----------------------- */
-function SamplingBoard({ profile, jobs, leads, reload, openActivity, openTechpack }){
+function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack }){
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
+  const [filterOwner,setFilterOwner]=useState('');
   const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [sendingPrint,setSendingPrint]=useState(null);
+  const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem('sampleSort')||'due_asc'; }catch(e){ return 'due_asc'; } });
+  function changeSort(v){ setSortBy(v); try{ localStorage.setItem('sampleSort',v); }catch(e){} }
+  const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Sampling jobs don't carry their own sales_owner_id — derive it from the linked lead.
+  const ownerIdFor=(j)=>{ const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return lead?lead.manager_id||null:null; };
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
   const active=jobs.filter(j=>!SAMPLING_DONE.includes(j.status));
   const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
   const dueThisWeek=active.filter(j=>{ const d=daysUntil(j.due_date); return d!==null && d>=0 && d<=7; }).length;
   const endorsed=active.filter(j=>j.status==='endorsed').length;
+  function compareJobs(a,b){
+    if(sortBy==='due_asc' || sortBy==='due_desc'){
+      const aT = a.due_date ? new Date(a.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const bT = b.due_date ? new Date(b.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      if(aT!==bT) return sortBy==='due_asc' ? (aT-bT) : (bT-aT);
+      return 0;
+    }
+    if(sortBy==='created_desc' || sortBy==='created_asc'){
+      const aC = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bC = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return sortBy==='created_desc' ? (bC-aC) : (aC-bC);
+    }
+    return 0;
+  }
   const shown=(viewMode==='active'?active:jobs.filter(j=>SAMPLING_DONE.includes(j.status)))
     .filter(j=>!filterStatus||j.status===filterStatus)
     .filter(j=>{ if(filterDeadline==='overdue') return deadlineInfo(j.due_date,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(j.due_date); return d!==null&&d>=0&&d<=7; } return true; })
-    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
+    .filter(j=>{ if(filterOwner==='__mine') return ownerIdFor(j)===profile.id; if(filterOwner==='__unassigned') return !ownerIdFor(j); if(filterOwner) return ownerIdFor(j)===filterOwner; return true; })
+    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
+    .slice()
+    .sort(compareJobs);
   async function move(j,st){ const {error}=await sb.from('sampling_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function del(id){ if(!confirm('Delete this sampling job?')) return; const {error}=await sb.from('sampling_jobs').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const tile=(label,value,sub,active2,onClick)=>(
@@ -1045,7 +1068,7 @@ function SamplingBoard({ profile, jobs, leads, reload, openActivity, openTechpac
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">🧵 Sampling Board</h1><p className="text-slate-500 text-sm">Sample production tracking — every sample job flows through endorsed → material request → on going → for delivery → delivered.</p></div>
+          <div><h1 className="text-2xl font-bold">🧵 Sampling Board</h1><p className="text-slate-500 text-sm">Live sample tracking — every sample job flows through endorsed → material request → on going → for delivery → delivered.</p></div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setViewMode('active')} className={`px-3 py-1.5 rounded-md ${viewMode==='active'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Active ({active.length})</button><button onClick={()=>setViewMode('delivered')} className={`px-3 py-1.5 rounded-md ${viewMode==='delivered'?'bg-white shadow-sm font-semibold text-emerald-700':'text-slate-600'}`}>✓ Delivered ({jobs.length-active.length})</button></div>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New sample</button>
@@ -1063,22 +1086,36 @@ function SamplingBoard({ profile, jobs, leads, reload, openActivity, openTechpac
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search ref, client, item…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
         <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All statuses</option>{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+        <select value={filterOwner} onChange={e=>setFilterOwner(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300">
+          <option value="">All sales owners</option>
+          <option value="__mine">My samples only</option>
+          <option value="__unassigned">Unassigned</option>
+          <option disabled>──────────</option>
+          {salesPeople.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}
+        </select>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
           <button onClick={()=>setFilterDeadline('')} className={`px-3 py-1.5 rounded-md ${filterDeadline===''?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All</button>
           <button onClick={()=>setFilterDeadline('overdue')} className={`px-3 py-1.5 rounded-md ${filterDeadline==='overdue'?'bg-white shadow-sm font-semibold text-rose-600':'text-slate-600'}`}>Overdue</button>
           <button onClick={()=>setFilterDeadline('week')} className={`px-3 py-1.5 rounded-md ${filterDeadline==='week'?'bg-white shadow-sm font-semibold text-amber-600':'text-slate-600'}`}>This week</button>
         </div>
+        <select value={sortBy} onChange={e=>changeSort(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white" title="Sort samples">
+          <option value="due_asc">⬆ Most urgent first (earliest due)</option>
+          <option value="due_desc">⬇ Latest due first</option>
+          <option value="created_desc">🆕 Newest sample first</option>
+          <option value="created_asc">🕒 Oldest sample first</option>
+        </select>
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th></th></tr></thead>
-        <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, SAMPLING_DONE.includes(j.status)); const meta=metaFrom(SAMPLING_STATUSES,j.status); const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return (
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className={`text-left px-3 py-2 ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
+        <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, SAMPLING_DONE.includes(j.status)); const meta=metaFrom(SAMPLING_STATUSES,j.status); const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; const ownerId=lead?lead.manager_id:null; const owner=ownerId?(profiles||[]).find(p=>p.id===ownerId):null; return (
           <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
             <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label||fmtDate(j.due_date)}</span></td>
+            <td className="px-3 py-2">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
@@ -1088,7 +1125,7 @@ function SamplingBoard({ profile, jobs, leads, reload, openActivity, openTechpac
             </td>
           </tr>
         ); })}
-        {shown.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No sample jobs here. Click "+ New sample" or send from a lead in Sampling stage.</td></tr>}
+        {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No sample jobs here. Click "+ New sample" or send from a lead in Sampling stage.</td></tr>}
         </tbody></table></div></div>
       {(creating||editing) && <SamplingJobForm existing={editing} leads={leads} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {sendingPrint && <SendSampleToPrintingModal sample={sendingPrint} lead={sendingPrint.lead_id?leads.find(l=>l.id===sendingPrint.lead_id):null} onClose={()=>setSendingPrint(null)} onSent={(n)=>{ setSendingPrint(null); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); reload(); }} />}
@@ -3602,7 +3639,7 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
-        {view==='sampling' && <SamplingBoard profile={profile} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
+        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
