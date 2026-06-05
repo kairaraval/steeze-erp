@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15s · Sampling: List view + remove Send-to-Printing/Edit';
+const BUILD = 'Live build 15t · Graphic/Printing: side-by-side detail with embedded activity';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -885,39 +885,57 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
       )}
 
       {(creating||editing) && <DeptJobForm profile={profile} table={table} statuses={statuses} graphicTypes={graphicTypes} existing={editing} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
-      {liveDetail && (() => { const detailLead=liveDetail.lead_id?(leads||[]).find(l=>l.id===liveDetail.lead_id):null; const hasTechpack=detailLead && detailLead.techpack; return (
-        <Modal title={`${title} — ${liveDetail.number||''}`} onClose={()=>setDetail(null)}>
-          <div className="space-y-3">
-            <div className="text-lg font-bold">{liveDetail.item}</div><div className="text-sm text-slate-500">{liveDetail.client_name}</div>
-            <div className="grid grid-cols-2 gap-3 text-sm"><div><div className="text-[10px] uppercase text-slate-400">Qty</div><div>{liveDetail.quantity||'—'}</div></div><div><div className="text-[10px] uppercase text-slate-400">Deadline</div><div>{fmtDate(liveDetail.due_date)}</div></div>{liveDetail.graphic_type && <div><div className="text-[10px] uppercase text-slate-400">Graphic request</div><div>{liveDetail.graphic_type}</div></div>}<div><div className="text-[10px] uppercase text-slate-400">Status</div><div>{metaFrom(statuses,liveDetail.status).label}</div></div></div>
-            {/* Techpack section */}
-            {openTechpack && (
-              <div className={`border rounded-lg p-3 ${hasTechpack?'bg-teal-50 border-teal-200':'bg-slate-50 border-slate-200'}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[10px] uppercase text-slate-400">Techpack</div>
-                    {detailLead ? (
-                      hasTechpack ? (
-                        <div className="text-sm font-semibold text-teal-700 mt-0.5">📋 {detailLead.techpack_number||'Techpack ready'} · {detailLead.title}</div>
-                      ) : (
-                        <div className="text-sm text-slate-500 mt-0.5">Linked lead "<span className="font-medium">{detailLead.title}</span>" has no techpack yet.</div>
-                      )
-                    ) : (
-                      <div className="text-sm text-slate-400 mt-0.5">This job isn't linked to a sales lead — no techpack to view.</div>
-                    )}
-                  </div>
-                  {hasTechpack && <button onClick={()=>openTechpack(detailLead)} className="shrink-0 py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 View techpack</button>}
+      {liveDetail && (() => { const detailLead=liveDetail.lead_id?(leads||[]).find(l=>l.id===liveDetail.lead_id):null; const hasTechpack=detailLead && detailLead.techpack; const statusMeta=metaFrom(statuses,liveDetail.status); return (
+        <Modal title={`${title} — ${liveDetail.number||''}`} onClose={()=>setDetail(null)} xwide>
+          <div className="grid md:grid-cols-5 gap-5">
+            {/* Left: job info + actions (3 cols) */}
+            <div className="md:col-span-3 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-lg font-bold truncate">{liveDetail.item||'—'}</div>
+                  <div className="text-sm text-slate-500 truncate">{liveDetail.client_name||'—'}</div>
                 </div>
+                <span className={`text-xs px-2 py-1 rounded font-medium ${statusMeta.color}`}>{statusMeta.label}</span>
               </div>
-            )}
-            {(liveDetail.attachments||[]).length>0 && <div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{liveDetail.attachments.map((a,i)=><AttachmentChip key={i} att={a} small />)}</div></div>}
-            {liveDetail.notes && <div><div className="text-[10px] uppercase text-slate-400 mb-1">Notes</div><div className="text-sm bg-slate-50 border rounded p-2 whitespace-pre-wrap">{liveDetail.notes}</div></div>}
-            <div className="flex gap-2 pt-2 border-t flex-wrap">
-              <button onClick={()=>openActivity({ job:liveDetail, jobType, title:`${liveDetail.item} · ${liveDetail.client_name}` })} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold">💬 Activity</button>
-              {hasTechpack && <button onClick={()=>openTechpack(detailLead)} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 Techpack</button>}
-              <button onClick={()=>{ setEditing(liveDetail); setDetail(null); }} className="py-2 px-3 rounded-lg border text-sm">✎ Edit</button>
-              {canSendToPrinting && <button onClick={()=>{ sendToPrinting(liveDetail); setDetail(null); }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold">🖨 Send to Printing</button>}
-              <button onClick={()=>setDetail(null)} className="py-2 px-3 rounded-lg text-slate-500 text-sm">Close</button>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><div className="text-[10px] uppercase text-slate-400">Qty</div><div>{liveDetail.quantity||'—'}</div></div>
+                <div><div className="text-[10px] uppercase text-slate-400">Deadline</div><div>{fmtDate(liveDetail.due_date)||'—'}</div></div>
+                {liveDetail.graphic_type && <div><div className="text-[10px] uppercase text-slate-400">Graphic request</div><div>{liveDetail.graphic_type}</div></div>}
+                <div><div className="text-[10px] uppercase text-slate-400">Ref</div><div className="font-mono text-xs">{liveDetail.number||'—'}</div></div>
+              </div>
+              {/* Techpack section */}
+              {openTechpack && (
+                <div className={`border rounded-lg p-3 ${hasTechpack?'bg-teal-50 border-teal-200':'bg-slate-50 border-slate-200'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-slate-400">Techpack</div>
+                      {detailLead ? (
+                        hasTechpack ? (
+                          <div className="text-sm font-semibold text-teal-700 mt-0.5">📋 {detailLead.techpack_number||'Techpack ready'} · {detailLead.title}</div>
+                        ) : (
+                          <div className="text-sm text-slate-500 mt-0.5">Linked lead "<span className="font-medium">{detailLead.title}</span>" has no techpack yet.</div>
+                        )
+                      ) : (
+                        <div className="text-sm text-slate-400 mt-0.5">This job isn't linked to a sales lead — no techpack to view.</div>
+                      )}
+                    </div>
+                    {hasTechpack && <button onClick={()=>openTechpack(detailLead)} className="shrink-0 py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 View techpack</button>}
+                  </div>
+                </div>
+              )}
+              {(liveDetail.attachments||[]).length>0 && <div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{liveDetail.attachments.map((a,i)=><AttachmentChip key={i} att={a} small />)}</div></div>}
+              {liveDetail.notes && <div><div className="text-[10px] uppercase text-slate-400 mb-1">Notes</div><div className="text-sm bg-slate-50 border rounded p-2 whitespace-pre-wrap">{liveDetail.notes}</div></div>}
+              <div className="flex gap-2 pt-2 border-t flex-wrap">
+                {hasTechpack && <button onClick={()=>openTechpack(detailLead)} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 Techpack</button>}
+                <button onClick={()=>{ setEditing(liveDetail); setDetail(null); }} className="py-2 px-3 rounded-lg border text-sm hover:bg-slate-50">✎ Edit</button>
+                {canSendToPrinting && <button onClick={()=>{ sendToPrinting(liveDetail); setDetail(null); }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
+                <button onClick={()=>setDetail(null)} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+              </div>
+            </div>
+            {/* Right: live activity (2 cols) */}
+            <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
+              <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">💬 Activity</div>
+              <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: liveDetail.id, job_type: jobType }} scope={'dept/'+liveDetail.id} titleText={`${liveDetail.item} · ${liveDetail.client_name}`} afterChange={reload} headerless embedded />
             </div>
           </div>
         </Modal>
