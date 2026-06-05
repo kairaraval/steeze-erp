@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15t · Graphic/Printing: side-by-side detail with embedded activity';
+const BUILD = 'Live build 15u · Graphic/Printing: Open lead button replaces 💬';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -806,7 +806,7 @@ function DeptJobForm({ profile, table, statuses, graphicTypes, existing, onClose
 }
 
 /* ----------------------- Dept board (Graphic / Printing) ----------------------- */
-function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, reload, openActivity, openTechpack }){
+function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
@@ -848,7 +848,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                       <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.cls}>{di.label}</span></div>
                       <div className="flex items-center gap-1 mt-2">
                         <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                        <button onClick={()=>openActivity({ job:j, jobType, title:`${j.item} · ${j.client_name}` })} title="Activity" className="text-slate-400 hover:text-indigo-600 text-xs px-1">💬</button>
+                        {lead && openLead && <button onClick={(e)=>{e.stopPropagation(); openLead(lead);}} title="Open the linked sales lead" className="text-indigo-600 text-xs px-1 hover:underline">↗ Open lead</button>}
                         {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} title="Send to Printing" className="text-purple-600 text-xs px-1">🖨</button>}
                       </div>
                     </div>
@@ -873,7 +873,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label||fmtDate(j.due_date)}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
-                <button onClick={()=>openActivity({ job:j, jobType, title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬 Activity</button>
+                {lead && openLead && <button onClick={()=>openLead(lead)} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
                 {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
                 {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} className="text-xs text-purple-700 hover:underline mr-2">🖨 Printing</button>}
                 <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline">Delete</button>
@@ -3827,8 +3827,8 @@ function App(){
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
-        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
-        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
+        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={setDetailLead} />}
+        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={setDetailLead} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
         {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} reload={loadAll} />}
         {view==='suppliers' && <SuppliersView suppliers={suppliers} reload={loadAll} />}
