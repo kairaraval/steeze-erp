@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16b · LeadInfoModal: editable attachments + notes + save';
+const BUILD = 'Live build 16c · Send-to-Printing: auto-navigate + saves edits + better errors';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -879,7 +879,18 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
           <div className="flex flex-wrap gap-2 pt-3 border-t">
             {job && <button disabled={busy||!dirty} onClick={save} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(dirty?'💾 Save changes':'✓ Saved')}</button>}
             {lead.techpack && onOpenTechpack && <button onClick={()=>{ onClose(); onOpenTechpack(lead); }} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 View techpack</button>}
-            {canSendToPrinting && job && onSendToPrinting && <button onClick={()=>{ onSendToPrinting(job); onClose(); }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
+            {canSendToPrinting && job && onSendToPrinting && <button onClick={async ()=>{
+              // Persist any pending attachments / notes to the dept job first so
+              // the printing card receives the LATEST state, not stale data.
+              if(dirty){
+                setBusy(true); setMsg('');
+                const { error } = await sb.from(deptTable).update({ attachments: atts, notes: note }).eq('id', job.id);
+                setBusy(false);
+                if(error){ setMsg('Save failed before sending: '+(error.message||error)); return; }
+              }
+              await onSendToPrinting({ ...job, attachments: atts, notes: note });
+              onClose();
+            }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
             <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
           </div>
         </div>
@@ -952,9 +963,15 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
   async function move(j,st){ const {error}=await sb.from(table).update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function del(id){ if(!confirm('Delete this job?')) return; const {error}=await sb.from(table).delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
-  async function sendToPrinting(j){ if(!confirm('Send this card (with attachments) to Printing?')) return;
-    const {error}=await sb.from('printing_jobs').insert({ number:'PR-P-'+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:j.attachments||[], status:'to do', due_date:j.due_date||null, notes:j.notes||'' });
-    if(error){ alert(error.message); return; } alert('Sent '+(j.number||'')+' to Printing.'); }
+  async function sendToPrinting(j){
+    const atts = j.attachments||[];
+    if(!confirm(`Send ${j.number||''} to Printing with ${atts.length} attachment${atts.length===1?'':'s'}?`)) return;
+    const row = { number:'PR-P-'+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:atts, status:'to do', due_date:j.due_date||null, notes:j.notes||'' };
+    const { data:inserted, error } = await sb.from('printing_jobs').insert(row).select('id,number').single();
+    if(error){ console.error('Send-to-Printing failed:', error); alert('Could not send to Printing.\n\n'+(error.message||error)); return; }
+    await reload();
+    alert('Sent to Printing as '+(inserted?.number||j.number||'(new card)')+'. Switch to the Printing board to find it in the "To Do" column.');
+  }
   const liveDetail = detail ? (jobs.find(x=>x.id===detail.id)||detail) : null;
   return (
     <div className="p-6">
@@ -4029,12 +4046,27 @@ function App(){
           onOpenTechpack={openTechpackView}
           onSendToPrinting={async (job)=>{
             if(!job){ return; }
-            if(!confirm(`Send ${job.number||''} (with its current attachments) to Printing?`)) return;
-            const row={ number:'PR-P-'+Date.now().toString().slice(-5), source_job_id:job.id, lead_id:job.lead_id||null, client_name:job.client_name||'', item:job.item||'', items:job.items||[], quantity:job.quantity||0, attachments:job.attachments||[], status:'to do', due_date:job.due_date||null, notes:'' };
-            const { error } = await sb.from('printing_jobs').insert(row);
-            if(error){ alert(error.message); return; }
-            alert('Sent to Printing.');
-            loadAll();
+            const attsCount = (job.attachments||[]).length;
+            if(!confirm(`Send ${job.number||''} to Printing with ${attsCount} attachment${attsCount===1?'':'s'}?`)) return;
+            const row={
+              number: 'PR-P-'+Date.now().toString().slice(-5),
+              source_job_id: job.id,
+              lead_id: job.lead_id||null,
+              client_name: job.client_name||'',
+              item: job.item||'',
+              items: job.items||[],
+              quantity: job.quantity||0,
+              attachments: job.attachments||[],
+              status: 'to do',
+              due_date: job.due_date||null,
+              notes: job.notes||''
+            };
+            const { data:inserted, error } = await sb.from('printing_jobs').insert(row).select('id,number').single();
+            if(error){ console.error('Send-to-Printing insert failed:', error); alert('Could not send to Printing.\n\n'+(error.message||error)+'\n\nIf this keeps happening, take a screenshot and send to kaira.'); return; }
+            await loadAll();
+            // Jump to the Printing board so the user can see the new card immediately
+            setView('printing');
+            alert('Sent to Printing as '+(inserted?.number||'(new card)')+'. Opening the Printing board now.');
           }}
         />
       )}
