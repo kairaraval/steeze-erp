@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 15m · Pipeline List view (ClickUp-style grouped by stage)';
+const BUILD = 'Live build 15n · Production: sort by due date (most urgent first)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -908,6 +908,8 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
   const [filterOwner,setFilterOwner]=useState('');
+  const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem('prodSort')||'due_asc'; }catch(e){ return 'due_asc'; } });
+  function changeSort(v){ setSortBy(v); try{ localStorage.setItem('prodSort',v); }catch(e){} }
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   async function changeOwner(j, ownerId){ const { error } = await sb.from('production_jobs').update({ sales_owner_id: ownerId||null }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
@@ -915,11 +917,29 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
   const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
   const dueThisWeek=active.filter(j=>{ const d=daysUntil(j.due_date); return d!==null && d>=0 && d<=7; }).length;
   const awaiting=active.filter(j=>j.status==='materials to purchase').length;
+  function compareJobs(a,b){
+    if(sortBy==='due_asc' || sortBy==='due_desc'){
+      // Treat missing due_date as "infinity" so it always sinks to the bottom in asc,
+      // and to the top in desc (but we apply the same rule and just invert otherwise).
+      const aT = a.due_date ? new Date(a.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const bT = b.due_date ? new Date(b.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      if(aT!==bT) return sortBy==='due_asc' ? (aT-bT) : (bT-aT);
+      return 0;
+    }
+    if(sortBy==='created_desc' || sortBy==='created_asc'){
+      const aC = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bC = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return sortBy==='created_desc' ? (bC-aC) : (aC-bC);
+    }
+    return 0;
+  }
   const shown=(viewMode==='active'?active:jobs.filter(j=>PRODUCTION_DONE.includes(j.status)))
     .filter(j=>!filterStatus||j.status===filterStatus)
     .filter(j=>{ if(filterDeadline==='overdue') return deadlineInfo(j.due_date,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(j.due_date); return d!==null&&d>=0&&d<=7; } return true; })
     .filter(j=>{ if(filterOwner==='__mine') return j.sales_owner_id===profile.id; if(filterOwner==='__unassigned') return !j.sales_owner_id; if(filterOwner) return j.sales_owner_id===filterOwner; return true; })
-    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
+    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
+    .slice() // don't mutate the prop
+    .sort(compareJobs);
   async function move(j,st){ const {error}=await sb.from('production_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function sendTo(j, table, status, label){ if(!confirm(`Send ${j.number||''} to ${label}?`)) return;
     const row={ number:(table==='printing_jobs'?'PR-P-':'GD-')+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, attachments:[], status, due_date:j.due_date||null, notes:'' };
@@ -962,10 +982,16 @@ function ProductionBoard({ profile, profiles, jobs, leads, reload, openActivity,
           <button onClick={()=>setFilterDeadline('overdue')} className={`px-3 py-1.5 rounded-md ${filterDeadline==='overdue'?'bg-white shadow-sm font-semibold text-rose-600':'text-slate-600'}`}>Overdue</button>
           <button onClick={()=>setFilterDeadline('week')} className={`px-3 py-1.5 rounded-md ${filterDeadline==='week'?'bg-white shadow-sm font-semibold text-amber-600':'text-slate-600'}`}>This week</button>
         </div>
+        <select value={sortBy} onChange={e=>changeSort(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white" title="Sort jobs">
+          <option value="due_asc">⬆ Most urgent first (earliest due)</option>
+          <option value="due_desc">⬇ Latest due first</option>
+          <option value="created_desc">🆕 Newest job first</option>
+          <option value="created_asc">🕒 Oldest job first</option>
+        </select>
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className={`text-left px-3 py-2 ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
         <tbody>{shown.map(j=>{ const di=deadlineInfo(j.due_date, PRODUCTION_DONE.includes(j.status)); const meta=metaFrom(PRODUCTION_STATUSES,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const owner=j.sales_owner_id?(profiles||[]).find(p=>p.id===j.sales_owner_id):null; return (
           <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
