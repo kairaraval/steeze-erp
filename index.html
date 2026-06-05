@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16j · Graphic/Printing: Delete on board cards (admin/manager)';
+const BUILD = 'Live build 16m · Sales managers lose Dashboard/Ops/Purchasing; accounting sees admin';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2588,7 +2588,14 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 /* ----------------------- Team Overview ----------------------- */
 function TeamOverview({ profile, profiles, leads, clients, pendingInvites, reload }){
   const isAdmin = profile && profile.role==='admin';
-  const rows=profiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>SOLD_STAGES.includes(l.stage)); const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
+  const isAccounting = profile && profile.role==='accounting';
+  // Accounting sees the Sales side of the team — Admin, Sales Managers and
+  // Sales Assistants. Production / purchasing / other accounting teammates
+  // are hidden. Everyone else sees the full roster.
+  const visibleProfiles = isAccounting
+    ? profiles.filter(p => p.role==='admin' || p.role==='manager' || p.role==='assistant')
+    : profiles;
+  const rows=visibleProfiles.map(p=>{ const mine=leads.filter(l=>l.manager_id===p.id); const won=mine.filter(l=>SOLD_STAGES.includes(l.stage)); const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage)); return { p, total:mine.length, openVal:open.reduce((s,l)=>s+(Number(l.value)||0),0), wonVal:won.reduce((s,l)=>s+(Number(l.value)||0),0), wonCount:won.length }; }).sort((a,b)=>b.wonVal-a.wonVal);
 
   const [inviteEmail,setInviteEmail]=useState('');
   const [inviteRole,setInviteRole]=useState('manager');
@@ -2609,9 +2616,21 @@ function TeamOverview({ profile, profiles, leads, clients, pendingInvites, reloa
     setEditingNameId(null); setDraftName(''); reload && reload();
   }
 
-  const roleLabel = (r) => r==='admin'?'Administrator' : r==='assistant'?'Sales Assistant' : 'Sales Manager';
+  const roleLabel = (r) =>
+    r==='admin'      ? 'Administrator' :
+    r==='assistant'  ? 'Sales Assistant' :
+    r==='production' ? 'Production Team' :
+    r==='purchasing' ? 'Purchasing Team' :
+    r==='accounting' ? 'Accounting Team' :
+    'Sales Manager';
   const roleBadge = (r) => {
-    const cls = r==='admin'?'bg-indigo-100 text-indigo-700' : r==='assistant'?'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+    const cls =
+      r==='admin'      ? 'bg-indigo-100 text-indigo-700' :
+      r==='assistant'  ? 'bg-amber-100 text-amber-700' :
+      r==='production' ? 'bg-emerald-100 text-emerald-700' :
+      r==='purchasing' ? 'bg-violet-100 text-violet-700' :
+      r==='accounting' ? 'bg-sky-100 text-sky-700' :
+      'bg-slate-100 text-slate-600';
     return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(r)}</span>;
   };
 
@@ -2667,6 +2686,10 @@ function TeamOverview({ profile, profiles, leads, clients, pendingInvites, reloa
                 <option value="admin">Administrator</option>
                 <option value="manager">Sales Manager</option>
                 <option value="assistant">Sales Assistant</option>
+                <option disabled>──────────</option>
+                <option value="production">Production Team</option>
+                <option value="purchasing">Purchasing Team</option>
+                <option value="accounting">Accounting Team</option>
               </select>
             </div>
             <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
@@ -2745,6 +2768,10 @@ function TeamOverview({ profile, profiles, leads, clients, pendingInvites, reloa
                     <option value="admin">Administrator</option>
                     <option value="manager">Sales Manager</option>
                     <option value="assistant">Sales Assistant</option>
+                    <option disabled>──────────</option>
+                    <option value="production">Production Team</option>
+                    <option value="purchasing">Purchasing Team</option>
+                    <option value="accounting">Accounting Team</option>
                   </select>
                 ) : roleBadge(p.role||'manager')}
               </td>
@@ -4038,12 +4065,31 @@ function App(){
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
   useEffect(()=>{ setSelectedClient(null); },[view]);
-  // Assistants only have Sales + Production tabs. If they land anywhere else
-  // (Dashboard, Team, Operations, Purchasing, Other) bounce to Sales Pipeline.
+  // Each restricted role has its own allowed-view set + default landing page.
+  // If a user (e.g. via a stale tab) lands on a view they shouldn't see, bounce
+  // them to their default.
   useEffect(()=>{
-    if(!profile || profile.role!=='assistant') return;
-    const allowed = new Set(['inbox','pipeline','techpacks','clients','profile','prod','sampling','graphic','printing']);
-    if(!allowed.has(view)) setView('pipeline');
+    if(!profile) return;
+    let allowed, fallback;
+    if(profile.role==='assistant'){
+      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','prod','sampling','graphic','printing']);
+      fallback = 'pipeline';
+    } else if(profile.role==='manager'){
+      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','team','prod','sampling','graphic','printing']);
+      fallback = 'pipeline';
+    } else if(profile.role==='production'){
+      allowed = new Set(['inbox','prod','sampling','graphic','printing']);
+      fallback = 'prod';
+    } else if(profile.role==='purchasing'){
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','orders','styles']);
+      fallback = 'prod';
+    } else if(profile.role==='accounting'){
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','orders','styles']);
+      fallback = 'pipeline';
+    } else {
+      return; // admin / manager — no restrictions
+    }
+    if(!allowed.has(view)) setView(fallback);
   },[profile, view]);
 
   // Realtime: ping + toast the moment someone @mentions you anywhere.
@@ -4115,20 +4161,61 @@ function App(){
   }
 
   const isAssistant=profile.role==='assistant';
-  const NAV = isAssistant ? [
+  const isProduction=profile.role==='production';
+  const isPurchasing=profile.role==='purchasing';
+  const isAccounting=profile.role==='accounting';
+  const isManager=profile.role==='manager';
+  // Build the sidebar nav per role.
+  let NAV;
+  if(isProduction){
+    // Production team — Production space + inbox only.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+    ];
+  } else if(isPurchasing){
+    // Purchasing team — Production + Operations + Purchasing + inbox.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+    ];
+  } else if(isAccounting){
+    // Accounting team — Sales (no admin profile) + filtered Team Overview + Operations + Purchasing + inbox.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+    ];
+  } else if(isAssistant){
     // Sales Assistants only see Sales + Production. No Team Overview, no
     // Operations / Purchasing / Other modules.
-    { items: [ ['inbox','Inbox','📥'] ] },
-    { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'] ] },
-    { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
-  ] : [
-    { items:[ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
-    { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
-    { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
-    { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-    { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
-    { group:'Other', soon:true, items:[ ['soon-rep','Reports','📈'] ] },
-  ];
+    NAV = [
+      { items: [ ['inbox','Inbox','📥'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+    ];
+  } else if(isManager){
+    // Sales Manager — Sales + Production + Team Overview. No Dashboard, no
+    // Operations, no Purchasing.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+    ];
+  } else {
+    // Admin — full access.
+    NAV = [
+      { items:[ ['dashboard','Dashboard','📊'], ['inbox','Inbox','📥'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Other', soon:true, items:[ ['soon-rep','Reports','📈'] ] },
+    ];
+  }
   function NavBtn([k,lbl,icon]){
     const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : 0;
     return <button key={k} onClick={()=>{ setView(k); }} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center">{icon}</span><span className="flex-1 text-left">{lbl}</span>{badge>0 && <span className="text-[10px] bg-rose-500 text-white rounded-full px-1.5 py-0.5 font-bold">{badge}</span>}</button>;
