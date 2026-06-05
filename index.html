@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16p · Deadline: due today / tomorrow / N days overdue / date';
+const BUILD = 'Live build 16q · Activity comments: hover Edit + Delete (own comments / admin)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -377,6 +377,45 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   const [rows,setRows]=useState(null); const [text,setText]=useState('');
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
+  // Inline edit state — one comment at a time.
+  const [editId,setEditId]=useState(null);
+  const [editText,setEditText]=useState('');
+  const [editAtts,setEditAtts]=useState([]);
+  const [editBusy,setEditBusy]=useState(false);
+  function startEdit(row){
+    setEditId(row.id);
+    setEditText(row.text||'');
+    setEditAtts(Array.isArray(row.attachments)&&row.attachments.length>0 ? row.attachments : (row.attachment?[row.attachment]:[]));
+  }
+  function cancelEdit(){ setEditId(null); setEditText(''); setEditAtts([]); }
+  function removeEditAtt(idx){ setEditAtts(a=>a.filter((_,i)=>i!==idx)); }
+  async function saveEdit(row){
+    setEditBusy(true);
+    const newText = (editText||'').trim();
+    const newMentions = parseMentions(newText, profiles);
+    const newAtts = editAtts;
+    const first = newAtts[0] || null;
+    const { error } = await sb.from(table).update({
+      text: newText,
+      mentions: newMentions,
+      attachments: newAtts,
+      attachment: first,
+    }).eq('id', row.id);
+    setEditBusy(false);
+    if(error){ alert('Edit failed: '+(error.message||error)); return; }
+    cancelEdit();
+    await load();
+    afterChange && afterChange();
+  }
+  async function deleteComment(row){
+    if(!confirm('Delete this comment? This cannot be undone.')) return;
+    const { error } = await sb.from(table).delete().eq('id', row.id);
+    if(error){ alert('Delete failed: '+(error.message||error)); return; }
+    await load();
+    afterChange && afterChange();
+  }
+  // Anyone can edit/delete their own comment; admins can do it on anyone's.
+  function canModify(row){ return row.actor_id === profile.id || profile.role === 'admin'; }
   async function load(){
     let q = sb.from(table).select('*'); Object.entries(match).forEach(([k,v])=>{ q=q.eq(k,v); });
     const { data, error } = await q.order('created_at',{ ascending:true });
@@ -449,7 +488,50 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
         {rows && rows.length===0 && <div className="text-center text-sm text-slate-400 py-6 border rounded-lg border-dashed">No activity yet.</div>}
         {rows && rows.slice().reverse().map(a=>{ const actor=profiles.find(p=>p.id===a.actor_id); const atts=normalizeAtts(a);
           if(a.type==='system') return <div key={a.id} className="text-[11px] text-slate-400 italic px-2">{a.text} · {fmtTime(a.created_at)}</div>;
-          return (<div key={a.id} className="flex items-start gap-3 p-3 rounded-lg bg-white border"><Avatar profile={actor} size="sm" /><div className="flex-1 min-w-0"><div className="flex items-baseline gap-2"><span className="font-medium text-sm">{actor?.name||'Unknown'}</span><span className="text-[11px] text-slate-500">{fmtTime(a.created_at)}</span></div><div className="mt-1 text-sm whitespace-pre-wrap">{renderCommentText(a.text, profiles)}</div>{atts.length>0 && <div className="mt-2 flex flex-col gap-2 items-start">{atts.map((att,i)=><InlineAttachment key={i} att={att} />)}</div>}</div></div>);
+          const isEditing = editId === a.id;
+          const mine = canModify(a);
+          return (
+            <div key={a.id} className="group flex items-start gap-3 p-3 rounded-lg bg-white border relative">
+              <Avatar profile={actor} size="sm" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="font-medium text-sm">{actor?.name||'Unknown'}</span>
+                  <span className="text-[11px] text-slate-500">{fmtTime(a.created_at)}</span>
+                </div>
+                {isEditing ? (
+                  <div className="mt-2 space-y-2">
+                    <textarea autoFocus className="input min-h-[70px]" value={editText} onChange={e=>setEditText(e.target.value)} placeholder="Edit your comment…" />
+                    {editAtts.length>0 && (
+                      <div className="flex flex-col gap-2 items-start">
+                        {editAtts.map((att,i)=>(
+                          <div key={i} className="flex items-center gap-2 group/att">
+                            <InlineAttachment att={att} />
+                            <button onClick={()=>removeEditAtt(i)} title="Remove attachment" className="text-rose-400 hover:text-rose-600 text-xs opacity-0 group-hover/att:opacity-100 transition">✕ remove</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button disabled={editBusy} onClick={()=>saveEdit(a)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold disabled:opacity-50 hover:bg-indigo-700">{editBusy?'Saving…':'Save'}</button>
+                      <button onClick={cancelEdit} className="text-xs px-3 py-1.5 rounded text-slate-500 hover:bg-slate-100">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-1 text-sm whitespace-pre-wrap">{renderCommentText(a.text, profiles)}</div>
+                    {atts.length>0 && <div className="mt-2 flex flex-col gap-2 items-start">{atts.map((att,i)=><InlineAttachment key={i} att={att} />)}</div>}
+                  </>
+                )}
+              </div>
+              {/* Hover-reveal edit/delete buttons — only for the comment owner or admins */}
+              {mine && !isEditing && (
+                <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <button onClick={()=>startEdit(a)} title="Edit" className="text-[11px] px-2 py-1 rounded bg-white border border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 text-slate-500">✎ Edit</button>
+                  <button onClick={()=>deleteComment(a)} title="Delete" className="text-[11px] px-2 py-1 rounded bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-500">🗑 Delete</button>
+                </div>
+              )}
+            </div>
+          );
         })}
       </div>
     </div>
