@@ -58,7 +58,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16d · Sales pipeline: inline notes box + 📝 indicator on cards/list';
+const BUILD = 'Live build 16e · Send-to-Graphic: include lead notes (editable, opt-in)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -561,14 +561,18 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
 /* ----------------------- Send-to-Graphic chooser ----------------------- */
 function SendToGraphicModal({ profile, lead, clients, onClose, onSent }){
   const [chosen,setChosen]=useState({}); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Pre-fill with the lead's existing notes — sales can edit before sending.
+  const [includeNotes,setIncludeNotes]=useState(!!(lead.notes||'').trim());
+  const [noteForGraphic,setNoteForGraphic]=useState(lead.notes||'');
   const atts=lead.attachments||[]; const client=clients.find(c=>c.id===lead.client_id);
   async function send(){ setBusy(true); setMsg('');
     try{ const chosenAtts=atts.filter((_,i)=>chosen[i]);
-      const job={ number:'GD-'+Date.now().toString().slice(-5), source_lead_id:lead.id, lead_id:lead.id, client_name:client?.company||'', item:lead.title, items:lead.items||[], quantity:(lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0), graphic_type:'', attachments:chosenAtts, status:'to do', due_date:lead.delivery_date||null, notes:'' };
+      const finalNote = includeNotes ? (noteForGraphic||'').trim() : '';
+      const job={ number:'GD-'+Date.now().toString().slice(-5), source_lead_id:lead.id, lead_id:lead.id, client_name:client?.company||'', item:lead.title, items:lead.items||[], quantity:(lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0), graphic_type:'', attachments:chosenAtts, status:'to do', due_date:lead.delivery_date||null, notes:finalNote };
       const {error}=await sb.from('graphic_design_jobs').insert(job); if(error) throw error; onSent(chosenAtts.length); }
     catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
-    <Modal title="Send to Graphic Design" onClose={onClose}>
+    <Modal title="Send to Graphic Design" onClose={onClose} wide>
       <div className="space-y-3">
         <div className="text-sm text-slate-600">Choose which attachments to send with <strong>{lead.title}</strong>:</div>
         {atts.length===0?<div className="text-xs text-slate-400">This lead has no attachments. It will still create a Graphic Design card.</div>:(
@@ -577,6 +581,19 @@ function SendToGraphicModal({ profile, lead, clients, onClose, onSent }){
             {atts.map((a,i)=>(<label key={i} className="flex items-center gap-2 text-sm bg-white border rounded px-2 py-1 cursor-pointer"><input type="checkbox" checked={!!chosen[i]} onChange={e=>setChosen(p=>({...p,[i]:e.target.checked}))} /><span>{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="truncate flex-1">{a.name}</span></label>))}
           </div>
         )}
+        {/* Notes hand-off — start from the lead's own notes (editable) and send with the card */}
+        <div className="border rounded-lg p-3 bg-amber-50/50 border-amber-200">
+          <label className="flex items-center gap-2 text-xs font-semibold text-amber-700 mb-2 cursor-pointer">
+            <input type="checkbox" checked={includeNotes} onChange={e=>setIncludeNotes(e.target.checked)} />
+            📝 Include notes for the graphic team
+          </label>
+          {includeNotes && (
+            <>
+              <textarea className="w-full text-sm px-2 py-1.5 rounded border border-amber-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 min-h-[80px]" value={noteForGraphic} onChange={e=>setNoteForGraphic(e.target.value)} placeholder="What does the graphic team need to know? Colour codes, layout preferences, deadlines, references…" />
+              {(lead.notes||'').trim() && <div className="text-[10px] text-slate-500 mt-1 italic">Pre-filled from the lead's notes — edit anything you don't want shared.</div>}
+            </>
+          )}
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={send} className="w-full py-2 rounded-lg bg-pink-600 text-white font-semibold disabled:opacity-50">{busy?'Sending…':'Send to Graphic Design'}</button>
       </div>
