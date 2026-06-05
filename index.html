@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 16i · Inbox: grouped by date + per-item Clear + Clear all';
+const BUILD = 'Live build 16j · Graphic/Printing: Delete on board cards (admin/manager)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -1020,6 +1020,9 @@ function DeptJobForm({ profile, table, statuses, graphicTypes, existing, onClose
 function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
+  const isAdmin=profile.role==='admin';
+  const isAssistant=profile.role==='assistant';
+  const canDelete = isAdmin || !isAssistant; // admin + managers
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
   async function move(j,st){ const {error}=await sb.from(table).update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function del(id){ if(!confirm('Delete this job?')) return; const {error}=await sb.from(table).delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
@@ -1053,7 +1056,14 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <div className={`rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               <div className="bg-slate-200/60 rounded-b-lg p-2 space-y-2 min-h-[120px]">
                 {col.map(j=>{ const img=firstImage(j.attachments); const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const hasTp=lead&&lead.techpack; return (
-                  <div key={j.id} className="bg-white border rounded-lg shadow-sm overflow-hidden">
+                  <div key={j.id} className="bg-white border rounded-lg shadow-sm overflow-hidden relative group">
+                    {canDelete && (
+                      <button
+                        onClick={(e)=>{ e.stopPropagation(); del(j.id); }}
+                        title="Delete this job"
+                        className="absolute top-1.5 right-1.5 z-10 w-6 h-6 rounded-full bg-white border border-slate-200 text-slate-400 hover:bg-rose-500 hover:text-white hover:border-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition shadow-sm"
+                      >✕</button>
+                    )}
                     {img ? <button onClick={()=>setDetail(j)} className="block w-full"><AttachmentChip att={img} /></button> : <button onClick={()=>setDetail(j)} className="w-full h-12 bg-slate-50 flex items-center justify-center text-slate-300 text-xl">🖼️</button>}
                     <div className="p-2">
                       <div className="font-semibold text-sm leading-tight">{j.item||'—'}</div>
@@ -1097,7 +1107,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                 {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType, canSendToPrinting })} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
                 {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
                 {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} className="text-xs text-purple-700 hover:underline mr-2">🖨 Printing</button>}
-                <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline">Delete</button>}
               </td>
             </tr>
           ); })}
