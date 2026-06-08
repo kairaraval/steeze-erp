@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17c · Notification sound: stop closing the shared AudioContext';
+const BUILD = 'Live build 17d · Sewing Payroll module + sewing_lead role';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -2779,24 +2779,26 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 /* ----------------------- Team Overview ----------------------- */
 // Shared role helpers used by Team Overview + Settings.
 function roleLabel(r){
-  return r==='admin'      ? 'Administrator' :
-         r==='assistant'  ? 'Sales Assistant' :
-         r==='production' ? 'Production Team' :
-         r==='purchasing' ? 'Purchasing Team' :
-         r==='accounting' ? 'Accounting Team' :
-         r==='graphic'    ? 'Graphic Design' :
-         r==='printing'   ? 'Printing Team' :
+  return r==='admin'        ? 'Administrator' :
+         r==='assistant'    ? 'Sales Assistant' :
+         r==='production'   ? 'Production Team' :
+         r==='purchasing'   ? 'Purchasing Team' :
+         r==='accounting'   ? 'Accounting Team' :
+         r==='graphic'      ? 'Graphic Design' :
+         r==='printing'     ? 'Printing Team' :
+         r==='sewing_lead'  ? 'Sewing Line Lead' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
   const cls =
-    role==='admin'      ? 'bg-indigo-100 text-indigo-700' :
-    role==='assistant'  ? 'bg-amber-100 text-amber-700' :
-    role==='production' ? 'bg-emerald-100 text-emerald-700' :
-    role==='purchasing' ? 'bg-violet-100 text-violet-700' :
-    role==='accounting' ? 'bg-sky-100 text-sky-700' :
-    role==='graphic'    ? 'bg-pink-100 text-pink-700' :
-    role==='printing'   ? 'bg-purple-100 text-purple-700' :
+    role==='admin'        ? 'bg-indigo-100 text-indigo-700' :
+    role==='assistant'    ? 'bg-amber-100 text-amber-700' :
+    role==='production'   ? 'bg-emerald-100 text-emerald-700' :
+    role==='purchasing'   ? 'bg-violet-100 text-violet-700' :
+    role==='accounting'   ? 'bg-sky-100 text-sky-700' :
+    role==='graphic'      ? 'bg-pink-100 text-pink-700' :
+    role==='printing'     ? 'bg-purple-100 text-purple-700' :
+    role==='sewing_lead'  ? 'bg-rose-100 text-rose-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -2960,10 +2962,11 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
     { key:'accounting',  label:'Accounting',    count:profiles.filter(p=>p.role==='accounting').length },
+    { key:'sewing_lead', label:'Sewing Lead',   count:profiles.filter(p=>p.role==='sewing_lead').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','graphic','printing','purchasing','accounting'];
+  const roleOrder = ['admin','manager','assistant','production','graphic','printing','purchasing','accounting','sewing_lead'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -2994,6 +2997,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
               <option value="accounting">Accounting Team</option>
+              <option value="sewing_lead">Sewing Line Lead</option>
             </select>
           </div>
           <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
@@ -3322,6 +3326,593 @@ function TpPageFrame({ hdr, title, pageNo, children }){
 }
 function TpRow({ children }){ return <div className="grid grid-cols-2 gap-3">{children}</div>; }
 function TpLbl({ t, children }){ return <div><div className="text-[10px] uppercase text-slate-400 mb-1">{t}</div>{children}</div>; }
+
+/* ============================================================================
+   SEWING PAYROLL MODULE
+   Six internal tabs: Dashboard · Daily Entry · Payroll · Sewers · Garments · Settings
+   All data lives in Supabase tables: payroll_sewers / payroll_garments /
+   payroll_entries / payroll_settings. RLS restricts access to admin /
+   accounting / sewing_lead.
+   ============================================================================ */
+function SewingPayroll({ profile }){
+  const [tab,setTab]=useState('dashboard');
+  const [sewers,setSewers]=useState([]);
+  const [garments,setGarments]=useState([]);
+  const [entries,setEntries]=useState([]);
+  const [pSettings,setPSettings]=useState({ currency:'₱', ot_multiplier:1 });
+  const [loading,setLoading]=useState(true);
+  const [loadErr,setLoadErr]=useState('');
+
+  async function loadAll(){
+    setLoading(true); setLoadErr('');
+    try{
+      const [sRes, gRes, eRes, setRes] = await Promise.all([
+        sb.from('payroll_sewers').select('*').order('name',{ascending:true}),
+        sb.from('payroll_garments').select('*').order('name',{ascending:true}),
+        sb.from('payroll_entries').select('*').order('date',{ascending:false}),
+        sb.from('payroll_settings').select('*').eq('id',1).maybeSingle(),
+      ]);
+      if(sRes.error)   throw sRes.error;
+      if(gRes.error)   throw gRes.error;
+      if(eRes.error)   throw eRes.error;
+      setSewers(sRes.data||[]);
+      setGarments(gRes.data||[]);
+      setEntries(eRes.data||[]);
+      if(setRes.data) setPSettings(setRes.data);
+    }catch(e){
+      console.error('Payroll load failed:', e);
+      setLoadErr(e.message||String(e));
+    } finally { setLoading(false); }
+  }
+  useEffect(()=>{ loadAll(); },[]);
+
+  const money = (v) => (pSettings.currency||'₱') + Number(v||0).toLocaleString('en-PH', { minimumFractionDigits:2, maximumFractionDigits:2 });
+
+  function entryEarnings(e){
+    const g = garments.find(x=>x.id===e.garment_id); if(!g) return 0;
+    const op = (g.operations||[]).find(x=>x.id===e.operation_id); if(!op) return 0;
+    const base = (Number(op.price)||0) * (Number(e.quantity)||0);
+    if(e.time_slot==='overtime') return base * (Number(pSettings.ot_multiplier)||1);
+    return base;
+  }
+  function entryDescribe(e){
+    const g = garments.find(x=>x.id===e.garment_id);
+    const op = g && (g.operations||[]).find(x=>x.id===e.operation_id);
+    return { garment: g?g.name:'(deleted garment)', operation: op?op.name:'(deleted operation)', price: op?(Number(op.price)||0):0 };
+  }
+  // ---- date helpers (Monday-start ISO weeks) ----
+  function todayISOd(){ return new Date().toISOString().slice(0,10); }
+  function addDaysISO(d, n){ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); }
+  function getWeekStart(d){ const x=new Date(d+'T00:00:00'); const day=x.getDay(); const diff = day===0 ? -6 : 1-day; x.setDate(x.getDate()+diff); return x.toISOString().slice(0,10); }
+  function fmtPayrollDate(d){ if(!d) return ''; return new Date(d+'T00:00:00').toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
+
+  const TABS = [
+    { key:'dashboard', label:'Dashboard',  icon:'📊' },
+    { key:'entry',     label:'Daily Entry', icon:'✍️' },
+    { key:'payroll',   label:'Payroll',    icon:'💰' },
+    { key:'sewers',    label:'Sewers',     icon:'👥' },
+    { key:'garments',  label:'Garments',   icon:'👕' },
+    { key:'settings',  label:'Settings',   icon:'⚙' },
+  ];
+
+  // -------- CRUD helpers --------
+  async function addSewer(name){
+    if(!name.trim()) return alert('Enter a name.');
+    if(sewers.some(s=>s.name.toLowerCase()===name.trim().toLowerCase())) return alert('That sewer already exists.');
+    const { error } = await sb.from('payroll_sewers').insert({ name:name.trim(), active:true });
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function toggleSewerActive(s){
+    const { error } = await sb.from('payroll_sewers').update({ active: !s.active }).eq('id', s.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function renameSewer(s){
+    const n=(prompt('Rename sewer:', s.name)||'').trim(); if(!n) return;
+    const { error } = await sb.from('payroll_sewers').update({ name:n }).eq('id', s.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function deleteSewer(s){
+    const linked = entries.filter(e=>e.sewer_id===s.id).length;
+    if(!confirm(`Delete "${s.name}"? This will also delete ${linked} associated entries.`)) return;
+    const { error } = await sb.from('payroll_sewers').delete().eq('id', s.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function addGarment(name){
+    if(!name.trim()) return alert('Enter a garment name.');
+    const { error } = await sb.from('payroll_garments').insert({ name:name.trim(), operations:[] });
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function updateGarmentOps(g, ops){
+    const { error } = await sb.from('payroll_garments').update({ operations: ops }).eq('id', g.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function renameGarment(g){
+    const n=(prompt('Rename garment:', g.name)||'').trim(); if(!n) return;
+    const { error } = await sb.from('payroll_garments').update({ name:n }).eq('id', g.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function deleteGarment(g){
+    const linked = entries.filter(e=>e.garment_id===g.id).length;
+    if(!confirm(`Delete "${g.name}"? This will also delete ${linked} associated entries.`)) return;
+    const { error } = await sb.from('payroll_garments').delete().eq('id', g.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function deleteEntry(e){
+    if(!confirm('Delete this entry?')) return;
+    const { error } = await sb.from('payroll_entries').delete().eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function toggleEntryStatus(e){
+    const next = e.status==='done' ? 'pending' : 'done';
+    const { error } = await sb.from('payroll_entries').update({ status: next }).eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+  async function updateSettings(patch){
+    const { error } = await sb.from('payroll_settings').update(patch).eq('id', 1);
+    if(error){ alert(error.message); return; }
+    await loadAll();
+  }
+
+  if(loading){
+    return <div className="p-6"><h1 className="text-2xl font-bold mb-2">✂ Sewing Payroll</h1><div className="text-sm text-slate-400">Loading…</div></div>;
+  }
+  if(loadErr){
+    return <div className="p-6"><h1 className="text-2xl font-bold mb-2">✂ Sewing Payroll</h1><div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-3">Failed to load: {loadErr}<br/><span className="text-xs text-slate-500">If this is the first time, make sure you ran steeze-erp-payroll-module.sql in Supabase.</span></div></div>;
+  }
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="mb-4">
+        <h1 className="text-2xl font-bold">✂ Sewing Production Payroll</h1>
+        <p className="text-slate-500 text-sm">Piece-rate · Regular + Overtime · Pending → Done · Weekly payslips</p>
+      </div>
+      <div className="border-b mb-5 -mx-1 px-1 flex gap-1 overflow-x-auto">
+        {TABS.map(t=>(
+          <button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-2 text-sm font-medium border-b-2 whitespace-nowrap ${tab===t.key?'border-rose-600 text-rose-700':'border-transparent text-slate-500 hover:text-slate-800'}`}>{t.icon} {t.label}</button>
+        ))}
+      </div>
+      {tab==='dashboard' && <PayrollDashboard sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} toggleEntryStatus={toggleEntryStatus} />}
+      {tab==='entry' && <PayrollDailyEntry sewers={sewers} garments={garments} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} reload={loadAll} toggleEntryStatus={toggleEntryStatus} deleteEntry={deleteEntry} />}
+      {tab==='payroll' && <PayrollPayslips sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} />}
+      {tab==='sewers' && <PayrollSewers sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} addSewer={addSewer} toggleSewerActive={toggleSewerActive} renameSewer={renameSewer} deleteSewer={deleteSewer} />}
+      {tab==='garments' && <PayrollGarments garments={garments} money={money} addGarment={addGarment} updateGarmentOps={updateGarmentOps} renameGarment={renameGarment} deleteGarment={deleteGarment} />}
+      {tab==='settings' && <PayrollSettings pSettings={pSettings} updateSettings={updateSettings} />}
+    </div>
+  );
+}
+
+function PayrollDashboard({ sewers, entries, money, entryEarnings, entryDescribe, pSettings, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate, toggleEntryStatus }){
+  const t = todayISOd();
+  const ws = getWeekStart(t);
+  const weekDates = Array.from({length:7},(_,i)=>addDaysISO(ws,i));
+  const todayDone = entries.filter(e=>e.date===t && e.status==='done');
+  const weekDone  = entries.filter(e=>weekDates.includes(e.date) && e.status==='done');
+  const weekOt    = weekDone.filter(e=>e.time_slot==='overtime');
+  const allPending = entries.filter(e=>e.status==='pending');
+  const todayTotal = todayDone.reduce((s,e)=>s+entryEarnings(e),0);
+  const weekTotal  = weekDone.reduce((s,e)=>s+entryEarnings(e),0);
+  const weekOtTotal= weekOt.reduce((s,e)=>s+entryEarnings(e),0);
+  const pendingTotal = allPending.reduce((s,e)=>s+entryEarnings(e),0);
+  const bySewer = {};
+  weekDone.forEach(e=>{ if(!bySewer[e.sewer_id]) bySewer[e.sewer_id]={reg:0,ot:0,count:0}; bySewer[e.sewer_id][e.time_slot==='overtime'?'ot':'reg']+=entryEarnings(e); bySewer[e.sewer_id].count++; });
+  const rows = Object.entries(bySewer).map(([sid,v])=>{ const s=sewers.find(x=>x.id===sid); return { name:s?s.name:'(deleted)', ...v, total:v.reg+v.ot }; }).sort((a,b)=>b.total-a.total);
+  const pendingShown = allPending.slice().sort((a,b)=>a.date.localeCompare(b.date)).slice(0,10);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-500">Today (Done)</div><div className="text-2xl font-bold mt-1">{money(todayTotal)}</div><div className="text-xs text-slate-400 mt-0.5">{todayDone.length} entries · {fmtPayrollDate(t)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-500">This week (Done)</div><div className="text-2xl font-bold mt-1">{money(weekTotal)}</div><div className="text-xs text-slate-400 mt-0.5">{weekDone.length} entries · wk of {fmtPayrollDate(ws)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-500">OT this week</div><div className="text-2xl font-bold mt-1 text-violet-600">{money(weekOtTotal)}</div><div className="text-xs text-slate-400 mt-0.5">{weekOt.length} OT entries{Number(pSettings.ot_multiplier)!==1?` · ×${Number(pSettings.ot_multiplier).toFixed(2)}`:''}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-500">Pending</div><div className="text-2xl font-bold mt-1 text-amber-600">{money(pendingTotal)}</div><div className="text-xs text-slate-400 mt-0.5">{allPending.length} awaiting Done</div></div>
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-3">This week's earnings by sewer <span className="text-xs text-slate-400 font-normal">(approved/done only)</span></div>
+        {rows.length===0 ? <div className="text-center text-sm text-slate-400 py-6">No approved entries this week yet.</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Sewer</th><th className="text-right py-1.5">Entries</th><th className="text-right py-1.5">Regular</th><th className="text-right py-1.5">Overtime</th><th className="text-right py-1.5">Total</th></tr></thead>
+            <tbody>{rows.map(r=><tr key={r.name} className="border-t"><td className="py-1.5">{r.name}</td><td className="text-right">{r.count}</td><td className="text-right">{money(r.reg)}</td><td className="text-right text-violet-700">{r.ot>0?money(r.ot):'—'}</td><td className="text-right font-semibold">{money(r.total)}</td></tr>)}</tbody>
+          </table></div>
+        )}
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-3">Pending operations</div>
+        {pendingShown.length===0 ? <div className="text-center text-sm text-slate-400 py-6">No pending operations 🎉</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Date</th><th className="text-left py-1.5">Slot</th><th className="text-left py-1.5">Sewer</th><th className="text-left py-1.5">Operation</th><th className="text-right py-1.5">Qty</th><th className="text-right py-1.5">Worth</th><th></th></tr></thead>
+            <tbody>{pendingShown.map(e=>{ const s=sewers.find(x=>x.id===e.sewer_id); const d=entryDescribe(e); const isOt=e.time_slot==='overtime'; return (
+              <tr key={e.id} className="border-t bg-amber-50/30">
+                <td className="py-1.5 whitespace-nowrap">{fmtPayrollDate(e.date)}</td>
+                <td>{isOt?<span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold">OT</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Reg</span>}</td>
+                <td>{s?s.name:'(deleted)'}</td>
+                <td>{d.operation} <span className="text-xs text-slate-400">— {d.garment}</span></td>
+                <td className="text-right">{e.quantity}</td>
+                <td className="text-right font-semibold">{money(entryEarnings(e))}</td>
+                <td className="text-right"><button onClick={()=>toggleEntryStatus(e)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">Mark done</button></td>
+              </tr>
+            ); })}</tbody>
+          </table></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PayrollDailyEntry({ sewers, garments, entries, money, entryEarnings, entryDescribe, pSettings, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate, reload, toggleEntryStatus, deleteEntry }){
+  const [date,setDate]=useState(todayISOd());
+  const [client,setClient]=useState('');
+  const [sewerId,setSewerId]=useState('');
+  const [garmentId,setGarmentId]=useState('');
+  const [note,setNote]=useState('');
+  const [opRows,setOpRows]=useState({ regular:[{opId:'',qty:1}], overtime:[] });
+  const [busy,setBusy]=useState(false);
+  const [filterFrom,setFilterFrom]=useState(todayISOd());
+  const [filterTo,setFilterTo]=useState(todayISOd());
+  const [filterSewer,setFilterSewer]=useState('');
+  const [filterStatus,setFilterStatus]=useState('');
+  const [filterSlot,setFilterSlot]=useState('');
+  const activeSewers = sewers.filter(s=>s.active);
+  const selectedGarment = garments.find(g=>g.id===garmentId);
+  function setEntryRange(preset){
+    const t = todayISOd();
+    if(preset==='today'){ setFilterFrom(t); setFilterTo(t); }
+    else if(preset==='yesterday'){ const y=addDaysISO(t,-1); setFilterFrom(y); setFilterTo(y); }
+    else if(preset==='thisWeek'){ const f=getWeekStart(t); setFilterFrom(f); setFilterTo(addDaysISO(f,6)); }
+    else if(preset==='lastWeek'){ const f=addDaysISO(getWeekStart(t),-7); setFilterFrom(f); setFilterTo(addDaysISO(f,6)); }
+    else if(preset==='last7'){ setFilterFrom(addDaysISO(t,-6)); setFilterTo(t); }
+    else if(preset==='all'){ setFilterFrom(''); setFilterTo(''); }
+  }
+  async function addEntries(){
+    if(!date) return alert('Pick a date.');
+    if(!sewerId) return alert('Pick a sewer.');
+    if(!garmentId) return alert('Pick a garment.');
+    const validReg = opRows.regular.filter(r=>r.opId && Number(r.qty)>0);
+    const validOt  = opRows.overtime.filter(r=>r.opId && Number(r.qty)>0);
+    if(validReg.length+validOt.length===0) return alert('Add at least one operation with quantity.');
+    setBusy(true);
+    const rows = [
+      ...validReg.map(r=>({ date, client, sewer_id:sewerId, garment_id:garmentId, operation_id:r.opId, quantity:Number(r.qty), note, status:'pending', time_slot:'regular' })),
+      ...validOt.map(r=>({  date, client, sewer_id:sewerId, garment_id:garmentId, operation_id:r.opId, quantity:Number(r.qty), note, status:'pending', time_slot:'overtime' })),
+    ];
+    const { error } = await sb.from('payroll_entries').insert(rows);
+    setBusy(false);
+    if(error){ alert(error.message); return; }
+    setOpRows({ regular:[{opId:'',qty:1}], overtime:[] }); setNote('');
+    await reload();
+  }
+  async function markAllVisibleDone(){
+    const list = getFiltered().filter(e=>e.status==='pending');
+    if(list.length===0) return alert('No pending entries in current filter.');
+    if(!confirm(`Mark ${list.length} pending entries as Done?`)) return;
+    const ids = list.map(e=>e.id);
+    const { error } = await sb.from('payroll_entries').update({ status:'done' }).in('id', ids);
+    if(error){ alert(error.message); return; }
+    await reload();
+  }
+  function getFiltered(){
+    let list = entries.slice().sort((a,b)=>b.date.localeCompare(a.date));
+    if(filterFrom) list = list.filter(e=>e.date>=filterFrom);
+    if(filterTo)   list = list.filter(e=>e.date<=filterTo);
+    if(filterSewer) list = list.filter(e=>e.sewer_id===filterSewer);
+    if(filterStatus) list = list.filter(e=>e.status===filterStatus);
+    if(filterSlot) list = list.filter(e=>e.time_slot===filterSlot);
+    return list;
+  }
+  const visible = getFiltered();
+  const visibleDone = visible.filter(e=>e.status==='done');
+  const visiblePending = visible.filter(e=>e.status==='pending');
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-3">Assign work</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+          <TpLbl t="Client"><input type="text" className="input" placeholder="e.g. ABC Apparel" value={client} onChange={e=>setClient(e.target.value)} /></TpLbl>
+          <TpLbl t="Sewer"><select className="input" value={sewerId} onChange={e=>setSewerId(e.target.value)}><option value="">— Select sewer —</option>{activeSewers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></TpLbl>
+          <TpLbl t="Garment / Project"><select className="input" value={garmentId} onChange={e=>setGarmentId(e.target.value)}><option value="">— Select garment —</option>{garments.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select></TpLbl>
+        </div>
+        {/* Regular section */}
+        <div className="mt-4 border rounded-lg p-3 bg-slate-50">
+          <div className="text-sm font-semibold mb-2">⏰ Regular hours <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">Standard rate</span></div>
+          <PayrollOpRows slot="regular" rows={opRows.regular} garment={selectedGarment} money={money} onChange={(rows)=>setOpRows(p=>({...p,regular:rows}))} />
+          <button onClick={()=>setOpRows(p=>({...p,regular:[...p.regular,{opId:'',qty:1}]}))} className="mt-2 text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">+ Add operation (Regular)</button>
+        </div>
+        <div className="mt-3 border rounded-lg p-3 bg-violet-50/50">
+          <div className="text-sm font-semibold mb-2">🌙 Overtime <span className="text-[10px] uppercase tracking-wide bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">{Number(pSettings.ot_multiplier)===1?'Same rate':'× '+Number(pSettings.ot_multiplier).toFixed(2)+' rate'}</span></div>
+          <PayrollOpRows slot="overtime" rows={opRows.overtime} garment={selectedGarment} money={money} onChange={(rows)=>setOpRows(p=>({...p,overtime:rows}))} />
+          <button onClick={()=>setOpRows(p=>({...p,overtime:[...p.overtime,{opId:'',qty:1}]}))} className="mt-2 text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50 text-violet-700">+ Add operation (Overtime)</button>
+        </div>
+        <TpLbl t="Note (applies to all operations above)"><input className="input" placeholder="e.g. Bundle #14, Color: navy" value={note} onChange={e=>setNote(e.target.value)} /></TpLbl>
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <button disabled={busy} onClick={addEntries} className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">{busy?'Saving…':'Assign as pending'}</button>
+          <span className="text-xs text-slate-500">All operations will be saved as Pending. Mark them done in the list below when completed.</span>
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-3">Entries</div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          <input type="date" className="input max-w-[10rem]" value={filterFrom} onChange={e=>setFilterFrom(e.target.value)} placeholder="From" />
+          <input type="date" className="input max-w-[10rem]" value={filterTo} onChange={e=>setFilterTo(e.target.value)} placeholder="To" />
+          <select className="input max-w-[10rem]" value={filterSewer} onChange={e=>setFilterSewer(e.target.value)}><option value="">All sewers</option>{sewers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
+          <select className="input max-w-[8rem]" value={filterSlot} onChange={e=>setFilterSlot(e.target.value)}><option value="">All slots</option><option value="regular">Regular only</option><option value="overtime">Overtime only</option></select>
+          <select className="input max-w-[8rem]" value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}><option value="">All</option><option value="pending">Pending only</option><option value="done">Done only</option></select>
+          <div className="flex-1"></div>
+          {visiblePending.length>0 && <button onClick={markAllVisibleDone} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">Mark all visible as Done ({visiblePending.length})</button>}
+        </div>
+        <div className="flex flex-wrap gap-1 text-xs mb-3 text-slate-500"><span className="self-center">Quick:</span>
+          {[['today','Today'],['yesterday','Yesterday'],['thisWeek','This week'],['lastWeek','Last week'],['last7','Last 7 days'],['all','All']].map(([k,l])=><button key={k} onClick={()=>setEntryRange(k)} className="px-2 py-0.5 rounded hover:bg-slate-100">{l}</button>)}
+        </div>
+        {visible.length===0 ? <div className="text-center text-sm text-slate-400 py-8">No entries for this filter.</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Date</th><th>Slot</th><th>Client</th><th>Sewer</th><th>Garment / Operation</th><th className="text-right">Qty</th><th className="text-right">Rate</th><th className="text-right">Earned</th><th>Status</th><th></th></tr></thead>
+            <tbody>{visible.map(e=>{ const s=sewers.find(x=>x.id===e.sewer_id); const d=entryDescribe(e); const isOt=e.time_slot==='overtime'; const isPending=e.status==='pending'; return (
+              <tr key={e.id} className={`border-t ${isPending?'bg-amber-50/40':(isOt?'bg-violet-50/30':'')}`}>
+                <td className="py-1.5 whitespace-nowrap">{fmtPayrollDate(e.date)}</td>
+                <td>{isOt?<span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold">OT</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Reg</span>}</td>
+                <td>{e.client||''}</td>
+                <td>{s?s.name:'(deleted)'}</td>
+                <td><div>{d.operation}</div><div className="text-[10px] text-slate-400">{d.garment}{e.note?` · ${e.note}`:''}</div></td>
+                <td className="text-right">{e.quantity}</td>
+                <td className="text-right">{money(d.price)}{isOt && Number(pSettings.ot_multiplier)!==1 && <div className="text-[10px] text-slate-500">×{Number(pSettings.ot_multiplier).toFixed(2)}</div>}</td>
+                <td className="text-right font-semibold">{money(entryEarnings(e))}</td>
+                <td>{isPending?<span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">Pending</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Done</span>}</td>
+                <td className="text-right whitespace-nowrap">
+                  {isPending?<button onClick={()=>toggleEntryStatus(e)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold mr-1">Mark done</button>:<button onClick={()=>toggleEntryStatus(e)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 mr-1">Unmark</button>}
+                  <button onClick={()=>deleteEntry(e)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ); })}
+            </tbody>
+          </table></div>
+        )}
+        {visible.length>0 && (
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+            <div className="bg-slate-50 border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-500">Done — Regular</div><div className="font-bold">{money(visibleDone.filter(e=>e.time_slot==='regular').reduce((s,e)=>s+entryEarnings(e),0))}</div></div>
+            <div className="bg-violet-50 border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-500">Done — Overtime</div><div className="font-bold text-violet-700">{money(visibleDone.filter(e=>e.time_slot==='overtime').reduce((s,e)=>s+entryEarnings(e),0))}</div></div>
+            <div className="bg-amber-50 border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-500">Pending</div><div className="font-bold text-amber-700">{money(visiblePending.reduce((s,e)=>s+entryEarnings(e),0))}</div></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PayrollOpRows({ slot, rows, garment, money, onChange }){
+  function setRow(i, patch){ onChange(rows.map((r,idx)=>idx===i?{...r,...patch}:r)); }
+  function removeRow(i){ onChange(rows.filter((_,idx)=>idx!==i)); }
+  if(rows.length===0) return <div className="text-xs text-slate-400 italic">No {slot} operations added.</div>;
+  return (
+    <div className="space-y-2">
+      {rows.map((r,i)=>(
+        <div key={i} className="grid grid-cols-12 gap-2 items-center">
+          <select className="input col-span-7" value={r.opId} onChange={e=>setRow(i,{opId:e.target.value})}>
+            {garment ? <>
+              <option value="">— Select operation —</option>
+              {(garment.operations||[]).map(o=><option key={o.id} value={o.id}>{o.name||'(unnamed)'} — {money(o.price)}</option>)}
+            </> : <option value="">— First select a garment —</option>}
+          </select>
+          <input type="number" min="1" className="input col-span-3" value={r.qty} onChange={e=>setRow(i,{qty:e.target.value})} placeholder="Qty" />
+          <div className="col-span-2 text-right"><button onClick={()=>removeRow(i)} className="text-rose-400 text-lg" title="Remove">✕</button></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PayrollPayslips({ sewers, entries, money, entryEarnings, entryDescribe, pSettings, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate }){
+  const [from,setFrom]=useState(getWeekStart(todayISOd()));
+  const [to,setTo]=useState(addDaysISO(getWeekStart(todayISOd()),6));
+  const [sewerFilter,setSewerFilter]=useState('');
+  function setRange(preset){
+    const t = todayISOd();
+    if(preset==='thisWeek'){ const f=getWeekStart(t); setFrom(f); setTo(addDaysISO(f,6)); }
+    else if(preset==='lastWeek'){ const f=addDaysISO(getWeekStart(t),-7); setFrom(f); setTo(addDaysISO(f,6)); }
+    else if(preset==='last2Weeks'){ setFrom(addDaysISO(getWeekStart(t),-7)); setTo(addDaysISO(getWeekStart(t),6)); }
+    else if(preset==='last30'){ setFrom(addDaysISO(t,-29)); setTo(t); }
+  }
+  function shift(direction){
+    if(!from||!to) return;
+    const days = Math.round((new Date(to+'T00:00:00')-new Date(from+'T00:00:00'))/86400000)+1;
+    setFrom(addDaysISO(from, direction*days));
+    setTo(addDaysISO(to, direction*days));
+  }
+  const inRange = e => e.date>=from && e.date<=to;
+  const sewersToShow = sewerFilter ? sewers.filter(s=>s.id===sewerFilter) : sewers.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  let grandTotal=0, grandReg=0, grandOt=0, anyEntries=false;
+  const periodLabel = (getWeekStart(from)===from && addDaysISO(from,6)===to) ? 'Week' : 'Period';
+  const pendingInRange = entries.filter(e=>inRange(e) && e.status==='pending');
+  const pendingBanner = pendingInRange.length>0 ? `⚠ ${pendingInRange.length} pending operations worth ${money(pendingInRange.reduce((s,e)=>s+entryEarnings(e),0))} are NOT in this payroll. Mark them Done in Daily Entry to include.` : '';
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4 no-print">
+        <div className="flex flex-wrap gap-2 items-end">
+          <TpLbl t="From"><input type="date" className="input max-w-[10rem]" value={from} onChange={e=>setFrom(e.target.value)} /></TpLbl>
+          <TpLbl t="To"><input type="date" className="input max-w-[10rem]" value={to} onChange={e=>setTo(e.target.value)} /></TpLbl>
+          <TpLbl t="Sewer"><select className="input max-w-[10rem]" value={sewerFilter} onChange={e=>setSewerFilter(e.target.value)}><option value="">All sewers</option>{sewers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></TpLbl>
+          <button onClick={()=>shift(-1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">← Previous</button>
+          <button onClick={()=>shift(1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">Next →</button>
+          <div className="flex-1"></div>
+          <button onClick={()=>window.print()} className="text-xs px-3 py-2 rounded bg-rose-600 text-white font-semibold hover:bg-rose-700">🖨 Print payslip(s)</button>
+        </div>
+        <div className="flex flex-wrap gap-1 text-xs mt-3 text-slate-500"><span className="self-center">Quick:</span>
+          {[['thisWeek','This week'],['lastWeek','Last week'],['last2Weeks','Last 2 weeks'],['last30','Last 30 days']].map(([k,l])=><button key={k} onClick={()=>setRange(k)} className="px-2 py-0.5 rounded hover:bg-slate-100">{l}</button>)}
+        </div>
+      </div>
+      {pendingBanner && <div className="no-print bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">{pendingBanner}</div>}
+      <div>
+        {sewersToShow.map(s=>{
+          const sewerEntries = entries.filter(e=>e.sewer_id===s.id && inRange(e) && e.status==='done');
+          if(sewerEntries.length===0 && !sewerFilter && !s.active) return null;
+          const totalReg = sewerEntries.filter(e=>e.time_slot==='regular').reduce((sum,e)=>sum+entryEarnings(e),0);
+          const totalOt  = sewerEntries.filter(e=>e.time_slot==='overtime').reduce((sum,e)=>sum+entryEarnings(e),0);
+          const total = totalReg+totalOt;
+          if(sewerEntries.length>0) anyEntries=true;
+          grandTotal+=total; grandReg+=totalReg; grandOt+=totalOt;
+          const byDate = {};
+          sewerEntries.forEach(e=>{ if(!byDate[e.date]) byDate[e.date]=[]; byDate[e.date].push(e); });
+          const dates = Object.keys(byDate).sort();
+          return (
+            <div key={s.id} className="bg-white border rounded-xl p-6 mb-4 payslip">
+              <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3 mb-4">
+                <div><div className="text-lg font-bold">{s.name}</div><div className="text-xs text-slate-500">Piece-rate payslip</div></div>
+                <div className="text-right text-xs text-slate-500"><div><strong>{periodLabel}:</strong> {fmtPayrollDate(from)} – {fmtPayrollDate(to)}</div><div>Generated: {fmtPayrollDate(todayISOd())}</div></div>
+              </div>
+              {sewerEntries.length===0 ? <div className="text-center text-sm text-slate-400 py-6">No approved entries this period.</div> : dates.map(date=>{
+                const dayEntries = byDate[date].slice().sort((a,b)=>(a.time_slot==='overtime'?1:0)-(b.time_slot==='overtime'?1:0));
+                const dayReg = dayEntries.filter(e=>e.time_slot==='regular').reduce((s,e)=>s+entryEarnings(e),0);
+                const dayOt  = dayEntries.filter(e=>e.time_slot==='overtime').reduce((s,e)=>s+entryEarnings(e),0);
+                const dayTotal = dayReg+dayOt;
+                return (
+                  <details key={date} open className="mb-2">
+                    <summary className="cursor-pointer px-3 py-2 bg-slate-50 border rounded text-sm font-semibold flex justify-between"><span>{fmtPayrollDate(date)}</span><span>{dayOt>0?<><span className="text-emerald-700">{money(dayReg)}</span> + <span className="text-violet-700">OT {money(dayOt)}</span> · </>:''}<strong>{money(dayTotal)}</strong></span></summary>
+                    <div className="border border-t-0 rounded-b">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50"><tr><th className="text-left p-2">Slot</th><th className="text-left p-2">Client</th><th className="text-left p-2">Garment</th><th className="text-left p-2">Operation</th><th className="text-right p-2">Qty</th><th className="text-right p-2">Rate</th><th className="text-right p-2">Earned</th></tr></thead>
+                        <tbody>{dayEntries.map(e=>{ const d=entryDescribe(e); const isOt=e.time_slot==='overtime'; return (
+                          <tr key={e.id} className={`border-t ${isOt?'bg-violet-50/30':''}`}>
+                            <td className="p-2">{isOt?<span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold">OT</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Reg</span>}</td>
+                            <td className="p-2">{e.client||''}</td>
+                            <td className="p-2">{d.garment}</td>
+                            <td className="p-2">{d.operation}{e.note?<div className="text-[10px] text-slate-400">{e.note}</div>:''}</td>
+                            <td className="p-2 text-right">{e.quantity}</td>
+                            <td className="p-2 text-right">{money(d.price)}{isOt&&Number(pSettings.ot_multiplier)!==1?<div className="text-[10px] text-slate-500">×{Number(pSettings.ot_multiplier).toFixed(2)}</div>:''}</td>
+                            <td className="p-2 text-right font-semibold">{money(entryEarnings(e))}</td>
+                          </tr>
+                        ); })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                );
+              })}
+              <div className="grid grid-cols-2 gap-3 mt-4">
+                <div className="bg-slate-50 border rounded p-3"><div className="text-[10px] uppercase text-slate-500">Regular hours total</div><div className="text-lg font-bold">{money(totalReg)}</div></div>
+                <div className="bg-violet-50 border rounded p-3"><div className="text-[10px] uppercase text-slate-500">Overtime total{Number(pSettings.ot_multiplier)!==1?` (×${Number(pSettings.ot_multiplier).toFixed(2)})`:''}</div><div className="text-lg font-bold text-violet-700">{money(totalOt)}</div></div>
+              </div>
+              <div className="mt-3 bg-slate-900 text-white rounded p-4 flex justify-between items-center"><div className="font-semibold">Total earnings for the {periodLabel.toLowerCase()}</div><div className="text-2xl font-bold">{money(total)}</div></div>
+            </div>
+          );
+        })}
+        {!anyEntries && <div className="text-center text-sm text-slate-400 py-8">No approved entries in this period.</div>}
+        {sewersToShow.length>1 && anyEntries && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 no-print">
+            <div className="flex justify-between flex-wrap gap-3">
+              <div><div className="text-[10px] uppercase text-slate-500">{periodLabel} of {fmtPayrollDate(from)} – {fmtPayrollDate(to)}</div><div>{sewersToShow.length} sewers</div></div>
+              <div className="text-right"><div className="text-[10px] uppercase text-slate-500">Regular</div><div className="text-lg font-bold text-emerald-700">{money(grandReg)}</div></div>
+              <div className="text-right"><div className="text-[10px] uppercase text-slate-500">Overtime</div><div className="text-lg font-bold text-violet-700">{money(grandOt)}</div></div>
+              <div className="text-right"><div className="text-[10px] uppercase text-slate-500">Total payroll</div><div className="text-xl font-bold text-emerald-800">{money(grandTotal)}</div></div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PayrollSewers({ sewers, entries, money, entryEarnings, addSewer, toggleSewerActive, renameSewer, deleteSewer }){
+  const [newName,setNewName]=useState('');
+  function submit(){ addSewer(newName).then(()=>setNewName('')); }
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4">
+        <div className="flex gap-2 items-end"><div className="flex-1"><TpLbl t="New sewer name"><input className="input" placeholder="e.g. Maria Santos" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') submit(); }} /></TpLbl></div>
+          <button onClick={submit} className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700">Add sewer</button>
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-3">Team list</div>
+        {sewers.length===0 ? <div className="text-center text-sm text-slate-400 py-6">No sewers yet.</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Name</th><th>Status</th><th className="text-right">Entries</th><th className="text-right">Pending</th><th className="text-right">Approved earnings</th><th></th></tr></thead>
+            <tbody>{[...sewers].sort((a,b)=>a.name.localeCompare(b.name)).map(s=>{ const list=entries.filter(e=>e.sewer_id===s.id); const pending=list.filter(e=>e.status==='pending'); const done=list.filter(e=>e.status==='done'); const total=done.reduce((sum,e)=>sum+entryEarnings(e),0); const pTotal=pending.reduce((sum,e)=>sum+entryEarnings(e),0); return (
+              <tr key={s.id} className="border-t">
+                <td className="py-1.5 font-medium">{s.name}</td>
+                <td>{s.active?<span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Active</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">Inactive</span>}</td>
+                <td className="text-right">{list.length}</td>
+                <td className="text-right">{pending.length>0?<span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">{pending.length} · {money(pTotal)}</span>:'—'}</td>
+                <td className="text-right font-semibold">{money(total)}</td>
+                <td className="text-right whitespace-nowrap">
+                  <button onClick={()=>renameSewer(s)} className="text-xs text-slate-500 hover:underline mr-2">Rename</button>
+                  <button onClick={()=>toggleSewerActive(s)} className="text-xs text-slate-500 hover:underline mr-2">{s.active?'Deactivate':'Reactivate'}</button>
+                  <button onClick={()=>deleteSewer(s)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ); })}</tbody>
+          </table></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PayrollGarments({ garments, money, addGarment, updateGarmentOps, renameGarment, deleteGarment }){
+  const [newName,setNewName]=useState('');
+  function submit(){ addGarment(newName).then(()=>setNewName('')); }
+  function addOp(g){ updateGarmentOps(g, [...(g.operations||[]), { id:'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), name:'', price:0 }]); }
+  function setOpField(g, opId, field, value){ const ops=(g.operations||[]).map(o=>o.id===opId?{...o,[field]:field==='price'?(Number(value)||0):value}:o); updateGarmentOps(g, ops); }
+  function removeOp(g, opId){ if(!confirm('Remove this operation?')) return; const ops=(g.operations||[]).filter(o=>o.id!==opId); updateGarmentOps(g, ops); }
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4">
+        <div className="flex gap-2 items-end"><div className="flex-1"><TpLbl t="New garment / project name"><input className="input" placeholder="e.g. Long-sleeve blouse — Style 1042" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') submit(); }} /></TpLbl></div>
+          <button onClick={submit} className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700">Add garment</button>
+        </div>
+      </div>
+      {garments.length===0 ? <div className="bg-white border rounded-xl p-8 text-center text-sm text-slate-400">No garments yet. Add one above.</div> : garments.map(g=>{
+        const total = (g.operations||[]).reduce((s,o)=>s+(Number(o.price)||0),0);
+        return (
+          <div key={g.id} className="bg-white border rounded-xl p-4">
+            <div className="flex justify-between items-start mb-3">
+              <div><div className="font-bold">{g.name}</div><div className="text-xs text-slate-500">{(g.operations||[]).length} operation{(g.operations||[]).length===1?'':'s'} · Total per garment: <strong>{money(total)}</strong></div></div>
+              <div><button onClick={()=>renameGarment(g)} className="text-xs text-slate-500 hover:underline mr-2">Rename</button><button onClick={()=>deleteGarment(g)} className="text-xs text-rose-500 hover:underline">Delete</button></div>
+            </div>
+            <div className="space-y-2">
+              <div className="grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-7">Operation</div><div className="col-span-4">Price per piece</div><div></div></div>
+              {(g.operations||[]).map(op=>(
+                <div key={op.id} className="grid grid-cols-12 gap-2 items-center">
+                  <input className="input col-span-7" placeholder="e.g. Attach collar" value={op.name} onChange={e=>setOpField(g, op.id, 'name', e.target.value)} />
+                  <input type="number" step="0.01" min="0" className="input col-span-4" value={op.price} onChange={e=>setOpField(g, op.id, 'price', e.target.value)} />
+                  <div className="col-span-1 text-right"><button onClick={()=>removeOp(g, op.id)} className="text-rose-400 text-lg" title="Remove">✕</button></div>
+                </div>
+              ))}
+              <button onClick={()=>addOp(g)} className="text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">+ Add operation</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PayrollSettings({ pSettings, updateSettings }){
+  const [currency,setCurrency]=useState(pSettings.currency);
+  const [otMult,setOtMult]=useState(pSettings.ot_multiplier);
+  useEffect(()=>{ setCurrency(pSettings.currency); setOtMult(pSettings.ot_multiplier); },[pSettings.currency, pSettings.ot_multiplier]);
+  async function saveCurrency(){ await updateSettings({ currency: currency||'₱' }); }
+  async function saveMult(){ const n=Number(otMult); if(isNaN(n)||n<0) return alert('Enter a valid multiplier.'); await updateSettings({ ot_multiplier:n }); }
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-2">Currency symbol</div>
+        <div className="flex gap-2 items-end"><div style={{maxWidth:120}}><input className="input" value={currency} onChange={e=>setCurrency(e.target.value)} /></div><button onClick={saveCurrency} className="px-3 py-1.5 rounded bg-rose-600 text-white text-sm font-semibold">Save</button><div className="text-xs text-slate-500 self-center">Default: ₱ (Philippine Peso). Use $, €, £, etc.</div></div>
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="font-semibold text-sm mb-2">Overtime rate multiplier</div>
+        <div className="flex gap-2 items-end"><div style={{maxWidth:140}}><input type="number" step="0.01" min="0" className="input" value={otMult} onChange={e=>setOtMult(e.target.value)} /></div><button onClick={saveMult} className="px-3 py-1.5 rounded bg-rose-600 text-white text-sm font-semibold">Save</button></div>
+        <div className="text-xs text-slate-500 mt-2">Multiplier applied to OT earnings. <strong>1.00</strong> = same rate as regular. <strong>1.25</strong> = 25% premium. <strong>1.50</strong> = time-and-a-half. <strong>2.00</strong> = double time.</div>
+      </div>
+    </div>
+  );
+}
 
 function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups }){
   const [tp,setTp]=useState(()=>mergeTechpack(lead.techpack, lead, client, profile));
@@ -4472,8 +5063,11 @@ function App(){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','orders','styles']);
       fallback = 'inventory';
     } else if(profile.role==='accounting'){
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','orders','styles']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','orders','styles','payroll']);
       fallback = 'pipeline';
+    } else if(profile.role==='sewing_lead'){
+      allowed = new Set(['inbox','payroll']);
+      fallback = 'payroll';
     } else {
       return; // admin / manager — no restrictions
     }
@@ -4555,6 +5149,7 @@ function App(){
   const isManager=profile.role==='manager';
   const isGraphicTeam=profile.role==='graphic';
   const isPrintingTeam=profile.role==='printing';
+  const isSewingLead=profile.role==='sewing_lead';
   // Build the sidebar nav per role.
   let NAV;
   if(isProduction || isGraphicTeam || isPrintingTeam){
@@ -4573,12 +5168,19 @@ function App(){
       { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
     ];
   } else if(isAccounting){
-    // Accounting team — Sales (no admin profile) + filtered Team Overview + Operations + Purchasing + inbox.
+    // Accounting team — Sales (no admin profile) + filtered Team Overview + Operations + Purchasing + Payroll + inbox.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+    ];
+  } else if(isSewingLead){
+    // Sewing line team leader — only the Payroll module + inbox.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
     ];
   } else if(isAssistant){
     // Sales Assistants only see Sales + Production. No Team Overview, no
@@ -4604,6 +5206,7 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       { group:'Other', soon:true, items:[ ['soon-rep','Reports','📈'] ] },
     ];
@@ -4678,6 +5281,7 @@ function App(){
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={(lead)=>setTechpackLead(lead)} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
+        {view==='payroll' && <SewingPayroll profile={profile} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
