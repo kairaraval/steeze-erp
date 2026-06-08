@@ -32,17 +32,22 @@
       .no-print { display:none !important; }
       .app-root { min-height:0 !important; background:#fff !important; }
       .tp-root { position:static !important; inset:auto !important; overflow:visible !important; height:auto !important; z-index:auto !important; }
-      .tp-print { margin:0; padding:0; max-width:none; }
+      /* Strip Tailwind's py-6 from the print wrapper — that 1.5rem top/bottom
+         padding was spilling onto a blank second PDF page. */
+      .tp-print { margin:0 !important; padding:0 !important; max-width:none !important; }
       /* Make the printed page match the on-screen preview exactly.
          Letter landscape (11in × 8.5in) minus the 0.4in @page margin on each
          side leaves a printable area of 10.2in × 7.7in — same usable size as
          the preview's 11in page with 0.4in padding. Using inches (not vh)
          keeps proportions stable across browsers/printers. */
-      .tp-page { width:10.2in; height:7.7in; min-height:0; box-shadow:none; border:none; margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; page-break-after: always; break-after: page; }
-      .tp-page:last-child { page-break-after: auto; break-after: auto; }
-      /* Let images fill their container the same way they do in preview
-         (was capped at 46vh which shrank everything on the printed copy). */
-      .tp-page img { max-width:100% !important; max-height:100% !important; object-fit:contain; }
+      .tp-page { width:10.2in; height:7.6in; min-height:0; box-shadow:none; border:none; margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
+      /* The last page must NOT force a page break — otherwise the print
+         engine emits a blank final page. !important beats inherited rules. */
+      .tp-page:last-child { page-break-after: avoid !important; break-after: avoid !important; }
+      /* Let images respect their inline maxH (e.g. 6in for cover shots) so
+         we don't blow them up beyond the design intent. The previous
+         !important override was stripping the inline cap. */
+      .tp-page img { max-width:100%; max-height:100%; object-fit:contain; }
       /* Force red titles, gray header bars, and colored cells to print as
          shown on screen — Chrome / Safari otherwise wash colors out. */
       * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
@@ -82,7 +87,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17k · Techpack print matches preview';
+const BUILD = 'Live build 17l · Techpack print: no blank page + tighter fit';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
