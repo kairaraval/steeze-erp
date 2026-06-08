@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17g · Inbox: dept-job mentions open the linked sales lead';
+const BUILD = 'Live build 17h · Inbox: revert — dept-job mentions stay in their module';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -5525,26 +5525,14 @@ function App(){
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
     const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
-  // From the Inbox: main card click → opens the WHOLE LEAD when possible. If a
-  // graphic / printing / sampling / production job was mentioned and that job
-  // is linked to a sales lead, we open the LeadDetail so the recipient sees
-  // the full lead context (sales chat, items, attachments, all actions). Only
-  // when there's no linked lead (rare — standalone dept jobs) do we fall back
-  // to switching to the board and opening the dept job's own activity thread.
+  // From the Inbox: main card click → opens the actual lead detail / board.
   function openInboxTask(m){
-    if(m.source==='lead'){
-      const l=leads.find(x=>x.id===m.lead_id); if(l) setDetailLead(l); return;
-    }
-    const list = m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
-    const j = list.find(x=>x.id===m.job_id);
-    if(j && j.lead_id){
-      const lead = leads.find(l=>l.id===j.lead_id);
-      if(lead){ setDetailLead(lead); return; }
-    }
-    // No linked lead — fall back to opening the board + dept job activity.
+    if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setDetailLead(l); return; }
     const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' };
-    setView(map[m.source]||'prod');
-    if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
+    const v=map[m.source]||'prod'; setView(v);
+    // Also open the job's activity so they can see the context they were mentioned in.
+    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
+    const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
 
   const isAssistant=profile.role==='assistant';
