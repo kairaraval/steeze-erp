@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17d · Sewing Payroll module + sewing_lead role';
+const BUILD = 'Live build 17e · Logistics module (daily delivery schedule)';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -3914,6 +3914,334 @@ function PayrollSettings({ pSettings, updateSettings }){
   );
 }
 
+/* ============================================================================
+   LOGISTICS — Daily delivery scheduling (simple, two drivers)
+   ============================================================================ */
+function DailyLogistics({ profile }){
+  const todayISO = () => new Date().toISOString().slice(0,10);
+  const [date,setDate]=useState(todayISO());
+  const [drivers,setDrivers]=useState([]);
+  const [deliveries,setDeliveries]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [loadErr,setLoadErr]=useState('');
+  const [editing,setEditing]=useState(null); // delivery being edited; null=closed, 'new'=create form
+  const [showDrivers,setShowDrivers]=useState(false);
+
+  async function loadAll(){
+    setLoading(true); setLoadErr('');
+    try{
+      const [dRes,eRes] = await Promise.all([
+        sb.from('logistics_drivers').select('*').order('name',{ascending:true}),
+        sb.from('logistics_deliveries').select('*').eq('date',date).order('position',{ascending:true}).order('created_at',{ascending:true}),
+      ]);
+      if(dRes.error) throw dRes.error;
+      if(eRes.error) throw eRes.error;
+      setDrivers(dRes.data||[]);
+      setDeliveries(eRes.data||[]);
+    }catch(e){
+      console.error('Logistics load failed:', e);
+      setLoadErr(e.message||String(e));
+    } finally { setLoading(false); }
+  }
+  useEffect(()=>{ loadAll(); },[date]);
+
+  function shiftDate(days){
+    const d = new Date(date+'T00:00:00');
+    d.setDate(d.getDate()+days);
+    setDate(d.toISOString().slice(0,10));
+  }
+  function fmtDateLong(d){
+    if(!d) return '';
+    return new Date(d+'T00:00:00').toLocaleDateString(undefined, { weekday:'long', month:'short', day:'numeric', year:'numeric' });
+  }
+  async function toggleDelivered(d){
+    const next = d.status==='delivered' ? 'pending' : 'delivered';
+    const { error } = await sb.from('logistics_deliveries').update({
+      status: next,
+      delivered_at: next==='delivered' ? new Date().toISOString() : null,
+    }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    loadAll();
+  }
+  async function setStatusOf(d, status){
+    const { error } = await sb.from('logistics_deliveries').update({
+      status,
+      delivered_at: status==='delivered' ? new Date().toISOString() : null,
+    }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    loadAll();
+  }
+  async function deleteDelivery(d){
+    if(!confirm(`Delete delivery "${d.item||d.client_name||'untitled'}"?`)) return;
+    const { error } = await sb.from('logistics_deliveries').delete().eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    loadAll();
+  }
+
+  const grouped = {};
+  drivers.forEach(dr => grouped[dr.id] = []);
+  grouped['__unassigned'] = [];
+  deliveries.forEach(d => { const k = d.driver_id || '__unassigned'; (grouped[k]=grouped[k]||[]).push(d); });
+
+  const dayDone = deliveries.filter(d=>d.status==='delivered').length;
+
+  if(loading){
+    return <div className="p-6"><h1 className="text-2xl font-bold mb-2">🚚 Logistics</h1><div className="text-sm text-slate-400">Loading…</div></div>;
+  }
+  if(loadErr){
+    return <div className="p-6"><h1 className="text-2xl font-bold mb-2">🚚 Logistics</h1><div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-3">Failed to load: {loadErr}<br/><span className="text-xs text-slate-500">If this is the first time, make sure you ran steeze-erp-logistics-module.sql in Supabase.</span></div></div>;
+  }
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">🚚 Daily Delivery Schedule</h1>
+          <p className="text-slate-500 text-sm">Plan today's runs, check off as they're delivered.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={()=>setShowDrivers(true)} className="text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">👥 Drivers ({drivers.length})</button>
+          <button onClick={()=>setEditing('new')} className="text-xs px-3 py-2 rounded bg-orange-600 text-white font-semibold hover:bg-orange-700">+ New delivery</button>
+        </div>
+      </div>
+
+      {/* Date strip */}
+      <div className="bg-white border rounded-xl p-3 flex items-center gap-3 flex-wrap mb-4">
+        <button onClick={()=>shiftDate(-1)} className="text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">← Previous day</button>
+        <button onClick={()=>setDate(todayISO())} className="text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">Today</button>
+        <button onClick={()=>shiftDate(1)} className="text-xs px-3 py-1.5 rounded border bg-white hover:bg-slate-50">Next day →</button>
+        <input type="date" className="input max-w-[10rem]" value={date} onChange={e=>setDate(e.target.value)} />
+        <div className="flex-1"></div>
+        <div className="text-sm">
+          <span className="font-semibold">{fmtDateLong(date)}</span>
+          {deliveries.length>0 && <span className="text-slate-500 ml-3">· {dayDone}/{deliveries.length} delivered</span>}
+        </div>
+      </div>
+
+      {/* Driver columns */}
+      <div className="grid md:grid-cols-2 gap-3">
+        {drivers.length===0 && (
+          <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-sm text-slate-400">
+            No drivers yet. Click <button onClick={()=>setShowDrivers(true)} className="text-orange-600 underline">👥 Drivers</button> to add some.
+          </div>
+        )}
+        {drivers.map(dr=>{
+          const list = grouped[dr.id]||[];
+          const done = list.filter(d=>d.status==='delivered').length;
+          return (
+            <div key={dr.id} className="bg-white border rounded-xl overflow-hidden">
+              <div className="bg-orange-50 border-b border-orange-200 px-4 py-3 flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-orange-800">🚗 {dr.name}</div>
+                  <div className="text-[11px] text-orange-700">{dr.vehicle||'—'}{dr.phone?` · 📞 ${dr.phone}`:''}</div>
+                </div>
+                <div className="text-xs text-orange-700"><strong>{done}/{list.length}</strong> done</div>
+              </div>
+              {list.length===0 ? (
+                <div className="text-center text-sm text-slate-400 py-8">No deliveries assigned.<br/><button onClick={()=>setEditing({driver_id:dr.id})} className="mt-2 text-xs text-orange-600 hover:underline">+ Schedule one</button></div>
+              ) : (
+                <div className="divide-y">
+                  {list.map(d => <DeliveryRow key={d.id} d={d} onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} />)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Unassigned column appears only when there are unassigned deliveries */}
+        {grouped['__unassigned'].length>0 && (
+          <div className="md:col-span-2 bg-white border rounded-xl overflow-hidden">
+            <div className="bg-slate-50 border-b px-4 py-3 flex items-center justify-between">
+              <div className="font-bold text-slate-700">❓ Unassigned</div>
+              <div className="text-xs text-slate-500">{grouped['__unassigned'].length} delivery{grouped['__unassigned'].length===1?'':'s'} need a driver</div>
+            </div>
+            <div className="divide-y">
+              {grouped['__unassigned'].map(d=><DeliveryRow key={d.id} d={d} onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} />)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {editing && <DeliveryEditModal delivery={editing==='new'?{ date }:editing} date={date} drivers={drivers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); loadAll(); }} />}
+      {showDrivers && <DriversManageModal drivers={drivers} onClose={()=>setShowDrivers(false)} onChanged={loadAll} />}
+    </div>
+  );
+}
+
+function DeliveryRow({ d, onToggle, onSetStatus, onEdit, onDelete }){
+  const isDone = d.status==='delivered';
+  const isTransit = d.status==='in_transit';
+  const isFail = d.status==='failed';
+  return (
+    <div className={`flex items-start gap-3 px-4 py-3 ${isDone?'bg-emerald-50/40':(isFail?'bg-rose-50/40':(isTransit?'bg-blue-50/40':''))}`}>
+      <button onClick={onToggle} title={isDone?'Mark as not delivered':'Mark as delivered'} className={`shrink-0 mt-0.5 w-6 h-6 rounded-md border-2 flex items-center justify-center text-sm transition ${isDone?'bg-emerald-600 border-emerald-600 text-white':'bg-white border-slate-300 hover:border-emerald-400'}`}>{isDone?'✓':''}</button>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className={`font-semibold ${isDone?'text-slate-500 line-through':'text-slate-800'}`}>{d.item || '(no item)'}</div>
+          {isTransit && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">In transit</span>}
+          {isFail && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Failed</span>}
+        </div>
+        <div className="text-xs text-slate-500 mt-0.5">
+          📍 {d.address || '—'}
+          {d.client_name && <span> · {d.client_name}</span>}
+          {(d.contact||d.contact_phone) && <span> · {d.contact}{d.contact_phone?` (${d.contact_phone})`:''}</span>}
+        </div>
+        {d.notes && <div className="text-xs text-slate-600 mt-1 bg-amber-50 border border-amber-100 rounded px-2 py-1">📝 {d.notes}</div>}
+        {isDone && d.delivered_at && (
+          <div className="text-[10px] text-emerald-700 mt-1">✓ Delivered {new Date(d.delivered_at).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' })}</div>
+        )}
+        <div className="flex items-center gap-2 mt-1.5">
+          <select value={d.status} onChange={e=>onSetStatus(e.target.value)} className="text-[11px] border rounded px-1.5 py-0.5 bg-white">
+            <option value="pending">Pending</option>
+            <option value="in_transit">In transit</option>
+            <option value="delivered">Delivered</option>
+            <option value="failed">Failed</option>
+          </select>
+          <button onClick={onEdit} className="text-[11px] text-slate-500 hover:underline">Edit</button>
+          <button onClick={onDelete} className="text-[11px] text-rose-500 hover:underline">Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeliveryEditModal({ delivery, date, drivers, onClose, onSaved }){
+  const isNew = !delivery || !delivery.id;
+  const [d,setD]=useState(()=>({
+    date: delivery?.date || date,
+    driver_id: delivery?.driver_id || '',
+    client_name: delivery?.client_name || '',
+    item: delivery?.item || '',
+    address: delivery?.address || '',
+    contact: delivery?.contact || '',
+    contact_phone: delivery?.contact_phone || '',
+    notes: delivery?.notes || '',
+    status: delivery?.status || 'pending',
+  }));
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  function up(k,v){ setD(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!d.item.trim() && !d.client_name.trim()){ setMsg('Add either an item or a client name.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      if(isNew){
+        const payload = { ...d, driver_id: d.driver_id||null };
+        const { error } = await sb.from('logistics_deliveries').insert(payload);
+        if(error) throw error;
+      } else {
+        const payload = { ...d, driver_id: d.driver_id||null };
+        const { error } = await sb.from('logistics_deliveries').update(payload).eq('id', delivery.id);
+        if(error) throw error;
+      }
+      onSaved();
+    }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
+  }
+  return (
+    <Modal title={isNew?'+ New delivery':'Edit delivery'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={d.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Driver"><select className="input" value={d.driver_id} onChange={e=>up('driver_id',e.target.value)}><option value="">— Unassigned —</option>{drivers.map(dr=><option key={dr.id} value={dr.id}>{dr.name}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Item / What's being delivered"><input className="input" value={d.item} onChange={e=>up('item',e.target.value)} placeholder="e.g. Polo Shirt 60pcs · Techpack samples · Invoice 13828" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Client / Recipient"><input className="input" value={d.client_name} onChange={e=>up('client_name',e.target.value)} placeholder="e.g. Pro Sigma Events" /></TpLbl>
+          <TpLbl t="Status"><select className="input" value={d.status} onChange={e=>up('status',e.target.value)}><option value="pending">Pending</option><option value="in_transit">In transit</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></TpLbl>
+        </div>
+        <TpLbl t="Address"><input className="input" value={d.address} onChange={e=>up('address',e.target.value)} placeholder="e.g. Unit 5, Eastwood City, Quezon City" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Contact name"><input className="input" value={d.contact} onChange={e=>up('contact',e.target.value)} placeholder="e.g. Drew Siapco" /></TpLbl>
+          <TpLbl t="Contact phone"><input className="input" value={d.contact_phone} onChange={e=>up('contact_phone',e.target.value)} placeholder="e.g. +63 917 …" /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={d.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. Call before arriving · Cash on delivery · Fragile" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-orange-600 text-white font-semibold hover:bg-orange-700 disabled:opacity-50">{busy?'Saving…':(isNew?'Create delivery':'Save changes')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function DriversManageModal({ drivers, onClose, onChanged }){
+  const [newName,setNewName]=useState('');
+  const [newPhone,setNewPhone]=useState('');
+  const [newVehicle,setNewVehicle]=useState('');
+  const [busy,setBusy]=useState(false);
+  async function addDriver(){
+    if(!newName.trim()) return alert('Enter a name.');
+    setBusy(true);
+    const { error } = await sb.from('logistics_drivers').insert({ name:newName.trim(), phone:newPhone.trim(), vehicle:newVehicle.trim() });
+    setBusy(false);
+    if(error){ alert(error.message); return; }
+    setNewName(''); setNewPhone(''); setNewVehicle('');
+    onChanged();
+  }
+  async function renameDriver(d){
+    const n=(prompt('Rename driver:', d.name)||'').trim(); if(!n) return;
+    const { error } = await sb.from('logistics_drivers').update({ name:n }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function setPhone(d){
+    const v=(prompt('Phone:', d.phone||'')||'').trim();
+    const { error } = await sb.from('logistics_drivers').update({ phone:v }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function setVehicle(d){
+    const v=(prompt('Vehicle:', d.vehicle||'')||'').trim();
+    const { error } = await sb.from('logistics_drivers').update({ vehicle:v }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function toggleActive(d){
+    const { error } = await sb.from('logistics_drivers').update({ active: !d.active }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function deleteDriver(d){
+    if(!confirm(`Delete "${d.name}"? Their assigned deliveries will become Unassigned.`)) return;
+    const { error } = await sb.from('logistics_drivers').delete().eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  return (
+    <Modal title="👥 Drivers" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-2">Add a driver</div>
+          <div className="grid grid-cols-3 gap-2">
+            <input className="input" placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} />
+            <input className="input" placeholder="Phone (optional)" value={newPhone} onChange={e=>setNewPhone(e.target.value)} />
+            <input className="input" placeholder="Vehicle (e.g. Motorbike)" value={newVehicle} onChange={e=>setNewVehicle(e.target.value)} />
+          </div>
+          <button disabled={busy} onClick={addDriver} className="mt-2 px-4 py-1.5 rounded bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50">{busy?'Adding…':'Add driver'}</button>
+        </div>
+        {drivers.length===0 ? <div className="text-center text-sm text-slate-400 py-6">No drivers yet.</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1.5">Name</th><th className="text-left">Phone</th><th className="text-left">Vehicle</th><th>Status</th><th></th></tr></thead>
+            <tbody>{drivers.map(d=>(
+              <tr key={d.id} className="border-t">
+                <td className="py-1.5 font-medium">{d.name}</td>
+                <td>{d.phone||'—'}</td>
+                <td>{d.vehicle||'—'}</td>
+                <td>{d.active?<span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Active</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">Inactive</span>}</td>
+                <td className="text-right whitespace-nowrap">
+                  <button onClick={()=>renameDriver(d)} className="text-xs text-slate-500 hover:underline mr-2">Rename</button>
+                  <button onClick={()=>setPhone(d)} className="text-xs text-slate-500 hover:underline mr-2">Phone</button>
+                  <button onClick={()=>setVehicle(d)} className="text-xs text-slate-500 hover:underline mr-2">Vehicle</button>
+                  <button onClick={()=>toggleActive(d)} className="text-xs text-slate-500 hover:underline mr-2">{d.active?'Deactivate':'Reactivate'}</button>
+                  <button onClick={()=>deleteDriver(d)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups }){
   const [tp,setTp]=useState(()=>mergeTechpack(lead.techpack, lead, client, profile));
   const [active,setActive]=useState('header'); const [mode,setMode]=useState(readOnly?'preview':'edit'); const [saving,setSaving]=useState(false);
@@ -5051,7 +5379,7 @@ function App(){
       allowed = new Set(['inbox','pipeline','techpacks','clients','profile','team','prod','sampling','graphic','printing']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing']);
@@ -5155,9 +5483,11 @@ function App(){
   if(isProduction || isGraphicTeam || isPrintingTeam){
     // Production / Graphic Design / Printing teams all share the same nav —
     // Inbox + Production space. They differ only in their default landing page.
+    // Production team also gets the Logistics module (delivery scheduling).
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+      ...(isProduction ? [{ group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] }] : []),
     ];
   } else if(isPurchasing){
     // Purchasing team — Production + Operations + Purchasing + inbox.
@@ -5206,6 +5536,7 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       { group:'Other', soon:true, items:[ ['soon-rep','Reports','📈'] ] },
@@ -5282,6 +5613,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
+        {view==='logistics' && <DailyLogistics profile={profile} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
