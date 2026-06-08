@@ -87,7 +87,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17q · Mobile sidebar drawer';
+const BUILD = 'Live build 17r · System notifications on background tab';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5513,6 +5513,33 @@ function App(){
     if(!allowed.has(view)) setView(fallback);
   },[profile, view]);
 
+  // System notifications: when the tab is in the background (or phone screen
+  // is on but Steeze OS isn't the active app), we fire a real OS notification
+  // so people see they were @mentioned without keeping the app focused.
+  // Tracks 'default' | 'granted' | 'denied'. Refreshed on permission change.
+  const [notifPerm, setNotifPerm] = useState(()=> typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  async function enableSystemNotifications(){
+    if(typeof Notification === 'undefined'){ alert('This browser doesn\'t support notifications. On iPhone, open Steeze OS from your home-screen icon (PWA), not Safari.'); return; }
+    if(Notification.permission === 'denied'){ alert('Notifications are blocked for this site. Open your browser settings → Notifications → allow steeze-erp.vercel.app, then reload.'); return; }
+    if(Notification.permission === 'granted'){ setNotifPerm('granted'); return; }
+    const r = await Notification.requestPermission();
+    setNotifPerm(r);
+    if(r === 'granted'){
+      try { new Notification('Steeze OS notifications on', { body:'You\'ll see a ping when someone @mentions you.', icon:'/icon-192.png' }); } catch(_){}
+    }
+  }
+  // Helper used by the realtime handler below. Only fires when the tab is
+  // backgrounded — otherwise the on-screen toast is plenty.
+  function showSystemMention(title, body, onClick){
+    if(typeof Notification === 'undefined') return;
+    if(Notification.permission !== 'granted') return;
+    if(!document.hidden) return;
+    try {
+      const n = new Notification(title, { body: body||'', icon:'/icon-192.png', badge:'/icon-192.png', tag:'steeze-mention', renotify:true });
+      n.onclick = ()=>{ try { window.focus(); } catch(_){} try { n.close(); } catch(_){} if(onClick) onClick(); };
+    } catch(_){}
+  }
+
   // Realtime: ping + toast the moment someone @mentions you anywhere.
   useEffect(()=>{
     if(!profile || !profile.id) return;
@@ -5524,6 +5551,7 @@ function App(){
       if(!mutedRef.current) playPing();
       const snippet = (row.text||'').replace(/@\[[^\]]+\]\([^)]+\)/g,'@').slice(0,140);
       setToast({ title:'New @mention', body: snippet || 'You were tagged in a comment.' });
+      if(!mutedRef.current) showSystemMention('Steeze OS — New @mention', snippet || 'You were tagged in a comment.', ()=>setView('inbox'));
       loadAll();
     }
     const ch = sb.channel('mentions-'+me)
@@ -5713,6 +5741,14 @@ function App(){
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
           <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'}</div></div></div>
+          {/* System notification opt-in banner. Shows only when the browser
+              supports notifications AND the user hasn't decided yet. Once
+              granted (or permanently denied) the banner disappears. */}
+          {notifPerm === 'default' && (
+            <button onClick={enableSystemNotifications} className="w-full text-[11px] px-2 py-1.5 mb-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-semibold flex items-center justify-center gap-1.5">
+              <span>📲</span><span>Enable phone notifications</span>
+            </button>
+          )}
           <div className="flex items-center gap-2">
             <button onClick={()=>sb.auth.signOut()} className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">Sign out</button>
             <button onClick={()=>playPing()} title="Play test sound" className="text-xs px-2 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-emerald-300">▶</button>
