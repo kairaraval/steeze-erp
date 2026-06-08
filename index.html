@@ -87,7 +87,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17v · Cover image safer cap, never cut or overlapped';
+const BUILD = 'Live build 17w · Cover image fixed 4in box, no overlap possible';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4547,22 +4547,21 @@ function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, size
   }
   function sectionBody(type, s){
     if(type==='coverMain') return (
-      // Cover page layout — three guarantees:
-      //   (1) image never overlaps caption (caption is flexShrink:0 + has
-      //       solid margin above)
-      //   (2) image never gets cut/cropped (objectFit:'contain' inside TImg
-      //       letterboxes the photo to fit its box — no clipping)
-      //   (3) image area is bounded to 4.6in so even a 6-line caption has
-      //       room to render below without the photo pushing into it. The
-      //       usable area on a Letter-landscape page (7.6in tall minus 0.5in
-      //       header + 0.4in title + 0.3in footer ≈ 6.4in) easily fits the
-      //       4.6in image + ~1.6in for caption + 0.2in margin.
+      // Cover page — bullet-proof layout to guarantee NO overlap and NO crop:
+      //   * Image row uses a FIXED height (4in) with flexShrink:0 so the
+      //     image never grows past it — browsers can't override an explicit
+      //     `height` the way they sometimes do with `max-height`+`flex:1`.
+      //   * Image content inside is letterboxed (object-fit:contain) — no crop.
+      //   * Caption sits BELOW the image with a clear 28px gap and is also
+      //     flexShrink:0 so it always renders its full text.
+      //   * Any leftover vertical space stays as empty whitespace at the
+      //     bottom — preferable to risking an overlap.
       <div style={{flex:1, display:'flex', flexDirection:'column', padding:'10px', minHeight:0}}>
-        <div style={{flex:1, display:'grid', gridTemplateColumns:(s.frontImage&&s.backImage?'1fr 1fr':'1fr'), gap:'14px', width:'100%', justifyItems:'center', alignItems:'center', minHeight:0, maxHeight:'4.6in'}}>
-          <TImg path={s.frontImage} maxH="100%" />
-          <TImg path={s.backImage} maxH="100%" />
+        <div style={{display:'grid', gridTemplateColumns:(s.frontImage&&s.backImage?'1fr 1fr':'1fr'), gap:'14px', width:'100%', justifyItems:'center', alignItems:'center', height:'4in', flexShrink:0}}>
+          <TImg path={s.frontImage} maxH="4in" />
+          <TImg path={s.backImage} maxH="4in" />
         </div>
-        <div style={{textAlign:'center', flexShrink:0, marginTop:'20px'}}>
+        <div style={{textAlign:'center', flexShrink:0, marginTop:'28px'}}>
           <div style={{fontWeight:700, color:'#d63031', fontSize:'11pt', marginBottom:'4px'}}>{s.mainLine}</div>
           {bullets(s.details)}
         </div>
