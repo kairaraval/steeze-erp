@@ -59,7 +59,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 17e · Logistics module (daily delivery schedule)';
+const BUILD = 'Live build 17f · Logistics: per-day vehicle + client picker autofill';
 
 // On-screen error reporter so problems show as readable text, not a blank page.
 function showFatal(msg){
@@ -3917,11 +3917,13 @@ function PayrollSettings({ pSettings, updateSettings }){
 /* ============================================================================
    LOGISTICS — Daily delivery scheduling (simple, two drivers)
    ============================================================================ */
-function DailyLogistics({ profile }){
+function DailyLogistics({ profile, clients }){
   const todayISO = () => new Date().toISOString().slice(0,10);
+  const VEHICLE_OPTIONS = ['Truck','Motorbike','Van','Car','Other'];
   const [date,setDate]=useState(todayISO());
   const [drivers,setDrivers]=useState([]);
   const [deliveries,setDeliveries]=useState([]);
+  const [dayAssign,setDayAssign]=useState([]); // logistics_day_assignments for this date
   const [loading,setLoading]=useState(true);
   const [loadErr,setLoadErr]=useState('');
   const [editing,setEditing]=useState(null); // delivery being edited; null=closed, 'new'=create form
@@ -3930,20 +3932,39 @@ function DailyLogistics({ profile }){
   async function loadAll(){
     setLoading(true); setLoadErr('');
     try{
-      const [dRes,eRes] = await Promise.all([
+      const [dRes,eRes,aRes] = await Promise.all([
         sb.from('logistics_drivers').select('*').order('name',{ascending:true}),
         sb.from('logistics_deliveries').select('*').eq('date',date).order('position',{ascending:true}).order('created_at',{ascending:true}),
+        sb.from('logistics_day_assignments').select('*').eq('date',date),
       ]);
       if(dRes.error) throw dRes.error;
       if(eRes.error) throw eRes.error;
+      if(aRes.error) throw aRes.error;
       setDrivers(dRes.data||[]);
       setDeliveries(eRes.data||[]);
+      setDayAssign(aRes.data||[]);
     }catch(e){
       console.error('Logistics load failed:', e);
       setLoadErr(e.message||String(e));
     } finally { setLoading(false); }
   }
   useEffect(()=>{ loadAll(); },[date]);
+
+  // Returns the vehicle assigned to this driver on this date — falls back to
+  // the driver's default vehicle from the drivers table.
+  function vehicleFor(dr){
+    const row = dayAssign.find(a=>a.driver_id===dr.id);
+    if(row && row.vehicle) return row.vehicle;
+    return dr.vehicle || '';
+  }
+  async function setVehicleFor(dr, vehicle){
+    const { error } = await sb.from('logistics_day_assignments').upsert(
+      { date, driver_id: dr.id, vehicle },
+      { onConflict: 'date,driver_id' }
+    );
+    if(error){ alert(error.message); return; }
+    loadAll();
+  }
 
   function shiftDate(days){
     const d = new Date(date+'T00:00:00');
@@ -4028,14 +4049,25 @@ function DailyLogistics({ profile }){
         {drivers.map(dr=>{
           const list = grouped[dr.id]||[];
           const done = list.filter(d=>d.status==='delivered').length;
+          const todayVehicle = vehicleFor(dr);
+          const vIcon = todayVehicle==='Truck'?'🚚':todayVehicle==='Motorbike'?'🏍':todayVehicle==='Van'?'🚐':todayVehicle==='Car'?'🚗':'🚗';
           return (
             <div key={dr.id} className="bg-white border rounded-xl overflow-hidden">
-              <div className="bg-orange-50 border-b border-orange-200 px-4 py-3 flex items-center justify-between">
-                <div>
-                  <div className="font-bold text-orange-800">🚗 {dr.name}</div>
-                  <div className="text-[11px] text-orange-700">{dr.vehicle||'—'}{dr.phone?` · 📞 ${dr.phone}`:''}</div>
+              <div className="bg-orange-50 border-b border-orange-200 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="font-bold text-orange-800">{vIcon} {dr.name}</div>
+                    <div className="text-[11px] text-orange-700">{dr.phone?`📞 ${dr.phone}`:''}</div>
+                  </div>
+                  <div className="text-xs text-orange-700"><strong>{done}/{list.length}</strong> done</div>
                 </div>
-                <div className="text-xs text-orange-700"><strong>{done}/{list.length}</strong> done</div>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-wide text-orange-700 font-semibold">Vehicle today:</span>
+                  <select value={todayVehicle} onChange={e=>setVehicleFor(dr, e.target.value)} className="text-xs border rounded px-2 py-1 bg-white text-orange-900">
+                    <option value="">— Not set —</option>
+                    {VEHICLE_OPTIONS.map(v=><option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
               </div>
               {list.length===0 ? (
                 <div className="text-center text-sm text-slate-400 py-8">No deliveries assigned.<br/><button onClick={()=>setEditing({driver_id:dr.id})} className="mt-2 text-xs text-orange-600 hover:underline">+ Schedule one</button></div>
@@ -4062,7 +4094,7 @@ function DailyLogistics({ profile }){
         )}
       </div>
 
-      {editing && <DeliveryEditModal delivery={editing==='new'?{ date }:editing} date={date} drivers={drivers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); loadAll(); }} />}
+      {editing && <DeliveryEditModal delivery={editing==='new'?{ date }:editing} date={date} drivers={drivers} clients={clients||[]} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); loadAll(); }} />}
       {showDrivers && <DriversManageModal drivers={drivers} onClose={()=>setShowDrivers(false)} onChanged={loadAll} />}
     </div>
   );
@@ -4105,11 +4137,12 @@ function DeliveryRow({ d, onToggle, onSetStatus, onEdit, onDelete }){
   );
 }
 
-function DeliveryEditModal({ delivery, date, drivers, onClose, onSaved }){
+function DeliveryEditModal({ delivery, date, drivers, clients, onClose, onSaved }){
   const isNew = !delivery || !delivery.id;
   const [d,setD]=useState(()=>({
     date: delivery?.date || date,
     driver_id: delivery?.driver_id || '',
+    client_id: delivery?.client_id || '',
     client_name: delivery?.client_name || '',
     item: delivery?.item || '',
     address: delivery?.address || '',
@@ -4121,22 +4154,45 @@ function DeliveryEditModal({ delivery, date, drivers, onClose, onSaved }){
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
   function up(k,v){ setD(p=>({...p,[k]:v})); }
+  // When the user picks a client from the dropdown, auto-fill the address +
+  // primary contact + phone from the clients table. They can still edit any
+  // field after the autofill.
+  function pickClient(clientId){
+    if(!clientId){
+      setD(p=>({...p, client_id:'', client_name:''}));
+      return;
+    }
+    const c = (clients||[]).find(x=>x.id===clientId);
+    if(!c){ setD(p=>({...p, client_id:clientId})); return; }
+    // Primary contact (first item in contacts array, or legacy contact/phone fields)
+    const primary = Array.isArray(c.contacts) && c.contacts.length>0 ? c.contacts[0] : null;
+    const cName = (primary && primary.name) || c.contact || '';
+    const cPhone = (primary && primary.phone) || c.phone || '';
+    setD(p=>({
+      ...p,
+      client_id: clientId,
+      client_name: c.company || p.client_name,
+      address: c.address || p.address,
+      contact: cName || p.contact,
+      contact_phone: cPhone || p.contact_phone,
+    }));
+  }
   async function save(){
     if(!d.item.trim() && !d.client_name.trim()){ setMsg('Add either an item or a client name.'); return; }
     setBusy(true); setMsg('');
     try{
+      const payload = { ...d, driver_id: d.driver_id||null, client_id: d.client_id||null };
       if(isNew){
-        const payload = { ...d, driver_id: d.driver_id||null };
         const { error } = await sb.from('logistics_deliveries').insert(payload);
         if(error) throw error;
       } else {
-        const payload = { ...d, driver_id: d.driver_id||null };
         const { error } = await sb.from('logistics_deliveries').update(payload).eq('id', delivery.id);
         if(error) throw error;
       }
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
+  const sortedClients = (clients||[]).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||'')));
   return (
     <Modal title={isNew?'+ New delivery':'Edit delivery'} onClose={onClose}>
       <div className="space-y-3">
@@ -4145,9 +4201,18 @@ function DeliveryEditModal({ delivery, date, drivers, onClose, onSaved }){
           <TpLbl t="Driver"><select className="input" value={d.driver_id} onChange={e=>up('driver_id',e.target.value)}><option value="">— Unassigned —</option>{drivers.map(dr=><option key={dr.id} value={dr.id}>{dr.name}</option>)}</select></TpLbl>
         </div>
         <TpLbl t="Item / What's being delivered"><input className="input" value={d.item} onChange={e=>up('item',e.target.value)} placeholder="e.g. Polo Shirt 60pcs · Techpack samples · Invoice 13828" /></TpLbl>
-        <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Client / Recipient"><input className="input" value={d.client_name} onChange={e=>up('client_name',e.target.value)} placeholder="e.g. Pro Sigma Events" /></TpLbl>
-          <TpLbl t="Status"><select className="input" value={d.status} onChange={e=>up('status',e.target.value)}><option value="pending">Pending</option><option value="in_transit">In transit</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></TpLbl>
+        {/* Client picker — pulls from your clients list and autofills address + contact */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <TpLbl t={`Pick a client (auto-fills address + contact)${sortedClients.length?` · ${sortedClients.length} on file`:''}`}>
+            <select className="input" value={d.client_id} onChange={e=>pickClient(e.target.value)}>
+              <option value="">— Type manually below —</option>
+              {sortedClients.map(c=><option key={c.id} value={c.id}>{c.company}</option>)}
+            </select>
+          </TpLbl>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <TpLbl t="Client / Recipient name"><input className="input" value={d.client_name} onChange={e=>up('client_name',e.target.value)} placeholder="e.g. Pro Sigma Events" /></TpLbl>
+            <TpLbl t="Status"><select className="input" value={d.status} onChange={e=>up('status',e.target.value)}><option value="pending">Pending</option><option value="in_transit">In transit</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></TpLbl>
+          </div>
         </div>
         <TpLbl t="Address"><input className="input" value={d.address} onChange={e=>up('address',e.target.value)} placeholder="e.g. Unit 5, Eastwood City, Quezon City" /></TpLbl>
         <div className="grid grid-cols-2 gap-2">
@@ -5613,7 +5678,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
-        {view==='logistics' && <DailyLogistics profile={profile} />}
+        {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
