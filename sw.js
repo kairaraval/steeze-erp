@@ -2,7 +2,7 @@
 // Strategy: cache the app shell (HTML/icons/manifest) so the app opens fast
 // and works offline, but ALWAYS go to the network for Supabase + Storage so
 // the user never sees stale data. Bump CACHE_NAME to force a refresh.
-const CACHE_NAME = 'steeze-os-v5';
+const CACHE_NAME = 'steeze-os-v6';
 
 // Allow the page to ask us to activate a freshly installed version immediately
 // (paired with controllerchange + reload in index.html for auto-update).
