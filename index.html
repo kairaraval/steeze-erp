@@ -110,7 +110,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 19a · Inventory: 4-tab buckets';
+const BUILD = 'Live build 19b · Inventory: grouped colors + bulk add';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4861,6 +4861,27 @@ function InventoryView({ suppliers, items, departments, reload }){
   async function del(id){ if(!confirm('Delete this item?')) return; const {error}=await sb.from('items').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const suppName=(id)=>suppliers.find(s=>s.id===id)?.company||'—';
   const tabMeta = INV_BUCKETS.find(b=>b.key===tab) || INV_BUCKETS[0];
+
+  // Group rows by trimmed lowercase `name` so e.g. "Lacoste" appears once as
+  // a parent row with its color variants underneath. Singletons (a fabric
+  // with only one row) render flat — no expand/collapse noise.
+  const groups = (()=>{
+    const map = new Map();
+    rows.forEach(i=>{
+      const key = (i.name||'').trim().toLowerCase() || '__unnamed';
+      if(!map.has(key)) map.set(key,{ key, name:i.name||'—', items:[], totalQty:0, totalValue:0, low:0, units:new Set() });
+      const g = map.get(key);
+      g.items.push(i);
+      g.totalQty += Number(i.qty||0);
+      g.totalValue += Number(i.qty||0) * Number(i.cost||0);
+      if(i.unit) g.units.add(i.unit);
+      if(Number(i.qty||0) <= Number(i.reorder||0) && Number(i.reorder||0) > 0) g.low += 1;
+    });
+    return Array.from(map.values()).sort((a,b)=>a.name.localeCompare(b.name));
+  })();
+  const [expanded,setExpanded]=useState(()=>new Set());
+  function toggleExpand(key){ setExpanded(prev=>{ const n=new Set(prev); if(n.has(key)) n.delete(key); else n.add(key); return n; }); }
+  const [bulkAdding,setBulkAdding]=useState(false);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -4868,6 +4889,7 @@ function InventoryView({ suppliers, items, departments, reload }){
           <div><h1 className="text-2xl font-bold">📦 Inventory</h1><p className="text-slate-500 text-sm">{items.length} items total · {peso(Object.values(stats).reduce((s,x)=>s+x.value,0))} total value · {Object.values(stats).reduce((s,x)=>s+x.low,0)} below reorder</p></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
+            <button onClick={()=>setBulkAdding(true)} className="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-semibold hover:bg-indigo-50">+ Multi-color</button>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New item</button>
           </div>
         </div>
@@ -4905,24 +4927,178 @@ function InventoryView({ suppliers, items, departments, reload }){
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">SKU</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Sub-category</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost ₱</th><th className="text-right px-3 py-2">Value</th><th></th></tr></thead>
-        <tbody>{rows.map(i=>{ const low=Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0; return (
-          <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
-            <td className="px-3 py-2 font-mono text-xs">{i.sku||'—'}</td>
-            <td className="px-3 py-2 font-medium">{i.name}<div className="text-[10px] text-slate-500">{[i.brand,i.model,i.color,i.size].filter(Boolean).join(' · ')}</div></td>
-            <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
-            <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
-            <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
-            <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
-            <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
-            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
-          </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" to add one.</td></tr>}</tbody>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2 w-8"></th>
+          <th className="text-left px-3 py-2">SKU</th>
+          <th className="text-left px-3 py-2">Name / Color</th>
+          <th className="text-left px-3 py-2">Sub-category</th>
+          <th className="text-left px-3 py-2">Supplier</th>
+          <th className="text-right px-3 py-2">Qty</th>
+          <th className="text-right px-3 py-2">Cost ₱</th>
+          <th className="text-right px-3 py-2">Value</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{groups.map(g=>{
+          const isMulti = g.items.length > 1;
+          const open = !isMulti || expanded.has(g.key);
+          // Singletons (one color/variant) render as a flat row — no parent
+          // header needed, just the item itself.
+          if(!isMulti){
+            const i = g.items[0];
+            const low = Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0;
+            return (
+              <tr key={g.key} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
+                <td></td>
+                <td className="px-3 py-2 font-mono text-xs">{i.sku||'—'}</td>
+                <td className="px-3 py-2 font-medium">{i.name}<div className="text-[10px] text-slate-500">{[i.brand,i.model,i.color,i.size].filter(Boolean).join(' · ')}</div></td>
+                <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
+                <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
+                <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
+                <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+              </tr>
+            );
+          }
+          // Multi-color group: parent header row + child rows when expanded.
+          const unitDisplay = g.units.size === 1 ? Array.from(g.units)[0] : '';
+          return (<React.Fragment key={g.key}>
+            <tr className="border-t bg-slate-50/60 hover:bg-slate-100 cursor-pointer" onClick={()=>toggleExpand(g.key)}>
+              <td className="px-3 py-2 text-center text-slate-400 select-none">{open?'▾':'▸'}</td>
+              <td className="px-3 py-2 text-[10px] uppercase tracking-wider text-slate-500">{g.items.length} color{g.items.length===1?'':'s'}</td>
+              <td className="px-3 py-2 font-bold text-slate-900">{g.name}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{Array.from(new Set(g.items.map(x=>x.category).filter(Boolean))).join(' · ')||'—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{Array.from(new Set(g.items.map(x=>suppName(x.supplier_id)).filter(s=>s&&s!=='—'))).join(' · ')||'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold">{g.totalQty} {unitDisplay}</td>
+              <td className="px-3 py-2 text-right text-xs text-slate-500">—</td>
+              <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(g.totalValue)}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">{g.low > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold">{g.low} low</span>}</td>
+            </tr>
+            {open && g.items.map(i=>{ const low=Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0; return (
+              <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
+                <td></td>
+                <td className="px-3 py-2 font-mono text-xs pl-6">{i.sku||'—'}</td>
+                <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div></td>
+                <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
+                <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
+                <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
+                <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+              </tr>
+            ); })}
+          </React.Fragment>);
+        })}{groups.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" or "+ Multi-color" to add.</td></tr>}</tbody>
       </table></div></div>
 
       {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
+      {bulkAdding && <BulkColorItemForm defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>setBulkAdding(false)} onSaved={()=>{ setBulkAdding(false); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
+  );
+}
+
+// Bulk-add form: one shared parent (name, brand, supplier, cost defaults) +
+// many color rows. Each color row becomes its own item with its own SKU and
+// starting qty. Same `name` field across all rows is what makes them appear
+// grouped on the Inventory page.
+function BulkColorItemForm({ defaultBucket, suppliers, departments, onClose, onSaved }){
+  const [shared,setShared]=useState({
+    name:'', brand:'', model:'',
+    bucket:(defaultBucket && defaultBucket!=='other')?defaultBucket:'fabrics',
+    category:'',
+    unit:'yd',
+    cost:0,
+    price:0,
+    reorder:0,
+    dept_id:null, supplier_id:null,
+    location:'', notes:''
+  });
+  function setS(k,v){ setShared(p=>({...p,[k]:v})); }
+  const [colors,setColors]=useState([
+    { id:'c'+Date.now(), color:'', sku:'', qty:0 },
+    { id:'c'+(Date.now()+1), color:'', sku:'', qty:0 },
+  ]);
+  function setColor(idx,k,v){ setColors(arr=>arr.map((c,i)=>i===idx?{...c,[k]:v}:c)); }
+  function addRow(){ setColors(arr=>[...arr,{ id:'c'+Date.now()+Math.random(), color:'', sku:'', qty:0 }]); }
+  function removeRow(idx){ setColors(arr=>arr.length===1?arr:arr.filter((_,i)=>i!==idx)); }
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    if(!shared.name.trim()){ setMsg('Fabric / item name is required.'); return; }
+    const valid = colors.filter(c=>c.color.trim());
+    if(valid.length===0){ setMsg('Add at least one color row.'); return; }
+    setBusy(true); setMsg('');
+    const payloads = valid.map(c=>({
+      name: shared.name.trim(),
+      sku: (c.sku||'').trim(),
+      bucket: shared.bucket,
+      category: shared.category||'',
+      brand: shared.brand||'',
+      model: shared.model||'',
+      color: c.color.trim(),
+      size:'',
+      unit: shared.unit||'pc',
+      qty: Number(c.qty)||0,
+      cost: Number(shared.cost)||0,
+      price: Number(shared.price)||0,
+      reorder: Number(shared.reorder)||0,
+      dept_id: shared.dept_id||null,
+      supplier_id: shared.supplier_id||null,
+      location: shared.location||'',
+      notes: shared.notes||''
+    }));
+    const { error } = await sb.from('items').insert(payloads);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Add fabric / item in multiple colors" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="text-xs font-semibold text-slate-700 mb-2">🧵 Shared fabric details — applied to every color row</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Name *"><input className="input" value={shared.name} onChange={e=>setS('name',e.target.value)} placeholder="e.g. Lacoste" /></TpLbl>
+            <TpLbl t="Bucket *">
+              <select className="input" value={shared.bucket} onChange={e=>setS('bucket',e.target.value)}>
+                {INV_BUCKETS.filter(b=>b.key!=='other').map(b=>(<option key={b.key} value={b.key}>{b.icon} {b.label}</option>))}
+              </select>
+            </TpLbl>
+            <TpLbl t="Sub-category"><input className="input" value={shared.category} onChange={e=>setS('category',e.target.value)} placeholder="e.g. Cotton, Microfiber" /></TpLbl>
+            <TpLbl t="Brand"><input className="input" value={shared.brand} onChange={e=>setS('brand',e.target.value)} /></TpLbl>
+            <TpLbl t="Model / spec"><input className="input" value={shared.model} onChange={e=>setS('model',e.target.value)} placeholder="e.g. 200gsm" /></TpLbl>
+            <TpLbl t="Unit"><input className="input" value={shared.unit} onChange={e=>setS('unit',e.target.value)} placeholder="yd / m / pc" /></TpLbl>
+            <TpLbl t="Cost per unit ₱"><input type="number" className="input" value={shared.cost} onChange={e=>setS('cost',e.target.value)} /></TpLbl>
+            <TpLbl t="Reorder point"><input type="number" className="input" value={shared.reorder} onChange={e=>setS('reorder',e.target.value)} /></TpLbl>
+            <TpLbl t="Supplier"><select className="input" value={shared.supplier_id||''} onChange={e=>setS('supplier_id',e.target.value||null)}><option value="">—</option>{suppliers.map(s=>(<option key={s.id} value={s.id}>{s.company}</option>))}</select></TpLbl>
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">🎨 Colors — one row = one SKU on the shelf</div>
+            <button onClick={addRow} className="text-xs text-indigo-600 hover:underline font-medium">+ Add color</button>
+          </div>
+          <div className="grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+            <div className="col-span-4">Color *</div>
+            <div className="col-span-4">SKU (optional)</div>
+            <div className="col-span-3">Starting qty</div>
+            <div className="col-span-1"></div>
+          </div>
+          <div className="space-y-2">{colors.map((c,idx)=>(
+            <div key={c.id} className="grid grid-cols-12 gap-2 items-center">
+              <input className="input col-span-4" placeholder="White / Beige / Black" value={c.color} onChange={e=>setColor(idx,'color',e.target.value)} />
+              <input className="input col-span-4 font-mono text-xs" placeholder="LAC-WHT (auto if blank)" value={c.sku} onChange={e=>setColor(idx,'sku',e.target.value)} />
+              <input type="number" min="0" className="input col-span-3" value={c.qty} onChange={e=>setColor(idx,'qty',e.target.value)} />
+              <button onClick={()=>removeRow(idx)} className="col-span-1 text-rose-400 hover:text-rose-600 text-lg" title="Remove">✕</button>
+            </div>
+          ))}</div>
+        </div>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':`Create ${colors.filter(c=>c.color.trim()).length||'all'} color item${colors.filter(c=>c.color.trim()).length===1?'':'s'}`}</button>
+      </div>
+    </Modal>
   );
 }
 
