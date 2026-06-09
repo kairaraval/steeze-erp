@@ -23,6 +23,9 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Confetti for "Closed Won" celebrations. ~10KB, zero deps. Exposes
+       window.confetti(opts). https://github.com/catdad/canvas-confetti -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
   <!-- OneSignal Web SDK for real push notifications (Layer 2). Init runs as
        soon as the page loads; users still need to grant permission via the
        Enable notifications button before they'll start receiving pushes. The
@@ -123,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 20g · Inbox Clear = Archive (per-user)';
+const BUILD = 'Live build 20h · 🎉 Closed Won celebration (confetti + chord)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -277,6 +280,38 @@ function playPing(){
     });
     // Do NOT close the context — we reuse it for every subsequent ping.
   } catch(_) {}
+}
+// Triumphant chord for a closed-won deal — a C-major triad (C5, E5, G5)
+// arpeggiated quickly, fading out over ~1.3s. Same shared AudioContext as
+// playPing so it doesn't fight iOS's autoplay rules.
+function playWonSound(){
+  try {
+    const ctx = getAudioCtx(); if(!ctx) return;
+    if(ctx.state==='suspended') ctx.resume().catch(()=>{});
+    const now = ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((freq,i)=>{
+      const t = now + i*0.07;
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type='triangle'; osc.frequency.value=freq;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.16, t+0.04);
+      gain.gain.exponentialRampToValueAtTime(0.0008, t+1.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t); osc.stop(t+1.4);
+    });
+  } catch(_) {}
+}
+// Three-burst confetti: a central burst + two side angles so it really
+// fills the screen for a moment. Uses canvas-confetti loaded from CDN.
+function fireWonConfetti(){
+  try {
+    if(typeof window.confetti !== 'function') return;
+    const cf = window.confetti;
+    cf({ particleCount: 110, spread: 75, origin: { y: 0.6 }, colors: ['#fbbf24','#f472b6','#a855f7','#10b981','#3b82f6'] });
+    setTimeout(()=> cf({ particleCount: 70, angle: 60,  spread: 55, origin: { x: 0,    y: 0.7 } }), 250);
+    setTimeout(()=> cf({ particleCount: 70, angle: 120, spread: 55, origin: { x: 1,    y: 0.7 } }), 250);
+    setTimeout(()=> cf({ particleCount: 90, spread: 140, origin: { y: 0.5 }, startVelocity: 35 }), 700);
+  } catch(_){}
 }
 function fmtTime(iso){ if(!iso) return ''; return new Date(iso).toLocaleString('en-PH',{ timeZone:'Asia/Manila', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
 function fmtDate(d){
@@ -850,6 +885,11 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         if(newJob){
           await sb.from('lead_activity').insert({ lead_id:savedLeadId, actor_id:profile.id, type:'system', text:`Auto-created Production job ${newJob.number}` });
         }
+      }
+      // 🎉 Celebrate when the deal lands in "Won" (and wasn't already Won).
+      const justBecameWon = stage === 'won' && (!isEdit || existing?.stage !== 'won');
+      if(justBecameWon){
+        try { window.dispatchEvent(new CustomEvent('steeze:won', { detail: { lead: savedLeadForPR } })); } catch(_){}
       }
       onSaved();
     } catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
@@ -2353,6 +2393,11 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
       if(newJob){
         await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Production job ${newJob.number}` });
       }
+    }
+    // 🎉 Celebrate when a deal lands in the actual "Won" stage (skip the
+    // later Delivered statuses — those aren't fresh closes).
+    if(st === 'won' && l.stage !== 'won'){
+      try { window.dispatchEvent(new CustomEvent('steeze:won', { detail: { lead: { ...l, ...patch } } })); } catch(_){}
     }
     reload();
   }
@@ -6913,6 +6958,23 @@ function App(){
   const mutedRef=useRef(muted); useEffect(()=>{ mutedRef.current=muted; },[muted]);
   const [toast,setToast]=useState(null); // { title, body }
   useEffect(()=>{ if(!toast) return; const t=setTimeout(()=>setToast(null),5000); return ()=>clearTimeout(t); },[toast]);
+  // Won celebration — listens for the custom event dispatched by Pipeline
+  // and LeadModal whenever a deal lands in the Won stage for the first time.
+  const [wonCelebration,setWonCelebration]=useState(null); // { lead }
+  useEffect(()=>{
+    function onWon(e){
+      const lead = e?.detail?.lead;
+      if(!lead) return;
+      setWonCelebration({ lead });
+      // Pop confetti + chord right now while the audio context is still in
+      // user-gesture context. Both respect the mute toggle via mutedRef.
+      try { fireWonConfetti(); } catch(_){}
+      if(!mutedRef.current){ try { playWonSound(); } catch(_){} }
+    }
+    window.addEventListener('steeze:won', onWon);
+    return ()=>window.removeEventListener('steeze:won', onWon);
+  },[]);
+  useEffect(()=>{ if(!wonCelebration) return; const t=setTimeout(()=>setWonCelebration(null),5500); return ()=>clearTimeout(t); },[wonCelebration]);
 
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session)); const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
 
@@ -7308,6 +7370,21 @@ function App(){
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
       </main>
+
+      {/* 🎉 Closed-Won celebration overlay */}
+      {wonCelebration && (
+        <div className="no-print fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm pointer-events-auto" onClick={()=>setWonCelebration(null)}>
+          <div className="bg-gradient-to-br from-amber-300 via-pink-400 to-purple-600 rounded-3xl shadow-2xl p-10 max-w-md mx-4 text-center text-white cursor-pointer transform transition-transform duration-300 scale-100 hover:scale-105" style={{animation:'pop-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1)'}} onClick={()=>setWonCelebration(null)}>
+            <div className="text-7xl mb-2">🎉</div>
+            <div className="text-3xl font-black tracking-tight mb-2 drop-shadow">CONGRATULATIONS!</div>
+            <div className="text-sm uppercase tracking-widest opacity-90 mb-3">Closed Won</div>
+            <div className="text-lg font-bold leading-tight">{wonCelebration.lead.title}</div>
+            {Number(wonCelebration.lead.value)>0 && <div className="text-3xl font-extrabold mt-3 drop-shadow">{peso(wonCelebration.lead.value)}</div>}
+            <div className="text-xs mt-5 opacity-75">🏆 Well done — well earned. Tap to dismiss.</div>
+          </div>
+          <style>{`@keyframes pop-in { 0% { transform: scale(0.5) rotate(-5deg); opacity:0; } 50% { transform: scale(1.1) rotate(2deg); opacity:1; } 100% { transform: scale(1) rotate(0); opacity:1; } }`}</style>
+        </div>
+      )}
 
       {/* Mention toast */}
       {toast && (
