@@ -87,7 +87,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 18b · Payroll Garments: uncontrolled inputs + id fix';
+const BUILD = 'Live build 18c · Suppliers: detail view + bank info + total spend';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4998,15 +4998,21 @@ function ItemForm({ existing, suppliers, departments, onClose, onSaved }){
   );
 }
 
-function SuppliersView({ suppliers, reload }){
-  const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [importing,setImporting]=useState(false);
+function SuppliersView({ suppliers, orders, onOpen, reload }){
+  const [search,setSearch]=useState(''); const [creating,setCreating]=useState(false); const [importing,setImporting]=useState(false);
+  // Precompute total spend + order count per supplier from PO totals.
+  const spendBy = (suppliers||[]).reduce((acc,s)=>{ acc[s.id]={ total:0, count:0 }; return acc; },{});
+  (orders||[]).forEach(o=>{
+    if(!o.supplier_id || !spendBy[o.supplier_id]) return;
+    spendBy[o.supplier_id].total += Number(o.total)||0;
+    spendBy[o.supplier_id].count += 1;
+  });
   const rows=(suppliers||[]).filter(s=>!search||`${s.company} ${s.contact} ${s.email}`.toLowerCase().includes(search.toLowerCase()));
-  async function del(id){ if(!confirm('Delete this supplier?')) return; const {error}=await sb.from('suppliers').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">⚒ Suppliers</h1><p className="text-slate-500 text-sm">{suppliers.length} supplier{suppliers.length===1?'':'s'}</p></div>
+          <div><h1 className="text-2xl font-bold">⚒ Suppliers</h1><p className="text-slate-500 text-sm">{suppliers.length} supplier{suppliers.length===1?'':'s'} · click a row to see details</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
@@ -5014,12 +5020,121 @@ function SuppliersView({ suppliers, reload }){
           </div>
         </div>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Company</th><th className="text-left px-3 py-2">Contact</th><th className="text-left px-3 py-2">Email</th><th className="text-left px-3 py-2">Phone</th><th className="text-left px-3 py-2">Payment terms</th><th></th></tr></thead>
-        <tbody>{rows.map(s=>(<tr key={s.id} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-medium">{s.company}</td><td className="px-3 py-2">{s.contact||'—'}</td><td className="px-3 py-2 text-xs text-indigo-600">{s.email||'—'}</td><td className="px-3 py-2 text-xs">{s.phone||'—'}</td><td className="px-3 py-2 text-xs">{s.payment_terms||'—'}</td><td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(s)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(s.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td></tr>))}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No suppliers yet. Click "+ New supplier" to add one.</td></tr>}</tbody>
-      </table></div>
-      {(creating||editing) && <SupplierForm existing={editing} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Company</th>
+          <th className="text-left px-3 py-2">Contact</th>
+          <th className="text-left px-3 py-2">Phone</th>
+          <th className="text-left px-3 py-2">Payment terms</th>
+          <th className="text-right px-3 py-2">Orders</th>
+          <th className="text-right px-3 py-2">Total spend</th>
+        </tr></thead>
+        <tbody>{rows.map(s=>{ const sp=spendBy[s.id]||{total:0,count:0}; return (
+          <tr key={s.id} onClick={()=>onOpen(s)} className="border-t hover:bg-slate-50 cursor-pointer">
+            <td className="px-3 py-2 font-medium text-slate-900">{s.company}</td>
+            <td className="px-3 py-2 text-slate-600">{s.contact||'—'}{s.email && <div className="text-[11px] text-slate-400">{s.email}</div>}</td>
+            <td className="px-3 py-2 text-xs">{s.phone||'—'}</td>
+            <td className="px-3 py-2 text-xs">{s.payment_terms||'—'}</td>
+            <td className="px-3 py-2 text-right">{sp.count||'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold text-emerald-700">{sp.total>0?peso(sp.total):'—'}</td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No suppliers yet. Click "+ New supplier" to add one.</td></tr>}</tbody>
+      </table></div></div>
+      {creating && <SupplierForm onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
       {importing && <SupplierImportModal suppliers={suppliers} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
+    </div>
+  );
+}
+
+function SupplierDetail({ supplier, orders, items, profile, reload, onBack }){
+  const [tab,setTab]=useState('overview');
+  const [editing,setEditing]=useState(false);
+  const live=supplier;
+  const supplierOrders=(orders||[]).filter(o=>o.supplier_id===live.id);
+  const totalSpend=supplierOrders.reduce((s,o)=>s+(Number(o.total)||0),0);
+  const lastOrder=supplierOrders.map(o=>o.date).filter(Boolean).sort().slice(-1)[0];
+  const tabs=[['overview','Overview'],['orders','Orders ('+supplierOrders.length+')'],['bank','Bank details'],['notes','Notes']];
+  async function del(){
+    if(!confirm(`Delete "${live.company}"? This won't delete its existing POs.`)) return;
+    const { error } = await sb.from('suppliers').delete().eq('id', live.id);
+    if(error){ alert(error.message); return; }
+    onBack();
+    reload();
+  }
+  return (
+    <div className="p-6">
+      <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800 mb-4">← Back to suppliers</button>
+      <div className="bg-white border rounded-2xl p-5 flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-start gap-4">
+          <div className="w-14 h-14 rounded-xl bg-slate-900 text-white text-2xl font-bold flex items-center justify-center">{(live.company||'?')[0].toUpperCase()}</div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">{live.company}</h1>
+            <div className="text-sm text-slate-500 whitespace-pre-line">{live.address||'—'}</div>
+            <div className="text-sm text-slate-600 mt-2">{live.contact ? <span><strong>{live.contact}</strong>{live.email?` · ${live.email}`:''}{live.phone?` · ${live.phone}`:''}</span> : <span className="text-slate-400">No contact saved</span>}</div>
+            {live.payment_terms && <div className="text-xs text-slate-500 mt-1">Terms: <strong>{live.payment_terms}</strong></div>}
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">Total spend</div>
+          <div className="text-2xl font-bold text-slate-900">{peso(totalSpend)}</div>
+          <div className="text-xs text-slate-500">{supplierOrders.length} order{supplierOrders.length===1?'':'s'}{lastOrder?` · last ${fmtDate(lastOrder)}`:''}</div>
+          <div className="mt-2 flex gap-2 justify-end">
+            <button onClick={()=>setEditing(true)} className="text-sm text-indigo-600 hover:underline">Edit details</button>
+            {profile.role==='admin' && <button onClick={del} className="text-sm text-rose-500 hover:underline">Delete</button>}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-1 border-b mt-4 mb-4">{tabs.map(([k,lbl])=>(<button key={k} onClick={()=>setTab(k)} className={`px-4 py-2 text-sm rounded-t-lg ${tab===k?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>{lbl}</button>))}</div>
+
+      {tab==='overview' && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="bg-white border rounded-xl p-5"><div className="font-bold mb-3">Contact</div><dl className="text-sm divide-y">
+            {[['Contact name',live.contact],['Email',live.email],['Phone',live.phone],['Address',live.address],['Payment terms',live.payment_terms]].map(([l,v],i)=>(<div key={i} className="flex justify-between py-2 gap-3"><dt className="text-slate-500 whitespace-nowrap">{l}</dt><dd className="text-slate-800 text-right whitespace-pre-line">{v||'—'}</dd></div>))}
+          </dl></div>
+          <div className="bg-white border rounded-xl p-5"><div className="font-bold mb-3">Activity summary</div><dl className="text-sm divide-y">
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Total POs</dt><dd>{supplierOrders.length}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Open POs</dt><dd>{supplierOrders.filter(o=>o.status==='open'||o.status==='partial').length}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Last order</dt><dd>{lastOrder?fmtDate(lastOrder):'—'}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Total spend</dt><dd className="font-bold text-emerald-700">{peso(totalSpend)}</dd></div>
+          </dl></div>
+        </div>
+      )}
+      {tab==='orders' && (
+        <div className="bg-white border rounded-xl divide-y">
+          {supplierOrders.length===0 ? <div className="text-sm text-slate-400 p-4">No POs to this supplier yet.</div> :
+            supplierOrders.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(o=>{
+              const meta=poMeta(o.status);
+              return (
+                <div key={o.id} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+                  <div>
+                    <div className="font-medium text-slate-800 font-mono text-xs">PO {o.number||o.id.slice(0,6)}</div>
+                    <div className="text-xs text-slate-500">{fmtDate(o.date)} · {(o.lines||[]).length} line{(o.lines||[]).length===1?'':'s'} · <span className={`px-1.5 py-0.5 rounded ${meta.color}`}>{meta.label}</span></div>
+                  </div>
+                  <div className="font-semibold text-slate-800">{peso(o.total)}</div>
+                </div>
+              );
+            })}
+        </div>
+      )}
+      {tab==='bank' && (
+        <div className="bg-white border rounded-xl p-5 max-w-xl">
+          <div className="font-bold mb-3">🏦 Bank details (for payments)</div>
+          <dl className="text-sm divide-y">
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Bank name</dt><dd className="text-slate-800 text-right">{live.bank_name||'—'}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Account name</dt><dd className="text-slate-800 text-right">{live.bank_account_name||'—'}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-slate-500">Account number</dt><dd className="text-slate-800 text-right font-mono">{live.bank_account_number||'—'}</dd></div>
+          </dl>
+          {(!live.bank_name && !live.bank_account_name && !live.bank_account_number) && (
+            <div className="text-xs text-slate-400 mt-3">No bank info saved yet. Use "Edit details" to add it.</div>
+          )}
+        </div>
+      )}
+      {tab==='notes' && (
+        <div className="bg-white border rounded-xl p-5"><div className="text-sm whitespace-pre-wrap text-slate-700">{live.notes||<span className="text-slate-400">No notes yet. Use "Edit details" to add notes.</span>}</div></div>
+      )}
+
+      {editing && <SupplierForm existing={live} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); reload(); }} />}
     </div>
   );
 }
@@ -5145,15 +5260,20 @@ function SupplierImportModal({ suppliers, onClose, onDone }){
 }
 
 function SupplierForm({ existing, onClose, onSaved }){
-  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'' });
+  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){ if(!f.company.trim()){ setMsg('Company is required.'); return; } setBusy(true); setMsg('');
-    const payload={ company:f.company.trim(), contact:f.contact||'', email:f.email||'', phone:f.phone||'', address:f.address||'', payment_terms:f.payment_terms||'', notes:f.notes||'' };
+    const payload={
+      company:f.company.trim(),
+      contact:f.contact||'', email:f.email||'', phone:f.phone||'',
+      address:f.address||'', payment_terms:f.payment_terms||'', notes:f.notes||'',
+      bank_name:f.bank_name||'', bank_account_name:f.bank_account_name||'', bank_account_number:f.bank_account_number||'',
+    };
     const { error } = existing ? await sb.from('suppliers').update(payload).eq('id',existing.id) : await sb.from('suppliers').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
   return (
-    <Modal title={existing?'Edit supplier':'New supplier'} onClose={onClose}>
+    <Modal title={existing?'Edit supplier':'New supplier'} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Company *"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} /></TpLbl>
@@ -5161,8 +5281,19 @@ function SupplierForm({ existing, onClose, onSaved }){
           <TpLbl t="Email"><input className="input" value={f.email} onChange={e=>up('email',e.target.value)} /></TpLbl>
           <TpLbl t="Phone"><input className="input" value={f.phone} onChange={e=>up('phone',e.target.value)} /></TpLbl>
         </div>
-        <TpLbl t="Address"><input className="input" value={f.address} onChange={e=>up('address',e.target.value)} /></TpLbl>
+        <TpLbl t="Complete address"><textarea className="input min-h-[60px]" value={f.address} onChange={e=>up('address',e.target.value)} placeholder="Street, Barangay, City, Province, Postal code" /></TpLbl>
         <TpLbl t="Payment terms"><input className="input" value={f.payment_terms} onChange={e=>up('payment_terms',e.target.value)} placeholder="e.g. Net 30 / 50% DP" /></TpLbl>
+
+        {/* Bank info — used for sending payments to this supplier */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-semibold text-slate-700 mb-2">🏦 Bank details</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Bank name"><input className="input" value={f.bank_name||''} onChange={e=>up('bank_name',e.target.value)} placeholder="BPI / BDO / UnionBank…" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.bank_account_name||''} onChange={e=>up('bank_account_name',e.target.value)} placeholder="As shown on the account" /></TpLbl>
+            <TpLbl t="Account number"><input className="input" value={f.bank_account_number||''} onChange={e=>up('bank_account_number',e.target.value)} placeholder="0000-0000-0000" /></TpLbl>
+          </div>
+        </div>
+
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(existing?'Save changes':'Create supplier')}</button>
@@ -5564,6 +5695,7 @@ function App(){
   const closeLeadDetail=()=>{ setDetailLead(null); };
   const [sendGraphicLead,setSendGraphicLead]=useState(null); const [sendPrintLead,setSendPrintLead]=useState(null); const [showNew,setShowNew]=useState(false);
   const [selectedClient,setSelectedClient]=useState(null);
+  const [selectedSupplier,setSelectedSupplier]=useState(null);
   const [techpackLead,setTechpackLead]=useState(null);
   const [techpackReadOnly,setTechpackReadOnly]=useState(false);
   const openTechpackEdit=(lead)=>{ setTechpackReadOnly(false); setTechpackLead(lead); };
@@ -5630,7 +5762,7 @@ function App(){
     setStyles(st.data||[]);
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
-  useEffect(()=>{ setSelectedClient(null); },[view]);
+  useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
   // Each restricted role has its own allowed-view set + default landing page.
   // If a user (e.g. via a stale tab) lands on a view they shouldn't see, bounce
   // them to their default.
@@ -5929,7 +6061,9 @@ function App(){
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
         {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} reload={loadAll} />}
-        {view==='suppliers' && <SuppliersView suppliers={suppliers} reload={loadAll} />}
+        {view==='suppliers' && (selectedSupplier
+          ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
+          : <SuppliersView suppliers={suppliers} orders={orders} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={(lead)=>setTechpackLead(lead)} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
