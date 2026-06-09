@@ -110,7 +110,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 18e · OneSignal: auto opt-in if permission already granted';
+const BUILD = 'Live build 18f · Fix SW reload loop';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6217,10 +6217,23 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 // Auto-update: when a NEW service worker takes control of the page, force a
 // reload so the user immediately sees the latest build. Without this, devices
 // keep serving stale cached HTML / icons until the user manually clears data.
+// IMPORTANT: we guard against infinite reload loops with two checks:
+//   1. Skip the initial controller assignment (first time SW takes over a
+//      previously-uncontrolled page) — that fires on every fresh page load
+//      after a SW unregister and would loop us forever.
+//   2. Mark sessionStorage when we DO reload so the very next page-load
+//      ignores the immediate controllerchange that follows.
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   let reloading = false;
+  // If we just reloaded for a SW swap, skip the next controllerchange.
+  const justReloaded = sessionStorage.getItem('sw-just-reloaded') === '1';
+  if (justReloaded) sessionStorage.removeItem('sw-just-reloaded');
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return; reloading = true;
+    if (reloading) return;
+    if (justReloaded) return;                            // ignore the post-reload event
+    if (!navigator.serviceWorker.controller) return;     // initial SW install — no reload
+    reloading = true;
+    sessionStorage.setItem('sw-just-reloaded', '1');
     window.location.reload();
   });
   window.addEventListener('load', () => {
