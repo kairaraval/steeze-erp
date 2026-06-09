@@ -2,7 +2,14 @@
 // Strategy: cache the app shell (HTML/icons/manifest) so the app opens fast
 // and works offline, but ALWAYS go to the network for Supabase + Storage so
 // the user never sees stale data. Bump CACHE_NAME to force a refresh.
-const CACHE_NAME = 'steeze-os-v6';
+
+// OneSignal push notification handler. importScripts must run BEFORE any
+// other code in the SW that registers fetch/push listeners. This lets
+// OneSignal's SDK attach its push event handler to this same worker, so
+// our PWA shell caching + OneSignal pushes coexist in a single SW.
+try { importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js'); } catch(e) { /* offline first-load — OK */ }
+
+const CACHE_NAME = 'steeze-os-v7';
 
 // Allow the page to ask us to activate a freshly installed version immediately
 // (paired with controllerchange + reload in index.html for auto-update).
