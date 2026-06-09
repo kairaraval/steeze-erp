@@ -110,7 +110,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 18f · Fix SW reload loop';
+const BUILD = 'Live build 19a · Inventory: 4-tab buckets';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4812,38 +4812,100 @@ function TechpacksList({ profile, profiles, leads, clients, onOpen }){
 }
 
 /* ====================== PURCHASING MODULE (Inventory / Suppliers) ====================== */
+// Four inventory "buckets" — these become the top tabs. The `key` is what's
+// stored in items.bucket; the `match` patterns are used as a fallback in case
+// an item came from a legacy import without a bucket assigned.
+const INV_BUCKETS = [
+  { key:'fabrics',  label:'Fabrics',          icon:'🧵' },
+  { key:'trims',    label:'Trims',            icon:'🔗' },
+  { key:'printing', label:'Printing Supplies', icon:'🖨' },
+  { key:'office',   label:'Office Supplies',  icon:'📎' },
+  { key:'other',    label:'Other',            icon:'•••' }, // catch-all
+];
+const INV_BUCKET_KEYS = INV_BUCKETS.map(b=>b.key);
+function bucketOf(item){
+  const b = (item.bucket||'').toLowerCase().trim();
+  return INV_BUCKET_KEYS.includes(b) ? b : 'other';
+}
+
 function InventoryView({ suppliers, items, departments, reload }){
-  const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [filterCat,setFilterCat]=useState(''); const [showLow,setShowLow]=useState(false); const [importing,setImporting]=useState(false);
-  const cats=Array.from(new Set((items||[]).map(i=>i.category).filter(Boolean))).sort();
-  const totalValue=(items||[]).reduce((s,i)=>s+Number(i.qty||0)*Number(i.cost||0),0);
-  const lowCount=(items||[]).filter(i=>Number(i.qty||0)<=Number(i.reorder||0) && Number(i.reorder||0)>0).length;
-  const rows=(items||[]).filter(i=>(!search||`${i.sku} ${i.name} ${i.brand} ${i.model}`.toLowerCase().includes(search.toLowerCase()))&&(!filterCat||i.category===filterCat)&&(!showLow||(Number(i.qty||0)<=Number(i.reorder||0) && Number(i.reorder||0)>0)));
+  const [tab,setTab]=useState(()=>{ try{ return localStorage.getItem('steeze.inv.tab')||'fabrics'; }catch(_){ return 'fabrics'; } });
+  function pickTab(k){ setTab(k); try{ localStorage.setItem('steeze.inv.tab', k); }catch(_){} }
+  const [search,setSearch]=useState('');
+  const [editing,setEditing]=useState(null);
+  const [creating,setCreating]=useState(false);
+  const [filterCat,setFilterCat]=useState('');
+  const [showLow,setShowLow]=useState(false);
+  const [importing,setImporting]=useState(false);
+  // Precompute per-bucket stats so each tab header can show its own counts.
+  const stats = INV_BUCKETS.reduce((acc,b)=>{ acc[b.key]={ count:0, value:0, low:0 }; return acc; },{});
+  (items||[]).forEach(i=>{
+    const k = bucketOf(i);
+    if(!stats[k]) stats[k] = { count:0, value:0, low:0 };
+    stats[k].count += 1;
+    stats[k].value += Number(i.qty||0)*Number(i.cost||0);
+    const isLow = Number(i.qty||0)<=Number(i.reorder||0) && Number(i.reorder||0)>0;
+    if(isLow) stats[k].low += 1;
+  });
+  // Hide the Other tab if it's empty — no need to clutter the nav when every
+  // item already maps cleanly into one of the four real buckets.
+  const visibleBuckets = INV_BUCKETS.filter(b => b.key !== 'other' || stats.other.count > 0);
+  // Items in the current tab, after search / sub-category filter / low-stock.
+  const tabItems = (items||[]).filter(i => bucketOf(i) === tab);
+  const subCats = Array.from(new Set(tabItems.map(i=>i.category).filter(Boolean))).sort();
+  const rows = tabItems.filter(i=>
+    (!search || `${i.sku} ${i.name} ${i.brand} ${i.model}`.toLowerCase().includes(search.toLowerCase()))
+    && (!filterCat || i.category === filterCat)
+    && (!showLow || (Number(i.qty||0)<=Number(i.reorder||0) && Number(i.reorder||0)>0))
+  );
   async function del(id){ if(!confirm('Delete this item?')) return; const {error}=await sb.from('items').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const suppName=(id)=>suppliers.find(s=>s.id===id)?.company||'—';
-  const deptName=(id)=>departments.find(d=>d.id===id)?.name||'—';
+  const tabMeta = INV_BUCKETS.find(b=>b.key===tab) || INV_BUCKETS[0];
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">📦 Inventory</h1><p className="text-slate-500 text-sm">{items.length} items · {peso(totalValue)} value · {lowCount} below reorder</p></div>
+          <div><h1 className="text-2xl font-bold">📦 Inventory</h1><p className="text-slate-500 text-sm">{items.length} items total · {peso(Object.values(stats).reduce((s,x)=>s+x.value,0))} total value · {Object.values(stats).reduce((s,x)=>s+x.low,0)} below reorder</p></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New item</button>
           </div>
         </div>
       </div>
+
+      {/* Top tabs — one per inventory bucket. Each shows its own item count and
+          a red dot when there's at least one item below its reorder point so
+          the right team spots low stock at a glance. */}
+      <div className="flex gap-1 border-b mb-4 overflow-x-auto">
+        {visibleBuckets.map(b=>{ const s=stats[b.key]||{count:0,low:0}; const active=tab===b.key; return (
+          <button key={b.key} onClick={()=>{ pickTab(b.key); setFilterCat(''); setShowLow(false); }} className={`px-4 py-2 text-sm rounded-t-lg flex items-center gap-2 whitespace-nowrap ${active?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>
+            <span>{b.icon}</span>
+            <span>{b.label}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${active?'bg-indigo-100 text-indigo-700':'bg-slate-100 text-slate-500'}`}>{s.count}</span>
+            {s.low > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold">{s.low} low</span>}
+          </button>
+        ); })}
+      </div>
+
+      {/* Per-tab stats strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Total items</div><div className="text-2xl font-bold">{items.length}</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Total value</div><div className="text-2xl font-bold">{peso(totalValue)}</div></div>
-        <button onClick={()=>setShowLow(!showLow)} className={`text-left rounded-xl border p-4 ${showLow?'bg-rose-600 border-rose-600 text-white':'bg-white hover:border-rose-300'}`}><div className={`text-[11px] uppercase ${showLow?'text-rose-100':'text-slate-400'}`}>Below reorder</div><div className="text-2xl font-bold">{lowCount}</div><div className={`text-xs ${showLow?'text-rose-100':'text-slate-500'}`}>{showLow?'filtering':'click to filter'}</div></button>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Categories</div><div className="text-2xl font-bold">{cats.length}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">{tabMeta.label} items</div><div className="text-2xl font-bold">{stats[tab]?.count||0}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">{tabMeta.label} value</div><div className="text-2xl font-bold">{peso(stats[tab]?.value||0)}</div></div>
+        <button onClick={()=>setShowLow(!showLow)} className={`text-left rounded-xl border p-4 ${showLow?'bg-rose-600 border-rose-600 text-white':'bg-white hover:border-rose-300'}`}>
+          <div className={`text-[11px] uppercase ${showLow?'text-rose-100':'text-slate-400'}`}>Below reorder</div>
+          <div className="text-2xl font-bold">{stats[tab]?.low||0}</div>
+          <div className={`text-xs ${showLow?'text-rose-100':'text-slate-500'}`}>{showLow?'filtering':'click to filter'}</div>
+        </button>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Sub-categories</div><div className="text-2xl font-bold">{subCats.length}</div></div>
       </div>
+
       <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SKU, name, brand…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
-        <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All categories</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`Search ${tabMeta.label}…`} className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        {subCats.length>0 && <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All sub-categories</option>{subCats.map(c=><option key={c} value={c}>{c}</option>)}</select>}
       </div>
+
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">SKU</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Category</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost ₱</th><th className="text-right px-3 py-2">Value</th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">SKU</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Sub-category</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost ₱</th><th className="text-right px-3 py-2">Value</th><th></th></tr></thead>
         <tbody>{rows.map(i=>{ const low=Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0; return (
           <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{i.sku||'—'}</td>
@@ -4855,16 +4917,17 @@ function InventoryView({ suppliers, items, departments, reload }){
             <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No items yet. Click "+ New item" to add one.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" to add one.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <ItemForm existing={editing} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+
+      {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
   );
 }
 
 function ItemImportModal({ suppliers, departments, onClose, onDone }){
-  const TEMPLATE = 'name,sku,category,brand,model,color,size,unit,qty,cost,price,reorder,department,supplier,location,notes\nMain Fabric White,FAB-001,Fabrics,Texstyle,,White,,yd,100,45,80,20,Fabrics,Texstyle Trading,Shelf A1,\nMetal Zipper 8in,TRM-014,Zippers,YKK,8" Closed,Black,8in,pc,500,12,0,100,Trims,YKK Manila,Bin 3,';
+  const TEMPLATE = 'name,sku,bucket,category,brand,model,color,size,unit,qty,cost,price,reorder,department,supplier,location,notes\nMain Fabric White,FAB-001,fabrics,Lacoste,Texstyle,,White,,yd,100,45,80,20,Fabrics,Texstyle Trading,Shelf A1,\nMetal Zipper 8in,TRM-014,trims,Zippers,YKK,8" Closed,Black,8in,pc,500,12,0,100,Trims,YKK Manila,Bin 3,\nDTF Black Ink,PRT-005,printing,Ink,Epson,,,500ml,bot,5,2200,0,2,Printing,Inkmaster,Cabinet A,\nA4 Bond Paper,OFF-002,office,Paper,Hard Copy,80gsm,White,A4,rim,10,180,0,5,Office,National Bookstore,Cabinet B,';
   const [csv,setCsv]=useState(''); const [parsed,setParsed]=useState(null);
   const [step,setStep]=useState('paste'); // paste | preview | importing | done
   const [results,setResults]=useState(null); const [busy,setBusy]=useState(false);
@@ -4902,7 +4965,20 @@ function ItemImportModal({ suppliers, departments, onClose, onDone }){
       let dept_id=null, supplier_id=null;
       if(dn){ const k=dn.toLowerCase(); if(deptMap.has(k)) dept_id=deptMap.get(k); else { const { data, error }=await sb.from('departments').insert({ name:dn }).select().single(); if(error) errors.push(`Dept "${dn}" create failed: ${error.message}`); else { dept_id=data.id; deptMap.set(k,data.id); deptCreated++; } } }
       if(sn){ const k=sn.toLowerCase(); if(suppMap.has(k)) supplier_id=suppMap.get(k); else { const { data, error }=await sb.from('suppliers').insert({ company:sn }).select().single(); if(error) errors.push(`Supplier "${sn}" create failed: ${error.message}`); else { supplier_id=data.id; suppMap.set(k,data.id); suppCreated++; } } }
-      payloads.push({ name, sku:getVal(r,headers,'sku'), category:getVal(r,headers,'category'), brand:getVal(r,headers,'brand'), model:getVal(r,headers,'model'), color:getVal(r,headers,'color'), size:getVal(r,headers,'size'), unit:getVal(r,headers,'unit')||'pc', qty:Number(getVal(r,headers,'qty'))||0, cost:Number(getVal(r,headers,'cost'))||0, price:Number(getVal(r,headers,'price'))||0, reorder:Number(getVal(r,headers,'reorder'))||0, dept_id, supplier_id, location:getVal(r,headers,'location'), notes:getVal(r,headers,'notes') });
+      // Accept either an explicit `bucket` column OR infer it from the
+      // free-text `category` column using the same pattern map as the SQL
+      // migration. Anything we can't classify lands in 'other'.
+      const explicitBucket=getVal(r,headers,'bucket').toLowerCase();
+      const cat=getVal(r,headers,'category');
+      let bucket=INV_BUCKET_KEYS.includes(explicitBucket)?explicitBucket:'other';
+      if(bucket==='other'){
+        const c=cat.toLowerCase();
+        if(/fabric|cloth|material|cotton|polyester|microfiber|lacoste|denim|canvas/.test(c)) bucket='fabrics';
+        else if(/trim|zip|button|thread|lining|pelon|elastic|collar|cuff|label|tag/.test(c)) bucket='trims';
+        else if(/print|ink|dtf|subli|vinyl|toner|powder|transfer|embro/.test(c)) bucket='printing';
+        else if(/office|paper|pen|pencil|folder|stationery|staple|clip/.test(c)) bucket='office';
+      }
+      payloads.push({ name, sku:getVal(r,headers,'sku'), bucket, category:cat, brand:getVal(r,headers,'brand'), model:getVal(r,headers,'model'), color:getVal(r,headers,'color'), size:getVal(r,headers,'size'), unit:getVal(r,headers,'unit')||'pc', qty:Number(getVal(r,headers,'qty'))||0, cost:Number(getVal(r,headers,'cost'))||0, price:Number(getVal(r,headers,'price'))||0, reorder:Number(getVal(r,headers,'reorder'))||0, dept_id, supplier_id, location:getVal(r,headers,'location'), notes:getVal(r,headers,'notes') });
     }
     const chunkSize=100;
     for(let i=0;i<payloads.length;i+=chunkSize){
@@ -4985,21 +5061,26 @@ function ItemImportModal({ suppliers, departments, onClose, onDone }){
   );
 }
 
-function ItemForm({ existing, suppliers, departments, onClose, onSaved }){
-  const [f,setF]=useState(existing||{ sku:'', name:'', category:'', brand:'', model:'', color:'', size:'', unit:'pc', qty:0, cost:0, price:0, reorder:0, dept_id:null, supplier_id:null, location:'', notes:'' });
+function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, onSaved }){
+  const [f,setF]=useState(existing||{ sku:'', name:'', bucket:(defaultBucket && defaultBucket!=='other')?defaultBucket:'fabrics', category:'', brand:'', model:'', color:'', size:'', unit:'pc', qty:0, cost:0, price:0, reorder:0, dept_id:null, supplier_id:null, location:'', notes:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){ if(!f.name.trim()){ setMsg('Name is required.'); return; } setBusy(true); setMsg('');
-    const payload={ sku:f.sku||'', name:f.name.trim(), category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'' };
+    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'' };
     const { data, error } = existing ? await sb.from('items').update(payload).eq('id',existing.id).select().single() : await sb.from('items').insert(payload).select().single();
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(data); }
   return (
     <Modal title={existing?'Edit item':'New item'} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Bucket *">
+            <select className="input" value={f.bucket||'other'} onChange={e=>up('bucket',e.target.value)}>
+              {INV_BUCKETS.filter(b=>b.key!=='other'||f.bucket==='other').map(b=>(<option key={b.key} value={b.key}>{b.icon} {b.label}</option>))}
+            </select>
+          </TpLbl>
           <TpLbl t="SKU"><input className="input" value={f.sku} onChange={e=>up('sku',e.target.value)} /></TpLbl>
           <TpLbl t="Name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} /></TpLbl>
-          <TpLbl t="Category"><input className="input" value={f.category} onChange={e=>up('category',e.target.value)} placeholder="e.g. Fabric, Trim" /></TpLbl>
+          <TpLbl t="Sub-category"><input className="input" value={f.category} onChange={e=>up('category',e.target.value)} placeholder="e.g. Lacoste, YKK Zipper" /></TpLbl>
           <TpLbl t="Brand"><input className="input" value={f.brand} onChange={e=>up('brand',e.target.value)} /></TpLbl>
           <TpLbl t="Model"><input className="input" value={f.model} onChange={e=>up('model',e.target.value)} /></TpLbl>
           <TpLbl t="Color"><input className="input" value={f.color} onChange={e=>up('color',e.target.value)} /></TpLbl>
