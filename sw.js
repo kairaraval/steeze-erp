@@ -4,12 +4,14 @@
 // the user never sees stale data. Bump CACHE_NAME to force a refresh.
 
 // OneSignal push notification handler. importScripts must run BEFORE any
-// other code in the SW that registers fetch/push listeners. This lets
-// OneSignal's SDK attach its push event handler to this same worker, so
-// our PWA shell caching + OneSignal pushes coexist in a single SW.
-try { importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js'); } catch(e) { /* offline first-load — OK */ }
+// other code in the SW that registers fetch/push listeners. We import from
+// SAME-ORIGIN (/OneSignalSDKWorker.js) instead of OneSignal's CDN — the CDN
+// import was failing silently (likely a CORS issue inside the SW context),
+// which left the browser's PushManager with no subscription.
+// The OneSignalSDKWorker.js file must be uploaded to the web root.
+try { importScripts('/OneSignalSDKWorker.js'); } catch(e) { console.error('OneSignal SW import failed:', e); }
 
-const CACHE_NAME = 'steeze-os-v7';
+const CACHE_NAME = 'steeze-os-v8';
 
 // Allow the page to ask us to activate a freshly installed version immediately
 // (paired with controllerchange + reload in index.html for auto-update).
