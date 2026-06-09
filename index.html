@@ -123,7 +123,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 19f · PR/PO print = portrait Letter';
+const BUILD = 'Live build 20a · Materials Queue grouped by supplier';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6021,6 +6021,202 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
   );
 }
 
+/* ====================== MATERIALS QUEUE ======================
+   The materials queue shows every unfulfilled PR line across all open
+   Purchase Requests, grouped by which supplier we'll buy it from.
+
+   How supplier is determined for each line (in order):
+     1. If the line points to an inventory item AND that item has a
+        supplier_id set, use that supplier.
+     2. Otherwise the line is parked in the "Unassigned" bucket; the
+        purchaser either sets supplier_id on the inventory item or routes
+        the line manually via "+ New PO".
+
+   How "fulfilled" is tracked:
+     We add a `linked_po_id` field to each PR line (stored inline on the
+     JSON `lines` array). When the queue creates a PO, every line that
+     went into that PO gets stamped with the PO's id. The queue filters
+     out any line whose linked_po_id is set. PRs whose lines are ALL
+     stamped flip to status='ordered' automatically.
+   ============================================================ */
+
+function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload, onOpenPO }){
+  const [expanded,setExpanded]=useState(()=>new Set());
+  const [busy,setBusy]=useState(null); // bucket id currently being processed
+
+  // Build per-supplier buckets of unfulfilled PR lines.
+  const buckets = (()=>{
+    const map = new Map();
+    const openPRs = (requests||[]).filter(r => r.status==='submitted' || r.status==='approved');
+    openPRs.forEach(pr => {
+      const lead = pr.linked_lead_id ? (leads||[]).find(l=>l.id===pr.linked_lead_id) : null;
+      (pr.lines||[]).forEach((line, idx) => {
+        if(line.linked_po_id) return; // already in a PO
+        // Figure out supplier
+        const inventoryItem = line.item_id ? (items||[]).find(i=>i.id===line.item_id) : null;
+        const supplierId = inventoryItem?.supplier_id || '__unassigned__';
+        if(!map.has(supplierId)){
+          map.set(supplierId,{
+            supplierId,
+            supplier: supplierId === '__unassigned__' ? null : (suppliers||[]).find(s=>s.id===supplierId),
+            items:[],
+            total:0,
+            prIds:new Set(),
+          });
+        }
+        const b = map.get(supplierId);
+        b.items.push({ pr, lineIdx:idx, line, lead, inventoryItem });
+        b.total += (Number(line.qty)||0) * (Number(line.est_cost)||0);
+        b.prIds.add(pr.id);
+      });
+    });
+    return Array.from(map.values()).sort((a,b)=>{
+      if(a.supplierId === '__unassigned__') return 1;
+      if(b.supplierId === '__unassigned__') return -1;
+      return (a.supplier?.company||'').localeCompare(b.supplier?.company||'');
+    });
+  })();
+
+  const grandTotal = buckets.reduce((s,b)=>s+b.total, 0);
+  const totalItems = buckets.reduce((s,b)=>s+b.items.length, 0);
+  const totalSuppliers = buckets.filter(b=>b.supplierId!=='__unassigned__').length;
+
+  function toggleExpand(key){ setExpanded(prev=>{ const n=new Set(prev); if(n.has(key)) n.delete(key); else n.add(key); return n; }); }
+
+  async function createBulkPO(bucket){
+    if(bucket.supplierId === '__unassigned__'){
+      alert('These items have no preferred supplier set in Inventory. Open Inventory, edit each item, and set its Supplier. Then come back — they\'ll appear under the right supplier here.');
+      return;
+    }
+    if(!confirm(`Create a draft PO for ${bucket.supplier?.company}?\n\n${bucket.items.length} item(s) consolidated from ${bucket.prIds.size} PR(s)\nEstimated total: ${peso(bucket.total)}\n\nThe draft PO will be saved and you can edit / finalize it from Purchase Orders.`)) return;
+    setBusy(bucket.supplierId);
+    try {
+      // Build the date-based PO number using today's existing POs.
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      const { data: todayPOs } = await sb.from('purchase_orders').select('id').eq('date', todayStr);
+      const seq = String(((todayPOs||[]).length)+1).padStart(3,'0');
+      const number = `PO-${todayStr}-${seq}`;
+
+      const lines = bucket.items.map(({ line, lead })=>({
+        item_id: line.item_id || null,
+        description: line.description + (lead?` — for "${lead.title}"`:''),
+        qty: Number(line.qty)||0,
+        qty_received: 0,
+        unit_cost: Number(line.est_cost)||0,
+      }));
+
+      const payload = {
+        number,
+        date: todayStr,
+        supplier_id: bucket.supplierId,
+        status: 'draft',
+        notes: `Auto-built from Materials Queue · ${bucket.prIds.size} PR(s) consolidated`,
+        total: bucket.total,
+        lines,
+      };
+
+      const { data: po, error } = await sb.from('purchase_orders').insert(payload).select().single();
+      if(error){ alert('PO insert failed: '+error.message); setBusy(null); return; }
+
+      // Stamp linked_po_id on the source PR lines and update each PR.
+      // Group items by source PR so we issue one update per PR.
+      const byPR = new Map();
+      bucket.items.forEach(({ pr, lineIdx })=>{
+        if(!byPR.has(pr.id)) byPR.set(pr.id, { pr, indices:[] });
+        byPR.get(pr.id).indices.push(lineIdx);
+      });
+      for(const { pr, indices } of byPR.values()){
+        const newLines = (pr.lines||[]).map((l,i)=> indices.includes(i) ? { ...l, linked_po_id: po.id } : l);
+        const allFulfilled = newLines.every(l => l.linked_po_id);
+        const update = { lines: newLines };
+        if(allFulfilled) { update.status = 'ordered'; update.linked_po_id = po.id; }
+        const { error: prErr } = await sb.from('purchase_requests').update(update).eq('id', pr.id);
+        if(prErr) console.warn('PR update failed for', pr.id, prErr.message);
+      }
+
+      setBusy(null);
+      reload();
+      if(onOpenPO) onOpenPO(po);
+      else alert(`Draft ${number} created. Open Purchase Orders to review and finalize.`);
+    } catch(e){
+      console.error(e);
+      alert('Unexpected error: '+(e.message||String(e)));
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📥 Materials Queue</h1>
+            <p className="text-slate-500 text-sm">{totalItems} item{totalItems===1?'':'s'} across {totalSuppliers} supplier{totalSuppliers===1?'':'s'} · {peso(grandTotal)} estimated</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-900 mb-4">
+        <strong>🛒 Bulk purchasing day workflow:</strong> Each card below is one supplier's consolidated shopping list from your open Purchase Requests. Tap <strong>"Create draft PO"</strong> to generate a draft PO with all that supplier's items in one click. Edit / finalize the PO when you confirm prices and availability at the supplier.
+      </div>
+
+      {buckets.length === 0 && (
+        <div className="bg-white border rounded-xl p-12 text-center text-slate-400">
+          <div className="text-5xl mb-3">✅</div>
+          <div className="font-semibold text-slate-700">All caught up</div>
+          <div className="text-sm mt-1">No unfulfilled PR lines right now. Materials needs from new Purchase Requests will show up here.</div>
+        </div>
+      )}
+
+      <div className="space-y-3">{buckets.map(b => {
+        const isOpen = expanded.has(b.supplierId);
+        const isUnassigned = b.supplierId === '__unassigned__';
+        return (
+          <div key={b.supplierId} className={`bg-white border rounded-xl overflow-hidden ${isUnassigned?'border-amber-300':'border-slate-200'}`}>
+            <div className={`p-4 flex items-center justify-between gap-3 flex-wrap ${isUnassigned?'bg-amber-50':'bg-slate-50'}`}>
+              <button onClick={()=>toggleExpand(b.supplierId)} className="flex-1 text-left flex items-center gap-3 min-w-0">
+                <span className="text-slate-400 text-sm">{isOpen?'▾':'▸'}</span>
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-900 truncate">{isUnassigned ? '⚠ Unassigned (no supplier set in Inventory)' : `🏭 ${b.supplier?.company||'(unknown supplier)'}`}</div>
+                  <div className="text-xs text-slate-600">{b.items.length} item{b.items.length===1?'':'s'} · from {b.prIds.size} PR{b.prIds.size===1?'':'s'} · est. <strong className="text-emerald-700">{peso(b.total)}</strong></div>
+                </div>
+              </button>
+              <div className="flex items-center gap-2">
+                {!isUnassigned && (
+                  <button onClick={()=>createBulkPO(b)} disabled={busy===b.supplierId} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">
+                    {busy===b.supplierId ? 'Creating…' : '+ Create draft PO'}
+                  </button>
+                )}
+                {isUnassigned && (
+                  <span className="text-[11px] text-amber-700 font-semibold">Set supplier in Inventory →</span>
+                )}
+              </div>
+            </div>
+
+            {isOpen && (
+              <div className="border-t divide-y">
+                {b.items.map(({ pr, line, lead, inventoryItem }, i) => (
+                  <div key={i} className="px-4 py-2.5 grid grid-cols-12 gap-2 items-center text-sm">
+                    <div className="col-span-5">
+                      <div className="font-medium">{line.description||'—'}</div>
+                      {inventoryItem && <div className="text-[10px] text-slate-500">{inventoryItem.sku} · {inventoryItem.name}{inventoryItem.color?` · ${inventoryItem.color}`:''}</div>}
+                    </div>
+                    <div className="col-span-2 text-right text-slate-700"><strong>{line.qty}</strong></div>
+                    <div className="col-span-2 text-right text-xs text-slate-600">{peso(line.est_cost)}</div>
+                    <div className="col-span-2 text-right font-semibold">{peso((Number(line.qty)||0)*(Number(line.est_cost)||0))}</div>
+                    <div className="col-span-1 text-right text-[10px] text-slate-400" title={lead?`Lead: ${lead.title}`:''}>{lead?lead.title.slice(0,18):'—'}{(pr.number?` · ${pr.number}`:'')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}</div>
+    </div>
+  );
+}
+
 /* ====================== PURCHASE ORDERS ====================== */
 const PO_STATUSES=[
   { key:'draft',     label:'Draft',     color:'bg-slate-200 text-slate-700' },
@@ -6450,10 +6646,10 @@ function App(){
       allowed = new Set(['inbox','prod','sampling','graphic','printing']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','orders','styles']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','queue','orders','styles']);
       fallback = 'inventory';
     } else if(profile.role==='accounting'){
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','orders','styles','payroll']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','payroll']);
       fallback = 'pipeline';
     } else if(profile.role==='sewing_lead'){
       allowed = new Set(['inbox','payroll']);
@@ -6621,7 +6817,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
     ];
   } else if(isAccounting){
     // Accounting team — Sales (no admin profile) + filtered Team Overview + Operations + Purchasing + Payroll + inbox.
@@ -6629,7 +6825,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
     ];
   } else if(isSewingLead){
@@ -6661,7 +6857,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['styles','Styles & BOMs','👕'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
@@ -6766,6 +6962,7 @@ function App(){
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView suppliers={suppliers} orders={orders} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={(lead)=>setTechpackLead(lead)} />}
+        {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
