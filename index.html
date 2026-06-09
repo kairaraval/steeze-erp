@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 20h · 🎉 Closed Won celebration (confetti + chord)';
+const BUILD = 'Live build 20i · Techpacks list: TP# + client + style + type chips';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5001,16 +5001,88 @@ function TechpackEditor({ profile, lead, client, onClose, reload, readOnly, size
 /* ----------------------- Techpacks list ----------------------- */
 function TechpacksList({ profile, profiles, leads, clients, onOpen }){
   const [search,setSearch]=useState('');
-  const withTp=leads.filter(l=>l.techpack).filter(l=>!search||`${l.title} ${clients.find(c=>c.id===l.client_id)?.company||''}`.toLowerCase().includes(search.toLowerCase()));
+  const [typeFilter,setTypeFilter]=useState(''); // '' = all
+  // Per-type counts so the chip filter shows the size of each bucket.
+  const typeCounts = (()=>{
+    const counts = { __all: 0 };
+    TECHPACK_TYPES.forEach(t => counts[t] = 0);
+    (leads||[]).forEach(l => {
+      if(!l.techpack) return;
+      counts.__all += 1;
+      const t = l.techpack.techpackType;
+      if(t && counts[t] !== undefined) counts[t] += 1;
+    });
+    return counts;
+  })();
+  const tpColors = {
+    'TRAD PRODUCTION': 'bg-rose-100 text-rose-700 border-rose-200',
+    'SUBLI PRODUCTION': 'bg-purple-100 text-purple-700 border-purple-200',
+    'TRAD SAMPLE': 'bg-amber-100 text-amber-700 border-amber-200',
+    'SUBLI SAMPLE': 'bg-blue-100 text-blue-700 border-blue-200',
+  };
+  // Sort by updated desc so freshest work is on top.
+  const withTp = (leads||[])
+    .filter(l => l.techpack)
+    .filter(l => !typeFilter || l.techpack.techpackType === typeFilter)
+    .filter(l => {
+      if(!search) return true;
+      const term = search.toLowerCase();
+      const c = clients.find(x => x.id === l.client_id);
+      const tpNo = l.techpack?.prodFormNo || l.techpack_number || '';
+      return [l.title, c?.company || '', l.techpack.styleName || '', l.techpack.techpackType || '', tpNo]
+        .join(' ').toLowerCase().includes(term);
+    })
+    .sort((a,b) => (b.techpack?.updatedAt||'').localeCompare(a.techpack?.updatedAt||''));
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-slate-900 mb-1">Techpacks</h1>
-      <p className="text-slate-500 text-sm mb-4">All techpacks created by the team. Click a lead to create or edit its techpack.</p>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60 mb-4" />
-      <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Style</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Updated</th><th></th></tr></thead>
-        <tbody>{withTp.map(l=>{ const c=clients.find(x=>x.id===l.client_id); return (<tr key={l.id} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-medium">{l.techpack.styleName||l.title}</td><td className="px-3 py-2">{c?.company||'—'}</td><td className="px-3 py-2 text-xs">{l.techpack.techpackType||'—'}</td><td className="px-3 py-2 text-xs text-slate-500">{l.techpack.updatedAt||'—'}</td><td className="px-3 py-2 text-right"><button onClick={()=>onOpen(l)} className="text-xs text-indigo-600 hover:underline">Open</button></td></tr>); })}{withTp.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-8">No techpacks yet. Open a lead and click "Create techpack".</td></tr>}</tbody>
-      </table></div>
+      <div className="mb-4">
+        <h1 className="text-2xl font-bold text-slate-900 mb-1">📋 Techpacks</h1>
+        <p className="text-slate-500 text-sm">All techpacks created by the team. Click any row to open the techpack editor.</p>
+      </div>
+
+      {/* Type filter chips */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <button onClick={()=>setTypeFilter('')} className={`text-xs px-3 py-1.5 rounded-full border font-medium ${typeFilter===''?'bg-slate-900 text-white border-slate-900':'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
+          All <span className={`ml-1 ${typeFilter===''?'opacity-80':'text-slate-400'}`}>({typeCounts.__all})</span>
+        </button>
+        {TECHPACK_TYPES.map(t => (
+          <button key={t} onClick={()=>setTypeFilter(typeFilter===t?'':t)} className={`text-xs px-3 py-1.5 rounded-full border font-medium ${typeFilter===t?(tpColors[t]||'bg-indigo-100 text-indigo-700 border-indigo-200')+' ring-2 ring-offset-1':'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
+            {t} <span className={`ml-1 ${typeFilter===t?'opacity-80':'text-slate-400'}`}>({typeCounts[t]||0})</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search techpack #, client, style…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        {(search || typeFilter) && <button onClick={()=>{ setSearch(''); setTypeFilter(''); }} className="text-xs text-slate-500 hover:text-slate-800 underline">Clear filters</button>}
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Techpack #</th>
+          <th className="text-left px-3 py-2">Client</th>
+          <th className="text-left px-3 py-2">Style</th>
+          <th className="text-left px-3 py-2">Type</th>
+          <th className="text-left px-3 py-2">Updated</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{withTp.map(l=>{
+          const c = clients.find(x => x.id === l.client_id);
+          const tpNo = l.techpack?.prodFormNo || l.techpack_number || '';
+          const tpType = l.techpack?.techpackType || '';
+          const styleName = l.techpack?.styleName || l.title;
+          return (
+            <tr key={l.id} onClick={()=>onOpen(l)} className="border-t hover:bg-slate-50 cursor-pointer">
+              <td className="px-3 py-2 font-mono text-xs">{tpNo || <span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2 font-medium">{c?.company || <span className="text-slate-400">—</span>}</td>
+              <td className="px-3 py-2">{styleName}</td>
+              <td className="px-3 py-2">{tpType ? <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${tpColors[tpType]||'bg-slate-100 text-slate-700'}`}>{tpType}</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{l.techpack?.updatedAt || '—'}</td>
+              <td className="px-3 py-2 text-right"><button onClick={(e)=>{ e.stopPropagation(); onOpen(l); }} className="text-xs text-indigo-600 hover:underline">Open</button></td>
+            </tr>
+          );
+        })}{withTp.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">{typeFilter||search ? 'No techpacks match these filters.' : 'No techpacks yet. Open a lead and click "Create techpack".'}</td></tr>}</tbody>
+      </table></div></div>
     </div>
   );
 }
