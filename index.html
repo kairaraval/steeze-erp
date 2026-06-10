@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 20n · Cover photo picker on Graphic + Printing boards';
+const BUILD = 'Live build 20o · PO: payment method + terms + VAT/WHT + paid/unpaid';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6212,8 +6212,18 @@ function SignatureBox({ role, name }){
 
 function POPrintView({ po, suppliers, profile, profiles, onClose }){
   const supplier = suppliers.find(s => s.id === po.supplier_id);
-  const total = Number(po.total) || (po.lines||[]).reduce((s,l) => s + (Number(l.qty)||0) * (Number(l.unit_cost)||0), 0);
+  const subtotalRaw = (po.lines||[]).reduce((s,l) => s + (Number(l.qty)||0) * (Number(l.unit_cost)||0), 0);
+  // If VAT was enabled, po.total already includes VAT (saved as gross). Back out
+  // the subtotal so the print breakdown shows correct lines.
+  const subtotal = subtotalRaw;
+  const vatAmount = po.vat_enabled ? subtotal * 0.12 : 0;
+  const gross = subtotal + vatAmount;
+  const whtAmount = po.withholding_tax_enabled ? subtotal * (Number(po.withholding_tax_rate)||0)/100 : 0;
+  const netPayable = gross - whtAmount;
+  const total = Number(po.total) || gross;
   const finalizedBy = po.finalized_by ? (profiles||[]).find(p => p.id === po.finalized_by) : null;
+  const paidBy = po.paid_by ? (profiles||[]).find(p => p.id === po.paid_by) : null;
+  const methodLabel = (PO_PAYMENT_METHODS.find(m=>m.key===po.payment_method)||{}).label || '—';
   return (
     <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
       <PortraitPagePrintStyle />
@@ -6288,13 +6298,64 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
                 ))}
               </tbody>
               <tfoot>
-                <tr className="bg-slate-100">
-                  <td colSpan="4" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Grand Total</td>
-                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(total)}</td>
+                <tr>
+                  <td colSpan="4" className="border border-slate-400 px-2 py-1 text-right text-[10px] uppercase text-slate-500">Subtotal</td>
+                  <td className="border border-slate-400 px-2 py-1 text-right">{peso(subtotal)}</td>
                 </tr>
+                {po.vat_enabled && (
+                  <tr>
+                    <td colSpan="4" className="border border-slate-400 px-2 py-1 text-right text-[10px] uppercase text-slate-500">+ VAT 12%</td>
+                    <td className="border border-slate-400 px-2 py-1 text-right">{peso(vatAmount)}</td>
+                  </tr>
+                )}
+                <tr className="bg-slate-100">
+                  <td colSpan="4" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Gross Total{po.vat_enabled?' (VAT inc.)':''}</td>
+                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(gross)}</td>
+                </tr>
+                {po.withholding_tax_enabled && (
+                  <>
+                    <tr>
+                      <td colSpan="4" className="border border-slate-400 px-2 py-1 text-right text-[10px] uppercase text-slate-500">− Withholding tax ({Number(po.withholding_tax_rate)||0}%)</td>
+                      <td className="border border-slate-400 px-2 py-1 text-right">({peso(whtAmount)})</td>
+                    </tr>
+                    <tr className="bg-emerald-50">
+                      <td colSpan="4" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider text-emerald-800">Net Payable</td>
+                      <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base text-emerald-800">{peso(netPayable)}</td>
+                    </tr>
+                  </>
+                )}
               </tfoot>
             </table>
           </div>
+
+          {/* Payment block — method, terms, conditional detail (check#, gcash#, bank info) */}
+          {(po.payment_method || po.payment_terms) && (
+            <div className="mt-3 border border-slate-400 p-3 grid grid-cols-2 gap-3 text-[11px]">
+              <div>
+                <div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Mode of payment</div>
+                <div className="font-bold text-slate-900">{methodLabel}</div>
+                {po.payment_method==='check' && po.payment_method_detail && <div className="mt-0.5">Check #: <strong>{po.payment_method_detail}</strong></div>}
+                {po.payment_method==='gcash' && po.payment_method_detail && <div className="mt-0.5">GCash #: <strong>{po.payment_method_detail}</strong></div>}
+                {po.payment_method==='others' && po.payment_method_detail && <div className="mt-0.5">{po.payment_method_detail}</div>}
+                {po.payment_method==='bank_transfer' && supplier && (supplier.bank_name||supplier.bank_account_number) && (
+                  <div className="mt-1">
+                    <div>{supplier.bank_name||''}{supplier.bank_account_name?' · '+supplier.bank_account_name:''}</div>
+                    {supplier.bank_account_number && <div className="font-mono">A/C {supplier.bank_account_number}</div>}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Payment terms</div>
+                <div className="font-bold text-slate-900">{po.payment_terms||'—'}</div>
+                {po.payment_status==='paid' && (
+                  <div className="mt-2 inline-block px-2 py-1 rounded bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold text-[10px] uppercase">✅ Paid {po.paid_at?fmtDate(po.paid_at):''}{paidBy?' · '+(paidBy.name||paidBy.email):''}</div>
+                )}
+                {po.payment_status!=='paid' && po.status!=='draft' && (
+                  <div className="mt-2 inline-block px-2 py-1 rounded bg-rose-100 border border-rose-300 text-rose-800 font-bold text-[10px] uppercase">⏳ Unpaid</div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Notes block — only render if there's text. Keeps the page tidy. */}
           {po.notes && (
@@ -6998,8 +7059,8 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reloa
       <div className="grid grid-cols-5 gap-3 mb-4">{PO_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PO#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72 mb-4" />
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">PO#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Lines</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
-        <tbody>{rows.map(o=>{ const meta=poMeta(o.status); return (
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">PO#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Lines</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Payment</th><th></th></tr></thead>
+        <tbody>{rows.map(o=>{ const meta=poMeta(o.status); const isFinalized=o.status!=='draft' && o.status!=='cancelled'; const isPaid=o.payment_status==='paid'; return (
           <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(o)}>
             <td className="px-3 py-2 font-mono text-xs">{o.number||o.id.slice(0,6)}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(o.date)}</td>
@@ -7007,9 +7068,16 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reloa
             <td className="px-3 py-2 text-right">{(o.lines||[]).length}</td>
             <td className="px-3 py-2 text-right font-semibold">{peso(o.total)}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+            <td className="px-3 py-2">
+              {isFinalized ? (
+                isPaid
+                  ? <span className="text-xs px-2 py-1 rounded font-semibold bg-emerald-100 text-emerald-700">✅ Paid</span>
+                  : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
+              ) : <span className="text-xs text-slate-300">—</span>}
+            </td>
             <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline">↓ Receive</button>}</td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
       {(creating||editing) && <PurchaseOrderForm profile={profile} profiles={profiles} allOrders={orders} existing={editing} fromPR={creating?openFromPR:null} items={items} suppliers={suppliers} onClose={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); }} onSaved={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); reload(); }} onPrint={(po)=>setPrinting(po)} />}
       {receiving && <PurchaseOrderReceive po={receiving} items={items} profile={profile} onClose={()=>setReceiving(null)} onSaved={()=>{ setReceiving(null); reload(); }} />}
@@ -7018,26 +7086,73 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reloa
   );
 }
 
+// Payment methods supported on POs. Each one drives a different conditional
+// "detail" input below the dropdown (check #, gcash #, etc.).
+const PO_PAYMENT_METHODS = [
+  { key:'',              label:'— Select —' },
+  { key:'check',         label:'Check' },
+  { key:'bank_transfer', label:'Bank Transfer' },
+  { key:'cash',          label:'Cash' },
+  { key:'gcash',         label:'GCash' },
+  { key:'others',        label:'Others' },
+];
 function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, onClose, onSaved, onPrint }){
   const isEdit=!!existing;
   const initLines = isEdit ? (existing.lines||[]) : (fromPR ? (fromPR.lines||[]).map(l=>({ item_id:l.item_id||null, description:l.description||'', qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 })) : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
-  const [f,setF]=useState({ date: isEdit?existing.date:new Date().toISOString().slice(0,10), supplier_id: isEdit?existing.supplier_id:null, pr_id: isEdit?existing.pr_id:(fromPR?fromPR.id:null), status: isEdit?existing.status:'draft', notes: isEdit?existing.notes:'', lines: initLines });
+  const [f,setF]=useState({
+    date: isEdit?existing.date:new Date().toISOString().slice(0,10),
+    supplier_id: isEdit?existing.supplier_id:null,
+    pr_id: isEdit?existing.pr_id:(fromPR?fromPR.id:null),
+    status: isEdit?existing.status:'draft',
+    notes: isEdit?existing.notes:'',
+    lines: initLines,
+    payment_method: isEdit?(existing.payment_method||''):'',
+    payment_method_detail: isEdit?(existing.payment_method_detail||''):'',
+    payment_terms: isEdit?(existing.payment_terms||''):'',
+    vat_enabled: isEdit?!!existing.vat_enabled:false,
+    withholding_tax_enabled: isEdit?!!existing.withholding_tax_enabled:false,
+    withholding_tax_rate: isEdit?(Number(existing.withholding_tax_rate)||2):2,
+  });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Determines whether the user can still tweak qty/lines. Drafts are fully
   // editable; once finalized (Placed/Partial/Received/Cancelled) the lines lock.
   const locked = isEdit && existing.status !== 'draft';
   const finalizedBy = existing && existing.finalized_by ? (profiles||[]).find(p=>p.id===existing.finalized_by) : null;
-  function up(k,v){ if(locked) return; setF(p=>({...p,[k]:v})); }
+  function up(k,v){ if(locked && !['payment_method','payment_method_detail','payment_terms','vat_enabled','withholding_tax_enabled','withholding_tax_rate'].includes(k)) return; setF(p=>({...p,[k]:v})); }
   function setLine(i,patch){ if(locked) return; setF(p=>({...p,lines:p.lines.map((l,j)=>j===i?{...l,...patch}:l)})); }
   function addLine(){ if(locked) return; setF(p=>({...p,lines:[...p.lines,{item_id:null, description:'', qty:1, qty_received:0, unit_cost:0}]})); }
   function removeLine(i){ if(locked) return; setF(p=>({...p,lines:p.lines.filter((_,j)=>j!==i)})); }
-  const total=f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
+  // Total math:
+  //   subtotal     = Σ qty × unit_cost
+  //   VAT 12%      = subtotal × 0.12 (only if vat_enabled)
+  //   gross        = subtotal + VAT  ← this is what we OWE the supplier on the invoice
+  //   WHT          = subtotal × WHT% (only if withholding_tax_enabled). PH expanded WHT
+  //                  is computed on the VAT-exclusive amount (i.e. the subtotal), and we
+  //                  deduct it from what we pay the supplier (we remit it to BIR instead).
+  //   net payable  = gross − WHT  ← this is what we ACTUALLY pay the supplier
+  const subtotal = f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
+  const vatAmount = f.vat_enabled ? subtotal * 0.12 : 0;
+  const gross = subtotal + vatAmount;
+  const whtAmount = f.withholding_tax_enabled ? subtotal * (Number(f.withholding_tax_rate)||0)/100 : 0;
+  const netPayable = gross - whtAmount;
+  const total = gross; // PO "total" we save = the gross (what the supplier invoices)
+  // Auto-pull supplier's saved bank info + payment terms when the user picks
+  // a supplier. The bank rows display read-only inside the Bank Transfer panel.
+  const supplier = (suppliers||[]).find(s=>s.id===f.supplier_id);
+  useEffect(()=>{
+    if(!supplier) return;
+    // Only auto-fill payment_terms if user hasn't typed one yet — don't clobber edits.
+    if(!f.payment_terms && supplier.payment_terms){ setF(p=>({...p, payment_terms: supplier.payment_terms })); }
+  // eslint-disable-next-line
+  },[f.supplier_id]);
   // Save without finalizing — stays in current status (draft drafts stay draft).
   async function saveDraft(){
     if(!f.supplier_id){ setMsg('Pick a supplier.'); return; }
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
     setBusy(true); setMsg('');
-    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines };
+    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
+      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
+      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0 };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
     const { data, error } = isEdit ? await sb.from('purchase_orders').update(payload).eq('id',existing.id).select().single() : await sb.from('purchase_orders').insert(payload).select().single();
     if(error){ setBusy(false); setMsg(error.message); return; }
@@ -7051,12 +7166,35 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
     if(!confirm('Finalize this PO?\n\nOnce finalized:\n• Lines are locked for editing\n• The total goes to finance\n• Use the Receive button later to record deliveries\n\nMake sure quantities match what you actually bought.')) return;
     setBusy(true); setMsg('');
-    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id };
+    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id,
+      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
+      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
+      payment_status: existing?.payment_status || 'unpaid' };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
     const { data, error } = isEdit ? await sb.from('purchase_orders').update(payload).eq('id',existing.id).select().single() : await sb.from('purchase_orders').insert(payload).select().single();
     if(error){ setBusy(false); setMsg(error.message); return; }
     if(!isEdit && fromPR){ await sb.from('purchase_requests').update({ status:'ordered', linked_po_id: data.id }).eq('id', fromPR.id); }
     setBusy(false); onSaved();
+  }
+  // Mark a finalized PO as Paid / Unpaid. Stamps actor + timestamp. Visible
+  // only after the PO is finalized so we don't track payments on drafts.
+  async function markPaid(){
+    if(!isEdit) return;
+    if(!confirm(`Mark this PO as PAID?\n\nNet payable: ${peso(netPayable)}\nMethod: ${f.payment_method||'(unspecified)'}\n\nFinance will see this immediately on the PO list.`)) return;
+    setBusy(true);
+    const { error } = await sb.from('purchase_orders').update({ payment_status:'paid', paid_at:new Date().toISOString(), paid_by:profile.id, amount_paid:netPayable }).eq('id', existing.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function markUnpaid(){
+    if(!isEdit) return;
+    if(!confirm('Mark this PO back to UNPAID?\n\nThis clears the paid date and who marked it paid.')) return;
+    setBusy(true);
+    const { error } = await sb.from('purchase_orders').update({ payment_status:'unpaid', paid_at:null, paid_by:null, amount_paid:null }).eq('id', existing.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
   }
   // Reopen an already-finalized PO back to draft (admin / purchaser only).
   // Stamps audit info clear so the next finalize is a fresh action.
@@ -7103,8 +7241,94 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
               <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
             </div>
           ))}</div>
-          <div className="text-right mt-2 text-sm font-bold">Total: {peso(total)}</div>
+
+          {/* Totals breakdown — subtotal, optional VAT, optional withholding tax, net payable */}
+          <div className="mt-3 bg-white border rounded p-3 max-w-md ml-auto text-sm">
+            <div className="flex justify-between py-0.5"><span className="text-slate-500">Subtotal</span><span className="font-semibold">{peso(subtotal)}</span></div>
+            <div className="flex items-center justify-between py-0.5">
+              <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
+                <input type="checkbox" checked={!!f.vat_enabled} onChange={e=>up('vat_enabled', e.target.checked)} />
+                <span>+ VAT 12% <span className="text-[10px] text-slate-400">(supplier adds VAT)</span></span>
+              </label>
+              <span className={f.vat_enabled?'font-semibold':'text-slate-300'}>{peso(vatAmount)}</span>
+            </div>
+            <div className="flex justify-between py-0.5 border-t mt-1 pt-1"><span className="text-slate-700 font-medium">Gross (supplier invoice)</span><span className="font-bold">{peso(gross)}</span></div>
+            <div className="flex items-center justify-between py-0.5">
+              <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
+                <input type="checkbox" checked={!!f.withholding_tax_enabled} onChange={e=>up('withholding_tax_enabled', e.target.checked)} />
+                <span>− Withholding tax</span>
+                <input type="number" step="0.1" className="input text-xs w-14 py-0.5 px-1 inline-block" disabled={!f.withholding_tax_enabled} value={f.withholding_tax_rate} onChange={e=>up('withholding_tax_rate', e.target.value)} />
+                <span className="text-[10px] text-slate-400">%</span>
+              </label>
+              <span className={f.withholding_tax_enabled?'font-semibold text-rose-600':'text-slate-300'}>{peso(-whtAmount)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-t mt-1 bg-emerald-50 -mx-3 px-3 rounded-b"><span className="font-bold text-emerald-700">NET PAYABLE</span><span className="font-extrabold text-emerald-700 text-base">{peso(netPayable)}</span></div>
+            <div className="text-[10px] text-slate-400 mt-1">PH default: services 2%, goods 1%. WHT is deducted from what you pay the supplier and remitted to BIR.</div>
+          </div>
         </div>
+
+        {/* Payment details — method dropdown with conditional inputs + payment terms */}
+        <div className="border rounded-lg p-3 bg-violet-50 border-violet-200">
+          <div className="text-xs font-semibold text-violet-800 mb-2">💳 Payment details</div>
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Mode of payment">
+              <select className="input" value={f.payment_method} onChange={e=>up('payment_method', e.target.value)}>
+                {PO_PAYMENT_METHODS.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
+              </select>
+            </TpLbl>
+            <TpLbl t="Payment terms">
+              <input className="input" placeholder="e.g. 30% downpayment, 70% on delivery · Net 30" value={f.payment_terms} onChange={e=>up('payment_terms', e.target.value)} />
+            </TpLbl>
+          </div>
+
+          {/* Conditional detail per method */}
+          {f.payment_method==='check' && (
+            <div className="mt-2"><TpLbl t="Check number"><input className="input" placeholder="Check #" value={f.payment_method_detail} onChange={e=>up('payment_method_detail', e.target.value)} /></TpLbl></div>
+          )}
+          {f.payment_method==='gcash' && (
+            <div className="mt-2"><TpLbl t="GCash number"><input className="input" placeholder="09XX-XXX-XXXX" value={f.payment_method_detail} onChange={e=>up('payment_method_detail', e.target.value)} /></TpLbl></div>
+          )}
+          {f.payment_method==='others' && (
+            <div className="mt-2"><TpLbl t="Specify"><input className="input" placeholder="How is this being paid?" value={f.payment_method_detail} onChange={e=>up('payment_method_detail', e.target.value)} /></TpLbl></div>
+          )}
+          {f.payment_method==='bank_transfer' && (
+            <div className="mt-2 bg-white border rounded p-2 text-xs">
+              <div className="font-semibold text-slate-700 mb-1">🏦 Supplier bank details</div>
+              {!supplier ? (
+                <div className="text-slate-400">Pick a supplier above to see their bank info.</div>
+              ) : (supplier.bank_name||supplier.bank_account_name||supplier.bank_account_number) ? (
+                <div className="grid grid-cols-3 gap-2">
+                  <div><div className="text-[10px] uppercase text-slate-400">Bank</div><div className="font-semibold">{supplier.bank_name||'—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Account name</div><div className="font-semibold">{supplier.bank_account_name||'—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Account #</div><div className="font-mono">{supplier.bank_account_number||'—'}</div></div>
+                </div>
+              ) : (
+                <div className="text-amber-700">⚠ No bank info saved for <strong>{supplier.company}</strong>. Add it under Suppliers → Edit so it pulls in here next time.</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Payment status — only relevant for finalized POs */}
+        {isEdit && locked && (
+          <div className={`border rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap ${existing.payment_status==='paid' ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
+            <div className="text-sm">
+              {existing.payment_status==='paid' ? (
+                <>
+                  <span className="font-bold text-emerald-700">✅ PAID</span>
+                  {existing.paid_at && <span className="text-emerald-700 ml-2 text-xs">{fmtTime(existing.paid_at)}{(profiles||[]).find(p=>p.id===existing.paid_by)?' · by '+((profiles||[]).find(p=>p.id===existing.paid_by).name||(profiles||[]).find(p=>p.id===existing.paid_by).email):''}</span>}
+                  {existing.amount_paid != null && <span className="ml-2 text-xs text-emerald-700">· {peso(existing.amount_paid)}</span>}
+                </>
+              ) : (
+                <span className="font-bold text-rose-700">⏳ UNPAID</span>
+              )}
+            </div>
+            {existing.payment_status==='paid'
+              ? <button onClick={markUnpaid} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">↺ Mark unpaid</button>
+              : <button onClick={markPaid} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">💰 Mark as paid</button>
+            }
+          </div>
+        )}
 
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} disabled={locked} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
