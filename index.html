@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 20j · Activity attachments mirror to lead details';
+const BUILD = 'Live build 20k · Production deadline: fall back to expected_close';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -980,7 +980,7 @@ function SendToGraphicModal({ profile, lead, clients, onClose, onSent }){
   async function send(){ setBusy(true); setMsg('');
     try{ const chosenAtts=atts.filter((_,i)=>chosen[i]);
       const finalNote = includeNotes ? (noteForGraphic||'').trim() : '';
-      const job={ number:'GD-'+Date.now().toString().slice(-5), source_lead_id:lead.id, lead_id:lead.id, client_name:client?.company||'', item:lead.title, items:lead.items||[], quantity:(lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0), graphic_type:'', attachments:chosenAtts, status:'to do', due_date:lead.delivery_date||null, notes:finalNote };
+      const job={ number:'GD-'+Date.now().toString().slice(-5), source_lead_id:lead.id, lead_id:lead.id, client_name:client?.company||'', item:lead.title, items:lead.items||[], quantity:(lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0), graphic_type:'', attachments:chosenAtts, status:'to do', due_date:lead.delivery_date||lead.expected_close||null, notes:finalNote };
       const {error}=await sb.from('graphic_design_jobs').insert(job); if(error) throw error; onSent(chosenAtts.length); }
     catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
@@ -1612,9 +1612,13 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
     if(lead && lead.manager_id) return (profiles||[]).find(p=>p.id===lead.manager_id) || null;
     return null;
   }
-  // Same fallback for deadline — production_jobs.due_date is primary, but if
-  // it's blank the lead's delivery_date is shown so nothing looks empty.
-  function deadlineOf(j, lead){ return j.due_date || lead?.delivery_date || ''; }
+  // Deadline resolution order:
+  //   1. The production job's own due_date (what the team set here)
+  //   2. The linked lead's delivery_date (client's expected delivery)
+  //   3. The linked lead's expected_close (sales's expected close)
+  // This three-level chain means jobs created before the fallback fix below
+  // still show SOMETHING in the deadline column without requiring a re-save.
+  function deadlineOf(j, lead){ return j.due_date || lead?.delivery_date || lead?.expected_close || ''; }
   async function del(j){ if(!confirm(`Delete production job ${j.number||''} — ${j.item||''} for ${j.client_name||''}?`)) return; const { error } = await sb.from('production_jobs').delete().eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
   const active=jobs.filter(j=>!PRODUCTION_DONE.includes(j.status));
@@ -6238,7 +6242,12 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
       items,
       quantity: qty,
       status: 'materials to purchase',
-      due_date: lead.delivery_date || null,
+      // Prefer delivery_date (client's expected delivery). Fall back to
+      // expected_close (sales's expected close date) so the production job
+      // still has a working deadline even when sales hasn't filled in a
+      // delivery_date on the lead. If both are null, leave null and rely
+      // on the production team to set it manually.
+      due_date: lead.delivery_date || lead.expected_close || null,
       sales_owner_id: lead.manager_id || null,
     };
     const { data, error } = await sb.from('production_jobs').insert(payload).select().single();
@@ -7245,7 +7254,7 @@ function App(){
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
-    const { error }=await sb.from('sampling_jobs').insert({ number:'SMP-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'endorsed', due_date:lead.delivery_date||null });
+    const { error }=await sb.from('sampling_jobs').insert({ number:'SMP-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'endorsed', due_date:lead.delivery_date||lead.expected_close||null });
     if(error){ alert(error.message); return; }
     alert('Sent "'+lead.title+'" to Sampling Board.'); setDetailLead(null); setView('sampling'); loadAll();
   }
@@ -7253,7 +7262,7 @@ function App(){
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
-    const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||null, sales_owner_id: lead.manager_id||null });
+    const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||lead.expected_close||null, sales_owner_id: lead.manager_id||null });
     if(error){ alert(error.message); return; } alert('Sent "'+lead.title+'" to Production.'); setDetailLead(null); setView('prod'); loadAll();
   }
 
