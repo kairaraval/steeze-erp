@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 21a · Admin For Approval queue + live badge';
+const BUILD = 'Live build 22 · Finance Sprint 2 — Expenses, Budgets, Petty Cash, Cash Position, Cash Flow';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8363,6 +8363,7 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
 // New approval types can be added by extending the sections array below.
 function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, reload }){
   const [openRfp,setOpenRfp]=useState(null);
+  const [openBudget,setOpenBudget]=useState(null);
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
   const pendingBudgets = (budgetRequests||[]).filter(b => b.status==='pending');
   const total = pendingRfps.length + pendingBudgets.length;
@@ -8436,13 +8437,13 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
               <th></th>
             </tr></thead>
             <tbody>{pendingBudgets.map(b=>(
-              <tr key={b.id} className="border-t hover:bg-purple-50/40">
+              <tr key={b.id} className="border-t hover:bg-purple-50/40 cursor-pointer" onClick={()=>setOpenBudget(b)}>
                 <td className="px-3 py-2 text-xs">{fmtDate(b.date)}</td>
                 <td className="px-3 py-2 font-semibold">{b.department||'—'}</td>
                 <td className="px-3 py-2">{b.purpose||'—'}</td>
                 <td className="px-3 py-2 text-right font-bold">{peso(b.amount)}</td>
                 <td className="px-3 py-2 text-xs">{b.date_needed?fmtDate(b.date_needed):'—'}</td>
-                <td className="px-3 py-2 text-right"><span className="text-xs text-slate-400">Sprint 2</span></td>
+                <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setOpenBudget(b);}} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Review →</button></td>
               </tr>
             ))}</tbody>
           </table>
@@ -8451,6 +8452,856 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
 
       {/* Reuse the existing RFP modal for the actual approval flow */}
       {openRfp && <RFPModal rfp={openRfp} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setOpenRfp(null)} onSaved={()=>{ setOpenRfp(null); reload(); }} onPay={()=>{}} />}
+      {/* Budget request approval — reuses the form modal which has approve/reject buttons for admins */}
+      {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
+    </div>
+  );
+}
+
+
+/* ====================== FINANCE MODULE — Sprint 2 ====================== */
+// Sprint 2 ships:
+//   • Expenses Tracker (non-PO opex: rent, utilities, transport, etc.)
+//   • Budget Requests (any dept asks, admin approves)
+//   • Petty Cash & Cash Advances (issue, liquidate, return)
+//   • Cash Position (snapshot of cash + AR + AP)
+//   • Cash Flow Dashboard (historical money in/out)
+
+const EXPENSE_CATEGORIES = [
+  'Rent','Utilities','Internet','Transport','Office Supplies',
+  'Repairs & Maintenance','Professional Fees','Meals & Entertainment',
+  'Marketing','Bank Charges','Government Fees','Other'
+];
+const PAID_VIA_OPTIONS = [
+  { key:'bank',        label:'Bank Transfer' },
+  { key:'petty_cash',  label:'Petty Cash' },
+  { key:'cv',          label:'Check Voucher (manual)' },
+  { key:'gcash',       label:'GCash' },
+  { key:'cash',        label:'Cash on hand' },
+];
+const DEPARTMENT_OPTIONS = [
+  'HR','Sales','Production','Graphic Design','Printing','Purchasing','Accounting',
+  'Logistics','Sewing','IT','Admin','Other'
+];
+
+/* ─────────── EXPENSES TRACKER ─────────── */
+function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [filter,setFilter]=useState(''); // category
+  const [search,setSearch]=useState('');
+  const [monthFilter,setMonthFilter]=useState(''); // YYYY-MM
+  const isAdmin = profile.role==='admin';
+  const isAccounting = profile.role==='accounting';
+  const canEdit = isAdmin || isAccounting;
+
+  const rows = expenses
+    .filter(e=>!filter || e.category===filter)
+    .filter(e=>!monthFilter || (e.date||'').startsWith(monthFilter))
+    .filter(e=>!search || `${e.vendor||''} ${e.description||''} ${e.category||''}`.toLowerCase().includes(search.toLowerCase()));
+  const totalThisFilter = rows.reduce((s,e)=>s+Number(e.amount||0), 0);
+  // Build category totals for the filter pills.
+  const catTotals = {};
+  expenses.filter(e=>!monthFilter||(e.date||'').startsWith(monthFilter)).forEach(e=>{
+    const c = e.category||'Other'; catTotals[c] = (catTotals[c]||0) + Number(e.amount||0);
+  });
+  // Default month filter: current month, so the page is useful straight away.
+  useEffect(()=>{ if(!monthFilter){ const t=new Date(); setMonthFilter(t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')); } },[]);
+
+  async function del(e){
+    if(!confirm(`Delete expense "${e.description||e.category}"?\n\nThis sends it to Trash.`)) return;
+    const { error } = await sb.from('expenses').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', e.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">💸 Expenses</h1>
+            <p className="text-slate-500 text-sm">{rows.length} expense{rows.length===1?'':'s'} · Total {peso(totalThisFilter)}{monthFilter?` in ${monthFilter}`:''}</p>
+          </div>
+          {canEdit && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <input type="month" className="input w-40" value={monthFilter} onChange={e=>setMonthFilter(e.target.value)} />
+        <button onClick={()=>setMonthFilter('')} className="text-xs text-slate-500 hover:underline">Clear month</button>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search vendor / description…" className="ml-auto px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-72" />
+      </div>
+
+      <div className="flex items-center gap-1 mb-4 flex-wrap">
+        <button onClick={()=>setFilter('')} className={`text-xs px-3 py-1.5 rounded ${filter===''?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>All</button>
+        {EXPENSE_CATEGORIES.map(c=>{
+          const cnt = catTotals[c]||0;
+          if(!cnt && filter!==c) return null; // skip zero categories unless filtered
+          return <button key={c} onClick={()=>setFilter(filter===c?'':c)} className={`text-xs px-3 py-1.5 rounded ${filter===c?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{c} <span className="opacity-60 ml-1">{peso(cnt)}</span></button>;
+        })}
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">Category</th>
+          <th className="text-left px-3 py-2">Vendor</th>
+          <th className="text-left px-3 py-2">Description</th>
+          <th className="text-left px-3 py-2">Paid via</th>
+          <th className="text-left px-3 py-2">Bank</th>
+          <th className="text-right px-3 py-2">Amount</th>
+          <th className="text-center px-3 py-2">Tax-ded</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{rows.map(e=>{ const bank=bankAccounts.find(b=>b.id===e.bank_id); const via=PAID_VIA_OPTIONS.find(p=>p.key===e.paid_via); return (
+          <tr key={e.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>canEdit && setEditing(e)}>
+            <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+            <td className="px-3 py-2"><span className="text-xs px-1.5 py-0.5 rounded bg-slate-100">{e.category||'—'}</span></td>
+            <td className="px-3 py-2">{e.vendor||'—'}</td>
+            <td className="px-3 py-2 max-w-xs truncate">{e.description||'—'}</td>
+            <td className="px-3 py-2 text-xs">{via?via.label:e.paid_via||'—'}</td>
+            <td className="px-3 py-2 text-xs">{bank?bank.bank_name:'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
+            <td className="px-3 py-2 text-center">{e.tax_deductible? '✓':'—'}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap">
+              {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" onClick={ev=>ev.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎 Receipt</a>}
+              {canEdit && <button onClick={(ev)=>{ev.stopPropagation(); del(e);}} className="text-xs text-rose-500 hover:underline">Delete</button>}
+            </td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No expenses match this filter. {canEdit && 'Click "+ New expense" to log one.'}</td></tr>}</tbody>
+      </table></div></div>
+
+      {(creating||editing) && <ExpenseFormModal existing={editing} profile={profile} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function ExpenseFormModal({ existing, profile, bankAccounts, onClose, onSaved }){
+  const isEdit = !!existing;
+  const [f,setF]=useState({
+    date: existing?.date || new Date().toISOString().slice(0,10),
+    category: existing?.category || EXPENSE_CATEGORIES[0],
+    vendor: existing?.vendor || '',
+    description: existing?.description || '',
+    amount: existing?.amount || 0,
+    paid_via: existing?.paid_via || 'bank',
+    bank_id: existing?.bank_id || (bankAccounts[0]?.id || null),
+    receipt_url: existing?.receipt_url || '',
+    tax_deductible: existing?.tax_deductible ?? true,
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploading,setUploading]=useState(false);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function handleReceipt(file){
+    if(!file) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      setF(p=>({...p, receipt_url: pu.publicUrl}));
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setUploading(false);
+  }
+  async function save(){
+    const amt = Number(f.amount)||0;
+    if(amt<=0){ setMsg('Enter an amount.'); return; }
+    if(f.paid_via==='bank' && !f.bank_id){ setMsg('Pick a bank.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload = {
+        date:f.date, category:f.category, vendor:f.vendor||null, description:f.description||null,
+        amount:amt, paid_via:f.paid_via, bank_id:(f.paid_via==='bank'?f.bank_id:null),
+        receipt_url:f.receipt_url||null, tax_deductible:!!f.tax_deductible,
+      };
+      // For new expense paid via bank: create matching bank txn so the bank balance updates.
+      // For edit, keep the existing bank txn linked (we don't reconcile changes — too risky to auto-fix).
+      if(!isEdit){
+        payload.created_by = profile.id;
+        let bankTxId = null;
+        if(f.paid_via==='bank' && f.bank_id){
+          const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+            bank_id: f.bank_id, date: f.date, direction:'out', amount: amt,
+            description: `Expense · ${f.category}${f.vendor?' · '+f.vendor:''}`,
+            ref_type:'expense', ref_id:null, created_by: profile.id,
+          }).select('id').single();
+          if(btErr) throw btErr;
+          bankTxId = btx.id;
+        }
+        if(bankTxId) payload.bank_transaction_id = bankTxId;
+        const { data: ins, error } = await sb.from('expenses').insert(payload).select('id').single();
+        if(error) throw error;
+        // Patch the bank txn ref_id back to this expense.
+        if(bankTxId && ins?.id){ await sb.from('bank_transactions').update({ ref_id: ins.id }).eq('id', bankTxId); }
+      } else {
+        const { error } = await sb.from('expenses').update(payload).eq('id', existing.id);
+        if(error) throw error;
+      }
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit expense':'New expense'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Vendor / Payee"><input className="input" placeholder="Meralco, Manila Water, Globe, etc." value={f.vendor} onChange={e=>up('vendor',e.target.value)} /></TpLbl>
+        <TpLbl t="Description"><textarea className="input min-h-[50px]" value={f.description} onChange={e=>up('description',e.target.value)} placeholder="What this expense is for" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} /></TpLbl>
+          <TpLbl t="Tax-deductible"><label className="flex items-center gap-2 input cursor-pointer"><input type="checkbox" checked={!!f.tax_deductible} onChange={e=>up('tax_deductible',e.target.checked)} /><span>Yes</span></label></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Paid via">
+            <select className="input" value={f.paid_via} onChange={e=>up('paid_via',e.target.value)}>
+              {PAID_VIA_OPTIONS.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t={`Bank ${f.paid_via==='bank'?'*':'(N/A)'}`}>
+            <select className="input" value={f.bank_id||''} disabled={f.paid_via!=='bank'} onChange={e=>up('bank_id',e.target.value||null)}>
+              <option value="">—</option>
+              {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Receipt (photo / scan)">
+          <div className="flex items-center gap-2">
+            <input type="file" accept="image/*,application/pdf" onChange={e=>handleReceipt(e.target.files?.[0])} className="text-xs flex-1" />
+            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+            {f.receipt_url && <a href={f.receipt_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View →</a>}
+          </div>
+        </TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        {isEdit && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">⚠ Editing an existing expense doesn't auto-update its bank transaction. Manually adjust the bank txn if the amount or bank changed.</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Log expense'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── BUDGET REQUESTS ─────────── */
+function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [filter,setFilter]=useState('');
+  const isAdmin = profile.role==='admin';
+  const isAccounting = profile.role==='accounting';
+  const canApprove = isAdmin || isAccounting;
+  const STATUSES = [
+    { key:'pending',  label:'Pending',  color:'bg-amber-100 text-amber-700' },
+    { key:'approved', label:'Approved', color:'bg-emerald-100 text-emerald-700' },
+    { key:'rejected', label:'Rejected', color:'bg-rose-100 text-rose-700' },
+    { key:'spent',    label:'Spent',    color:'bg-slate-200 text-slate-700' },
+  ];
+  function bMeta(k){ return STATUSES.find(s=>s.key===k)||STATUSES[0]; }
+  const rows = budgetRequests.filter(b=>!filter||b.status===filter);
+  const counts = STATUSES.reduce((a,s)=>{ a[s.key]=budgetRequests.filter(b=>b.status===s.key).length; return a; },{});
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">💰 Budget Requests</h1>
+            <p className="text-slate-500 text-sm">{budgetRequests.length} request{budgetRequests.length===1?'':'s'} · {counts.pending||0} pending</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New request</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-3 mb-4">{STATUSES.map(s=>(
+        <button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-3 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
+          <div className={`text-[10px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div>
+          <div className="text-2xl font-bold">{counts[s.key]||0}</div>
+        </button>
+      ))}</div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">Department</th>
+          <th className="text-left px-3 py-2">Purpose</th>
+          <th className="text-left px-3 py-2">Requested by</th>
+          <th className="text-right px-3 py-2">Amount</th>
+          <th className="text-left px-3 py-2">Needed by</th>
+          <th className="text-left px-3 py-2">Status</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{rows.map(b=>{ const meta=bMeta(b.status); const req=profiles.find(p=>p.id===b.requested_by); return (
+          <tr key={b.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(b)}>
+            <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(b.date)}</td>
+            <td className="px-3 py-2 font-semibold">{b.department||'—'}</td>
+            <td className="px-3 py-2 max-w-xs truncate">{b.purpose||'—'}</td>
+            <td className="px-3 py-2 text-xs">{req?(req.name||req.email):'—'}</td>
+            <td className="px-3 py-2 text-right font-bold">{peso(b.amount)}</td>
+            <td className="px-3 py-2 text-xs">{b.date_needed?fmtDate(b.date_needed):'—'}</td>
+            <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+            <td className="px-3 py-2 text-right">{b.attachment_url && <a href={b.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs text-indigo-600 hover:underline">📎</a>}</td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No budget requests yet. Click "+ New request" to submit one.</td></tr>}</tbody>
+      </table></div></div>
+      {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSaved }){
+  const isEdit = !!existing;
+  const [f,setF]=useState({
+    department: existing?.department || (DEPARTMENT_OPTIONS[0]),
+    purpose: existing?.purpose || '',
+    amount: existing?.amount || 0,
+    date_needed: existing?.date_needed || '',
+    notes: existing?.notes || '',
+    attachment_url: existing?.attachment_url || '',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploading,setUploading]=useState(false);
+  const status = existing?.status || 'pending';
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function handleAttachment(file){
+    if(!file) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `budget-requests/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      setF(p=>({...p, attachment_url: pu.publicUrl}));
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setUploading(false);
+  }
+  async function save(){
+    const amt = Number(f.amount)||0;
+    if(amt<=0){ setMsg('Enter an amount.'); return; }
+    if(!f.purpose){ setMsg('What is the budget for?'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      department:f.department, purpose:f.purpose, amount:amt, date_needed:f.date_needed||null,
+      notes:f.notes||null, attachment_url:f.attachment_url||null,
+    };
+    if(!isEdit){ payload.requested_by = profile.id; payload.status = 'pending'; }
+    const { error } = isEdit
+      ? await sb.from('budget_requests').update(payload).eq('id', existing.id)
+      : await sb.from('budget_requests').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function approve(){
+    if(!confirm('Approve this budget request?')) return;
+    setBusy(true);
+    const { error } = await sb.from('budget_requests').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id', existing.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function reject(){
+    const reason = prompt('Reason for rejection?'); if(reason===null) return;
+    setBusy(true);
+    const { error } = await sb.from('budget_requests').update({ status:'rejected', approved_by:profile.id, approved_at:new Date().toISOString(), notes:(existing.notes||'')+'\n[Rejected: '+reason+']' }).eq('id', existing.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function markSpent(){
+    if(!confirm('Mark this budget as spent? Use this once the expense has been logged.')) return;
+    setBusy(true);
+    const { error } = await sb.from('budget_requests').update({ status:'spent' }).eq('id', existing.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Budget Request':'New budget request'} onClose={onClose}>
+      <div className="space-y-3">
+        {isEdit && (
+          <div className={`border rounded-lg p-2 text-sm font-bold ${status==='approved'?'bg-emerald-50 border-emerald-200 text-emerald-700':status==='rejected'?'bg-rose-50 border-rose-200 text-rose-700':status==='spent'?'bg-slate-100 border-slate-200 text-slate-700':'bg-amber-50 border-amber-200 text-amber-700'}`}>
+            Status: {status.toUpperCase()}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Department"><select className="input" value={f.department} onChange={e=>up('department',e.target.value)}>{DEPARTMENT_OPTIONS.map(d=><option key={d}>{d}</option>)}</select></TpLbl>
+          <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Purpose *"><input className="input" placeholder="e.g. Monthly birthday lunch · Quarterly team outing · Office plants" value={f.purpose} onChange={e=>up('purpose',e.target.value)} /></TpLbl>
+        <TpLbl t="Date needed"><input type="date" className="input" value={f.date_needed} onChange={e=>up('date_needed',e.target.value)} /></TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Quote, breakdown, justification…" /></TpLbl>
+        <TpLbl t="Attachment (quote, photo)">
+          <div className="flex items-center gap-2">
+            <input type="file" onChange={e=>handleAttachment(e.target.files?.[0])} className="text-xs flex-1" />
+            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+            {f.attachment_url && <a href={f.attachment_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View →</a>}
+          </div>
+        </TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        {(!isEdit || status==='pending') && <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Submit request'}</button>}
+        {isEdit && status==='pending' && canApprove && (
+          <div className="flex gap-2 pt-2 border-t">
+            <button onClick={approve} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✓ Approve</button>
+            <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
+          </div>
+        )}
+        {isEdit && status==='approved' && canApprove && (
+          <button onClick={markSpent} disabled={busy} className="w-full py-2 rounded-lg bg-slate-600 text-white font-semibold disabled:opacity-50">Mark as spent</button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── PETTY CASH / CASH ADVANCES ─────────── */
+function PettyCashView({ profile, profiles, cashAdvances, bankAccounts, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [liquidating,setLiquidating]=useState(null);
+  const [filter,setFilter]=useState('open'); // default to open so the work-in-progress shows
+  const isAdmin = profile.role==='admin';
+  const isAccounting = profile.role==='accounting';
+  const canEdit = isAdmin || isAccounting;
+
+  const STATUSES = [
+    { key:'open',       label:'Open',       color:'bg-amber-100 text-amber-700' },
+    { key:'liquidated', label:'Liquidated', color:'bg-emerald-100 text-emerald-700' },
+    { key:'closed',     label:'Closed',     color:'bg-slate-200 text-slate-700' },
+  ];
+  function caMeta(k){ return STATUSES.find(s=>s.key===k)||STATUSES[0]; }
+  const rows = cashAdvances.filter(c=>!filter||c.status===filter);
+
+  // Per-custodian open balance
+  const custodianOpen = {};
+  cashAdvances.filter(c=>c.status==='open').forEach(c=>{
+    const k = c.custodian_id || c.custodian_name || 'unknown';
+    custodianOpen[k] = (custodianOpen[k]||0) + Number(c.amount||0) - Number(c.amount_liquidated||0) - Number(c.amount_returned||0);
+  });
+  const totalOpen = Object.values(custodianOpen).reduce((s,n)=>s+n, 0);
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">💵 Petty Cash & Cash Advances</h1>
+            <p className="text-slate-500 text-sm">{cashAdvances.length} CA{cashAdvances.length===1?'':'s'} · Open balance out: <strong className="text-rose-700">{peso(totalOpen)}</strong></p>
+          </div>
+          {canEdit && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Issue Cash Advance</button>}
+        </div>
+      </div>
+
+      {/* Per-custodian open balances */}
+      {Object.keys(custodianOpen).length>0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+          <div className="text-xs font-semibold text-amber-800 mb-2 uppercase tracking-wider">Outstanding by custodian</div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(custodianOpen).map(([k,amt])=>{
+              const p = profiles.find(x=>x.id===k); const name = p ? (p.name||p.email) : k;
+              return <div key={k} className="bg-white border rounded px-2 py-1 text-xs"><strong>{name}</strong> <span className="text-rose-700 font-bold">{peso(amt)}</span></div>;
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-1 mb-4">
+        <button onClick={()=>setFilter('')} className={`text-xs px-3 py-1.5 rounded ${filter===''?'bg-indigo-600 text-white font-semibold':'bg-slate-100'}`}>All</button>
+        {STATUSES.map(s=>(
+          <button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`text-xs px-3 py-1.5 rounded ${filter===s.key?'bg-indigo-600 text-white font-semibold':'bg-slate-100'}`}>{s.label}</button>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">CA#</th>
+          <th className="text-left px-3 py-2">Custodian</th>
+          <th className="text-left px-3 py-2">Purpose</th>
+          <th className="text-right px-3 py-2">Issued</th>
+          <th className="text-right px-3 py-2">Liquidated</th>
+          <th className="text-right px-3 py-2">Returned</th>
+          <th className="text-right px-3 py-2">Outstanding</th>
+          <th className="text-left px-3 py-2">Status</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{rows.map(c=>{
+          const meta=caMeta(c.status);
+          const custodian = profiles.find(p=>p.id===c.custodian_id);
+          const outstanding = Number(c.amount||0) - Number(c.amount_liquidated||0) - Number(c.amount_returned||0);
+          return (
+            <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(c)}>
+              <td className="px-3 py-2 text-xs">{fmtDate(c.date)}</td>
+              <td className="px-3 py-2 font-mono text-xs">{c.number||c.id.slice(0,6)}</td>
+              <td className="px-3 py-2">{custodian?(custodian.name||custodian.email):c.custodian_name||'—'}</td>
+              <td className="px-3 py-2 max-w-xs truncate">{c.purpose||'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
+              <td className="px-3 py-2 text-right text-emerald-700">{peso(c.amount_liquidated)}</td>
+              <td className="px-3 py-2 text-right text-blue-700">{peso(c.amount_returned)}</td>
+              <td className={`px-3 py-2 text-right font-bold ${outstanding>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(outstanding)}</td>
+              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2 text-right">{c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline">Liquidate →</button>}</td>
+            </tr>
+          );
+        })}{rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No cash advances in this filter.</td></tr>}</tbody>
+      </table></div></div>
+
+      {(creating||editing) && <CashAdvanceFormModal existing={editing} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {liquidating && <LiquidationModal ca={liquidating} profile={profile} bankAccounts={bankAccounts} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload(); }} />}
+    </div>
+  );
+}
+
+function CashAdvanceFormModal({ existing, profile, profiles, bankAccounts, onClose, onSaved }){
+  const isEdit = !!existing;
+  const today = new Date().toISOString().slice(0,10);
+  const monthKey = today.slice(0,7);
+  const [f,setF]=useState({
+    date: existing?.date || today,
+    custodian_id: existing?.custodian_id || profile.id,
+    custodian_name: existing?.custodian_name || '',
+    purpose: existing?.purpose || '',
+    amount: existing?.amount || 0,
+    bank_id: existing?.bank_id || (bankAccounts[0]?.id || null),
+    notes: existing?.notes || '',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    const amt = Number(f.amount)||0;
+    if(amt<=0){ setMsg('Enter an amount.'); return; }
+    if(!f.bank_id){ setMsg('Pick the source bank.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const custodian = profiles.find(p=>p.id===f.custodian_id);
+      const payload = {
+        date:f.date, custodian_id:f.custodian_id||null, custodian_name: custodian?(custodian.name||custodian.email):(f.custodian_name||null),
+        purpose:f.purpose||null, amount:amt, bank_id:f.bank_id, notes:f.notes||null,
+      };
+      if(!isEdit){
+        // Number it
+        const { data: monthRows } = await sb.from('cash_advances').select('id,number').like('number', `CA-${monthKey}-%`);
+        const seq = String((monthRows?.length||0)+1).padStart(3,'0');
+        payload.number = `CA-${monthKey}-${seq}`;
+        payload.created_by = profile.id;
+        payload.status = 'open';
+        // Create bank txn (out)
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id: f.bank_id, date: f.date, direction:'out', amount: amt,
+          description: `${payload.number} · Cash advance to ${payload.custodian_name||'staff'} · ${f.purpose||''}`,
+          ref_type:'cash_advance', ref_id:null, created_by: profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr;
+        payload.bank_transaction_id = btx.id;
+        const { data: ins, error } = await sb.from('cash_advances').insert(payload).select('id').single();
+        if(error) throw error;
+        if(ins?.id) await sb.from('bank_transactions').update({ ref_id: ins.id }).eq('id', btx.id);
+      } else {
+        const { error } = await sb.from('cash_advances').update(payload).eq('id', existing.id);
+        if(error) throw error;
+      }
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Cash Advance':'Issue Cash Advance'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Custodian (who receives the cash)">
+          <select className="input" value={f.custodian_id||''} onChange={e=>up('custodian_id',e.target.value||null)}>
+            <option value="">— External / not in profiles —</option>
+            {profiles.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}
+          </select>
+        </TpLbl>
+        {!f.custodian_id && <TpLbl t="External name"><input className="input" value={f.custodian_name} onChange={e=>up('custodian_name',e.target.value)} placeholder="If not a Steeze profile" /></TpLbl>}
+        <TpLbl t="Purpose"><input className="input" value={f.purpose} onChange={e=>up('purpose',e.target.value)} placeholder="What is the CA for? e.g. Office supplies pickup" /></TpLbl>
+        <TpLbl t="Source bank *">
+          <select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}>
+            <option value="">—</option>
+            {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}
+          </select>
+        </TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save':'Issue CA'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
+  const issued = Number(ca.amount)||0;
+  const [receipts,setReceipts]=useState(ca.receipts||[]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const total = receipts.reduce((s,r)=>s+Number(r.amount||0), 0);
+  const returned = Math.max(0, issued - total);
+  function addReceipt(){ setReceipts(rs=>[...rs, { description:'', amount:0 }]); }
+  function setReceipt(i, patch){ setReceipts(rs=>rs.map((r,j)=>j===i?{...r,...patch}:r)); }
+  function removeReceipt(i){ setReceipts(rs=>rs.filter((_,j)=>j!==i)); }
+  async function save(){
+    if(receipts.length===0){ setMsg('Add at least one receipt.'); return; }
+    if(total > issued + 0.01){ if(!confirm(`Receipts total (${peso(total)}) exceeds CA amount (${peso(issued)}). Save anyway?`)) return; }
+    setBusy(true); setMsg('');
+    try {
+      // If money is being returned, create a bank txn (in) to the original source bank.
+      if(returned > 0.01 && ca.bank_id){
+        await sb.from('bank_transactions').insert({
+          bank_id: ca.bank_id, date: new Date().toISOString().slice(0,10), direction:'in', amount: returned,
+          description: `Return from ${ca.number||'CA'} · ${ca.custodian_name||''}`,
+          ref_type:'cash_advance', ref_id: ca.id, created_by: profile.id,
+        });
+      }
+      const { error } = await sb.from('cash_advances').update({
+        receipts, amount_liquidated: total, amount_returned: returned,
+        status: 'liquidated', liquidated_at: new Date().toISOString().slice(0,10),
+      }).eq('id', ca.id);
+      if(error) throw error;
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`Liquidate ${ca.number||'CA'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs">
+          <strong>{ca.custodian_name||''}</strong> · Issued <strong>{peso(issued)}</strong> on {fmtDate(ca.date)} · Purpose: {ca.purpose||'—'}
+        </div>
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Receipts</div><button onClick={addReceipt} className="text-xs text-indigo-600 font-semibold">+ Add receipt</button></div>
+          <div className="space-y-2">{receipts.map((r,i)=>(
+            <div key={i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-8"><label className="text-[10px] uppercase text-slate-500">Description</label><input className="input mt-0.5 text-xs" value={r.description} onChange={e=>setReceipt(i,{description:e.target.value})} placeholder="e.g. Bond paper x5 reams · National Bookstore" /></div>
+              <div className="col-span-3"><label className="text-[10px] uppercase text-slate-500">Amount</label><input type="number" className="input mt-0.5 text-xs" value={r.amount} onChange={e=>setReceipt(i,{amount:e.target.value})} /></div>
+              <div className="col-span-1 text-right"><button onClick={()=>removeReceipt(i)} className="text-rose-400 text-sm">✕</button></div>
+            </div>
+          ))}{receipts.length===0 && <div className="text-xs text-slate-400 text-center py-3">No receipts yet. Click "Add receipt".</div>}</div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Issued</div><div className="font-bold">{peso(issued)}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-700">Receipts total</div><div className="font-bold text-emerald-700">{peso(total)}</div></div>
+          <div className={`border rounded p-2 ${returned>0.01?'bg-blue-50 border-blue-200':'bg-slate-50'}`}><div className="text-[10px] uppercase text-blue-700">To return</div><div className="font-bold text-blue-700">{peso(returned)}</div></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'✓ Liquidate'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── CASH POSITION ─────────── */
+function CashPositionView({ bankAccounts, bankTransactions, salesOrders, rfps, budgetRequests, cashAdvances }){
+  const totalBanks = bankAccounts.reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
+  const pettyCashOpen = cashAdvances.filter(c=>c.status==='open').reduce((s,c)=>s+(Number(c.amount||0)-Number(c.amount_liquidated||0)-Number(c.amount_returned||0)), 0);
+  // AR: unpaid SO balances
+  const arOpen = salesOrders.filter(s=>s.status!=='paid' && s.status!=='cancelled').reduce((s,o)=>s+Number(o.balance_due||0), 0);
+  // Money expected in next 30 days = SOs with expected_delivery within 30 days
+  const today = new Date(); const in30 = new Date(today.getTime()+30*86400000);
+  const arNext30 = salesOrders.filter(s=>{
+    if(s.status==='paid'||s.status==='cancelled') return false;
+    const ed = s.expected_delivery ? new Date(s.expected_delivery) : null;
+    return ed && ed <= in30;
+  }).reduce((s,o)=>s+Number(o.balance_due||0), 0);
+  // AP: unpaid finalized POs + pending RFPs not yet paid
+  const rfpPending = rfps.filter(r=>r.status!=='paid' && r.status!=='rejected').reduce((s,r)=>s+Number(r.amount||0), 0);
+  // Approved but unspent budgets
+  const budgetApproved = budgetRequests.filter(b=>b.status==='approved').reduce((s,b)=>s+Number(b.amount||0), 0);
+
+  const totalCash = totalBanks + pettyCashOpen;
+  const netPosition = totalCash + arOpen - rfpPending - budgetApproved;
+
+  function Card({ title, value, color='slate', sub }){
+    const colors = { slate:'bg-slate-50 border-slate-200 text-slate-800', emerald:'bg-emerald-50 border-emerald-200 text-emerald-800', rose:'bg-rose-50 border-rose-200 text-rose-800', indigo:'bg-indigo-50 border-indigo-200 text-indigo-800', amber:'bg-amber-50 border-amber-200 text-amber-800' };
+    return (
+      <div className={`border-2 rounded-xl p-4 ${colors[color]||colors.slate}`}>
+        <div className="text-[10px] uppercase tracking-widest font-bold opacity-70">{title}</div>
+        <div className="text-2xl font-extrabold mt-1">{peso(value)}</div>
+        {sub && <div className="text-[11px] mt-1 opacity-70">{sub}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">💎 Cash Position</h1>
+            <p className="text-slate-500 text-sm">Snapshot of where your money sits right now. Numbers update live as transactions post.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Headline net position */}
+      <div className={`rounded-2xl p-6 mb-5 border-2 ${netPosition>=0?'bg-gradient-to-br from-emerald-500 to-teal-600 border-emerald-700':'bg-gradient-to-br from-rose-500 to-pink-600 border-rose-700'} text-white`}>
+        <div className="text-xs uppercase tracking-widest opacity-80 font-bold">Net Position</div>
+        <div className="text-5xl font-black mt-2">{peso(netPosition)}</div>
+        <div className="text-xs mt-2 opacity-90">Cash on hand {peso(totalCash)} + AR {peso(arOpen)} − AP (RFPs) {peso(rfpPending)} − Approved Budgets {peso(budgetApproved)}</div>
+      </div>
+
+      {/* Money we hold */}
+      <div className="mb-5">
+        <div className="text-xs uppercase tracking-widest text-slate-500 font-bold mb-2">💰 Money you hold right now</div>
+        <div className="grid md:grid-cols-3 gap-3">
+          <Card title="All Banks" value={totalBanks} color="emerald" sub={`${bankAccounts.length} accounts`} />
+          <Card title="Petty Cash (CAs out)" value={pettyCashOpen} color="amber" sub={`${cashAdvances.filter(c=>c.status==='open').length} open CAs`} />
+          <Card title="Total Cash on Hand" value={totalCash} color="indigo" />
+        </div>
+        {bankAccounts.length>0 && (
+          <div className="mt-3 bg-white border rounded-lg overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Bank</th><th className="text-right px-3 py-2">Opening</th><th className="text-right px-3 py-2">In</th><th className="text-right px-3 py-2">Out</th><th className="text-right px-3 py-2">Balance</th></tr></thead>
+            <tbody>{bankAccounts.map(b=>{
+              const txns = bankTransactions.filter(t=>t.bank_id===b.id);
+              const ins = txns.filter(t=>t.direction==='in').reduce((s,t)=>s+Number(t.amount||0),0);
+              const outs = txns.filter(t=>t.direction==='out').reduce((s,t)=>s+Number(t.amount||0),0);
+              return (
+                <tr key={b.id} className="border-t">
+                  <td className="px-3 py-2 font-medium">{b.bank_name}</td>
+                  <td className="px-3 py-2 text-right">{peso(b.opening_balance)}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700">+{peso(ins)}</td>
+                  <td className="px-3 py-2 text-right text-rose-700">−{peso(outs)}</td>
+                  <td className="px-3 py-2 text-right font-bold">{peso(bankBalance(b, bankTransactions))}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+        )}
+      </div>
+
+      {/* Money expected IN */}
+      <div className="mb-5">
+        <div className="text-xs uppercase tracking-widest text-emerald-700 font-bold mb-2">📥 Expected to come in</div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <Card title="Total AR (all unpaid SOs)" value={arOpen} color="emerald" sub={`${salesOrders.filter(s=>s.status!=='paid'&&s.status!=='cancelled').length} open SOs`} />
+          <Card title="Due in next 30 days" value={arNext30} color="emerald" sub="By expected delivery" />
+        </div>
+      </div>
+
+      {/* Money expected OUT */}
+      <div className="mb-5">
+        <div className="text-xs uppercase tracking-widest text-rose-700 font-bold mb-2">📤 Expected to go out</div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <Card title="RFPs awaiting payment" value={rfpPending} color="rose" sub={`${rfps.filter(r=>r.status!=='paid'&&r.status!=='rejected').length} RFPs in queue`} />
+          <Card title="Approved budgets (unspent)" value={budgetApproved} color="amber" sub={`${budgetRequests.filter(b=>b.status==='approved').length} approved requests`} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─────────── CASH FLOW DASHBOARD ─────────── */
+function CashFlowView({ bankAccounts, bankTransactions, expenses }){
+  const [period,setPeriod]=useState('month');  // day | week | month
+  const [range,setRange]=useState('6');         // # of periods to show
+  const [bankFilter,setBankFilter]=useState('');
+
+  // Bucket bank transactions by period.
+  function bucketKey(dateStr){
+    const d = new Date(dateStr);
+    if(period==='day') return d.toISOString().slice(0,10);
+    if(period==='week'){
+      const onejan = new Date(d.getFullYear(),0,1);
+      const week = Math.ceil(((d - onejan)/86400000 + onejan.getDay()+1)/7);
+      return d.getFullYear()+'-W'+String(week).padStart(2,'0');
+    }
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  }
+
+  const txns = bankTransactions.filter(t=>!bankFilter || t.bank_id===bankFilter);
+  const buckets = {};
+  txns.forEach(t=>{
+    const k = bucketKey(t.date); if(!buckets[k]) buckets[k]={in:0,out:0,date:t.date};
+    if(t.direction==='in') buckets[k].in += Number(t.amount||0);
+    else buckets[k].out += Number(t.amount||0);
+  });
+  const ordered = Object.entries(buckets).sort(([a],[b])=>a.localeCompare(b)).slice(-Number(range));
+  const maxV = Math.max(1, ...ordered.map(([_,v])=>Math.max(v.in, v.out)));
+
+  // Totals across visible range
+  const totalIn = ordered.reduce((s,[_,v])=>s+v.in, 0);
+  const totalOut = ordered.reduce((s,[_,v])=>s+v.out, 0);
+  const net = totalIn - totalOut;
+
+  // Expense category breakdown (within filter window — all expenses for now)
+  const catTotals = {};
+  expenses.forEach(e=>{
+    const c = e.category||'Other'; catTotals[c] = (catTotals[c]||0) + Number(e.amount||0);
+  });
+  const sortedCats = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
+  const maxCat = Math.max(1, ...sortedCats.map(([_,v])=>v));
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📈 Cash Flow</h1>
+            <p className="text-slate-500 text-sm">{ordered.length} {period}{ordered.length===1?'':'s'} · In {peso(totalIn)} · Out {peso(totalOut)} · <strong className={net>=0?'text-emerald-700':'text-rose-700'}>Net {peso(net)}</strong></p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+              {['day','week','month'].map(p=>(
+                <button key={p} onClick={()=>setPeriod(p)} className={`px-3 py-1 rounded-md ${period===p?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{p[0].toUpperCase()+p.slice(1)}</button>
+              ))}
+            </div>
+            <select className="input text-xs py-1.5 w-24" value={range} onChange={e=>setRange(e.target.value)}>
+              <option value="6">Last 6</option>
+              <option value="12">Last 12</option>
+              <option value="24">Last 24</option>
+            </select>
+            <select className="input text-xs py-1.5 w-36" value={bankFilter} onChange={e=>setBankFilter(e.target.value)}>
+              <option value="">All banks</option>
+              {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* In vs Out bars */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-xs font-semibold uppercase text-slate-500 mb-3">Money in vs out · per {period}</div>
+        {ordered.length===0 ? (
+          <div className="text-center text-slate-400 text-sm py-6">No transactions in range yet.</div>
+        ) : (
+          <div className="flex items-end gap-3 h-64 overflow-x-auto">
+            {ordered.map(([k,v])=>{
+              const inH = (v.in/maxV)*100;
+              const outH = (v.out/maxV)*100;
+              return (
+                <div key={k} className="flex flex-col items-center min-w-[60px]">
+                  <div className="flex items-end gap-1 h-56">
+                    <div title={`In: ${peso(v.in)}`} className="bg-emerald-500 rounded-t w-5 transition-all" style={{height: `${inH}%`}} />
+                    <div title={`Out: ${peso(v.out)}`} className="bg-rose-500 rounded-t w-5 transition-all" style={{height: `${outH}%`}} />
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-1 font-mono">{k}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex items-center gap-4 mt-3 text-xs">
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-500"></span> Money in</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-rose-500"></span> Money out</span>
+        </div>
+      </div>
+
+      {/* Expense category breakdown */}
+      <div className="bg-white border rounded-xl p-4">
+        <div className="text-xs font-semibold uppercase text-slate-500 mb-3">Expenses by category (all-time)</div>
+        {sortedCats.length===0 ? (
+          <div className="text-center text-slate-400 text-sm py-6">No expenses logged yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {sortedCats.map(([cat,amt])=>(
+              <div key={cat} className="flex items-center gap-3">
+                <div className="w-32 text-xs font-medium text-slate-700">{cat}</div>
+                <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+                  <div className="bg-gradient-to-r from-indigo-500 to-rose-500 h-full transition-all" style={{width:`${(amt/maxCat)*100}%`}} />
+                </div>
+                <div className="w-28 text-right text-xs font-semibold">{peso(amt)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -8579,6 +9430,8 @@ function App(){
   const [bankAccounts,setBankAccounts]=useState([]); const [bankTransactions,setBankTransactions]=useState([]);
   const [rfps,setRfps]=useState([]); const [vouchers,setVouchers]=useState([]);
   const [budgetRequests,setBudgetRequests]=useState([]);
+  // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
+  const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('dashboard');
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
@@ -8637,7 +9490,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -8667,6 +9520,9 @@ function App(){
       sb.from('rfps').select('*').order('created_at',{ascending:false}),
       sb.from('vouchers').select('*').order('created_at',{ascending:false}),
       sb.from('budget_requests').select('*').order('created_at',{ascending:false}),
+      // Sprint 2 — graceful if tables aren't there yet
+      sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
+      sb.from('cash_advances').select('*').order('date',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -8692,6 +9548,8 @@ function App(){
     setRfps(rf && !rf.error ? (rf.data||[]) : []);
     setVouchers(vc && !vc.error ? (vc.data||[]) : []);
     setBudgetRequests(br && !br.error ? (br.data||[]) : []);
+    setExpenses(ex && !ex.error ? (ex.data||[]) : []);
+    setCashAdvances(ca && !ca.error ? (ca.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
   }
@@ -8704,31 +9562,30 @@ function App(){
     if(!profile) return;
     let allowed, fallback;
     if(profile.role==='assistant'){
-      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','prod','sampling','graphic','printing','logistics']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','prod','sampling','graphic','printing','logistics','budgets']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','team','prod','sampling','graphic','printing','logistics','sales-orders','ledger']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','team','prod','sampling','graphic','printing','logistics','sales-orders','ledger','budgets']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics','budgets']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics','budgets']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','logistics','budgets']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
-      // Purchasing creates RFPs from POs, but doesn't approve/disburse — give them
-      // visibility into the RFP queue (read-only on their submissions).
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','queue','orders','styles','logistics','rfps']);
+      // Purchasing creates RFPs from POs + can submit budget requests.
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','queue','orders','styles','logistics','rfps','budgets']);
       fallback = 'inventory';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers']);
-      fallback = 'rfps';
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow']);
+      fallback = 'cash-position';
     } else if(profile.role==='sewing_lead'){
-      allowed = new Set(['inbox','payroll','logistics']);
+      allowed = new Set(['inbox','payroll','logistics','budgets']);
       fallback = 'payroll';
     } else {
       return; // admin / manager — no restrictions
@@ -8918,25 +9775,39 @@ function App(){
   // single RFP entry so they can track their submissions. Sales Manager gets
   // SOs + Customer Ledger (read-only feel for them).
   const FINANCE_FULL = { group:'Finance', items:[
+    ['cash-position','Cash Position','💎'],
+    ['cash-flow','Cash Flow','📈'],
     ['sales-orders','Sales Orders','📜'],
     ['ledger','Customer Ledger','👥'],
     ['rfps','Request for Payment','📝'],
     ['vouchers','Check / Cash Vouchers','💳'],
+    ['expenses','Expenses','💸'],
+    ['petty-cash','Petty Cash / CAs','💵'],
+    ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
   ] };
   const FINANCE_PURCHASING = { group:'Finance', items:[
     ['rfps','Request for Payment','📝'],
+    ['budgets','Budget Requests','💰'],
   ] };
   const FINANCE_SALES = { group:'Finance', items:[
     ['sales-orders','Sales Orders','📜'],
     ['ledger','Customer Ledger','👥'],
+    ['budgets','Budget Requests','💰'],
+  ] };
+  // Any role can submit a budget request — give all non-Finance roles a thin
+  // Finance group with just Budget Requests so HR / Production / Graphic / etc.
+  // can submit and check status of their requests.
+  const FINANCE_DEPT_ONLY = { group:'Finance', items:[
+    ['budgets','Budget Requests','💰'],
   ] };
   if(isProduction || isGraphicTeam || isPrintingTeam){
     // Production / Graphic Design / Printing teams all share the same nav —
-    // Inbox + Production space + Logistics. They differ only in their default landing page.
+    // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+      FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
     ];
   } else if(isPurchasing){
@@ -8961,19 +9832,20 @@ function App(){
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
     ];
   } else if(isSewingLead){
-    // Sewing line team leader — Payroll + Logistics + inbox.
+    // Sewing line team leader — Payroll + Logistics + Budget Requests + inbox.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
     ];
   } else if(isAssistant){
-    // Sales Assistants — Sales + Production + Logistics. No Team Overview, no
-    // Operations / Purchasing / Other modules.
+    // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
+      FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
     ];
   } else if(isManager){
@@ -9111,6 +9983,12 @@ function App(){
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
+        {/* Finance Sprint 2 routes */}
+        {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
+        {view==='petty-cash' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
+        {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} reload={loadAll} />}
         {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
