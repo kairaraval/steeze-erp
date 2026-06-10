@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 20l · Logistics: drag deliveries to reorder + reassign';
+const BUILD = 'Live build 20m · Soft-delete + Trash recovery (admin)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1427,7 +1427,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const canDelete = isAdmin || !isAssistant; // admin + managers
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
   async function move(j,st){ const {error}=await sb.from(table).update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
-  async function del(id){ if(!confirm('Delete this job?')) return; const {error}=await sb.from(table).delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
+  async function del(id){ if(!confirm('Send this job to Trash?\n\nIt\'ll be recoverable from Settings → Trash by the admin.')) return; const {error}=await sb.from(table).update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id',id); if(error){ alert(error.message); return; } reload(); }
   async function sendToPrinting(j){
     const atts = j.attachments||[];
     if(!confirm(`Send ${j.number||''} to Printing with ${atts.length} attachment${atts.length===1?'':'s'}?`)) return;
@@ -1593,7 +1593,9 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
-  const canDelete=isAdmin || !isAssistant; // admin + managers can delete; assistants cannot
+  // Production board delete is now admin-only. Managers can still edit /
+  // move jobs, but only admin can send to Trash. Recover from Settings → Trash.
+  const canDelete=isAdmin;
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   async function changeOwner(j, ownerId){ const { error } = await sb.from('production_jobs').update({ sales_owner_id: ownerId||null }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   // Inline deadline editor: saves to production_jobs.due_date so the
@@ -1619,7 +1621,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
   // This three-level chain means jobs created before the fallback fix below
   // still show SOMETHING in the deadline column without requiring a re-save.
   function deadlineOf(j, lead){ return j.due_date || lead?.delivery_date || lead?.expected_close || ''; }
-  async function del(j){ if(!confirm(`Delete production job ${j.number||''} — ${j.item||''} for ${j.client_name||''}?`)) return; const { error } = await sb.from('production_jobs').delete().eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
+  async function del(j){ if(!confirm(`Send production job ${j.number||''} — ${j.item||''} for ${j.client_name||''} to Trash?\n\nIt'll be recoverable from Settings → Trash.`)) return; const { error } = await sb.from('production_jobs').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
   const active=jobs.filter(j=>!PRODUCTION_DONE.includes(j.status));
   const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
@@ -1873,7 +1875,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
     .slice()
     .sort(compareJobs);
   async function move(j,st){ const {error}=await sb.from('sampling_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
-  async function del(id){ if(!confirm('Delete this sampling job?')) return; const {error}=await sb.from('sampling_jobs').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
+  async function del(id){ if(!confirm('Send this sampling job to Trash?\n\nIt\'ll be recoverable from Settings → Trash.')) return; const {error}=await sb.from('sampling_jobs').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const tile=(label,value,sub,active2,onClick)=>(
     <button onClick={onClick} className={`text-left rounded-xl border p-4 transition ${active2?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
       <div className={`text-[11px] uppercase tracking-wide ${active2?'text-indigo-100':'text-slate-400'}`}>{label}</div>
@@ -2424,7 +2426,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
     }
     reload();
   }
-  async function del(l){ if(!confirm('Delete this lead?')) return; const {error}=await sb.from('leads').delete().eq('id',l.id); if(error){ alert(error.message); return; } reload(); }
+  async function del(l){ if(!confirm('Send this lead to Trash?\n\nIt\'ll be recoverable from Settings → Trash by the admin.')) return; const {error}=await sb.from('leads').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id',l.id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div>
       <div className="sticky top-0 z-20 bg-slate-100/95 backdrop-blur border-b border-slate-200 px-6 pt-5 pb-3">
@@ -3232,6 +3234,7 @@ function TeamOverview({ profile, profiles, leads, clients, reload }){
 /* Settings — admin-only team management. Lists every member regardless of role,
    plus the invite form + pending invites. */
 function SettingsView({ profile, profiles, pendingInvites, reload }){
+  const [tab,setTab]=useState('team'); // 'team' | 'trash'
   const [inviteEmail,setInviteEmail]=useState('');
   const [inviteRole,setInviteRole]=useState('manager');
   const [inviteNote,setInviteNote]=useState('');
@@ -3321,8 +3324,18 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     <div className="p-6 space-y-6 max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 mb-1">⚙️ Settings</h1>
-        <p className="text-slate-500 text-sm">Manage your team — invite new members, change roles, edit names. Everyone in Steeze OS is listed here.</p>
+        <p className="text-slate-500 text-sm">Manage your team and recover accidentally-deleted items.</p>
       </div>
+
+      {/* Top tabs */}
+      <div className="flex gap-1 border-b">
+        <button onClick={()=>setTab('team')} className={`px-4 py-2 text-sm rounded-t-lg ${tab==='team'?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>👥 Team</button>
+        <button onClick={()=>setTab('trash')} className={`px-4 py-2 text-sm rounded-t-lg ${tab==='trash'?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>🗑 Trash</button>
+      </div>
+
+      {tab==='trash' && <TrashView profile={profile} profiles={profiles} reload={reload} />}
+
+      {tab==='team' && <>
 
       {/* Invite form */}
       <div className="bg-white border rounded-xl p-4">
@@ -3446,6 +3459,115 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
           </tbody>
         </table></div>
       </div>
+
+      </>}
+    </div>
+  );
+}
+
+// Trash view — admin-only recovery panel. Fetches soft-deleted rows from the
+// 5 supported tables, lets the admin Restore (clear deleted_at) or Delete
+// forever (real DELETE). One section per source table.
+function TrashView({ profile, profiles, reload }){
+  const [buckets,setBuckets]=useState({ leads:[], production_jobs:[], graphic_design_jobs:[], printing_jobs:[], sampling_jobs:[] });
+  const [busy,setBusy]=useState(false);
+  const [loadErr,setLoadErr]=useState('');
+  const TABLES = [
+    { key:'leads',                table:'leads',                icon:'💼', label:'Leads',         titleOf: r=>r.title || '(no title)',                              metaOf: r=>r.client_id?'Client: '+(r.client_id.slice(0,8)+'…'):'' },
+    { key:'production_jobs',      table:'production_jobs',      icon:'⚙',  label:'Production',     titleOf: r=>`${r.number||''} · ${r.item||''}`,                    metaOf: r=>r.client_name||'' },
+    { key:'graphic_design_jobs',  table:'graphic_design_jobs',  icon:'🎨', label:'Graphic Design', titleOf: r=>`${r.number||''} · ${r.item||''}`,                    metaOf: r=>r.client_name||'' },
+    { key:'printing_jobs',        table:'printing_jobs',        icon:'🖨', label:'Printing',       titleOf: r=>`${r.number||''} · ${r.item||''}`,                    metaOf: r=>r.client_name||'' },
+    { key:'sampling_jobs',        table:'sampling_jobs',        icon:'🧵', label:'Sampling',       titleOf: r=>`${r.number||''} · ${r.item||''}`,                    metaOf: r=>r.client_name||'' },
+  ];
+
+  async function loadTrash(){
+    setLoadErr('');
+    try {
+      const results = await Promise.all(TABLES.map(t =>
+        sb.from(t.table).select('*').not('deleted_at','is', null).order('deleted_at', { ascending:false }).limit(500)
+      ));
+      const next = {};
+      results.forEach((r,i)=>{
+        if(r.error){ console.warn('Trash load failed for', TABLES[i].table, r.error.message); next[TABLES[i].key]=[]; return; }
+        next[TABLES[i].key] = r.data||[];
+      });
+      setBuckets(next);
+    } catch(e){ setLoadErr(String(e.message||e)); }
+  }
+  useEffect(()=>{ loadTrash(); },[]);
+
+  function whoDeleted(r){ const p = (profiles||[]).find(x=>x.id===r.deleted_by); return p? (p.name||p.email) : 'someone'; }
+  function fmtWhen(iso){ if(!iso) return ''; try { return new Date(iso).toLocaleString('en-PH', { timeZone:'Asia/Manila', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){ return iso; } }
+
+  async function restore(t, r){
+    if(busy) return;
+    if(!confirm(`Restore "${t.titleOf(r)}"?\n\nIt'll return to its board / list as if it was never deleted.`)) return;
+    setBusy(true);
+    const { error } = await sb.from(t.table).update({ deleted_at:null, deleted_by:null }).eq('id', r.id);
+    setBusy(false);
+    if(error){ alert('Restore failed: '+error.message); return; }
+    await loadTrash();
+    reload && reload();
+  }
+  async function purge(t, r){
+    if(busy) return;
+    if(!confirm(`⚠ PERMANENTLY delete "${t.titleOf(r)}"?\n\nThis cannot be undone. The row will be wiped from the database for good.`)) return;
+    setBusy(true);
+    const { error } = await sb.from(t.table).delete().eq('id', r.id);
+    setBusy(false);
+    if(error){ alert('Permanent delete failed: '+error.message); return; }
+    await loadTrash();
+    reload && reload();
+  }
+  async function emptyAll(t){
+    const rows = buckets[t.key]||[];
+    if(rows.length===0) return;
+    if(!confirm(`⚠ Permanently delete ALL ${rows.length} item${rows.length===1?'':'s'} in ${t.label} trash?\n\nThis cannot be undone.`)) return;
+    setBusy(true);
+    const { error } = await sb.from(t.table).delete().in('id', rows.map(r=>r.id));
+    setBusy(false);
+    if(error){ alert('Empty trash failed: '+error.message); return; }
+    await loadTrash();
+    reload && reload();
+  }
+
+  const totalCount = TABLES.reduce((s,t)=>s+(buckets[t.key]||[]).length, 0);
+  return (
+    <div className="space-y-4">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+        <strong>🗑 Trash</strong> · Items deleted from Leads, Production, Graphic, Printing, and Sampling boards land here so you can recover them.
+        Items are kept until you Permanently delete them or run a future cleanup. Total in trash: <strong>{totalCount}</strong>.
+        {loadErr && <div className="mt-2 text-rose-700 font-semibold">Failed to load: {loadErr}</div>}
+      </div>
+      {TABLES.map(t => {
+        const rows = buckets[t.key]||[];
+        return (
+          <div key={t.key} className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 flex items-center justify-between border-b bg-slate-50">
+              <div className="font-semibold text-slate-700">{t.icon} {t.label} <span className="text-slate-400 font-normal text-xs ml-1">({rows.length})</span></div>
+              {rows.length>0 && <button onClick={()=>emptyAll(t)} disabled={busy} className="text-xs text-rose-600 hover:underline disabled:opacity-50">Empty this trash →</button>}
+            </div>
+            {rows.length===0 ? (
+              <div className="px-4 py-4 text-xs text-slate-400">No deleted {t.label.toLowerCase()} items.</div>
+            ) : (
+              <div className="divide-y">
+                {rows.map(r=>(
+                  <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-slate-800 truncate">{t.titleOf(r)}</div>
+                      <div className="text-[11px] text-slate-500">{t.metaOf(r)}{t.metaOf(r)?' · ':''}Deleted {fmtWhen(r.deleted_at)} by {whoDeleted(r)}</div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button onClick={()=>restore(t,r)} disabled={busy} className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-700 font-semibold hover:bg-emerald-100 disabled:opacity-50">↺ Restore</button>
+                      <button onClick={()=>purge(t,r)} disabled={busy} className="text-xs px-2.5 py-1 rounded border border-rose-300 bg-white text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">🗑 Delete forever</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -7172,20 +7294,20 @@ function App(){
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
-      sb.from('leads').select('*').order('created_at',{ ascending:false }),
+      sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }),
       sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }),
       sb.from('lead_activity').select('lead_id').eq('type','comment'),
       sb.from('dept_job_activity').select('job_id,job_type').eq('type','comment'),
-      sb.from('production_jobs').select('*').order('created_at',{ ascending:false }),
-      sb.from('graphic_design_jobs').select('*').order('created_at',{ ascending:false }),
-      sb.from('printing_jobs').select('*').order('created_at',{ ascending:false }),
+      sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
+      sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
+      sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('items').select('*').order('name'),
       sb.from('suppliers').select('*').order('company'),
       sb.from('departments').select('*').order('name'),
       sb.from('purchase_requests').select('*').order('created_at',{ascending:false}),
       sb.from('purchase_orders').select('*').order('created_at',{ascending:false}),
-      sb.from('sampling_jobs').select('*').order('created_at',{ascending:false}),
+      sb.from('sampling_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('size_charts').select('*').order('name'),
       sb.from('garment_mockups').select('*').order('name'),
       sb.from('styles').select('*').order('created_at',{ascending:false}),
