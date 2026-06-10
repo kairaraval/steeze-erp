@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 22 · Finance Sprint 2 — Expenses, Budgets, Petty Cash, Cash Position, Cash Flow';
+const BUILD = 'Live build 23 · Finance Sprint 3 — Payment Calendar, P&L, BIR Helpers + 2307';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9307,6 +9307,563 @@ function CashFlowView({ bankAccounts, bankTransactions, expenses }){
 }
 
 
+/* ====================== FINANCE MODULE — Sprint 3 ====================== */
+// Reports + planning over Sprint 1 + 2 data. No new tables.
+//   • Payment Calendar (forward look at what's due)
+//   • P&L Summary (Revenue − COGS − Opex = Net Income)
+//   • BIR Tax Helpers (VAT summary + 2307 generation)
+
+// Pre-filled PH BIR monthly deadlines. These show on every month of the calendar
+// so you never miss filing dates. Day = day of month.
+const BIR_DEADLINES = [
+  { day:10, label:'BIR 1601-C (WHT on Compensation)',   detail:'Filing & payment due — withholding tax on salaries from previous month' },
+  { day:12, label:'BIR 2550M (Monthly VAT Return)',     detail:'Monthly VAT declaration & payment (covering previous month sales)' },
+  { day:20, label:'BIR 1601-EQ / 1601-FQ',              detail:'Quarterly expanded / final withholding tax (if quarter-end month)' },
+  { day:25, label:'BIR 2550Q / 1701Q (Quarterly)',      detail:'Quarterly VAT return / income tax return (if quarter-end month)' },
+];
+
+
+/* ─────────── PAYMENT CALENDAR ─────────── */
+function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouchers, suppliers }){
+  const today = new Date();
+  const [year,setYear]=useState(today.getFullYear());
+  const [month,setMonth]=useState(today.getMonth()); // 0-indexed
+  const [selectedDay,setSelectedDay]=useState(null);
+  const monthKey = `${year}-${String(month+1).padStart(2,'0')}`;
+
+  // Build events for the month. Each event has: day, type, direction, amount, label, status, raw
+  const events = [];
+  // SO expected deliveries → expected money in
+  salesOrders.filter(s=> s.expected_delivery && (s.expected_delivery||'').startsWith(monthKey) && s.status!=='cancelled')
+    .forEach(s => events.push({
+      day: parseInt((s.expected_delivery||'').slice(8,10),10),
+      type:'so', direction:'in', amount:Number(s.balance_due||0), label:`${s.client_name||''} · ${s.number}`,
+      status: s.status==='paid'?'paid':(s.status==='partial'?'partial':'open'), raw:s,
+    }));
+  // RFPs due dates → money out
+  rfps.filter(r=> r.due_date && (r.due_date||'').startsWith(monthKey) && r.status!=='rejected')
+    .forEach(r => events.push({
+      day: parseInt((r.due_date||'').slice(8,10),10),
+      type:'rfp', direction:'out', amount:Number(r.amount||0), label:`${r.supplier_name||''} · ${r.number}`,
+      status: r.status==='paid'?'paid':(r.status==='approved'?'approved':'pending'), raw:r,
+    }));
+  // Approved budgets with date_needed
+  budgetRequests.filter(b=> b.status==='approved' && b.date_needed && (b.date_needed||'').startsWith(monthKey))
+    .forEach(b => events.push({
+      day: parseInt((b.date_needed||'').slice(8,10),10),
+      type:'budget', direction:'out', amount:Number(b.amount||0), label:`${b.department||''} · ${b.purpose||''}`,
+      status:'approved', raw:b,
+    }));
+  // Vouchers released this month (historical paid items)
+  vouchers.filter(v=> v.date && (v.date||'').startsWith(monthKey))
+    .forEach(v => events.push({
+      day: parseInt((v.date||'').slice(8,10),10),
+      type:'voucher', direction:'out', amount:Number(v.amount||0), label:`${v.payee||''} · ${v.number}`,
+      status:'paid', raw:v,
+    }));
+  // BIR deadlines — every month gets these. They are zero-amount reminders.
+  BIR_DEADLINES.forEach(d=> events.push({
+    day:d.day, type:'bir', direction:'out', amount:0, label:`📋 ${d.label}`, status:'pinned', raw:d,
+  }));
+
+  // Group by day
+  const byDay = {};
+  events.forEach(e => { if(!byDay[e.day]) byDay[e.day]=[]; byDay[e.day].push(e); });
+
+  // Month grid
+  const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const cells = [];
+  for(let i=0;i<firstDay;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  // pad to weeks of 7
+  while(cells.length%7!==0) cells.push(null);
+
+  function nav(dir){
+    let y=year, m=month+dir;
+    if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
+    setYear(y); setMonth(m); setSelectedDay(null);
+  }
+  function gotoToday(){ setYear(today.getFullYear()); setMonth(today.getMonth()); setSelectedDay(today.getDate()); }
+
+  const totalIn = events.filter(e=>e.direction==='in').reduce((s,e)=>s+e.amount, 0);
+  const totalOut = events.filter(e=>e.direction==='out').reduce((s,e)=>s+e.amount, 0);
+  const monthName = new Date(year, month).toLocaleString('en-PH',{ month:'long', year:'numeric' });
+  const isToday = (d)=> d===today.getDate() && month===today.getMonth() && year===today.getFullYear();
+
+  function dayCellColor(d){
+    if(!d) return 'bg-slate-50';
+    if(selectedDay===d) return 'bg-indigo-100 border-indigo-400';
+    if(isToday(d)) return 'bg-amber-50 border-amber-300';
+    const evs = byDay[d]||[];
+    if(evs.some(e=>e.type!=='bir' && e.direction==='out' && e.status!=='paid')) return 'bg-rose-50/60 hover:bg-rose-100';
+    if(evs.some(e=>e.type!=='bir' && e.direction==='in')) return 'bg-emerald-50/60 hover:bg-emerald-100';
+    if(evs.length>0) return 'bg-white hover:bg-slate-50';
+    return 'bg-white hover:bg-slate-50';
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🗓 Payment Calendar</h1>
+            <p className="text-slate-500 text-sm">{monthName} · Expected in <strong className="text-emerald-700">{peso(totalIn)}</strong> · Expected out <strong className="text-rose-700">{peso(totalOut)}</strong></p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>nav(-1)} className="px-3 py-1.5 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">‹ Prev</button>
+            <button onClick={gotoToday} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Today</button>
+            <button onClick={()=>nav(1)} className="px-3 py-1.5 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">Next ›</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 mb-3 text-xs flex-wrap">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-200"></span> Money in</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-rose-200"></span> Money out (unpaid)</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-amber-300"></span> Today</span>
+        <span className="flex items-center gap-1">📋 BIR deadline</span>
+      </div>
+
+      {/* Calendar grid */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="grid grid-cols-7 bg-slate-50 text-[10px] uppercase font-bold text-slate-500 text-center py-2 border-b">
+          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div key={d}>{d}</div>)}
+        </div>
+        <div className="grid grid-cols-7">
+          {cells.map((d,i)=>{
+            const evs = d ? (byDay[d]||[]) : [];
+            const dayIn = evs.filter(e=>e.direction==='in').reduce((s,e)=>s+e.amount,0);
+            const dayOut = evs.filter(e=>e.direction==='out' && e.type!=='bir').reduce((s,e)=>s+e.amount,0);
+            return (
+              <div key={i} onClick={()=>d && setSelectedDay(d)} className={`min-h-[110px] p-1.5 border-r border-b last:border-r-0 cursor-pointer transition ${dayCellColor(d)}`}>
+                {d && (
+                  <>
+                    <div className={`text-xs font-bold mb-1 ${isToday(d)?'text-amber-700':'text-slate-600'}`}>{d}</div>
+                    <div className="space-y-0.5">
+                      {evs.slice(0,3).map((e,j)=>(
+                        <div key={j} className={`text-[10px] truncate px-1 py-0.5 rounded ${e.type==='bir'?'bg-purple-100 text-purple-800':e.direction==='in'?'bg-emerald-200/80 text-emerald-900':e.status==='paid'?'bg-slate-200 text-slate-500 line-through':'bg-rose-200/80 text-rose-900'}`} title={e.label}>
+                          {e.amount>0 && <span className="font-bold">{e.direction==='in'?'+':'−'}{peso(e.amount).replace('₱','')}</span>} {e.label}
+                        </div>
+                      ))}
+                      {evs.length>3 && <div className="text-[10px] text-slate-500 px-1">+{evs.length-3} more</div>}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Selected day detail */}
+      {selectedDay && (
+        <div className="mt-4 bg-white border-2 border-indigo-300 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-bold text-slate-800">{new Date(year, month, selectedDay).toLocaleDateString('en-PH',{ weekday:'long', month:'long', day:'numeric', year:'numeric' })}</div>
+            <button onClick={()=>setSelectedDay(null)} className="text-xs text-slate-400 hover:text-slate-700">Close ✕</button>
+          </div>
+          {(byDay[selectedDay]||[]).length===0 ? (
+            <div className="text-sm text-slate-400">Nothing scheduled this day.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1">Type</th><th className="text-left py-1">Description</th><th className="text-left py-1">Status</th><th className="text-right py-1">Amount</th></tr></thead>
+              <tbody>{(byDay[selectedDay]||[]).map((e,i)=>(
+                <tr key={i} className="border-t">
+                  <td className="py-1.5"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${e.type==='bir'?'bg-purple-100 text-purple-700':e.type==='so'?'bg-emerald-100 text-emerald-700':e.type==='rfp'?'bg-amber-100 text-amber-700':e.type==='budget'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-700'}`}>{e.type==='so'?'SO':e.type==='rfp'?'RFP':e.type==='budget'?'Budget':e.type==='voucher'?'Voucher':'BIR'}</span></td>
+                  <td className="py-1.5">{e.label}</td>
+                  <td className="py-1.5"><span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${e.status==='paid'?'bg-emerald-100 text-emerald-700':e.status==='approved'?'bg-blue-100 text-blue-700':e.status==='pinned'?'bg-purple-100 text-purple-700':'bg-amber-100 text-amber-700'}`}>{e.status}</span></td>
+                  <td className={`py-1.5 text-right font-semibold ${e.direction==='in'?'text-emerald-700':e.amount>0?'text-rose-700':'text-slate-400'}`}>{e.amount>0?(e.direction==='in'?'+':'−')+peso(e.amount):'—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ─────────── P&L SUMMARY ─────────── */
+function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTransactions }){
+  const today = new Date();
+  const [year,setYear]=useState(today.getFullYear());
+  const [mode,setMode]=useState('month'); // 'month' | 'ytd'
+  const [month,setMonth]=useState(today.getMonth()); // 0-indexed
+  const monthKey = `${year}-${String(month+1).padStart(2,'0')}`;
+  const yearKey = `${year}-`;
+
+  // Helper: does a date string fall within the current selection?
+  function inRange(d){
+    if(!d) return false;
+    return mode==='ytd' ? d.startsWith(String(year)) : d.startsWith(monthKey);
+  }
+
+  // Revenue — we use SOs delivered in the period as the revenue trigger (accrual).
+  // If delivered_at is not set, fall back to date (helpful while you're adopting).
+  const revenueSOs = salesOrders.filter(s => s.status!=='cancelled' && inRange(s.delivered_at || s.date));
+  const revenue = revenueSOs.reduce((s,o)=>s+Number(o.total||0), 0);
+
+  // COGS — PO totals for POs received in the period (subtotal only, VAT we get back).
+  // If a PO has vat_enabled, COGS is total/1.12 (back out VAT); otherwise total.
+  const cogsPOs = orders.filter(o => o.status!=='draft' && o.status!=='cancelled' && inRange(o.received_at || o.date));
+  const cogs = cogsPOs.reduce((s,o)=>{
+    const tot = Number(o.total||0);
+    return s + (o.vat_enabled ? tot/1.12 : tot);
+  }, 0);
+
+  // Opex — expenses by category for the period
+  const opexExpenses = expenses.filter(e => inRange(e.date));
+  const opex = opexExpenses.reduce((s,e)=>s+Number(e.amount||0), 0);
+  const byCat = {};
+  opexExpenses.forEach(e=>{ const c=e.category||'Other'; byCat[c]=(byCat[c]||0)+Number(e.amount||0); });
+  const sortedCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+
+  const grossProfit = revenue - cogs;
+  const netIncome = grossProfit - opex;
+  const grossMargin = revenue>0 ? (grossProfit/revenue*100) : 0;
+  const netMargin = revenue>0 ? (netIncome/revenue*100) : 0;
+
+  // Cash receipts vs cash payments in period (cash basis, derived from bank txns)
+  const cashIn = bankTransactions.filter(t => t.direction==='in' && inRange(t.date)).reduce((s,t)=>s+Number(t.amount||0), 0);
+  const cashOut = bankTransactions.filter(t => t.direction==='out' && inRange(t.date)).reduce((s,t)=>s+Number(t.amount||0), 0);
+  const cashNet = cashIn - cashOut;
+
+  const monthName = new Date(year, month).toLocaleString('en-PH',{ month:'long', year:'numeric' });
+
+  function Row({ label, value, bold, color, sub, indent }){
+    return (
+      <tr className={bold?'border-t-2 border-b-2 border-slate-300':'border-t'}>
+        <td className={`py-2 ${indent?'pl-6':''} ${bold?'font-extrabold uppercase text-xs tracking-wider':'text-slate-700'} ${color||''}`}>{label}{sub && <span className="text-[10px] text-slate-400 ml-2 normal-case font-normal">{sub}</span>}</td>
+        <td className={`py-2 text-right ${bold?'font-extrabold text-base':'font-semibold'} ${color||''}`}>{peso(value)}</td>
+      </tr>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📊 P&L Summary</h1>
+            <p className="text-slate-500 text-sm">{mode==='month'?monthName:`Year ${year} (YTD)`} · {revenueSOs.length} delivered SOs · {opexExpenses.length} expenses</p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+              <button onClick={()=>setMode('month')} className={`px-3 py-1 rounded-md ${mode==='month'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Month</button>
+              <button onClick={()=>setMode('ytd')} className={`px-3 py-1 rounded-md ${mode==='ytd'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>YTD</button>
+            </div>
+            {mode==='month' && (
+              <select className="input text-xs py-1.5 w-32" value={month} onChange={e=>setMonth(parseInt(e.target.value,10))}>
+                {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m,i)=><option key={m} value={i}>{m}</option>)}
+              </select>
+            )}
+            <select className="input text-xs py-1.5 w-24" value={year} onChange={e=>setYear(parseInt(e.target.value,10))}>
+              {[today.getFullYear(), today.getFullYear()-1, today.getFullYear()-2].map(y=><option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Big numbers */}
+      <div className="grid md:grid-cols-4 gap-3 mb-4">
+        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4"><div className="text-[10px] uppercase font-bold tracking-widest text-emerald-700">Revenue</div><div className="text-2xl font-extrabold text-emerald-800 mt-1">{peso(revenue)}</div></div>
+        <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4"><div className="text-[10px] uppercase font-bold tracking-widest text-rose-700">COGS</div><div className="text-2xl font-extrabold text-rose-800 mt-1">{peso(cogs)}</div></div>
+        <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4"><div className="text-[10px] uppercase font-bold tracking-widest text-amber-700">Opex</div><div className="text-2xl font-extrabold text-amber-800 mt-1">{peso(opex)}</div></div>
+        <div className={`border-2 rounded-xl p-4 ${netIncome>=0?'bg-indigo-50 border-indigo-200':'bg-slate-100 border-slate-300'}`}><div className={`text-[10px] uppercase font-bold tracking-widest ${netIncome>=0?'text-indigo-700':'text-slate-600'}`}>Net Income</div><div className={`text-2xl font-extrabold mt-1 ${netIncome>=0?'text-indigo-800':'text-rose-700'}`}>{peso(netIncome)}</div><div className="text-[10px] mt-1 text-slate-500">{netMargin.toFixed(1)}% margin</div></div>
+      </div>
+
+      {/* Income statement table */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-xs font-semibold uppercase text-slate-500 mb-3">Income Statement</div>
+        <table className="w-full text-sm">
+          <tbody>
+            <Row label="REVENUE" value={revenue} bold />
+            <Row label="Sales (delivered SOs)" value={revenue} indent sub={`${revenueSOs.length} SO${revenueSOs.length===1?'':'s'}`} />
+            <Row label="COST OF GOODS SOLD" value={cogs} bold color="text-rose-700" />
+            <Row label="Materials & supplier costs (POs)" value={cogs} indent sub={`${cogsPOs.length} PO${cogsPOs.length===1?'':'s'}`} />
+            <Row label="GROSS PROFIT" value={grossProfit} bold color={grossProfit>=0?'text-emerald-700':'text-rose-700'} sub={`${grossMargin.toFixed(1)}% margin`} />
+            <Row label="OPERATING EXPENSES" value={opex} bold color="text-amber-700" />
+            {sortedCats.map(([cat,amt])=>(
+              <Row key={cat} label={cat} value={amt} indent />
+            ))}
+            <Row label="NET INCOME" value={netIncome} bold color={netIncome>=0?'text-indigo-700':'text-rose-700'} sub={`${netMargin.toFixed(1)}% margin`} />
+          </tbody>
+        </table>
+      </div>
+
+      {/* Cash basis comparison */}
+      <div className="bg-slate-50 border rounded-xl p-4">
+        <div className="text-xs font-semibold uppercase text-slate-500 mb-3">Cash Basis (from bank transactions, same period)</div>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="bg-white border rounded p-3"><div className="text-[10px] uppercase text-slate-500">Cash In</div><div className="text-lg font-bold text-emerald-700">{peso(cashIn)}</div></div>
+          <div className="bg-white border rounded p-3"><div className="text-[10px] uppercase text-slate-500">Cash Out</div><div className="text-lg font-bold text-rose-700">{peso(cashOut)}</div></div>
+          <div className="bg-white border rounded p-3"><div className="text-[10px] uppercase text-slate-500">Net Cash</div><div className={`text-lg font-bold ${cashNet>=0?'text-emerald-700':'text-rose-700'}`}>{peso(cashNet)}</div></div>
+        </div>
+        <div className="text-[10px] text-slate-400 mt-2">P&L uses accrual (when SO delivered / PO received). Cash basis above shows actual bank movement in the same window — useful for catching timing differences.</div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─────────── BIR TAX HELPERS ─────────── */
+function BIRHelpersView({ profile, orders, salesOrders, suppliers, vouchers }){
+  const today = new Date();
+  const [year,setYear]=useState(today.getFullYear());
+  const [month,setMonth]=useState(today.getMonth());
+  const [printing2307,setPrinting2307]=useState(null);
+  const monthKey = `${year}-${String(month+1).padStart(2,'0')}`;
+  function inRange(d){ return d && d.startsWith(monthKey); }
+
+  // OUTPUT VAT — from SOs delivered in the period (sales VAT we collected)
+  const outputRows = salesOrders.filter(s => s.status!=='cancelled' && inRange(s.delivered_at || s.date));
+  const outputVat = outputRows.reduce((s,o)=>{
+    // Use saved vat_amount if present; otherwise back out 12% from total when vatable_sales known
+    if(o.vat_amount) return s + Number(o.vat_amount);
+    return s + Number(o.vatable_sales||0) * 0.12;
+  }, 0);
+  const outputVatableSales = outputRows.reduce((s,o)=>s+Number(o.vatable_sales||o.total||0), 0);
+
+  // INPUT VAT — from POs where vat_enabled is true (purchases VAT we can claim back)
+  const inputRows = orders.filter(o => o.vat_enabled && o.status!=='draft' && o.status!=='cancelled' && inRange(o.received_at || o.date));
+  const inputVat = inputRows.reduce((s,o)=>{
+    const subtotal = (o.lines||[]).reduce((ss,l)=>ss+(Number(l.qty)||0)*(Number(l.unit_cost)||0), 0);
+    return s + subtotal*0.12;
+  }, 0);
+  const inputVatableTotal = inputRows.reduce((s,o)=>{
+    return s + (o.lines||[]).reduce((ss,l)=>ss+(Number(l.qty)||0)*(Number(l.unit_cost)||0), 0);
+  }, 0);
+
+  const vatPayable = Math.max(0, outputVat - inputVat);
+  const vatCreditable = outputVat < inputVat ? (inputVat - outputVat) : 0;
+
+  // WITHHOLDING TAX by supplier — for 2307 generation
+  const whtBySupp = {};
+  orders.filter(o => o.withholding_tax_enabled && o.status!=='draft' && o.status!=='cancelled' && inRange(o.received_at || o.date)).forEach(o=>{
+    const subtotal = (o.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0), 0);
+    const rate = Number(o.withholding_tax_rate)||0;
+    const wht = subtotal * rate/100;
+    const k = o.supplier_id || 'unknown';
+    if(!whtBySupp[k]) whtBySupp[k] = { supplier: suppliers.find(s=>s.id===k), pos:[], totalSubtotal:0, totalWHT:0, rate };
+    whtBySupp[k].pos.push(o);
+    whtBySupp[k].totalSubtotal += subtotal;
+    whtBySupp[k].totalWHT += wht;
+  });
+  const whtSuppliers = Object.entries(whtBySupp);
+  const totalWHT = whtSuppliers.reduce((s,[_,v])=>s+v.totalWHT, 0);
+
+  const monthName = new Date(year, month).toLocaleString('en-PH',{ month:'long', year:'numeric' });
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🧾 BIR Tax Helpers</h1>
+            <p className="text-slate-500 text-sm">{monthName} · VAT Payable {peso(vatPayable)} · WHT to remit {peso(totalWHT)}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select className="input text-xs py-1.5 w-32" value={month} onChange={e=>setMonth(parseInt(e.target.value,10))}>
+              {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m,i)=><option key={m} value={i}>{m}</option>)}
+            </select>
+            <select className="input text-xs py-1.5 w-24" value={year} onChange={e=>setYear(parseInt(e.target.value,10))}>
+              {[today.getFullYear(), today.getFullYear()-1].map(y=><option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Reminder: monthly BIR deadlines */}
+      <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4 text-xs">
+        <div className="font-bold text-purple-900 mb-1">📅 BIR monthly deadlines</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {BIR_DEADLINES.map(d=><div key={d.day} className="bg-white border rounded p-2"><div className="font-bold">{d.day}th</div><div className="text-[10px] text-slate-500">{d.label}</div></div>)}
+        </div>
+      </div>
+
+      {/* VAT SECTION */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-sm font-bold uppercase text-slate-700 mb-3">VAT Summary (BIR Form 2550M)</div>
+        <table className="w-full text-sm">
+          <tbody>
+            <tr className="border-t-2 border-emerald-300 bg-emerald-50">
+              <td className="py-2 px-3 font-bold uppercase text-xs tracking-wider text-emerald-700">OUTPUT VAT (Sales)</td>
+              <td className="py-2 text-right font-extrabold text-emerald-800">{peso(outputVat)}</td>
+            </tr>
+            <tr className="border-t"><td className="py-1.5 px-3 pl-6 text-xs">VATable Sales (subtotal)</td><td className="py-1.5 text-right">{peso(outputVatableSales)}</td></tr>
+            <tr className="border-t"><td className="py-1.5 px-3 pl-6 text-xs">× 12% VAT</td><td className="py-1.5 text-right font-semibold">{peso(outputVat)}</td></tr>
+
+            <tr className="border-t-2 border-rose-300 bg-rose-50">
+              <td className="py-2 px-3 font-bold uppercase text-xs tracking-wider text-rose-700">LESS: INPUT VAT (Purchases)</td>
+              <td className="py-2 text-right font-extrabold text-rose-800">({peso(inputVat)})</td>
+            </tr>
+            <tr className="border-t"><td className="py-1.5 px-3 pl-6 text-xs">VATable Purchases (subtotal)</td><td className="py-1.5 text-right">{peso(inputVatableTotal)}</td></tr>
+            <tr className="border-t"><td className="py-1.5 px-3 pl-6 text-xs">× 12% VAT</td><td className="py-1.5 text-right font-semibold">{peso(inputVat)}</td></tr>
+
+            <tr className={`border-t-2 border-b-2 ${vatPayable>0?'bg-indigo-50 border-indigo-300':'bg-emerald-50 border-emerald-300'}`}>
+              <td className="py-3 px-3 font-extrabold uppercase tracking-wider">VAT PAYABLE</td>
+              <td className={`py-3 text-right text-xl font-black ${vatPayable>0?'text-indigo-800':'text-emerald-800'}`}>{peso(vatPayable)}</td>
+            </tr>
+            {vatCreditable>0 && (
+              <tr className="border-t"><td className="py-1.5 px-3 text-xs text-emerald-700">Excess Input VAT (creditable forward)</td><td className="py-1.5 text-right font-semibold text-emerald-700">{peso(vatCreditable)}</td></tr>
+            )}
+          </tbody>
+        </table>
+        <div className="text-[10px] text-slate-400 mt-2">File: BIR Form 2550M by the 20th of the following month. If VAT Payable {'>'}  0, also remit via online banking or AAB.</div>
+      </div>
+
+      {/* WHT — suppliers we withheld from */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-sm font-bold uppercase text-slate-700 mb-3">Expanded Withholding Tax (BIR Form 1601-EQ)</div>
+        {whtSuppliers.length===0 ? (
+          <div className="text-sm text-slate-400 py-4">No POs in {monthName} have withholding tax enabled. Toggle it on a PO's totals box to record WHT here.</div>
+        ) : (
+          <>
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">TIN</th><th className="text-right px-3 py-2">VATable Purchases</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">WHT Amount</th><th></th></tr></thead>
+              <tbody>{whtSuppliers.map(([k,v])=>(
+                <tr key={k} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium">{v.supplier?.company||'Unknown supplier'}</td>
+                  <td className="px-3 py-2 text-xs font-mono">{v.supplier?.tin||'—'}</td>
+                  <td className="px-3 py-2 text-right">{peso(v.totalSubtotal)}</td>
+                  <td className="px-3 py-2 text-right">{v.rate}%</td>
+                  <td className="px-3 py-2 text-right font-bold text-amber-700">{peso(v.totalWHT)}</td>
+                  <td className="px-3 py-2 text-right"><button onClick={()=>setPrinting2307({ supplier:v.supplier, pos:v.pos, subtotal:v.totalSubtotal, wht:v.totalWHT, rate:v.rate, month:monthName, monthKey })} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 2307</button></td>
+                </tr>
+              ))}
+              <tr className="border-t-2 bg-amber-50">
+                <td colSpan="4" className="px-3 py-2 font-bold uppercase tracking-wider text-xs text-amber-800">Total WHT to remit</td>
+                <td className="px-3 py-2 text-right font-extrabold text-amber-800 text-base">{peso(totalWHT)}</td>
+                <td></td>
+              </tr>
+              </tbody>
+            </table>
+            <div className="text-[10px] text-slate-400 mt-2">Click 🖨 2307 to generate a BIR Form 2307 (Certificate of Creditable Tax Withheld at Source) for each supplier — give a copy to them, keep one for your books, and remit the total to BIR by the 10th of the following month.</div>
+          </>
+        )}
+      </div>
+
+      {printing2307 && <BIR2307PrintView data={printing2307} profile={profile} onClose={()=>setPrinting2307(null)} />}
+    </div>
+  );
+}
+
+// Printable BIR Form 2307 — Certificate of Creditable Tax Withheld at Source.
+// Simplified layout, single-page A4. The real form has more boxes but this
+// captures the BIR-required fields so the supplier accepts it.
+function BIR2307PrintView({ data, profile, onClose }){
+  const { supplier, subtotal, wht, rate, month, pos, monthKey } = data;
+  return (
+    <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
+      <PortraitPagePrintStyle />
+      <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
+        <div className="min-w-0">
+          <div className="font-bold text-slate-900 truncate">🧾 BIR Form 2307 — {supplier?.company||'Unknown'} · {month}</div>
+          <div className="text-xs text-slate-500">WHT certificate · {peso(wht)} withheld at {rate}%</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+        </div>
+      </div>
+
+      <div className="tp-print py-6">
+        <div className="po-page" style={{fontSize:'10pt', color:'#222'}}>
+          <div className="text-center mb-4 border-b-2 border-slate-900 pb-3">
+            <div className="text-[11px] uppercase text-slate-500 tracking-widest">Republic of the Philippines · Department of Finance · Bureau of Internal Revenue</div>
+            <div className="text-base font-bold mt-1">BIR Form No. 2307</div>
+            <div className="text-xs">Certificate of Creditable Tax Withheld at Source</div>
+            <div className="text-[10px] text-slate-500 mt-1">For the period {month}</div>
+          </div>
+
+          {/* Payor (us) */}
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="border border-slate-400 p-3">
+              <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART I — Payor (Withholding Agent)</div>
+              <div className="text-[11px]"><strong>Name:</strong> Steeze Corporation</div>
+              <div className="text-[11px]"><strong>TIN:</strong> ___-___-___-000</div>
+              <div className="text-[11px]"><strong>Address:</strong> Quezon City, Philippines</div>
+            </div>
+            <div className="border border-slate-400 p-3">
+              <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART II — Payee (Income Recipient)</div>
+              <div className="text-[11px]"><strong>Name:</strong> {supplier?.company||'—'}</div>
+              <div className="text-[11px]"><strong>TIN:</strong> {supplier?.tin||'—'}</div>
+              <div className="text-[11px]"><strong>Address:</strong> {supplier?.address||'—'}</div>
+            </div>
+          </div>
+
+          {/* Income payments + tax withheld */}
+          <div className="mb-3">
+            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART III — Income Payment & Tax Withheld</div>
+            <table className="w-full border border-slate-900 border-collapse" style={{fontSize:'9pt'}}>
+              <thead className="bg-slate-200">
+                <tr>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left">ATC</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left">Nature of Income Payment</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right">Amount of Income Payment</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right">Rate</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right">Tax Withheld</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border border-slate-400 px-2 py-1.5">{rate===2?'WC160':'WC158'}</td>
+                  <td className="border border-slate-400 px-2 py-1.5">{rate===2?'Income payments to certain contractors':'Income payments by top withholding agents for purchase of goods'}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(subtotal)}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right">{rate}%</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right font-bold">{peso(wht)}</td>
+                </tr>
+                <tr className="bg-slate-100">
+                  <td colSpan="2" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs">TOTAL</td>
+                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold">{peso(subtotal)}</td>
+                  <td className="border border-slate-900 px-2 py-2"></td>
+                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold">{peso(wht)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Backing POs */}
+          <div className="mb-3">
+            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">Backing transactions ({pos.length} PO{pos.length===1?'':'s'})</div>
+            <table className="w-full border border-slate-400 border-collapse" style={{fontSize:'8.5pt'}}>
+              <thead className="bg-slate-100">
+                <tr><th className="border border-slate-400 px-2 py-1 text-left">PO#</th><th className="border border-slate-400 px-2 py-1 text-left">Date</th><th className="border border-slate-400 px-2 py-1 text-right">Amount</th></tr>
+              </thead>
+              <tbody>{pos.map(p=>{
+                const sub = (p.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
+                return (
+                  <tr key={p.id}><td className="border border-slate-400 px-2 py-1">{p.number}</td><td className="border border-slate-400 px-2 py-1">{fmtDate(p.date)}</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(sub)}</td></tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+
+          {/* Signatures */}
+          <div className="grid grid-cols-2 gap-4 mt-5">
+            <div className="text-center">
+              <div className="border-t border-slate-900 mt-12 pt-1 text-[9px] text-slate-600 uppercase tracking-wider">Authorized Representative (Payor)</div>
+              <div className="text-[10px] font-bold mt-1">Steeze Corporation</div>
+            </div>
+            <div className="text-center">
+              <div className="border-t border-slate-900 mt-12 pt-1 text-[9px] text-slate-600 uppercase tracking-wider">Conforme (Payee)</div>
+              <div className="text-[10px] font-bold mt-1">{supplier?.company||''}</div>
+            </div>
+          </div>
+
+          <div className="text-center text-[9px] text-slate-500 mt-4 border-t pt-2">
+            This certificate is issued pursuant to Sections 57 and 58 of the National Internal Revenue Code, as amended.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 /* ====================== STYLES & BOMs ====================== */
 function StylesView({ styles, items, suppliers, departments, profile, reload }){
   const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
@@ -9582,7 +10139,7 @@ function App(){
       fallback = 'inventory';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow','payment-calendar','pnl','bir']);
       fallback = 'cash-position';
     } else if(profile.role==='sewing_lead'){
       allowed = new Set(['inbox','payroll','logistics','budgets']);
@@ -9777,6 +10334,7 @@ function App(){
   const FINANCE_FULL = { group:'Finance', items:[
     ['cash-position','Cash Position','💎'],
     ['cash-flow','Cash Flow','📈'],
+    ['payment-calendar','Payment Calendar','🗓'],
     ['sales-orders','Sales Orders','📜'],
     ['ledger','Customer Ledger','👥'],
     ['rfps','Request for Payment','📝'],
@@ -9785,6 +10343,8 @@ function App(){
     ['petty-cash','Petty Cash / CAs','💵'],
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
+    ['pnl','P&L Summary','📊'],
+    ['bir','BIR Tax Helpers','🧾'],
   ] };
   const FINANCE_PURCHASING = { group:'Finance', items:[
     ['rfps','Request for Payment','📝'],
@@ -9989,6 +10549,10 @@ function App(){
         {view==='petty-cash' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
+        {/* Finance Sprint 3 routes */}
+        {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} />}
+        {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
+        {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} reload={loadAll} />}
         {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
