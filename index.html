@@ -114,7 +114,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="env,react">
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 
 /* ============================================================
    STEEZE OS — LIVE (connected to your Supabase)
@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 23 · Finance Sprint 3 — Payment Calendar, P&L, BIR Helpers + 2307';
+const BUILD = 'Live build 24 · Purchasing L1+L2 — stock visibility + reservations on PRs/POs/Inventory';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5407,7 +5407,9 @@ function bucketOf(item){
   return INV_BUCKET_KEYS.includes(b) ? b : 'other';
 }
 
-function InventoryView({ suppliers, items, departments, reload }){
+function InventoryView({ suppliers, items, departments, requests, reload }){
+  // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
+  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   const [tab,setTab]=useState(()=>{ try{ return localStorage.getItem('steeze.inv.tab')||'fabrics'; }catch(_){ return 'fabrics'; } });
   function pickTab(k){ setTab(k); try{ localStorage.setItem('steeze.inv.tab', k); }catch(_){} }
   const [search,setSearch]=useState('');
@@ -5512,7 +5514,9 @@ function InventoryView({ suppliers, items, departments, reload }){
           <th className="text-left px-3 py-2">Name / Color</th>
           <th className="text-left px-3 py-2">Sub-category</th>
           <th className="text-left px-3 py-2">Supplier</th>
-          <th className="text-right px-3 py-2">Qty</th>
+          <th className="text-right px-3 py-2">On-hand</th>
+          <th className="text-right px-3 py-2" title="Reserved by approved PRs">Reserved</th>
+          <th className="text-right px-3 py-2" title="On-hand minus Reserved">Available</th>
           <th className="text-right px-3 py-2">Cost ₱</th>
           <th className="text-right px-3 py-2">Value</th>
           <th></th>
@@ -5525,6 +5529,8 @@ function InventoryView({ suppliers, items, departments, reload }){
           if(!isMulti){
             const i = g.items[0];
             const low = Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0;
+            const snap = stockSnapshot(i, reservations);
+            const availLow = snap.available <= Number(i.reorder||0) && Number(i.reorder||0) > 0;
             return (
               <tr key={g.key} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
                 <td></td>
@@ -5533,6 +5539,8 @@ function InventoryView({ suppliers, items, departments, reload }){
                 <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
                 <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
                 <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
+                <td className="px-3 py-2 text-right">{snap.reserved>0 ? <span className="text-amber-700 font-semibold">{snap.reserved}</span> : <span className="text-slate-300">—</span>}</td>
+                <td className={`px-3 py-2 text-right font-bold ${snap.available<0?'text-rose-700':availLow?'text-amber-700':'text-emerald-700'}`}>{snap.available}{availLow && <div className="text-[10px] font-normal">below reorder</div>}</td>
                 <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
                 <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
@@ -5541,6 +5549,9 @@ function InventoryView({ suppliers, items, departments, reload }){
           }
           // Multi-color group: parent header row + child rows when expanded.
           const unitDisplay = g.units.size === 1 ? Array.from(g.units)[0] : '';
+          // Roll up reservations + availability across all colors in this group.
+          const gReserved = g.items.reduce((s,it)=>s+(reservations.get(it.id)||0), 0);
+          const gAvailable = g.totalQty - gReserved;
           return (<React.Fragment key={g.key}>
             <tr className="border-t bg-slate-50/60 hover:bg-slate-100 cursor-pointer" onClick={()=>toggleExpand(g.key)}>
               <td className="px-3 py-2 text-center text-slate-400 select-none">{open?'▾':'▸'}</td>
@@ -5549,25 +5560,34 @@ function InventoryView({ suppliers, items, departments, reload }){
               <td className="px-3 py-2 text-xs text-slate-500">{Array.from(new Set(g.items.map(x=>x.category).filter(Boolean))).join(' · ')||'—'}</td>
               <td className="px-3 py-2 text-xs text-slate-500">{Array.from(new Set(g.items.map(x=>suppName(x.supplier_id)).filter(s=>s&&s!=='—'))).join(' · ')||'—'}</td>
               <td className="px-3 py-2 text-right font-semibold">{g.totalQty} {unitDisplay}</td>
+              <td className="px-3 py-2 text-right">{gReserved>0?<span className="text-amber-700 font-semibold">{gReserved}</span>:<span className="text-slate-300">—</span>}</td>
+              <td className={`px-3 py-2 text-right font-bold ${gAvailable<0?'text-rose-700':'text-emerald-700'}`}>{gAvailable}</td>
               <td className="px-3 py-2 text-right text-xs text-slate-500">—</td>
               <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(g.totalValue)}</td>
               <td className="px-3 py-2 text-right whitespace-nowrap">{g.low > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold">{g.low} low</span>}</td>
             </tr>
-            {open && g.items.map(i=>{ const low=Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0; return (
-              <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
-                <td></td>
-                <td className="px-3 py-2 font-mono text-xs pl-6">{i.sku||'—'}</td>
-                <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div></td>
-                <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
-                <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
-                <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
-                <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
-                <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
-                <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
-              </tr>
-            ); })}
+            {open && g.items.map(i=>{
+              const low=Number(i.qty||0)<=Number(i.reorder||0)&&Number(i.reorder||0)>0;
+              const snap = stockSnapshot(i, reservations);
+              const availLow = snap.available <= Number(i.reorder||0) && Number(i.reorder||0) > 0;
+              return (
+                <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
+                  <td></td>
+                  <td className="px-3 py-2 font-mono text-xs pl-6">{i.sku||'—'}</td>
+                  <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div></td>
+                  <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
+                  <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
+                  <td className="px-3 py-2 text-right">{snap.reserved>0?<span className="text-amber-700 font-semibold">{snap.reserved}</span>:<span className="text-slate-300">—</span>}</td>
+                  <td className={`px-3 py-2 text-right font-bold ${snap.available<0?'text-rose-700':availLow?'text-amber-700':'text-emerald-700'}`}>{snap.available}</td>
+                  <td className="px-3 py-2 text-right">{peso(i.cost)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(Number(i.qty||0)*Number(i.cost||0))}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditing(i)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>del(i.id)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+                </tr>
+              );
+            })}
           </React.Fragment>);
-        })}{groups.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" or "+ Multi-color" to add.</td></tr>}</tbody>
+        })}{groups.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" or "+ Multi-color" to add.</td></tr>}</tbody>
       </table></div></div>
 
       {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
@@ -6650,6 +6670,101 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
   }
 }
 
+/* ====================== STOCK RESERVATIONS (Layer 2) ====================== */
+// Reservations only kick in once a PR is APPROVED — speculative PRs that might
+// be rejected don't lock stock. A line "reserves" the qty in line.stock_allocated
+// (the part the user marked as pulling from inventory, not buying). The line
+// reservation is released when:
+//   • The PR is rejected / deleted
+//   • The PR line is converted to a PO (linked_po_id set — supplier is on the hook now)
+//   • The materials are actually pulled from stock (Layer 3 — future)
+//
+// Returns a Map<item_id, totalReservedQty>.
+function computeStockReservations(requests){
+  const map = new Map();
+  (requests||[]).forEach(pr => {
+    if(pr.status !== 'approved') return;
+    (pr.lines||[]).forEach(line => {
+      if(!line.item_id) return;
+      if(line.linked_po_id) return;   // Already in a PO — released
+      const allocated = Number(line.stock_allocated||0);
+      if(allocated <= 0) return;
+      const prev = map.get(line.item_id) || 0;
+      map.set(line.item_id, prev + allocated);
+    });
+  });
+  return map;
+}
+
+// Returns { onHand, reserved, available } for an item.
+function stockSnapshot(item, reservations){
+  const onHand = Number(item?.qty||0);
+  const reserved = (reservations && item) ? (reservations.get(item.id) || 0) : 0;
+  return { onHand, reserved, available: onHand - reserved };
+}
+
+// Returns { state, snap, need, shortfall } describing how well a PR/PO line is
+// covered by current stock. state is 'covered' | 'partial' | 'none' | 'overage'.
+//   covered: available >= need
+//   partial: 0 < available < need
+//   none:    available <= 0 (must buy 100%)
+//   overage: line.stock_allocated > available (over-pulled — usually only happens
+//            when another approved PR ate into the same stock after this line
+//            was split)
+function lineCoverage(line, item, reservations){
+  if(!item) return null;
+  const snap = stockSnapshot(item, reservations);
+  const need = Number(line.qty||0) + Number(line.stock_allocated||0);
+  if(need <= 0) return null;
+  const allocated = Number(line.stock_allocated||0);
+  if(allocated > snap.available + allocated) return { state:'overage', snap, need, shortfall:0, allocated };
+  if(snap.available >= Number(line.qty||0)) return { state:'covered', snap, need, shortfall:0, allocated };
+  if(snap.available <= 0) return { state:'none', snap, need, shortfall:Number(line.qty||0), allocated };
+  return { state:'partial', snap, need, shortfall: Number(line.qty||0) - snap.available, allocated };
+}
+
+// Reusable stock-visibility strip that renders under a PR/PO line item.
+// Shows On-hand · Reserved · Available with color coding. If `onPullFromStock`
+// is provided, also renders a "Pull from stock" button when there's stock to grab.
+function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, mode='pr' }){
+  if(!item) return <div className="text-[10px] text-slate-400 px-2 py-1">No inventory link — stock info unavailable.</div>;
+  const cov = lineCoverage(line, item, reservations);
+  if(!cov) return null;
+  const { snap, allocated } = cov;
+  // Color choice based on coverage state.
+  const colorMap = {
+    covered: 'bg-emerald-50 border-emerald-200 text-emerald-900',
+    partial: 'bg-amber-50 border-amber-200 text-amber-900',
+    none:    'bg-rose-50 border-rose-200 text-rose-900',
+    overage: 'bg-purple-50 border-purple-200 text-purple-900',
+  };
+  const labelMap = {
+    covered: '✓ Fully covered by stock',
+    partial: `⚠ Partial — short by ${cov.shortfall.toFixed(1)}`,
+    none:    '✕ No stock — must buy 100%',
+    overage: '⚠ Over-allocated',
+  };
+  // For PO mode, this is informational only (no pull-from-stock button).
+  return (
+    <div className={`text-[10px] border rounded px-2 py-1 mt-1 flex items-center justify-between gap-2 flex-wrap ${colorMap[cov.state]||colorMap.partial}`}>
+      <div className="flex items-center gap-3">
+        <span><strong>📦 On-hand:</strong> {snap.onHand}</span>
+        <span><strong>Reserved:</strong> {snap.reserved}</span>
+        <span><strong>Available:</strong> {snap.available}</span>
+        {allocated>0 && <span className="font-bold">· Pulling {allocated} from stock</span>}
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="font-bold">{labelMap[cov.state]}</span>
+        {mode==='pr' && !readOnly && onPullFromStock && snap.available > 0 && Number(line.qty||0) > 0 && cov.state!=='covered' && (
+          <button onClick={onPullFromStock} className="text-[10px] px-2 py-0.5 rounded bg-white border border-emerald-400 text-emerald-700 font-bold hover:bg-emerald-100">
+            ⤓ Pull {Math.min(snap.available, Number(line.qty||0)).toFixed(1)} from stock
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ====================== PURCHASE REQUESTS ====================== */
 const PR_STATUSES=[
   { key:'submitted', label:'Submitted', color:'bg-amber-100 text-amber-700' },
@@ -6723,16 +6838,23 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
           );
         })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase requests yet. Click "+ New PR" to add one.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
+      {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
   );
 }
 
-function PurchaseRequestForm({ profile, existing, items, suppliers, departments, leads, clients, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
+function PurchaseRequestForm({ profile, existing, items, suppliers, departments, leads, clients, allRequests, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
   const isEdit=!!existing;
   const isAdmin=profile.role==='admin';
-  const [f,setF]=useState(existing?{...existing, lines:existing.lines||[]}:{ date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null, urgency:'normal', status:'submitted', justification:'', approver_note:'', lines:[{item_id:null, sku:'', description:'', qty:1, est_cost:0}] });
+  const [f,setF]=useState(existing?{...existing, lines:existing.lines||[]}:{ date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null, urgency:'normal', status:'submitted', justification:'', approver_note:'', lines:[{item_id:null, sku:'', description:'', qty:1, est_cost:0, stock_allocated:0}] });
+  // Reservations = what's already committed from inventory by other approved PRs.
+  // For accuracy when editing this PR, we EXCLUDE this PR's own lines from the
+  // pool so the user sees the true "what's left for me to take" number.
+  const reservations = useMemo(()=>{
+    const others = (allRequests||[]).filter(r => !existing || r.id !== existing.id);
+    return computeStockReservations(others);
+  },[allRequests, existing]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const readOnly = f.status==='ordered' || (f.status==='rejected' && !isAdmin);
   // Resolve linked lead → client → techpack for the header banner.
@@ -6773,9 +6895,45 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
       supplier_id: it?.supplier_id || null,
     });
   }
-  function addLine(){ setF(p=>({...p,lines:[...p.lines,{item_id:null, sku:'', description:'', qty:1, est_cost:0}]})); }
+  function addLine(){ setF(p=>({...p,lines:[...p.lines,{item_id:null, sku:'', description:'', qty:1, est_cost:0, stock_allocated:0}]})); }
   function removeLine(i){ setF(p=>({...p,lines:p.lines.filter((_,j)=>j!==i)})); }
+  // "Pull from stock" — splits a line. Moves up-to-available units from
+  // line.qty (the buy amount) into line.stock_allocated (the pull amount).
+  // After splitting, the PO will only buy the remainder.
+  function pullFromStock(i){
+    const l = f.lines[i];
+    const it = l.item_id ? itemById(l.item_id) : null;
+    if(!it) return;
+    const snap = stockSnapshot(it, reservations);
+    const currentNeed = Number(l.qty||0);
+    if(currentNeed <= 0 || snap.available <= 0) return;
+    const pullAmt = Math.min(snap.available, currentNeed);
+    setLine(i, {
+      qty: Math.max(0, currentNeed - pullAmt),
+      stock_allocated: Number(l.stock_allocated||0) + pullAmt,
+    });
+  }
+  function clearStockPull(i){
+    const l = f.lines[i];
+    setLine(i, { qty: Number(l.qty||0) + Number(l.stock_allocated||0), stock_allocated: 0 });
+  }
   const total=f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.est_cost)||0),0);
+
+  // Overall coverage banner: how many lines need to be bought vs how many can
+  // come straight from stock. Helps purchasing see the bottom line in one glance.
+  const coverageSummary = (()=>{
+    let toBuy = 0, fromStock = 0, shortLines = 0;
+    f.lines.forEach(l => {
+      if(!l.item_id) return;
+      const it = itemById(l.item_id); if(!it) return;
+      const cov = lineCoverage(l, it, reservations);
+      if(!cov) return;
+      toBuy += Number(l.qty||0) * Number(l.est_cost||0);
+      fromStock += Number(l.stock_allocated||0) * Number(l.est_cost||0);
+      if(cov.state==='none' || cov.state==='partial') shortLines += 1;
+    });
+    return { toBuy, fromStock, shortLines };
+  })();
   async function save(){ if(!f.lines.some(l=>l.item_id||l.description)){ setMsg('Add at least one item line.'); return; } setBusy(true); setMsg('');
     const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status:f.status, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines };
     if(!isEdit) payload.number='PR-'+Date.now().toString().slice(-5);
@@ -6838,30 +6996,59 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
             const suppId = l.supplier_id || it?.supplier_id || null;
             const suppText = suppId ? supplierName(suppId) : '';
             const hasLegacyDesc = !l.item_id && l.description;
+            const allocated = Number(l.stock_allocated||0);
             return (
-              <div key={i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-center">
-                <div className="col-span-5">
-                  <select className="input text-xs" value={l.item_id||''} onChange={e=>pickItem(i, e.target.value)} disabled={readOnly}>
-                    <option value="">— pick an inventory item —</option>
-                    {['fabrics','trims','printing','office','other'].map(bk => itemsByBucket[bk].length>0 && (
-                      <optgroup key={bk} label={`${BUCKET_META[bk].icon} ${BUCKET_META[bk].label}`}>
-                        {itemsByBucket[bk].map(it=>(<option key={it.id} value={it.id}>{it.name}{it.color?` - ${it.color}`:''}{it.sku?` · ${it.sku}`:''}</option>))}
-                      </optgroup>
-                    ))}
-                  </select>
-                  {hasLegacyDesc && <div className="text-[10px] text-amber-600 mt-1">⚠ Legacy: "{l.description}" — pick an inventory item to replace</div>}
+              <div key={i} className="bg-white border rounded p-2">
+                <div className="grid grid-cols-12 gap-2 items-center">
+                  <div className="col-span-5">
+                    <select className="input text-xs" value={l.item_id||''} onChange={e=>pickItem(i, e.target.value)} disabled={readOnly}>
+                      <option value="">— pick an inventory item —</option>
+                      {['fabrics','trims','printing','office','other'].map(bk => itemsByBucket[bk].length>0 && (
+                        <optgroup key={bk} label={`${BUCKET_META[bk].icon} ${BUCKET_META[bk].label}`}>
+                          {itemsByBucket[bk].map(it=>(<option key={it.id} value={it.id}>{it.name}{it.color?` - ${it.color}`:''}{it.sku?` · ${it.sku}`:''}</option>))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    {hasLegacyDesc && <div className="text-[10px] text-amber-600 mt-1">⚠ Legacy: "{l.description}" — pick an inventory item to replace</div>}
+                  </div>
+                  <div className="col-span-1">
+                    <label className="text-[9px] uppercase text-slate-400">Buy qty</label>
+                    <input type="number" className="input text-xs text-right" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={readOnly} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[9px] uppercase text-slate-400">Unit ₱</label>
+                    <input type="number" step="0.01" className="input text-xs text-right" value={l.est_cost} onChange={e=>setLine(i,{est_cost:e.target.value})} disabled={readOnly} />
+                  </div>
+                  <div className="col-span-2 text-xs">
+                    {suppText ? <span className="font-medium text-slate-700">{suppText}</span> : <span className="text-amber-600">⚠ no supplier set</span>}
+                  </div>
+                  <div className="col-span-1 text-right text-xs font-semibold">{peso(Number(l.qty||0)*Number(l.est_cost||0))}</div>
+                  <div className="col-span-1 text-right">{!readOnly && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
                 </div>
-                <div className="col-span-1"><input type="number" className="input text-xs text-right" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={readOnly} /></div>
-                <div className="col-span-2"><input type="number" step="0.01" className="input text-xs text-right" value={l.est_cost} onChange={e=>setLine(i,{est_cost:e.target.value})} disabled={readOnly} /></div>
-                <div className="col-span-2 text-xs">
-                  {suppText ? <span className="font-medium text-slate-700">{suppText}</span> : <span className="text-amber-600">⚠ no supplier set</span>}
-                </div>
-                <div className="col-span-1 text-right text-xs font-semibold">{peso(Number(l.qty||0)*Number(l.est_cost||0))}</div>
-                <div className="col-span-1 text-right">{!readOnly && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
+                {/* Stock visibility strip — Layer 1. Shows On-hand / Reserved / Available
+                    with color-coded coverage and a "Pull from stock" split button. */}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={readOnly} mode="pr" onPullFromStock={()=>pullFromStock(i)} />}
+                {allocated > 0 && !readOnly && (
+                  <div className="text-[10px] mt-1 px-2 py-1 bg-emerald-50 border border-emerald-200 rounded flex items-center justify-between">
+                    <span>⤓ <strong>{allocated}</strong> being pulled from stock for this line. Buy qty above is the remainder.</span>
+                    <button onClick={()=>clearStockPull(i)} className="text-emerald-700 hover:underline font-semibold">↺ Undo stock pull</button>
+                  </div>
+                )}
               </div>
             );
           })}</div>
-          <div className="text-right mt-2 text-sm font-bold">Total: {peso(total)}</div>
+          {/* Coverage summary banner */}
+          {coverageSummary.fromStock > 0 || coverageSummary.shortLines > 0 ? (
+            <div className="mt-2 bg-slate-50 border-2 border-slate-200 rounded p-2 text-xs flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <span><strong className="text-emerald-700">From stock:</strong> {peso(coverageSummary.fromStock)}</span>
+                <span><strong className="text-rose-700">To buy:</strong> {peso(coverageSummary.toBuy)}</span>
+                {coverageSummary.shortLines>0 && <span className="text-amber-700">⚠ {coverageSummary.shortLines} line{coverageSummary.shortLines===1?'':'s'} short of full coverage</span>}
+              </div>
+              <div className="text-[10px] text-slate-500">Reservations lock in only after this PR is <strong>approved</strong>.</div>
+            </div>
+          ) : null}
+          <div className="text-right mt-2 text-sm font-bold">Total to buy: {peso(total)}</div>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -7102,7 +7289,7 @@ function nextPONumber(allOrders, dateStr){
   return `PO-${dateStr}-${String(n).padStart(3,'0')}`;
 }
 
-function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reload, openFromPR, onClearPR }){
+function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, reload, openFromPR, onClearPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
   useEffect(()=>{ if(openFromPR) setCreating(true); },[openFromPR&&openFromPR.id]);
   const counts=PO_STATUSES.reduce((a,s)=>{ a[s.key]=orders.filter(o=>o.status===s.key).length; return a; },{});
@@ -7139,7 +7326,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reloa
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <PurchaseOrderForm profile={profile} profiles={profiles} allOrders={orders} existing={editing} fromPR={creating?openFromPR:null} items={items} suppliers={suppliers} onClose={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); }} onSaved={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); reload(); }} onPrint={(po)=>setPrinting(po)} />}
+      {(creating||editing) && <PurchaseOrderForm profile={profile} profiles={profiles} allOrders={orders} existing={editing} fromPR={creating?openFromPR:null} items={items} suppliers={suppliers} requests={requests} onClose={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); }} onSaved={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); reload(); }} onPrint={(po)=>setPrinting(po)} />}
       {receiving && <PurchaseOrderReceive po={receiving} items={items} profile={profile} onClose={()=>setReceiving(null)} onSaved={()=>{ setReceiving(null); reload(); }} />}
       {printing && <POPrintView po={printing} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPrinting(null)} />}
     </div>
@@ -7156,7 +7343,10 @@ const PO_PAYMENT_METHODS = [
   { key:'gcash',         label:'GCash' },
   { key:'others',        label:'Others' },
 ];
-function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, onClose, onSaved, onPrint }){
+function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, requests, onClose, onSaved, onPrint }){
+  // Same reservations map the PR form uses — POs are informational only
+  // (no Pull-from-Stock since the buy decision is already made).
+  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   const isEdit=!!existing;
   const initLines = isEdit ? (existing.lines||[]) : (fromPR ? (fromPR.lines||[]).map(l=>({ item_id:l.item_id||null, description:l.description||'', qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 })) : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
@@ -7323,16 +7513,23 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
             <div className="text-xs font-semibold text-slate-700">Line items {lineCount>0 && <span className="text-slate-400 font-normal">· {lineCount} line{lineCount===1?'':'s'}</span>}</div>
             {!locked && <button onClick={addLine} className="text-xs text-indigo-600 font-semibold">+ Add line</button>}
           </div>
-          <div className="space-y-2">{f.lines.map((l,i)=>(
-            <div key={i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Inventory item</label><select className="input mt-0.5 text-xs" value={l.item_id||''} disabled={locked} onChange={e=>{ const it=items.find(x=>x.id===e.target.value); setLine(i,{ item_id:e.target.value||null, description:it?.name||l.description, unit_cost:l.unit_cost||it?.cost||0 }); }}><option value="">— optional —</option>{items.map(it=><option key={it.id} value={it.id}>{it.name}{it.sku?' · '+it.sku:''}</option>)}</select></div>
-              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5 text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} /></div>
-              <div className="col-span-1"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5 text-xs" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={locked} /></div>
-              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Unit ₱</label><input type="number" className="input mt-0.5 text-xs" value={l.unit_cost} onChange={e=>setLine(i,{unit_cost:e.target.value})} disabled={locked} /></div>
-              <div className="col-span-1 text-right text-xs"><div className="text-[10px] uppercase text-slate-500">Total</div><div className="font-semibold">{peso(Number(l.qty||0)*Number(l.unit_cost||0))}</div></div>
-              <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
-            </div>
-          ))}</div>
+          <div className="space-y-2">{f.lines.map((l,i)=>{
+            const it = l.item_id ? items.find(x=>x.id===l.item_id) : null;
+            return (
+              <div key={i} className="bg-white border rounded p-2">
+                <div className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Inventory item</label><select className="input mt-0.5 text-xs" value={l.item_id||''} disabled={locked} onChange={e=>{ const it2=items.find(x=>x.id===e.target.value); setLine(i,{ item_id:e.target.value||null, description:it2?.name||l.description, unit_cost:l.unit_cost||it2?.cost||0 }); }}><option value="">— optional —</option>{items.map(it2=><option key={it2.id} value={it2.id}>{it2.name}{it2.sku?' · '+it2.sku:''}</option>)}</select></div>
+                  <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5 text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} /></div>
+                  <div className="col-span-1"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5 text-xs" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={locked} /></div>
+                  <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Unit ₱</label><input type="number" className="input mt-0.5 text-xs" value={l.unit_cost} onChange={e=>setLine(i,{unit_cost:e.target.value})} disabled={locked} /></div>
+                  <div className="col-span-1 text-right text-xs"><div className="text-[10px] uppercase text-slate-500">Total</div><div className="font-semibold">{peso(Number(l.qty||0)*Number(l.unit_cost||0))}</div></div>
+                  <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
+                </div>
+                {/* Stock visibility strip — informational only on POs (no pull-from-stock action) */}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={true} mode="po" />}
+              </div>
+            );
+          })}</div>
 
           {/* Totals breakdown — subtotal, optional VAT, optional withholding tax, net payable */}
           <div className="mt-3 bg-white border rounded p-3 max-w-md ml-auto text-sm">
@@ -10530,13 +10727,13 @@ function App(){
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
-        {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} reload={loadAll} />}
+        {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView suppliers={suppliers} orders={orders} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
-        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
+        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
