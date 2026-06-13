@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 27 · Materials Buy List (Layer 4) — production demand + safety stock';
+const BUILD = 'Live build 28 · Supplier defaults pre-fill POs + auto-PR toast + Stock Out names';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2216,7 +2216,7 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
    what's queued and act on it). Bottom section shows the historical issuance
    log read from stock_movements. Only Purchasing/Admin/Accounting see this. */
 const PROD_ACTIVE_STATUSES_FOR_PULL = ['materials to purchase','materials in','cutting - in house','sewing','printing/embroidery','quality control'];
-function StockOutView({ profile, prodJobs, leads, items, requests, stockMovements, reload }){
+function StockOutView({ profile, profiles, prodJobs, leads, items, requests, stockMovements, reload }){
   const [pulling,setPulling]=useState(null);
   const [jobSearch,setJobSearch]=useState('');
   const [histSearch,setHistSearch]=useState('');
@@ -2336,7 +2336,11 @@ function StockOutView({ profile, prodJobs, leads, items, requests, stockMovement
                   <td className="px-3 py-2 text-xs font-mono">{job?job.number:'—'}</td>
                   <td className="px-3 py-2 text-xs">{job?job.client_name:'—'}</td>
                   <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{s.reason||'—'}</span></td>
-                  <td className="px-3 py-2 text-xs">{s.actor_id ? <span className="text-slate-500">{s.actor_id.slice(0,8)}…</span> : '—'}</td>
+                  <td className="px-3 py-2 text-xs">{(()=>{
+                    if(!s.actor_id) return '—';
+                    const p = (profiles||[]).find(x=>x.id===s.actor_id);
+                    return p ? <span className="text-slate-700 font-medium">{p.name||p.email}</span> : <span className="text-slate-400">unknown user</span>;
+                  })()}</td>
                 </tr>
               );
             })}
@@ -6584,7 +6588,7 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
   );
 }
 
-function SuppliersView({ suppliers, orders, onOpen, reload }){
+function SuppliersView({ suppliers, orders, bankAccounts, onOpen, reload }){
   const [search,setSearch]=useState(''); const [creating,setCreating]=useState(false); const [importing,setImporting]=useState(false);
   // Precompute total spend + order count per supplier from PO totals.
   const spendBy = (suppliers||[]).reduce((acc,s)=>{ acc[s.id]={ total:0, count:0 }; return acc; },{});
@@ -6626,13 +6630,13 @@ function SuppliersView({ suppliers, orders, onOpen, reload }){
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No suppliers yet. Click "+ New supplier" to add one.</td></tr>}</tbody>
       </table></div></div>
-      {creating && <SupplierForm onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+      {creating && <SupplierForm bankAccounts={bankAccounts} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
       {importing && <SupplierImportModal suppliers={suppliers} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
   );
 }
 
-function SupplierDetail({ supplier, orders, items, profile, reload, onBack }){
+function SupplierDetail({ supplier, orders, items, profile, bankAccounts, reload, onBack }){
   const [tab,setTab]=useState('overview');
   const [editing,setEditing]=useState(false);
   const live=supplier;
@@ -6720,7 +6724,7 @@ function SupplierDetail({ supplier, orders, items, profile, reload, onBack }){
         <div className="bg-white border rounded-xl p-5"><div className="text-sm whitespace-pre-wrap text-slate-700">{live.notes||<span className="text-slate-400">No notes yet. Use "Edit details" to add notes.</span>}</div></div>
       )}
 
-      {editing && <SupplierForm existing={live} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); reload(); }} />}
+      {editing && <SupplierForm existing={live} bankAccounts={bankAccounts} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); reload(); }} />}
     </div>
   );
 }
@@ -6845,8 +6849,8 @@ function SupplierImportModal({ suppliers, onClose, onDone }){
   );
 }
 
-function SupplierForm({ existing, onClose, onSaved }){
-  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'' });
+function SupplierForm({ existing, bankAccounts, onClose, onSaved }){
+  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'', default_payment_method:'', default_payment_method_detail:'', vat_enabled:false, withholding_tax_enabled:false, withholding_tax_rate:1.0, default_bank_id:null });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){ if(!f.company.trim()){ setMsg('Company is required.'); return; } setBusy(true); setMsg('');
@@ -6855,6 +6859,12 @@ function SupplierForm({ existing, onClose, onSaved }){
       contact:f.contact||'', email:f.email||'', phone:f.phone||'',
       address:f.address||'', payment_terms:f.payment_terms||'', notes:f.notes||'',
       bank_name:f.bank_name||'', bank_account_name:f.bank_account_name||'', bank_account_number:f.bank_account_number||'',
+      default_payment_method:f.default_payment_method||null,
+      default_payment_method_detail:f.default_payment_method_detail||null,
+      vat_enabled:!!f.vat_enabled,
+      withholding_tax_enabled:!!f.withholding_tax_enabled,
+      withholding_tax_rate:Number(f.withholding_tax_rate)||0,
+      default_bank_id:f.default_bank_id||null,
     };
     const { error } = existing ? await sb.from('suppliers').update(payload).eq('id',existing.id) : await sb.from('suppliers').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
@@ -6868,11 +6878,54 @@ function SupplierForm({ existing, onClose, onSaved }){
           <TpLbl t="Phone"><input className="input" value={f.phone} onChange={e=>up('phone',e.target.value)} /></TpLbl>
         </div>
         <TpLbl t="Complete address"><textarea className="input min-h-[60px]" value={f.address} onChange={e=>up('address',e.target.value)} placeholder="Street, Barangay, City, Province, Postal code" /></TpLbl>
-        <TpLbl t="Payment terms"><input className="input" value={f.payment_terms} onChange={e=>up('payment_terms',e.target.value)} placeholder="e.g. Net 30 / 50% DP" /></TpLbl>
 
-        {/* Bank info — used for sending payments to this supplier */}
+        {/* Payment defaults — auto-fill into POs when this supplier is picked. */}
+        <div className="border rounded-lg p-3 bg-violet-50 border-violet-200">
+          <div className="text-xs font-semibold text-violet-800 mb-2">💳 Payment defaults <span className="text-violet-600 font-normal">(pre-fill into POs for this supplier)</span></div>
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Payment terms"><input className="input" value={f.payment_terms} onChange={e=>up('payment_terms',e.target.value)} placeholder="e.g. Net 30 / 50% DP" /></TpLbl>
+            <TpLbl t="Default payment method">
+              <select className="input" value={f.default_payment_method||''} onChange={e=>up('default_payment_method',e.target.value||null)}>
+                <option value="">— pick —</option>
+                <option value="check">Check</option>
+                <option value="bank_transfer">Bank Transfer</option>
+                <option value="cash">Cash</option>
+                <option value="gcash">GCash</option>
+                <option value="others">Others</option>
+              </select>
+            </TpLbl>
+            {(f.default_payment_method==='gcash' || f.default_payment_method==='check' || f.default_payment_method==='others') && (
+              <TpLbl t={f.default_payment_method==='gcash'?'Default GCash number':f.default_payment_method==='check'?'Default check book / payee':'Specify'}>
+                <input className="input" value={f.default_payment_method_detail||''} onChange={e=>up('default_payment_method_detail',e.target.value)} placeholder={f.default_payment_method==='gcash'?'09XX-XXX-XXXX':''} />
+              </TpLbl>
+            )}
+            <TpLbl t="Default bank we pay from">
+              <select className="input" value={f.default_bank_id||''} onChange={e=>up('default_bank_id',e.target.value||null)}>
+                <option value="">— none —</option>
+                {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
+              </select>
+            </TpLbl>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-violet-200">
+            <label className="flex items-center gap-2 text-xs bg-white border rounded p-2 cursor-pointer">
+              <input type="checkbox" checked={!!f.vat_enabled} onChange={e=>up('vat_enabled', e.target.checked)} />
+              <span><strong>Adds 12% VAT</strong> to invoices</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-xs bg-white border rounded p-2 cursor-pointer flex-1">
+                <input type="checkbox" checked={!!f.withholding_tax_enabled} onChange={e=>up('withholding_tax_enabled', e.target.checked)} />
+                <span>Apply <strong>Withholding Tax</strong></span>
+              </label>
+              <input type="number" step="0.1" className="input text-xs w-20" disabled={!f.withholding_tax_enabled} value={f.withholding_tax_rate} onChange={e=>up('withholding_tax_rate', e.target.value)} title="WHT %" />
+              <span className="text-xs text-slate-500">%</span>
+            </div>
+          </div>
+          <div className="text-[10px] text-violet-700 mt-1">PH default: 1% for goods, 2% for services.</div>
+        </div>
+
+        {/* Bank info — used when sending bank transfers TO this supplier */}
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="text-xs font-semibold text-slate-700 mb-2">🏦 Bank details</div>
+          <div className="text-xs font-semibold text-slate-700 mb-2">🏦 Supplier's receiving bank <span className="text-slate-500 font-normal">(where we send bank transfers)</span></div>
           <div className="grid grid-cols-3 gap-2">
             <TpLbl t="Bank name"><input className="input" value={f.bank_name||''} onChange={e=>up('bank_name',e.target.value)} placeholder="BPI / BDO / UnionBank…" /></TpLbl>
             <TpLbl t="Account name"><input className="input" value={f.bank_account_name||''} onChange={e=>up('bank_account_name',e.target.value)} placeholder="As shown on the account" /></TpLbl>
@@ -8162,8 +8215,22 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   const supplier = (suppliers||[]).find(s=>s.id===f.supplier_id);
   useEffect(()=>{
     if(!supplier) return;
-    // Only auto-fill payment_terms if user hasn't typed one yet — don't clobber edits.
-    if(!f.payment_terms && supplier.payment_terms){ setF(p=>({...p, payment_terms: supplier.payment_terms })); }
+    // Pre-fill all supplier defaults on first pick. We only set fields the user
+    // hasn't already overridden so existing edits aren't clobbered.
+    setF(p => {
+      const patch = {};
+      if(!p.payment_terms && supplier.payment_terms){ patch.payment_terms = supplier.payment_terms; }
+      if(!p.payment_method && supplier.default_payment_method){ patch.payment_method = supplier.default_payment_method; }
+      if(!p.payment_method_detail && supplier.default_payment_method_detail){ patch.payment_method_detail = supplier.default_payment_method_detail; }
+      // Booleans: only auto-set when value hasn't been explicitly toggled by user
+      // (we treat "untouched" as both false, so apply supplier default if true).
+      if(!p.vat_enabled && supplier.vat_enabled){ patch.vat_enabled = true; }
+      if(!p.withholding_tax_enabled && supplier.withholding_tax_enabled){
+        patch.withholding_tax_enabled = true;
+        patch.withholding_tax_rate = Number(supplier.withholding_tax_rate) || p.withholding_tax_rate;
+      }
+      return Object.keys(patch).length > 0 ? {...p, ...patch} : p;
+    });
   // eslint-disable-next-line
   },[f.supplier_id]);
   // Save without finalizing — stays in current status (draft drafts stay draft).
@@ -11380,6 +11447,29 @@ function App(){
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
   },[profile && profile.id, profile && profile.role]);
 
+  // Realtime: notify Purchasing team when a new PR is auto-created from a
+  // Closed Won deal. Avoids the "did I miss a PR?" problem. Visible to
+  // purchasing + admin + accounting roles.
+  useEffect(()=>{
+    if(!profile) return;
+    const isPurchasingTeam = ['purchasing','admin','accounting'].includes(profile.role);
+    if(!isPurchasingTeam) return;
+    const ch = sb.channel('pr-watch-purchasing')
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'purchase_requests' }, (p)=>{
+        const r = p.new; if(!r) return;
+        if(r.requested_by === profile.id) return;   // don't toast yourself
+        if(!mutedRef.current) playPing();
+        // Pull a short client/title hint if we can find it from the lead.
+        const lead = r.linked_lead_id ? (leads||[]).find(l=>l.id===r.linked_lead_id) : null;
+        const hint = lead ? `${lead.title||''}` : (r.justification||'').slice(0, 80);
+        setToast({ title:`📝 New PR ${r.number||''}`, body: hint ? `Auto-created for ${hint}` : 'Auto-created from a Closed Won deal' });
+        if(!mutedRef.current) showSystemMention('Steeze OS — New PR for review', `${r.number||''} · ${hint}`, ()=>setView('requests'));
+        loadAll();
+      })
+      .subscribe();
+    return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
+  },[profile && profile.id, profile && profile.role]);
+
   // Idempotent send-to-X functions. Each checks for an existing non-deleted
   // record for this lead first. If one exists, just open the destination view
   // and tell the user — no duplicate insert. This prevents the "double entry"
@@ -11681,13 +11771,13 @@ function App(){
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
         {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
         {view==='suppliers' && (selectedSupplier
-          ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
-          : <SuppliersView suppliers={suppliers} orders={orders} onOpen={setSelectedSupplier} reload={loadAll} />)}
+          ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
+          : <SuppliersView suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
-        {view==='stock-out' && <StockOutView profile={profile} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
+        {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='buy-list' && <MaterialsBuyListView profile={profile} requests={requests} items={items} suppliers={suppliers} orders={orders} prodJobs={prodJobs} leads={leads} reload={loadAll} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
