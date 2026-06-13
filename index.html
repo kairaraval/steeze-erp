@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 34 · HR Tier 2 — Checklists + Trainings + HR Reports';
+const BUILD = 'Live build 35 · HR Tier 3 — Performance Reviews + Recruitment + Org Chart';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5113,6 +5113,596 @@ function EmployeeTrainingForm({ training, employeeId, profile, onClose, onSaved 
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
       </div>
     </Modal>
+  );
+}
+
+
+/* ─────────── HR TIER 3 — Performance Reviews ─────────── */
+const REVIEW_RATINGS = [
+  { v:1, label:'1 · Needs significant improvement', color:'bg-rose-100 text-rose-700' },
+  { v:2, label:'2 · Below expectations',             color:'bg-orange-100 text-orange-700' },
+  { v:3, label:'3 · Meets expectations',             color:'bg-amber-100 text-amber-700' },
+  { v:4, label:'4 · Exceeds expectations',           color:'bg-emerald-100 text-emerald-700' },
+  { v:5, label:'5 · Outstanding',                    color:'bg-indigo-100 text-indigo-700' },
+];
+const REVIEW_STATUSES = [
+  { key:'draft',        label:'Draft',                color:'bg-slate-200 text-slate-700' },
+  { key:'shared',       label:'Shared with employee', color:'bg-blue-100 text-blue-700' },
+  { key:'acknowledged', label:'Acknowledged',         color:'bg-amber-100 text-amber-700' },
+  { key:'final',        label:'Final',                color:'bg-emerald-100 text-emerald-700' },
+];
+
+function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, reload }){
+  const [creatingCycle,setCreatingCycle]=useState(false);
+  const [editingCycle,setEditingCycle]=useState(null);
+  const [openCycleId,setOpenCycleId]=useState(null);
+  const [editingReview,setEditingReview]=useState(null);
+
+  const activeCycles = (hrReviewCycles||[]).filter(c => c.status==='active' || c.status==='planning');
+  const allCycles = hrReviewCycles||[];
+  const cycle = openCycleId ? allCycles.find(c=>c.id===openCycleId) : null;
+  const cycleReviews = cycle ? (hrReviews||[]).filter(r => r.cycle_id===cycle.id) : [];
+
+  async function delCycle(c){
+    if(!confirm(`Delete review cycle "${c.name}"? This also deletes all reviews inside it.`)) return;
+    const { error } = await sb.from('hr_review_cycles').delete().eq('id', c.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function closeCycle(c){
+    if(!confirm(`Close cycle "${c.name}"? Reviews can still be viewed but no new ones can be added.`)) return;
+    const { error } = await sb.from('hr_review_cycles').update({ status:'closed' }).eq('id', c.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+
+  // List view (no cycle open)
+  if(!cycle){
+    return (
+      <div className="p-6">
+        <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h1 className="text-2xl font-bold">📊 Performance Reviews</h1>
+              <p className="text-slate-500 text-sm">{allCycles.length} cycle{allCycles.length===1?'':'s'} · {(hrReviews||[]).length} total reviews</p>
+            </div>
+            <button onClick={()=>setCreatingCycle(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New review cycle</button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {allCycles.map(c => {
+            const reviewsForCycle = (hrReviews||[]).filter(r=>r.cycle_id===c.id);
+            const done = reviewsForCycle.filter(r => r.status==='final').length;
+            const totalForCycle = reviewsForCycle.length;
+            const avgRating = totalForCycle>0 ? (reviewsForCycle.filter(r=>r.overall_rating).reduce((s,r)=>s+Number(r.overall_rating),0) / reviewsForCycle.filter(r=>r.overall_rating).length || 0) : 0;
+            return (
+              <div key={c.id} className="bg-white border-2 rounded-xl p-4 hover:border-indigo-300 transition">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-bold text-lg">{c.name}</div>
+                      <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${c.status==='active'?'bg-emerald-100 text-emerald-700':c.status==='closed'?'bg-slate-200 text-slate-600':c.status==='completed'?'bg-blue-100 text-blue-700':'bg-amber-100 text-amber-700'}`}>{c.status}</span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {c.period_start && c.period_end ? `Period: ${fmtDate(c.period_start)} → ${fmtDate(c.period_end)}` : 'No period set'}
+                    </div>
+                    {c.notes && <div className="text-xs text-slate-600 mt-1">{c.notes}</div>}
+                    <div className="text-xs text-slate-700 mt-2">
+                      <strong>{totalForCycle}</strong> review{totalForCycle===1?'':'s'} · <strong>{done}</strong> finalized
+                      {avgRating>0 && <> · Avg rating: <strong>{avgRating.toFixed(2)}</strong></>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 flex-wrap shrink-0">
+                    <button onClick={()=>setOpenCycleId(c.id)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">Open →</button>
+                    <button onClick={()=>setEditingCycle(c)} className="text-xs text-slate-500 hover:underline">Edit</button>
+                    {c.status!=='closed' && <button onClick={()=>closeCycle(c)} className="text-xs text-amber-700 hover:underline">Close</button>}
+                    <button onClick={()=>delCycle(c)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {allCycles.length===0 && <div className="bg-white border rounded-xl p-8 text-center text-sm text-slate-400">No review cycles yet. Click "+ New review cycle" to start one (e.g. "Annual 2026" or "Q1 2026").</div>}
+        </div>
+
+        {(creatingCycle||editingCycle) && <ReviewCycleForm cycle={editingCycle} profile={profile} onClose={()=>{ setCreatingCycle(false); setEditingCycle(null); }} onSaved={()=>{ setCreatingCycle(false); setEditingCycle(null); reload(); }} />}
+      </div>
+    );
+  }
+
+  // Cycle detail view
+  const reviewedEmpIds = new Set(cycleReviews.map(r=>r.employee_id));
+  const activeEmps = (employees||[]).filter(e => e.status!=='resigned' && e.status!=='terminated');
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <button onClick={()=>setOpenCycleId(null)} className="text-xs text-slate-500 hover:text-slate-800 mb-1">← All cycles</button>
+            <h1 className="text-2xl font-bold">📊 {cycle.name}</h1>
+            <p className="text-slate-500 text-sm">{cycleReviews.length} review{cycleReviews.length===1?'':'s'} · {activeEmps.length-reviewedEmpIds.size} employees not yet reviewed</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden mb-4">
+        <div className="px-4 py-3 bg-slate-50 border-b text-sm font-bold">Existing reviews ({cycleReviews.length})</div>
+        {cycleReviews.length===0 ? <div className="px-4 py-6 text-center text-sm text-slate-400">No reviews yet. Start one from the employee list below.</div> : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              <th className="text-left px-3 py-2">Employee</th>
+              <th className="text-left px-3 py-2">Position</th>
+              <th className="text-left px-3 py-2">Reviewer</th>
+              <th className="text-center px-3 py-2">Rating</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-center px-3 py-2">PIP</th>
+              <th></th>
+            </tr></thead>
+            <tbody>{cycleReviews.map(r => {
+              const emp = (employees||[]).find(e=>e.id===r.employee_id);
+              const reviewer = r.reviewer_id ? (profiles||[]).find(p=>p.id===r.reviewer_id) : null;
+              const ratingMeta = REVIEW_RATINGS.find(x=>x.v===r.overall_rating);
+              const statusMeta = REVIEW_STATUSES.find(s=>s.key===r.status) || REVIEW_STATUSES[0];
+              return (
+                <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditingReview(r)}>
+                  <td className="px-3 py-2 font-medium">{emp ? fullName(emp) : '(deleted employee)'}</td>
+                  <td className="px-3 py-2 text-xs">{emp?.position||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{reviewer ? (reviewer.name||reviewer.email) : '—'}</td>
+                  <td className="px-3 py-2 text-center">{ratingMeta ? <span className={`text-xs px-2 py-1 rounded font-bold ${ratingMeta.color}`}>{r.overall_rating}/5</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2"><span className={`text-[10px] px-2 py-1 rounded font-medium ${statusMeta.color}`}>{statusMeta.label}</span></td>
+                  <td className="px-3 py-2 text-center">{r.pip ? <span className="text-[10px] font-bold uppercase bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">PIP</span> : '—'}</td>
+                  <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setEditingReview(r);}} className="text-xs text-indigo-600 hover:underline">Open</button></td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        )}
+      </div>
+
+      {cycle.status!=='closed' && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50 border-b text-sm font-bold">Start review for employee</div>
+          <div className="grid md:grid-cols-3 gap-2 p-3">
+            {activeEmps.filter(e => !reviewedEmpIds.has(e.id)).map(e => (
+              <button key={e.id} onClick={()=>setEditingReview({ cycle_id: cycle.id, employee_id: e.id, status:'draft', overall_rating:null })} className="bg-white border rounded p-2 text-left hover:border-indigo-400">
+                <div className="font-semibold text-sm">{fullName(e)}</div>
+                <div className="text-[11px] text-slate-500">{e.position||'—'} · {e.department||'—'}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {editingReview && <PerformanceReviewForm review={editingReview} cycle={cycle} profile={profile} profiles={profiles} employees={employees} onClose={()=>setEditingReview(null)} onSaved={()=>{ setEditingReview(null); reload(); }} />}
+    </div>
+  );
+}
+
+function ReviewCycleForm({ cycle, profile, onClose, onSaved }){
+  const isEdit = !!cycle;
+  const [f,setF]=useState(cycle || { name:'', period_start:'', period_end:'', status:'planning', notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.name?.trim()){ setMsg('Name required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = { ...f, name:f.name.trim(), period_start:f.period_start||null, period_end:f.period_end||null };
+    if(!isEdit) payload.created_by = profile.id;
+    const { error } = isEdit ? await sb.from('hr_review_cycles').update(payload).eq('id', cycle.id) : await sb.from('hr_review_cycles').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit cycle':'New review cycle'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Name *"><input className="input" value={f.name||''} onChange={e=>up('name',e.target.value)} placeholder="Annual 2026 / Q1 2026 / Mid-Year 2026" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Period start"><input type="date" className="input" value={f.period_start||''} onChange={e=>up('period_start',e.target.value||null)} /></TpLbl>
+          <TpLbl t="Period end"><input type="date" className="input" value={f.period_end||''} onChange={e=>up('period_end',e.target.value||null)} /></TpLbl>
+        </div>
+        <TpLbl t="Status">
+          <select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>
+            <option value="planning">Planning</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="closed">Closed</option>
+          </select>
+        </TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Create cycle')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function PerformanceReviewForm({ review, cycle, profile, profiles, employees, onClose, onSaved }){
+  const isEdit = !!review.id;
+  const [f,setF]=useState(review || {});
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const emp = (employees||[]).find(e => e.id===f.employee_id);
+  async function save(){
+    setBusy(true); setMsg('');
+    const payload = { ...f, overall_rating: f.overall_rating?Number(f.overall_rating):null, review_date: f.review_date||null, pip: !!f.pip };
+    if(!isEdit && !payload.reviewer_id) payload.reviewer_id = profile.id;
+    const { error } = isEdit ? await sb.from('hr_reviews').update(payload).eq('id', review.id) : await sb.from('hr_reviews').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function del(){
+    if(!confirm('Delete this review?')) return;
+    const { error } = await sb.from('hr_reviews').delete().eq('id', review.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={`Performance review — ${emp?fullName(emp):'employee'}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 text-xs">
+          Cycle: <strong>{cycle?.name}</strong> · Employee: <strong>{emp ? fullName(emp) : '—'}</strong> · {emp?.position||''}
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Review date"><input type="date" className="input" value={f.review_date||''} onChange={e=>up('review_date',e.target.value||null)} /></TpLbl>
+          <TpLbl t="Reviewer">
+            <select className="input" value={f.reviewer_id||''} onChange={e=>up('reviewer_id',e.target.value||null)}>
+              <option value="">— pick —</option>
+              {(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Status">
+            <select className="input" value={f.status||'draft'} onChange={e=>up('status',e.target.value)}>
+              {REVIEW_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Overall rating">
+          <div className="flex gap-2 flex-wrap">{REVIEW_RATINGS.map(r=>(
+            <button key={r.v} type="button" onClick={()=>up('overall_rating', r.v===f.overall_rating?null:r.v)} className={`px-3 py-2 rounded border-2 text-xs font-medium ${r.v===f.overall_rating?r.color+' border-current':'border-slate-200 hover:border-slate-400 bg-white text-slate-600'}`}>{r.label}</button>
+          ))}</div>
+        </TpLbl>
+        <TpLbl t="Strengths"><textarea className="input min-h-[80px]" value={f.strengths||''} onChange={e=>up('strengths',e.target.value)} placeholder="What's working well — quality, attendance, attitude, technical skill, etc." /></TpLbl>
+        <TpLbl t="Areas to improve"><textarea className="input min-h-[80px]" value={f.improvements||''} onChange={e=>up('improvements',e.target.value)} placeholder="Specific areas, with examples" /></TpLbl>
+        <TpLbl t="Goals for next period"><textarea className="input min-h-[80px]" value={f.goals||''} onChange={e=>up('goals',e.target.value)} placeholder="SMART goals, training to complete, KPIs to hit" /></TpLbl>
+        <TpLbl t="Manager notes"><textarea className="input min-h-[60px]" value={f.manager_notes||''} onChange={e=>up('manager_notes',e.target.value)} placeholder="Internal notes (not necessarily shared with employee)" /></TpLbl>
+        <TpLbl t="Employee comments (after sharing)"><textarea className="input min-h-[60px]" value={f.employee_comments||''} onChange={e=>up('employee_comments',e.target.value)} placeholder="Their response, agreement / disagreement, additional context" /></TpLbl>
+        <label className="flex items-center gap-2 bg-rose-50 border border-rose-200 rounded p-2 text-xs cursor-pointer">
+          <input type="checkbox" checked={!!f.pip} onChange={e=>up('pip', e.target.checked)} />
+          <span><strong>Place on Performance Improvement Plan (PIP)</strong> — formal documented improvement period</span>
+        </label>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>}
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Save review')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── HR TIER 3 — Recruitment / ATS ─────────── */
+const APPLICANT_STAGES = [
+  { key:'applied',   label:'Applied',   color:'bg-slate-200 text-slate-700' },
+  { key:'screening', label:'Screening', color:'bg-blue-100 text-blue-700' },
+  { key:'interview', label:'Interview', color:'bg-amber-100 text-amber-700' },
+  { key:'offer',     label:'Offer',     color:'bg-violet-100 text-violet-700' },
+  { key:'hired',     label:'Hired',     color:'bg-emerald-100 text-emerald-700' },
+  { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
+  { key:'withdrawn', label:'Withdrawn', color:'bg-slate-200 text-slate-600' },
+];
+function applicantStageMeta(k){ return APPLICANT_STAGES.find(s=>s.key===k) || APPLICANT_STAGES[0]; }
+
+function HRRecruitmentView({ profile, profiles, employees, hrJobs, hrApplicants, reload }){
+  const [openJobId,setOpenJobId]=useState(null);
+  const [creatingJob,setCreatingJob]=useState(false);
+  const [editingJob,setEditingJob]=useState(null);
+  const [editingApplicant,setEditingApplicant]=useState(null);
+  const [creatingApplicant,setCreatingApplicant]=useState(false);
+  const [filterStatus,setFilterStatus]=useState('open');
+
+  const job = openJobId ? (hrJobs||[]).find(j=>j.id===openJobId) : null;
+  const jobs = (hrJobs||[]).filter(j => !filterStatus || j.status===filterStatus);
+
+  // List view (no job open)
+  if(!job){
+    return (
+      <div className="p-6">
+        <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h1 className="text-2xl font-bold">🎯 Recruitment</h1>
+              <p className="text-slate-500 text-sm">{hrJobs.length} job posting{hrJobs.length===1?'':'s'} · {(hrApplicants||[]).length} total applicants</p>
+            </div>
+            <button onClick={()=>setCreatingJob(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New job posting</button>
+          </div>
+        </div>
+
+        <div className="flex gap-1 mb-4">
+          {[{k:'',l:'All'},{k:'open',l:'🟢 Open'},{k:'draft',l:'Draft'},{k:'filled',l:'✓ Filled'},{k:'closed',l:'Closed'}].map(t=>(
+            <button key={t.k} onClick={()=>setFilterStatus(t.k)} className={`text-xs px-3 py-1.5 rounded ${filterStatus===t.k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{t.l}</button>
+          ))}
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-3">{jobs.map(j => {
+          const apps = (hrApplicants||[]).filter(a=>a.job_id===j.id);
+          const stageCounts = {};
+          apps.forEach(a => { stageCounts[a.current_stage] = (stageCounts[a.current_stage]||0)+1; });
+          const hiringMgr = j.hiring_manager_id ? (employees||[]).find(e=>e.id===j.hiring_manager_id) : null;
+          return (
+            <div key={j.id} className="bg-white border-2 rounded-xl p-4 hover:border-indigo-300">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="font-bold">{j.title}</div>
+                    <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${j.status==='open'?'bg-emerald-100 text-emerald-700':j.status==='filled'?'bg-blue-100 text-blue-700':j.status==='closed'?'bg-slate-200 text-slate-600':'bg-amber-100 text-amber-700'}`}>{j.status}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">{j.department||'—'}{j.employment_type?` · ${j.employment_type}`:''} · {j.positions_to_fill} position{j.positions_to_fill===1?'':'s'}</div>
+                  {hiringMgr && <div className="text-[11px] text-slate-500 mt-0.5">Hiring manager: {fullName(hiringMgr)}</div>}
+                </div>
+                <div className="flex gap-2 shrink-0"><button onClick={()=>setEditingJob(j)} className="text-xs text-slate-500 hover:underline">Edit</button></div>
+              </div>
+              <div className="text-xs text-slate-700 mb-2">
+                <strong>{apps.length}</strong> applicant{apps.length===1?'':'s'}: {APPLICANT_STAGES.filter(s=>stageCounts[s.key]>0).map(s=><span key={s.key} className={`inline-block ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${s.color}`}>{s.label} {stageCounts[s.key]}</span>)}
+              </div>
+              <button onClick={()=>setOpenJobId(j.id)} className="w-full text-xs py-1.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold">View applicants →</button>
+            </div>
+          );
+        })}{jobs.length===0 && <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-sm text-slate-400">No job postings in this filter. Click "+ New job posting" to add one.</div>}</div>
+
+        {(creatingJob||editingJob) && <JobPostingForm job={editingJob} profile={profile} employees={employees} onClose={()=>{ setCreatingJob(false); setEditingJob(null); }} onSaved={()=>{ setCreatingJob(false); setEditingJob(null); reload(); }} />}
+      </div>
+    );
+  }
+
+  // Job detail (Kanban-style applicant pipeline)
+  const jobApps = (hrApplicants||[]).filter(a => a.job_id===job.id);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <button onClick={()=>setOpenJobId(null)} className="text-xs text-slate-500 hover:text-slate-800 mb-1">← All postings</button>
+            <h1 className="text-2xl font-bold">🎯 {job.title}</h1>
+            <p className="text-slate-500 text-sm">{job.department||'—'} · {jobApps.length} applicant{jobApps.length===1?'':'s'}</p>
+          </div>
+          <button onClick={()=>setCreatingApplicant(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">+ Add applicant</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
+        {APPLICANT_STAGES.map(stage => {
+          const stageApps = jobApps.filter(a => a.current_stage===stage.key);
+          return (
+            <div key={stage.key} className="bg-white border rounded-lg overflow-hidden">
+              <div className={`px-3 py-2 text-xs font-bold uppercase tracking-wider ${stage.color}`}>{stage.label} <span className="opacity-70">({stageApps.length})</span></div>
+              <div className="p-2 space-y-2 min-h-[80px]">{stageApps.map(a => (
+                <button key={a.id} onClick={()=>setEditingApplicant(a)} className="w-full bg-slate-50 border rounded p-2 text-left hover:border-indigo-400">
+                  <div className="font-semibold text-xs truncate">{a.first_name} {a.last_name}</div>
+                  {a.current_position && <div className="text-[10px] text-slate-500 truncate">{a.current_position}</div>}
+                  {a.applied_date && <div className="text-[10px] text-slate-400">{fmtDate(a.applied_date)}</div>}
+                </button>
+              ))}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {(creatingApplicant||editingApplicant) && <ApplicantForm applicant={editingApplicant} jobId={job.id} profile={profile} onClose={()=>{ setCreatingApplicant(false); setEditingApplicant(null); }} onSaved={()=>{ setCreatingApplicant(false); setEditingApplicant(null); reload(); }} />}
+    </div>
+  );
+}
+
+function JobPostingForm({ job, profile, employees, onClose, onSaved }){
+  const isEdit = !!job;
+  const [f,setF]=useState(job || { title:'', department:'', description:'', requirements:'', employment_type:'full-time', positions_to_fill:1, status:'draft', posted_date:new Date().toISOString().slice(0,10), hiring_manager_id:null });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title?.trim()){ setMsg('Title required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = { ...f, title:f.title.trim(), positions_to_fill:Number(f.positions_to_fill)||1, posted_date:f.posted_date||null, closed_date:f.closed_date||null, hiring_manager_id:f.hiring_manager_id||null };
+    if(!isEdit) payload.created_by = profile.id;
+    const { error } = isEdit ? await sb.from('hr_job_postings').update(payload).eq('id', job.id) : await sb.from('hr_job_postings').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function del(){
+    if(!confirm('Delete this job posting? Applicants linked to it lose their job link but are not deleted.')) return;
+    const { error } = await sb.from('hr_job_postings').delete().eq('id', job.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit job posting':'New job posting'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="Senior Sewer / Account Manager" /></TpLbl>
+          <TpLbl t="Department"><input className="input" value={f.department||''} onChange={e=>up('department',e.target.value)} /></TpLbl>
+          <TpLbl t="Positions to fill"><input type="number" min="1" className="input" value={f.positions_to_fill||1} onChange={e=>up('positions_to_fill',e.target.value)} /></TpLbl>
+          <TpLbl t="Employment type">
+            <select className="input" value={f.employment_type||'full-time'} onChange={e=>up('employment_type',e.target.value)}>
+              <option>full-time</option><option>part-time</option><option>contractual</option><option>internship</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="Status">
+            <select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>
+              <option value="draft">Draft</option><option value="open">Open</option><option value="closed">Closed</option><option value="filled">Filled</option><option value="cancelled">Cancelled</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="Hiring manager">
+            <select className="input" value={f.hiring_manager_id||''} onChange={e=>up('hiring_manager_id',e.target.value||null)}>
+              <option value="">— pick —</option>
+              {(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Posted date"><input type="date" className="input" value={f.posted_date||''} onChange={e=>up('posted_date',e.target.value||null)} /></TpLbl>
+          <TpLbl t="Closed date"><input type="date" className="input" value={f.closed_date||''} onChange={e=>up('closed_date',e.target.value||null)} /></TpLbl>
+        </div>
+        <TpLbl t="Description"><textarea className="input min-h-[80px]" value={f.description||''} onChange={e=>up('description',e.target.value)} placeholder="Role responsibilities, day-to-day work" /></TpLbl>
+        <TpLbl t="Requirements"><textarea className="input min-h-[80px]" value={f.requirements||''} onChange={e=>up('requirements',e.target.value)} placeholder="Years of experience, skills, certifications" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>}
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Create posting')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
+  const isEdit = !!applicant;
+  const [f,setF]=useState(applicant || { job_id:jobId, first_name:'', last_name:'', email:'', phone:'', current_position:'', resume_url:'', current_stage:'applied', source:'', expected_salary:'', applied_date:new Date().toISOString().slice(0,10), notes:'', interview_date:'', rejection_reason:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploading,setUploading]=useState(false);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function uploadResume(file){
+    if(!file) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `recruitment/${jobId||'unassigned'}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      up('resume_url', pu.publicUrl);
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setUploading(false);
+  }
+  async function save(){
+    if(!f.first_name?.trim() || !f.last_name?.trim()){ setMsg('Name required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = { ...f, first_name:f.first_name.trim(), last_name:f.last_name.trim(), applied_date:f.applied_date||null, interview_date:f.interview_date||null, expected_salary: f.expected_salary?Number(f.expected_salary):null };
+    if(!isEdit) payload.created_by = profile.id;
+    const { error } = isEdit ? await sb.from('hr_applicants').update(payload).eq('id', applicant.id) : await sb.from('hr_applicants').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function del(){
+    if(!confirm('Delete this applicant record?')) return;
+    const { error } = await sb.from('hr_applicants').delete().eq('id', applicant.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit applicant':'New applicant'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="First name *"><input className="input" value={f.first_name||''} onChange={e=>up('first_name',e.target.value)} /></TpLbl>
+          <TpLbl t="Last name *"><input className="input" value={f.last_name||''} onChange={e=>up('last_name',e.target.value)} /></TpLbl>
+          <TpLbl t="Email"><input type="email" className="input" value={f.email||''} onChange={e=>up('email',e.target.value)} /></TpLbl>
+          <TpLbl t="Phone"><input className="input" value={f.phone||''} onChange={e=>up('phone',e.target.value)} /></TpLbl>
+          <TpLbl t="Current position / employer"><input className="input" value={f.current_position||''} onChange={e=>up('current_position',e.target.value)} placeholder="Senior Sewer at Company X" /></TpLbl>
+          <TpLbl t="Expected salary"><input type="number" className="input" value={f.expected_salary||''} onChange={e=>up('expected_salary',e.target.value)} placeholder="₱" /></TpLbl>
+          <TpLbl t="Source"><input className="input" value={f.source||''} onChange={e=>up('source',e.target.value)} placeholder="JobStreet / Referral / Walk-in / etc." /></TpLbl>
+          <TpLbl t="Applied date"><input type="date" className="input" value={f.applied_date||''} onChange={e=>up('applied_date',e.target.value||null)} /></TpLbl>
+          <TpLbl t="Stage">
+            <select className="input" value={f.current_stage} onChange={e=>up('current_stage',e.target.value)}>
+              {APPLICANT_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Interview date"><input type="date" className="input" value={f.interview_date||''} onChange={e=>up('interview_date',e.target.value||null)} /></TpLbl>
+        </div>
+        <TpLbl t="Resume / CV">
+          <div className="flex items-center gap-2">
+            <input type="file" onChange={e=>uploadResume(e.target.files?.[0])} className="text-xs flex-1" />
+            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+            {f.resume_url && <a href={f.resume_url} target="_blank" rel="noreferrer" className="text-xs text-emerald-600">✓ View</a>}
+          </div>
+        </TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[80px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Interview impressions, screening notes, references" /></TpLbl>
+        {f.current_stage==='rejected' && <TpLbl t="Rejection reason"><input className="input" value={f.rejection_reason||''} onChange={e=>up('rejection_reason',e.target.value)} placeholder="Optional" /></TpLbl>}
+        {f.current_stage==='hired' && <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">💡 Once saved, head to HR → Employees → + New employee to create their 201 file. Optionally link the new employee back to this applicant by ID.</div>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>}
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Add applicant')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── HR TIER 3 — Org Chart ─────────── */
+function HROrgChartView({ profile, employees }){
+  // Build hierarchical tree from employees.manager_id. Roots = no manager,
+  // or whose manager isn't in the active list.
+  const activeEmps = (employees||[]).filter(e => e.status!=='resigned' && e.status!=='terminated');
+  const empById = new Map(activeEmps.map(e => [e.id, e]));
+  const roots = activeEmps.filter(e => !e.manager_id || !empById.has(e.manager_id));
+  function childrenOf(empId){ return activeEmps.filter(e => e.manager_id===empId); }
+
+  // Department headcount
+  const deptCounts = {};
+  activeEmps.forEach(e => { const k = e.department||'(no department)'; deptCounts[k] = (deptCounts[k]||0)+1; });
+  const deptRows = Object.entries(deptCounts).sort((a,b)=>b[1]-a[1]);
+
+  // People without managers
+  const orphans = activeEmps.filter(e => !e.manager_id).length;
+  // Average span of control (only counting people who manage at least 1)
+  const managers = activeEmps.filter(e => activeEmps.some(x => x.manager_id===e.id));
+  const avgSpan = managers.length>0 ? (managers.reduce((s,m)=>s+childrenOf(m.id).length, 0) / managers.length) : 0;
+
+  function Node({ e, depth }){
+    const kids = childrenOf(e.id);
+    return (
+      <div className="ml-0">
+        <div className={`flex items-center gap-2 py-1.5 ${depth>0?'border-l-2 border-slate-200 pl-3 ml-3':''}`}>
+          {e.photo_url ? (
+            <img src={e.photo_url} alt="" className="w-8 h-8 rounded-full object-cover border border-slate-200" />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">{(e.first_name||'').charAt(0)}{(e.last_name||'').charAt(0)}</div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-sm truncate">{fullName(e)}</div>
+            <div className="text-[11px] text-slate-500 truncate">{e.position||'—'}{e.department?` · ${e.department}`:''}</div>
+          </div>
+          {kids.length>0 && <span className="text-[10px] text-slate-500 shrink-0">{kids.length} report{kids.length===1?'':'s'}</span>}
+        </div>
+        {kids.length>0 && (
+          <div className="ml-2">{kids.sort((a,b)=>String(a.last_name||'').localeCompare(b.last_name||'')).map(k => <Node key={k.id} e={k} depth={depth+1} />)}</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🏢 Org Chart</h1>
+            <p className="text-slate-500 text-sm">{activeEmps.length} active employees · {managers.length} managers · Avg span of control: {avgSpan.toFixed(1)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-4 mb-4">
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Top-level (no manager)</div><div className="text-2xl font-bold">{orphans}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Managers</div><div className="text-2xl font-bold">{managers.length}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Avg direct reports</div><div className="text-2xl font-bold">{avgSpan.toFixed(1)}</div></div>
+      </div>
+
+      {/* Department roll-up */}
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-sm font-bold mb-3">Headcount by department</div>
+        <div className="grid md:grid-cols-3 gap-2">{deptRows.map(([dept,count])=>(
+          <div key={dept} className="flex items-center justify-between bg-slate-50 border rounded p-2 text-sm">
+            <span className="font-medium truncate">{dept}</span>
+            <span className="font-bold ml-2">{count}</span>
+          </div>
+        ))}</div>
+      </div>
+
+      {/* Visual hierarchy tree */}
+      <div className="bg-white border rounded-xl p-4">
+        <div className="text-sm font-bold mb-3">Reporting hierarchy</div>
+        {roots.length===0 ? <div className="text-sm text-slate-400 text-center py-4">No active employees yet, or no manager hierarchy set.</div> : (
+          <div className="space-y-1">{roots.sort((a,b)=>String(a.last_name||'').localeCompare(b.last_name||'')).map(r => <Node key={r.id} e={r} depth={0} />)}</div>
+        )}
+        {(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated' && !e.manager_id).length > 0 && (
+          <div className="text-[11px] text-slate-500 mt-3 border-t pt-2">💡 To build the hierarchy, edit each employee's 201 file and set their Manager.</div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -13473,6 +14063,9 @@ function App(){
   // HR Tier 2: checklist templates + per-employee checklists + trainings
   const [hrTemplates,setHrTemplates]=useState([]); const [hrChecklists,setHrChecklists]=useState([]);
   const [hrTrainings,setHrTrainings]=useState([]);
+  // HR Tier 3: performance review cycles + reviews, job postings + applicants
+  const [hrReviewCycles,setHrReviewCycles]=useState([]); const [hrReviews,setHrReviews]=useState([]);
+  const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('dashboard');
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
@@ -13531,7 +14124,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -13578,6 +14171,11 @@ function App(){
       sb.from('hr_checklist_templates').select('*').order('name',{ascending:true}),
       sb.from('hr_checklists').select('*').order('started_at',{ascending:false}),
       sb.from('hr_trainings').select('*').order('date_completed',{ascending:false}),
+      // HR Tier 3
+      sb.from('hr_review_cycles').select('*').order('created_at',{ascending:false}),
+      sb.from('hr_reviews').select('*').order('created_at',{ascending:false}),
+      sb.from('hr_job_postings').select('*').order('created_at',{ascending:false}),
+      sb.from('hr_applicants').select('*').order('applied_date',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -13602,6 +14200,10 @@ function App(){
     setHrTemplates(htpl && !htpl.error ? (htpl.data||[]) : []);
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
+    setHrReviewCycles(hcyc && !hcyc.error ? (hcyc.data||[]) : []);
+    setHrReviews(hrev && !hrev.error ? (hrev.data||[]) : []);
+    setHrJobs(hjob && !hjob.error ? (hjob.data||[]) : []);
+    setHrApplicants(happ && !happ.error ? (happ.data||[]) : []);
     setItems(it.data||[]); setSuppliers(sp.data||[]); setDepartments(dp.data||[]);
     setRequests(pq.data||[]); setOrders(po.data||[]);
     setSampleJobs(sj.data||[]);
@@ -14017,7 +14619,7 @@ function App(){
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
     ];
   }
@@ -14107,6 +14709,9 @@ function App(){
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
+        {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} reload={loadAll} />}
+        {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
+        {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
