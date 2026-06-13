@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 30b · Production statuses + For Pattern + Cutting Subcon';
+const BUILD = 'Live build 31 · Production Supervisor role + Production Floor home dashboard';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2077,6 +2077,180 @@ function MaterialsBuyListView({ profile, requests, items, suppliers, orders, pro
    queues across PRs, Materials Queue, POs, Stock Out, and Reorder alerts so
    the purchaser doesn't have to dig through 6 different views. Each tile is
    clickable and jumps to the relevant page (with a filter when applicable). */
+/* ─────────── PRODUCTION SUPERVISOR HOME ───────────
+   Single-screen view of everything happening across the production floor —
+   built for the supervisor who needs to know status at a glance without
+   bouncing between 6 boards. Shows: active jobs by board, overdue counts,
+   due-this-week counts, today's deliveries, recent activity.
+*/
+function ProductionSupervisorHomeView({ profile, profiles, prodJobs, sampleJobs, graphicJobs, printingJobs, embroideryJobs, knittingJobs, leads, deptActivityCounts, navTo }){
+  // Helper: dedupe + sort by deadline urgency
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+  function daysUntil(d){ if(!d) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(d+'T00:00:00')-t)/86400000); }
+
+  // Active counts per board (exclude soft-deleted via state already filtered)
+  const activeProd = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
+  const activeSample = (sampleJobs||[]).filter(j => !SAMPLING_DONE.includes(j.status));
+  const activeGraphic = (graphicJobs||[]).filter(j => !GRAPHIC_DONE.includes(j.status));
+  const activePrinting = (printingJobs||[]).filter(j => !PRINTING_DONE.includes(j.status));
+  const activeEmb = (embroideryJobs||[]).filter(j => !EMBROIDERY_DONE.includes(j.status));
+  const activeKnit = (knittingJobs||[]).filter(j => !KNITTING_DONE.includes(j.status));
+
+  // Production-specific counts
+  const overdueProd = activeProd.filter(j => j.due_date && j.due_date < todayStr).length;
+  const dueThisWeekProd = activeProd.filter(j => { const d = daysUntil(j.due_date); return d!==null && d>=0 && d<=7; }).length;
+  const materialsPendingProd = activeProd.filter(j => j.status==='materials to purchase').length;
+
+  // Production status distribution — give the supervisor a sense of where the
+  // bottleneck is in the floor right now.
+  const statusDistrib = PRODUCTION_STATUSES
+    .filter(s => !PRODUCTION_DONE.includes(s.key))
+    .map(s => ({ meta:s, count: activeProd.filter(j=>j.status===s.key).length }))
+    .filter(s => s.count > 0);
+
+  // Boards with the most "in approval" or attention-needed states
+  const graphicForApproval = (graphicJobs||[]).filter(j => j.status==='for approval').length;
+  const embForApproval = (embroideryJobs||[]).filter(j => j.status==='for approval').length;
+  const knitForApproval = (knittingJobs||[]).filter(j => j.status==='for approval').length;
+  const totalForApproval = graphicForApproval + embForApproval + knitForApproval;
+
+  // Top 5 most urgent active production jobs
+  const urgentProd = activeProd
+    .filter(j => j.due_date)
+    .map(j => ({ j, daysLeft: daysUntil(j.due_date) }))
+    .sort((a,b) => (a.daysLeft||0) - (b.daysLeft||0))
+    .slice(0, 5);
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greet = hour<12 ? 'Good morning' : hour<18 ? 'Good afternoon' : 'Good evening';
+  const firstName = (profile?.name||profile?.email||'team').split(' ')[0].split('@')[0];
+
+  function Tile({ icon, label, count, sub, color='indigo', urgent, onClick, big }){
+    const palette = {
+      indigo:   'border-indigo-200 hover:border-indigo-400 bg-white',
+      emerald:  'border-emerald-200 hover:border-emerald-400 bg-emerald-50/40',
+      amber:    'border-amber-200 hover:border-amber-400 bg-amber-50/40',
+      rose:     'border-rose-200 hover:border-rose-400 bg-rose-50/40',
+      blue:     'border-blue-200 hover:border-blue-400 bg-blue-50/40',
+      purple:   'border-purple-200 hover:border-purple-400 bg-purple-50/40',
+      pink:     'border-pink-200 hover:border-pink-400 bg-pink-50/40',
+    };
+    const numColor = urgent ? 'text-rose-700' : count>0 ? 'text-slate-900' : 'text-slate-300';
+    return (
+      <button onClick={onClick} className={`text-left rounded-xl border-2 p-4 transition shadow-sm hover:shadow-md ${palette[color]} ${big?'md:col-span-2':''}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="text-2xl">{icon}</div>
+          {urgent && count>0 && <span className="text-[9px] uppercase font-bold tracking-wider bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">Urgent</span>}
+        </div>
+        <div className={`text-3xl font-extrabold mt-2 ${numColor}`}>{count}</div>
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">{label}</div>
+        {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">🏭 Production Floor</h1>
+        <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — here's what's happening across all boards today.</p>
+      </div>
+
+      {/* Top critical numbers */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Critical numbers</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Tile icon="⚙" label="Active production" count={activeProd.length} sub={`${overdueProd} overdue · ${dueThisWeekProd} due this week`} color="indigo" onClick={()=>navTo('prod')} />
+        <Tile icon="🚨" label="Overdue jobs" count={overdueProd} sub="Past their deadline" color="rose" urgent={overdueProd>0} onClick={()=>navTo('prod')} />
+        <Tile icon="📦" label="Awaiting materials" count={materialsPendingProd} sub="Production blocked" color="amber" urgent={materialsPendingProd>0} onClick={()=>navTo('prod')} />
+        <Tile icon="📝" label="For approval" count={totalForApproval} sub={`G:${graphicForApproval} · E:${embForApproval} · K:${knitForApproval}`} color="purple" urgent={totalForApproval>0} onClick={()=>navTo('graphic')} />
+      </div>
+
+      {/* Boards at a glance */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Boards at a glance</div>
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+        <Tile icon="⚙" label="Production" count={activeProd.length} sub="active jobs" color="indigo" onClick={()=>navTo('prod')} />
+        <Tile icon="🧵" label="Sampling" count={activeSample.length} sub="active samples" color="emerald" onClick={()=>navTo('sampling')} />
+        <Tile icon="🎨" label="Graphic" count={activeGraphic.length} sub="active jobs" color="pink" onClick={()=>navTo('graphic')} />
+        <Tile icon="🖨" label="Printing" count={activePrinting.length} sub="active jobs" color="purple" onClick={()=>navTo('printing')} />
+        <Tile icon="🪡" label="Embroidery" count={activeEmb.length} sub="active jobs" color="pink" onClick={()=>navTo('embroidery')} />
+        <Tile icon="🧶" label="Knitting" count={activeKnit.length} sub="active jobs" color="amber" onClick={()=>navTo('knitting')} />
+      </div>
+
+      {/* Urgent jobs */}
+      {urgentProd.length > 0 && (
+        <div className="bg-white border-2 border-rose-200 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-bold text-rose-900">⏰ Most urgent jobs on the floor</div>
+            <button onClick={()=>navTo('prod')} className="text-xs text-rose-700 font-semibold hover:underline">Open Production Board →</button>
+          </div>
+          <div className="space-y-1.5">
+            {urgentProd.map(({j, daysLeft})=>{
+              const meta = metaFrom(PRODUCTION_STATUSES, j.status);
+              const lead = j.lead_id ? (leads||[]).find(l=>l.id===j.lead_id) : null;
+              const overdue = daysLeft < 0;
+              return (
+                <div key={j.id} className={`bg-white border rounded p-2.5 flex items-center gap-3 ${overdue?'border-rose-300':'border-slate-200'}`}>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">{j.client_name} <span className="text-slate-400 text-xs ml-1">· {j.number}</span></div>
+                    <div className="text-xs text-slate-500 truncate">{j.item}</div>
+                  </div>
+                  <span className={`text-[10px] px-2 py-1 rounded font-medium ${meta.color} shrink-0`}>{meta.label}</span>
+                  <div className={`text-xs font-bold shrink-0 ${overdue?'text-rose-700':daysLeft<=3?'text-amber-700':'text-slate-700'}`}>
+                    {overdue ? `${Math.abs(daysLeft)}d OVERDUE` : daysLeft===0 ? 'DUE TODAY' : `${daysLeft}d left`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Status distribution — where's the work concentrated? */}
+      {statusDistrib.length > 0 && (
+        <div className="bg-white border rounded-xl p-4 mb-6">
+          <div className="text-sm font-bold text-slate-700 mb-3">⚙ Production status distribution</div>
+          <div className="space-y-1.5">{statusDistrib.map(s => (
+            <div key={s.meta.key} className="flex items-center gap-2">
+              <span className={`text-xs px-2 py-1 rounded font-medium ${s.meta.color} w-44 shrink-0 text-center`}>{s.meta.label}</span>
+              <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+                <div className="bg-indigo-500 h-full" style={{ width: `${Math.min(100, (s.count / activeProd.length) * 100)}%` }}></div>
+              </div>
+              <div className="text-xs font-bold w-12 text-right">{s.count}</div>
+            </div>
+          ))}</div>
+        </div>
+      )}
+
+      {/* Quick shortcuts */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Quick links</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <button onClick={()=>navTo('techpacks')} className="text-left rounded-xl border-2 border-teal-200 hover:border-teal-400 bg-white p-4 transition">
+          <div className="text-2xl">📋</div>
+          <div className="text-sm font-bold mt-2">Techpacks</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">Production specs & approved designs</div>
+        </button>
+        <button onClick={()=>navTo('logistics')} className="text-left rounded-xl border-2 border-orange-200 hover:border-orange-400 bg-white p-4 transition">
+          <div className="text-2xl">🚚</div>
+          <div className="text-sm font-bold mt-2">Logistics</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">Today's deliveries</div>
+        </button>
+        <button onClick={()=>navTo('payroll')} className="text-left rounded-xl border-2 border-rose-200 hover:border-rose-400 bg-white p-4 transition">
+          <div className="text-2xl">✂</div>
+          <div className="text-sm font-bold mt-2">Sewing Payroll</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">Time logs & rates</div>
+        </button>
+        <button onClick={()=>navTo('inbox')} className="text-left rounded-xl border-2 border-indigo-200 hover:border-indigo-400 bg-white p-4 transition">
+          <div className="text-2xl">📥</div>
+          <div className="text-sm font-bold mt-2">Inbox</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">@mentions and comments</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────── FINANCE HOME (landing dashboard) ───────────
    Same idea as Purchasing Home but for the Finance team: surface the work
    queue across RFPs, voucher disbursement, collections, bank reconciliation,
@@ -4125,26 +4299,28 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
 /* ----------------------- Team Overview ----------------------- */
 // Shared role helpers used by Team Overview + Settings.
 function roleLabel(r){
-  return r==='admin'        ? 'Administrator' :
-         r==='assistant'    ? 'Sales Assistant' :
-         r==='production'   ? 'Production Team' :
-         r==='purchasing'   ? 'Purchasing Team' :
-         r==='accounting'   ? 'Accounting Team' :
-         r==='graphic'      ? 'Graphic Design' :
-         r==='printing'     ? 'Printing Team' :
-         r==='sewing_lead'  ? 'Sewing Line Lead' :
+  return r==='admin'                  ? 'Administrator' :
+         r==='assistant'              ? 'Sales Assistant' :
+         r==='production'             ? 'Production Team' :
+         r==='production_supervisor'  ? 'Production Supervisor' :
+         r==='purchasing'             ? 'Purchasing Team' :
+         r==='accounting'             ? 'Accounting Team' :
+         r==='graphic'                ? 'Graphic Design' :
+         r==='printing'               ? 'Printing Team' :
+         r==='sewing_lead'            ? 'Sewing Line Lead' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
   const cls =
-    role==='admin'        ? 'bg-indigo-100 text-indigo-700' :
-    role==='assistant'    ? 'bg-amber-100 text-amber-700' :
-    role==='production'   ? 'bg-emerald-100 text-emerald-700' :
-    role==='purchasing'   ? 'bg-violet-100 text-violet-700' :
-    role==='accounting'   ? 'bg-sky-100 text-sky-700' :
-    role==='graphic'      ? 'bg-pink-100 text-pink-700' :
-    role==='printing'     ? 'bg-purple-100 text-purple-700' :
-    role==='sewing_lead'  ? 'bg-rose-100 text-rose-700' :
+    role==='admin'                  ? 'bg-indigo-100 text-indigo-700' :
+    role==='assistant'              ? 'bg-amber-100 text-amber-700' :
+    role==='production'             ? 'bg-emerald-100 text-emerald-700' :
+    role==='production_supervisor'  ? 'bg-teal-100 text-teal-700' :
+    role==='purchasing'             ? 'bg-violet-100 text-violet-700' :
+    role==='accounting'             ? 'bg-sky-100 text-sky-700' :
+    role==='graphic'                ? 'bg-pink-100 text-pink-700' :
+    role==='printing'               ? 'bg-purple-100 text-purple-700' :
+    role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -4305,6 +4481,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'manager',     label:'Sales Manager', count:profiles.filter(p=>p.role==='manager').length },
     { key:'assistant',   label:'Sales Asst.',   count:profiles.filter(p=>p.role==='assistant').length },
     { key:'production',  label:'Production',    count:profiles.filter(p=>p.role==='production').length },
+    { key:'production_supervisor', label:'Prod Supervisor', count:profiles.filter(p=>p.role==='production_supervisor').length },
     { key:'graphic',     label:'Graphic',       count:profiles.filter(p=>p.role==='graphic').length },
     { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
@@ -4313,7 +4490,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','graphic','printing','purchasing','accounting','sewing_lead'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -4350,6 +4527,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="assistant">Sales Assistant</option>
               <option disabled>──────────</option>
               <option value="production">Production Team</option>
+              <option value="production_supervisor">Production Supervisor</option>
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
@@ -4441,10 +4619,12 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="assistant">Sales Assistant</option>
                   <option disabled>──────────</option>
                   <option value="production">Production Team</option>
+                  <option value="production_supervisor">Production Supervisor</option>
                   <option value="graphic">Graphic Design</option>
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
                   <option value="accounting">Accounting Team</option>
+                  <option value="sewing_lead">Sewing Line Lead</option>
                 </select>
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
@@ -11538,6 +11718,11 @@ function App(){
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets']);
       fallback = 'prod';
+    } else if(profile.role==='production_supervisor'){
+      // Production Supervisor — owns the production floor + sees techpacks,
+      // logistics, payroll. Default landing is her custom Production Home.
+      allowed = new Set(['inbox','prod-home','prod','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','payroll','budgets']);
+      fallback = 'prod-home';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets']);
       fallback = 'graphic';
@@ -11793,6 +11978,7 @@ function App(){
   const isGraphicTeam=profile.role==='graphic';
   const isPrintingTeam=profile.role==='printing';
   const isSewingLead=profile.role==='sewing_lead';
+  const isProdSupervisor=profile.role==='production_supervisor';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -11831,7 +12017,18 @@ function App(){
   const FINANCE_DEPT_ONLY = { group:'Finance', items:[
     ['budgets','Budget Requests','💰'],
   ] };
-  if(isProduction || isGraphicTeam || isPrintingTeam){
+  if(isProdSupervisor){
+    // Production Supervisor — Home dashboard + all production boards + Sales Techpacks + Logistics + Payroll.
+    // She runs the floor so she needs visibility across every production sub-board.
+    NAV = [
+      { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
+      LOGISTICS_GROUP,
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      FINANCE_DEPT_ONLY,
+    ];
+  } else if(isProduction || isGraphicTeam || isPrintingTeam){
     // Production / Graphic Design / Printing teams all share the same nav —
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
@@ -12018,6 +12215,7 @@ function App(){
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} />}
+        {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
