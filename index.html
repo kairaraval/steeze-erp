@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 24c · PR: add new inventory item inline';
+const BUILD = 'Live build 24e · Styles: Calculate materials for project qty';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6568,12 +6568,17 @@ async function maybeAutoCreatePRForLead(profile, lead){
   if(!lead || !profile) return null;
   try {
     const { data: existing, error: lookupErr } = await sb.from('purchase_requests')
-      .select('id').eq('linked_lead_id', lead.id).limit(1);
+      .select('id').eq('linked_lead_id', lead.id).is('deleted_at', null).limit(1);
     if(lookupErr){ console.warn('PR auto-create lookup failed:', lookupErr.message); return null; }
     if(existing && existing.length > 0) return null; // already has a PR
     const payload = buildPRFromLead(profile, lead);
     const { data, error } = await sb.from('purchase_requests').insert(payload).select().single();
-    if(error){ console.warn('PR auto-create insert failed:', error.message); return null; }
+    if(error){
+      // 23505 = unique constraint violation. Means another tab / path won the race
+      // and inserted the PR first. Silently skip — the other path's row stands.
+      if(String(error.code||'').startsWith('23')) return null;
+      console.warn('PR auto-create insert failed:', error.message); return null;
+    }
     return data;
   } catch(e){
     console.warn('PR auto-create unexpected error:', e);
@@ -6589,9 +6594,9 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
   if(!lead || !profile) return null;
   try {
     const { data: existing, error: lookupErr } = await sb.from('production_jobs')
-      .select('id').eq('lead_id', lead.id).limit(1);
+      .select('id').eq('lead_id', lead.id).is('deleted_at', null).limit(1);
     if(lookupErr){ console.warn('Production auto-create lookup failed:', lookupErr.message); return null; }
-    if(existing && existing.length > 0) return null; // already has a production job
+    if(existing && existing.length > 0) return null; // already has an active production job
     const client = (clients||[]).find(c=>c.id===lead.client_id);
     const items = (lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty = items.reduce((s,it)=>s+(Number(it.quantity)||0), 0);
@@ -6613,7 +6618,11 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
       sales_owner_id: lead.manager_id || null,
     };
     const { data, error } = await sb.from('production_jobs').insert(payload).select().single();
-    if(error){ console.warn('Production auto-create insert failed:', error.message); return null; }
+    if(error){
+      // 23505 = unique-constraint violation. Another path won the race; safely skip.
+      if(String(error.code||'').startsWith('23')) return null;
+      console.warn('Production auto-create insert failed:', error.message); return null;
+    }
     return data;
   } catch(e){
     console.warn('Production auto-create unexpected error:', e);
@@ -10118,8 +10127,9 @@ function BIR2307PrintView({ data, profile, onClose }){
 
 
 /* ====================== STYLES & BOMs ====================== */
-function StylesView({ styles, items, suppliers, departments, profile, reload }){
+function StylesView({ styles, items, suppliers, departments, profile, requests, reload }){
   const [search,setSearch]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
+  const [calculating,setCalculating]=useState(null); // style to compute materials for
   const rows=(styles||[]).filter(s=>!search||`${s.number} ${s.name} ${s.category} ${s.fabric}`.toLowerCase().includes(search.toLowerCase()));
   function bomCost(s){ return (s.bom_rows||[]).reduce((sum,r)=>sum+(Number(r.qty)||0)*(Number(r.unit_cost)||0),0); }
   function totalCost(s){ return bomCost(s)+Number(s.decoration_cost||0)+Number(s.labor_cost||0); }
@@ -10145,20 +10155,153 @@ function StylesView({ styles, items, suppliers, departments, profile, reload }){
             <td className="px-3 py-2 text-right">{peso(s.sell_price)}</td>
             <td className="px-3 py-2 text-right">{peso(totalCost(s))}</td>
             <td className={`px-3 py-2 text-right font-semibold ${m===null?'text-slate-400':m>=30?'text-emerald-700':m>=20?'text-amber-700':'text-rose-700'}`}>{m===null?'—':m.toFixed(1)+'%'}</td>
-            <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); del(s.id);}} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+            <td className="px-3 py-2 text-right whitespace-nowrap">
+              <button onClick={(e)=>{e.stopPropagation(); setCalculating(s);}} className="text-xs text-indigo-600 hover:underline mr-2" title="Calculate materials for a project qty">🧮 Calculate</button>
+              <button onClick={(e)=>{e.stopPropagation(); del(s.id);}} className="text-xs text-rose-500 hover:underline">Delete</button>
+            </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No styles yet. Click "+ New style" to add one.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <StyleForm existing={editing} items={items} suppliers={suppliers} departments={departments} profile={profile} reloadItems={reload} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {(creating||editing) && <StyleForm existing={editing} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reloadItems={reload} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {calculating && <MaterialCalculatorModal style={calculating} items={items} requests={requests} onClose={()=>setCalculating(null)} />}
     </div>
   );
 }
 
-function StyleForm({ existing, items, suppliers, departments, profile, onClose, onSaved, reloadItems }){
+// Material Calculator — multiplies the style's BOM rows by a target production
+// quantity, then compares each material requirement against current stock and
+// reservations. Shows shortfall per material so purchasing knows exactly what
+// to buy for the project.
+function MaterialCalculatorModal({ style, items, requests, onClose }){
+  const [qty,setQty]=useState(100);  // default 100 pieces — common round number
+  const [wastagePct,setWastagePct]=useState(5);  // % wastage buffer (cutting loss, mistakes)
+  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  const n = Number(qty)||0;
+  const waste = (Number(wastagePct)||0) / 100;
+  // Per-row calc: needed = bom_qty × n × (1 + waste). Lookup item for stock.
+  const calc = (style.bom_rows||[]).map((r,i)=>{
+    const it = r.item_id ? (items||[]).find(x=>x.id===r.item_id) : null;
+    const bomQty = Number(r.qty)||0;
+    const needed = bomQty * n * (1 + waste);
+    const onHand = Number(it?.qty||0);
+    const reserved = it ? (reservations.get(it.id)||0) : 0;
+    const available = onHand - reserved;
+    const shortfall = Math.max(0, needed - available);
+    const unitCost = Number(r.unit_cost)||Number(it?.cost)||0;
+    return { i, r, item:it, bomQty, needed, onHand, reserved, available, shortfall, unitCost, totalCost: needed*unitCost, buyCost: shortfall*unitCost };
+  });
+  const totalMaterialCost = calc.reduce((s,c)=>s+c.totalCost, 0);
+  const totalBuyCost = calc.reduce((s,c)=>s+c.buyCost, 0);
+  const totalShortLines = calc.filter(c=>c.shortfall>0).length;
+  // Allow user to copy a textual summary to clipboard for sharing with team
+  function copySummary(){
+    const lines = [];
+    lines.push(`MATERIALS REQUIRED · ${style.name||style.number} · ${n} pieces${waste>0?` (+${(waste*100).toFixed(0)}% wastage)`:''}`);
+    lines.push('');
+    calc.forEach(c=>{
+      const label = c.r.name || c.item?.name || '(unnamed material)';
+      const unit = c.r.unit || c.item?.unit || 'pc';
+      lines.push(`• ${label}: ${c.needed.toFixed(2)} ${unit}  (have ${c.available} available, need to buy ${c.shortfall.toFixed(2)})`);
+    });
+    lines.push('');
+    lines.push(`Total material cost: ${peso(totalMaterialCost)}`);
+    lines.push(`Cost to buy shortfall: ${peso(totalBuyCost)}`);
+    try { navigator.clipboard.writeText(lines.join('\n')); alert('Summary copied to clipboard.'); } catch(_){ }
+  }
+  return (
+    <Modal title={`🧮 Calculate materials — ${style.name||style.number}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        {/* Inputs */}
+        <div className="grid grid-cols-3 gap-2 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+          <TpLbl t="Quantity to make (pieces)">
+            <input type="number" className="input text-lg font-bold" value={qty} onChange={e=>setQty(e.target.value)} min="1" />
+          </TpLbl>
+          <TpLbl t="Wastage / safety buffer %">
+            <input type="number" className="input" value={wastagePct} onChange={e=>setWastagePct(e.target.value)} min="0" max="100" step="1" />
+          </TpLbl>
+          <div className="flex items-end justify-end">
+            <button onClick={copySummary} className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50">📋 Copy summary</button>
+          </div>
+        </div>
+
+        {/* Results */}
+        {(style.bom_rows||[]).length===0 ? (
+          <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">⚠ This style has no Bill of Materials yet. Add BOM rows to the style first.</div>
+        ) : (
+          <div className="bg-white border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Material</th>
+                <th className="text-right px-3 py-2">Per piece</th>
+                <th className="text-right px-3 py-2">× {n} pcs{waste>0?` × ${(1+waste).toFixed(2)}`:''}</th>
+                <th className="text-right px-3 py-2">Available</th>
+                <th className="text-right px-3 py-2">Shortfall (buy)</th>
+                <th className="text-right px-3 py-2">Buy cost</th>
+                <th className="text-center px-3 py-2">Coverage</th>
+              </tr></thead>
+              <tbody>{calc.map(c=>{
+                const label = c.r.name || c.item?.name || '(unnamed)';
+                const unit = c.r.unit || c.item?.unit || 'pc';
+                const covered = c.shortfall<=0;
+                const partial = !covered && c.available > 0;
+                return (
+                  <tr key={c.i} className={`border-t ${covered?'':partial?'bg-amber-50/40':'bg-rose-50/40'}`}>
+                    <td className="px-3 py-2 font-medium">{label}{c.item?.color?<span className="text-slate-500"> · {c.item.color}</span>:''}</td>
+                    <td className="px-3 py-2 text-right text-xs">{c.bomQty} {unit}</td>
+                    <td className="px-3 py-2 text-right font-bold">{c.needed.toFixed(2)} {unit}</td>
+                    <td className="px-3 py-2 text-right text-xs">{c.item?<>{c.available} <span className="text-slate-400">/ {c.onHand}</span></>:<span className="text-slate-300">no link</span>}</td>
+                    <td className={`px-3 py-2 text-right font-bold ${covered?'text-emerald-700':'text-rose-700'}`}>{c.shortfall>0?c.shortfall.toFixed(2)+' '+unit:'—'}</td>
+                    <td className="px-3 py-2 text-right">{c.buyCost>0?peso(c.buyCost):<span className="text-slate-300">—</span>}</td>
+                    <td className="px-3 py-2 text-center">
+                      {covered ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ Stock OK</span>
+                        : partial ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Partial</span>
+                        : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Must buy</span>}
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
+              <tfoot className="bg-slate-50">
+                <tr className="border-t-2">
+                  <td colSpan="3" className="px-3 py-2 text-right text-xs uppercase tracking-wider text-slate-500 font-semibold">Total material cost (at full quantity)</td>
+                  <td colSpan="2" className="px-3 py-2 text-right font-bold">{peso(totalMaterialCost)}</td>
+                  <td colSpan="2"></td>
+                </tr>
+                <tr className="border-t">
+                  <td colSpan="3" className="px-3 py-2 text-right text-xs uppercase tracking-wider text-rose-700 font-semibold">Cost to buy shortfall</td>
+                  <td colSpan="2"></td>
+                  <td className="px-3 py-2 text-right font-extrabold text-rose-700 text-base">{peso(totalBuyCost)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        {/* Summary cards */}
+        <div className="grid grid-cols-4 gap-2">
+          <div className="bg-slate-50 border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Pieces</div><div className="font-bold text-lg">{n.toLocaleString()}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-emerald-700">Materials</div><div className="font-bold text-lg">{(style.bom_rows||[]).length}</div></div>
+          <div className={`border rounded-lg p-2 text-center ${totalShortLines>0?'bg-rose-50 border-rose-200':'bg-emerald-50 border-emerald-200'}`}>
+            <div className={`text-[10px] uppercase ${totalShortLines>0?'text-rose-700':'text-emerald-700'}`}>Short</div>
+            <div className={`font-bold text-lg ${totalShortLines>0?'text-rose-700':'text-emerald-700'}`}>{totalShortLines}</div>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-amber-700">To buy</div><div className="font-bold text-lg">{peso(totalBuyCost)}</div></div>
+        </div>
+
+        <div className="text-[10px] text-slate-500">
+          Available = On-hand − Reserved (by approved PRs). Linked materials show their inventory snapshot; unlinked rows show "no link" — calculation still works for needed qty but can't check stock.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function StyleForm({ existing, items, suppliers, departments, profile, requests, onClose, onSaved, reloadItems }){
   const isEdit=!!existing;
   const [f,setF]=useState(existing?{...existing, bom_rows:existing.bom_rows||[]}:{ name:'', category:'', fabric:'', sell_price:0, decoration_cost:0, labor_cost:0, notes:'', bom_rows:[{item_id:null, sku:'', name:'', qty:1, unit:'pc', unit_cost:0}] });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [addingItem,setAddingItem]=useState(false); const [addingForRow,setAddingForRow]=useState(null);
+  const [showCalc,setShowCalc]=useState(false);
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   function setRow(i,patch){ setF(p=>({...p,bom_rows:p.bom_rows.map((r,j)=>j===i?{...r,...patch}:r)})); }
   function addRow(){ setF(p=>({...p,bom_rows:[...p.bom_rows,{item_id:null, sku:'', name:'', qty:1, unit:'pc', unit_cost:0}]})); }
@@ -10183,7 +10326,13 @@ function StyleForm({ existing, items, suppliers, departments, profile, onClose, 
         </div>
 
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Bill of Materials</div><button onClick={addRow} className="text-xs text-indigo-600 font-semibold">+ Add row</button></div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">Bill of Materials</div>
+            <div className="flex items-center gap-3">
+              {(f.bom_rows||[]).some(r=>r.item_id||r.name) && <button type="button" onClick={()=>setShowCalc(true)} className="text-xs text-indigo-600 font-semibold">🧮 Calculate for project</button>}
+              <button onClick={addRow} className="text-xs text-indigo-600 font-semibold">+ Add row</button>
+            </div>
+          </div>
           <div className="space-y-2">{f.bom_rows.map((r,i)=>(
             <div key={i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
               <div className="col-span-5"><label className="text-[10px] text-slate-500 uppercase">Material (from inventory)</label><select className="input mt-0.5 text-xs" value={r.item_id||''} onChange={e=>pickItem(i,e.target.value)}><option value="">— pick —</option>{items.map(it=><option key={it.id} value={it.id}>{it.name}{it.sku?' · '+it.sku:''}</option>)}<option value="__new__">+ Add new inventory item…</option></select>{r.name && <div className="text-[10px] text-slate-500 mt-0.5">{r.name}{r.sku?' · '+r.sku:''}</div>}</div>
@@ -10215,6 +10364,7 @@ function StyleForm({ existing, items, suppliers, departments, profile, onClose, 
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create style')}</button>
       </div>
       {addingItem && <ItemForm suppliers={suppliers} departments={departments} onClose={()=>{ setAddingItem(false); setAddingForRow(null); }} onSaved={(newItem)=>{ setAddingItem(false); const r=addingForRow; setAddingForRow(null); if(newItem && r!=null){ setRow(r,{ item_id:newItem.id, sku:newItem.sku||'', name:newItem.name, unit:newItem.unit||'pc', unit_cost:newItem.cost||0 }); } reloadItems && reloadItems(); }} />}
+      {showCalc && <MaterialCalculatorModal style={f} items={items} requests={requests} onClose={()=>setShowCalc(false)} />}
     </Modal>
   );
 }
@@ -10518,7 +10668,18 @@ function App(){
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
   },[profile && profile.id, profile && profile.role]);
 
+  // Idempotent send-to-X functions. Each checks for an existing non-deleted
+  // record for this lead first. If one exists, just open the destination view
+  // and tell the user — no duplicate insert. This prevents the "double entry"
+  // bug where clicking Send after auto-create already ran creates a second row.
   async function sendLeadToPR(lead){
+    // Check for an existing active PR linked to this lead
+    const { data: existing } = await sb.from('purchase_requests')
+      .select('id,number').eq('linked_lead_id', lead.id).is('deleted_at', null).limit(1);
+    if(existing && existing.length > 0){
+      alert(`PR ${existing[0].number||''} already exists for "${lead.title}". Opening Purchase Requests…`);
+      setView('requests'); return;
+    }
     const payload=buildPRFromLead(profile, lead);
     const { data, error }=await sb.from('purchase_requests').insert(payload).select().single();
     if(error){ alert(error.message); return; }
@@ -10526,6 +10687,13 @@ function App(){
     setView('requests'); loadAll();
   }
   async function sendLeadToSampling(lead){
+    // Check for an existing active sampling job for this lead
+    const { data: existing } = await sb.from('sampling_jobs')
+      .select('id,number').eq('lead_id', lead.id).is('deleted_at', null).limit(1);
+    if(existing && existing.length > 0){
+      alert(`Sampling job ${existing[0].number||''} already exists for "${lead.title}". Opening Sampling Board…`);
+      setDetailLead(null); setView('sampling'); return;
+    }
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
@@ -10534,11 +10702,27 @@ function App(){
     alert('Sent "'+lead.title+'" to Sampling Board.'); setDetailLead(null); setView('sampling'); loadAll();
   }
   async function sendToProduction(lead){
+    // Check for an existing active production job for this lead
+    const { data: existing } = await sb.from('production_jobs')
+      .select('id,number').eq('lead_id', lead.id).is('deleted_at', null).limit(1);
+    if(existing && existing.length > 0){
+      alert(`Production job ${existing[0].number||''} already exists for "${lead.title}". Opening Production Board…`);
+      setDetailLead(null); setView('prod'); return;
+    }
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
     const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||lead.expected_close||null, sales_owner_id: lead.manager_id||null });
-    if(error){ alert(error.message); return; } alert('Sent "'+lead.title+'" to Production.'); setDetailLead(null); setView('prod'); loadAll();
+    if(error){
+      // DB-level UNIQUE index (steeze-erp-dedupe-by-lead.sql) returns 23505 on conflict.
+      // Treat that as "duplicate" — open the existing instead.
+      if(String(error.code||'').startsWith('23')){
+        alert(`Production job for "${lead.title}" was just created by another action. Opening Production Board…`);
+        setDetailLead(null); setView('prod'); loadAll(); return;
+      }
+      alert(error.message); return;
+    }
+    alert('Sent "'+lead.title+'" to Production.'); setDetailLead(null); setView('prod'); loadAll();
   }
 
   if(session===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Connecting…</div>;
@@ -10790,7 +10974,7 @@ function App(){
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
-        {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} reload={loadAll} />}
+        {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
