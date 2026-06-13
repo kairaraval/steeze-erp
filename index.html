@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 32a · Reports → Inventory tab with value, buckets, top items, low stock';
+const BUILD = 'Live build 33 · HR Module — 201 File directory, docs, memos, timeline';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3975,6 +3975,739 @@ function LeadImportModal({ profiles, clients, onClose, onDone }){
 }
 
 /* ----------------------- Dashboard ----------------------- */
+/* ====================== HR MODULE (201 File system) ====================== */
+// Steeze HR doesn't replace Sprout — it's the master 201 file directory +
+// document vault + memo log + internal notes timeline. All 90 employees live
+// here regardless of whether they log into Steeze.
+
+const EMP_STATUSES = [
+  { key:'probationary',  label:'Probationary',  color:'bg-amber-100 text-amber-700' },
+  { key:'regular',       label:'Regular',       color:'bg-emerald-100 text-emerald-700' },
+  { key:'contractual',   label:'Contractual',   color:'bg-blue-100 text-blue-700' },
+  { key:'consultant',    label:'Consultant',    color:'bg-violet-100 text-violet-700' },
+  { key:'resigned',      label:'Resigned',      color:'bg-slate-200 text-slate-600' },
+  { key:'terminated',    label:'Terminated',    color:'bg-rose-100 text-rose-700' },
+];
+function empStatusMeta(k){ return EMP_STATUSES.find(s=>s.key===k) || EMP_STATUSES[0]; }
+const MEMO_TYPES = [
+  { key:'verbal_warning', label:'Verbal Warning',  color:'bg-amber-100 text-amber-700' },
+  { key:'written_warning',label:'Written Warning', color:'bg-orange-100 text-orange-700' },
+  { key:'nte',            label:'Notice to Explain (NTE)', color:'bg-rose-100 text-rose-700' },
+  { key:'show_cause',     label:'Show Cause',      color:'bg-rose-100 text-rose-700' },
+  { key:'suspension',     label:'Suspension',      color:'bg-rose-200 text-rose-800' },
+  { key:'memo',           label:'Memo',            color:'bg-blue-100 text-blue-700' },
+  { key:'commendation',   label:'Commendation',    color:'bg-emerald-100 text-emerald-700' },
+];
+function memoMeta(k){ return MEMO_TYPES.find(m=>m.key===k) || MEMO_TYPES[0]; }
+const NOTE_CATEGORIES = ['note','hired','promoted','salary_change','role_change','regularized','resigned','training','other'];
+const DOC_TYPES = [
+  { key:'contract',    label:'Contract' },
+  { key:'nbi',         label:'NBI Clearance' },
+  { key:'id',          label:'Government ID' },
+  { key:'nda',         label:'NDA' },
+  { key:'resume',      label:'Resume / CV' },
+  { key:'certificate', label:'Certificate / Training' },
+  { key:'medical',     label:'Medical Cert / Drug Test' },
+  { key:'photo',       label:'Photo' },
+  { key:'other',       label:'Other' },
+];
+function fullName(e){ return [e.first_name, e.middle_name, e.last_name].filter(Boolean).join(' '); }
+
+// Regularization date = hire_date + 6 months (PH probation max)
+function regularizationDeadline(e){
+  if(!e.hire_date) return null;
+  const d = new Date(e.hire_date + 'T00:00:00');
+  d.setMonth(d.getMonth() + 6);
+  return d.toISOString().slice(0,10);
+}
+function daysToRegular(e){
+  const dl = regularizationDeadline(e);
+  if(!dl) return null;
+  const t = new Date(); t.setHours(0,0,0,0);
+  return Math.round((new Date(dl+'T00:00:00') - t) / 86400000);
+}
+
+function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, reload }){
+  const [search,setSearch]=useState('');
+  const [filterDept,setFilterDept]=useState('');
+  const [filterStatus,setFilterStatus]=useState('');
+  const [filterAccess,setFilterAccess]=useState(''); // '' | 'has' | 'none'
+  const [opening,setOpening]=useState(null); // employee record to view
+  const [creating,setCreating]=useState(false);
+
+  // Build dept list from data
+  const depts = Array.from(new Set((employees||[]).map(e=>e.department).filter(Boolean))).sort();
+
+  const rows = (employees||[]).filter(e =>
+    (!search || `${fullName(e)} ${e.position||''} ${e.department||''} ${e.employee_number||''} ${e.nickname||''}`.toLowerCase().includes(search.toLowerCase()))
+    && (!filterDept || e.department===filterDept)
+    && (!filterStatus || e.status===filterStatus)
+    && (!filterAccess || (filterAccess==='has' ? !!e.profile_id : !e.profile_id))
+  );
+
+  // Counts for tiles
+  const totalCount = (employees||[]).length;
+  const activeCount = (employees||[]).filter(e => e.status!=='resigned' && e.status!=='terminated').length;
+  const probationaryCount = (employees||[]).filter(e => e.status==='probationary').length;
+  const steezeAccessCount = (employees||[]).filter(e => e.profile_id).length;
+  // Probationary employees due for regularization in the next 30 days
+  const probationDueSoon = (employees||[])
+    .filter(e => e.status==='probationary')
+    .map(e => ({ e, days: daysToRegular(e) }))
+    .filter(x => x.days !== null && x.days <= 30)
+    .sort((a,b)=>a.days-b.days);
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">👤 Employees</h1>
+            <p className="text-slate-500 text-sm">201 File master directory · {totalCount} total · {activeCount} active · {probationaryCount} on probation · {steezeAccessCount} with Steeze access</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New employee</button>
+        </div>
+      </div>
+
+      {/* Stat tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Total</div><div className="text-2xl font-bold">{totalCount}</div></div>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-[10px] uppercase text-emerald-700 font-bold">Active</div><div className="text-2xl font-bold text-emerald-800">{activeCount}</div></div>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3"><div className="text-[10px] uppercase text-amber-700 font-bold">Probationary</div><div className="text-2xl font-bold text-amber-800">{probationaryCount}</div></div>
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3"><div className="text-[10px] uppercase text-indigo-700 font-bold">Steeze access</div><div className="text-2xl font-bold text-indigo-800">{steezeAccessCount}</div></div>
+      </div>
+
+      {/* Probation reminder panel */}
+      {probationDueSoon.length > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4 mb-4">
+          <div className="text-sm font-bold text-amber-900 mb-2">⏰ Probationary employees up for regularization (next 30 days)</div>
+          <div className="grid md:grid-cols-2 gap-2">
+            {probationDueSoon.map(({e,days})=>(
+              <button key={e.id} onClick={()=>setOpening(e)} className="bg-white border border-amber-200 rounded p-2 text-left hover:border-amber-400">
+                <div className="font-semibold text-sm">{fullName(e)}</div>
+                <div className="text-[11px] text-slate-500">{e.position||'—'} · {e.department||'—'}</div>
+                <div className={`text-xs mt-0.5 font-semibold ${days<0?'text-rose-700':days<=7?'text-rose-700':'text-amber-700'}`}>
+                  {days<0 ? `${Math.abs(days)} days OVERDUE for regularization` : days===0 ? 'Regularize TODAY' : `Regularize in ${days} days`}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, position, dept, employee#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        <select value={filterDept} onChange={e=>setFilterDept(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300">
+          <option value="">All departments</option>
+          {depts.map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300">
+          <option value="">All statuses</option>
+          {EMP_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+          <button onClick={()=>setFilterAccess('')} className={`px-3 py-1.5 rounded-md ${filterAccess===''?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All</button>
+          <button onClick={()=>setFilterAccess('has')} className={`px-3 py-1.5 rounded-md ${filterAccess==='has'?'bg-white shadow-sm font-semibold text-indigo-700':'text-slate-600'}`}>Steeze users</button>
+          <button onClick={()=>setFilterAccess('none')} className={`px-3 py-1.5 rounded-md ${filterAccess==='none'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>No Steeze access</button>
+        </div>
+        <div className="text-xs text-slate-500 ml-auto">{rows.length} shown</div>
+      </div>
+
+      {/* Directory table */}
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Emp #</th>
+          <th className="text-left px-3 py-2">Name</th>
+          <th className="text-left px-3 py-2">Position</th>
+          <th className="text-left px-3 py-2">Department</th>
+          <th className="text-left px-3 py-2">Status</th>
+          <th className="text-left px-3 py-2">Hired</th>
+          <th className="text-center px-3 py-2">Access</th>
+          <th></th>
+        </tr></thead>
+        <tbody>{rows.map(e=>{
+          const meta = empStatusMeta(e.status);
+          const docCount = (employeeDocs||[]).filter(d=>d.employee_id===e.id).length;
+          const memoCount = (employeeMemos||[]).filter(m=>m.employee_id===e.id).length;
+          return (
+            <tr key={e.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpening(e)}>
+              <td className="px-3 py-2 font-mono text-xs">{e.employee_number||'—'}</td>
+              <td className="px-3 py-2">
+                <div className="font-semibold">{fullName(e)}</div>
+                {e.nickname && <div className="text-[10px] text-slate-500">"{e.nickname}"</div>}
+                <div className="text-[10px] text-slate-400">{docCount>0?`📎 ${docCount}`:''}{memoCount>0?`  📝 ${memoCount}`:''}</div>
+              </td>
+              <td className="px-3 py-2 text-xs">{e.position||'—'}</td>
+              <td className="px-3 py-2 text-xs">{e.department||'—'}</td>
+              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2 text-xs">{e.hire_date?fmtDate(e.hire_date):'—'}</td>
+              <td className="px-3 py-2 text-center">
+                {e.profile_id ? <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">✓ Steeze</span> : <span className="text-[10px] text-slate-400">—</span>}
+              </td>
+              <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(ev)=>{ev.stopPropagation(); setOpening(e);}} className="text-xs text-indigo-600 hover:underline">Open 201 →</button></td>
+            </tr>
+          );
+        })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No employees match the filters. {totalCount===0 && 'Click "+ New employee" to add the first one.'}</td></tr>}</tbody>
+      </table></div></div>
+
+      {opening && <EmployeeDetailModal employee={opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
+      {creating && <EmployeeFormModal employee={null} profiles={profiles} profile={profile} allEmployees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+    </div>
+  );
+}
+
+// 201 Detail with tabs (Overview / Documents / Memos / Timeline). Edit button
+// at the top opens the form modal in edit mode.
+function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, memos, notes, onClose, onSaved }){
+  const [tab,setTab]=useState('overview');
+  const [editing,setEditing]=useState(false);
+  const [addingMemo,setAddingMemo]=useState(false);
+  const [addingNote,setAddingNote]=useState(false);
+  const [addingDoc,setAddingDoc]=useState(false);
+  const e = employee;
+  const meta = empStatusMeta(e.status);
+  const manager = e.manager_id ? (allEmployees||[]).find(x=>x.id===e.manager_id) : null;
+  const linkedProfile = e.profile_id ? (profiles||[]).find(p=>p.id===e.profile_id) : null;
+  const regDl = regularizationDeadline(e);
+  const dtr = daysToRegular(e);
+
+  async function deleteEmp(){
+    if(!confirm(`Send "${fullName(e)}"'s 201 file to Trash?\n\nThis archives the record — recoverable later if needed.`)) return;
+    const { error } = await sb.from('employees').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    onSaved(); onClose();
+  }
+
+  return (
+    <Modal title={`201 File — ${fullName(e)}`} onClose={onClose} xwide>
+      <div className="space-y-4">
+        {/* Header card */}
+        <div className="flex items-start gap-4 bg-gradient-to-r from-indigo-50 to-slate-50 border rounded-xl p-4">
+          {e.photo_url ? (
+            <img src={e.photo_url} alt="" className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-md" />
+          ) : (
+            <div className="w-20 h-20 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-2xl font-bold shadow-md">
+              {(e.first_name||'').charAt(0)}{(e.last_name||'').charAt(0)}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-xl font-bold text-slate-900">{fullName(e)}</div>
+            {e.nickname && <div className="text-sm text-slate-500">"{e.nickname}"</div>}
+            <div className="text-sm text-slate-700 mt-1">{e.position||'—'} · <strong>{e.department||'—'}</strong></div>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
+              {e.employee_number && <span className="text-xs text-slate-500">#{e.employee_number}</span>}
+              {linkedProfile && <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">✓ Steeze user · {linkedProfile.role}</span>}
+              {e.hire_date && <span className="text-xs text-slate-500">Hired {fmtDate(e.hire_date)}</span>}
+            </div>
+            {e.status==='probationary' && regDl && (
+              <div className={`text-xs mt-2 px-2 py-1 inline-block rounded ${dtr<0?'bg-rose-100 text-rose-700':dtr<=30?'bg-amber-100 text-amber-700':'bg-slate-100 text-slate-600'}`}>
+                Regularization: <strong>{fmtDate(regDl)}</strong>{dtr!==null && (dtr<0?` · ${Math.abs(dtr)} days overdue`:dtr===0?' · today':` · ${dtr} days`)}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col gap-2 shrink-0">
+            <button onClick={()=>setEditing(true)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">✎ Edit</button>
+            <button onClick={deleteEmp} className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 hover:bg-rose-50">Archive</button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 border-b">
+          {[
+            { k:'overview',  l:'Overview',  i:'👤' },
+            { k:'docs',      l:`Documents (${docs.length})`, i:'📎' },
+            { k:'memos',     l:`Memos (${memos.length})`, i:'📝' },
+            { k:'timeline',  l:`Timeline (${notes.length})`, i:'🕐' },
+          ].map(t => (
+            <button key={t.k} onClick={()=>setTab(t.k)} className={`text-sm px-4 py-2 rounded-t-lg ${tab===t.k?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>{t.i} {t.l}</button>
+          ))}
+        </div>
+
+        {/* TAB: Overview */}
+        {tab==='overview' && (
+          <div className="grid md:grid-cols-2 gap-4">
+            {/* Personal */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Personal</div>
+              <Field label="Gender" value={e.gender} />
+              <Field label="Civil status" value={e.civil_status} />
+              <Field label="Date of birth" value={e.date_of_birth?fmtDate(e.date_of_birth):null} />
+            </div>
+            {/* Contact */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Contact</div>
+              <Field label="Phone" value={e.phone} />
+              <Field label="Personal email" value={e.personal_email} />
+              <Field label="Work email" value={e.work_email} />
+              <Field label="Address" value={e.address} multiline />
+            </div>
+            {/* Emergency */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Emergency contact</div>
+              <Field label="Name" value={e.emergency_contact_name} />
+              <Field label="Relationship" value={e.emergency_contact_relationship} />
+              <Field label="Phone" value={e.emergency_contact_phone} />
+            </div>
+            {/* Employment */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Employment</div>
+              <Field label="Hire date" value={e.hire_date?fmtDate(e.hire_date):null} />
+              <Field label="Status" value={meta.label} />
+              <Field label="Manager" value={manager?fullName(manager):null} />
+              <Field label="Resignation date" value={e.resignation_date?fmtDate(e.resignation_date):null} />
+            </div>
+            {/* Government IDs */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Government IDs</div>
+              <CopyField label="SSS" value={e.sss} />
+              <CopyField label="PhilHealth" value={e.philhealth} />
+              <CopyField label="Pag-IBIG" value={e.pagibig} />
+              <CopyField label="TIN" value={e.tin} />
+            </div>
+            {/* Bank */}
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-xs uppercase font-bold text-slate-500 mb-2">Bank (reference)</div>
+              <Field label="Bank" value={e.bank_name} />
+              <Field label="Account name" value={e.bank_account_name} />
+              <CopyField label="Account #" value={e.bank_account_number} />
+            </div>
+            {/* Compensation */}
+            <div className="bg-white border rounded-lg p-3 md:col-span-2 bg-amber-50/40 border-amber-200">
+              <div className="text-xs uppercase font-bold text-amber-700 mb-2">💰 Compensation (reference only — Sprout has the live numbers)</div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Basic salary" value={e.basic_salary?peso(e.basic_salary):null} />
+                <Field label="Allowances" value={e.allowances?peso(e.allowances):null} />
+              </div>
+              {e.salary_notes && <div className="mt-2 text-xs text-slate-600">{e.salary_notes}</div>}
+            </div>
+            {/* Sprout link */}
+            {(e.sprout_employee_id || e.sprout_url) && (
+              <div className="bg-white border rounded-lg p-3 md:col-span-2">
+                <div className="text-xs uppercase font-bold text-slate-500 mb-2">🌱 Sprout</div>
+                <Field label="Employee ID" value={e.sprout_employee_id} />
+                {e.sprout_url && <div className="text-xs"><a href={e.sprout_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Open in Sprout →</a></div>}
+              </div>
+            )}
+            {/* Notes */}
+            {e.notes && (
+              <div className="bg-white border rounded-lg p-3 md:col-span-2">
+                <div className="text-xs uppercase font-bold text-slate-500 mb-2">Notes</div>
+                <div className="text-sm whitespace-pre-wrap">{e.notes}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: Documents */}
+        {tab==='docs' && (
+          <div className="space-y-3">
+            <div className="flex justify-end"><button onClick={()=>setAddingDoc(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Upload document</button></div>
+            {docs.length===0 ? <div className="text-sm text-slate-400 text-center py-6">No documents uploaded yet.</div> : (
+              <div className="space-y-1.5">{docs.map(d=>{
+                const tlabel = (DOC_TYPES.find(t=>t.key===d.doc_type)||{}).label || d.doc_type || 'Other';
+                return (
+                  <div key={d.id} className="bg-white border rounded p-2 flex items-center gap-3">
+                    <span className="text-2xl">📎</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{d.name}</div>
+                      <div className="text-[11px] text-slate-500">{tlabel} · uploaded {fmtTime(d.uploaded_at)}</div>
+                      {d.notes && <div className="text-[11px] text-slate-600 mt-0.5">{d.notes}</div>}
+                    </div>
+                    <a href={d.url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">Open</a>
+                    <button onClick={async ()=>{ if(!confirm('Delete this document?')) return; const { error } = await sb.from('employee_documents').delete().eq('id', d.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-xs text-rose-500 hover:underline">Delete</button>
+                  </div>
+                );
+              })}</div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: Memos */}
+        {tab==='memos' && (
+          <div className="space-y-3">
+            <div className="flex justify-end"><button onClick={()=>setAddingMemo(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Log memo</button></div>
+            {memos.length===0 ? <div className="text-sm text-slate-400 text-center py-6">No memos recorded.</div> : (
+              <div className="space-y-2">{memos.map(m=>{
+                const mm = memoMeta(m.type);
+                const issuer = m.issued_by ? (profiles||[]).find(p=>p.id===m.issued_by) : null;
+                return (
+                  <div key={m.id} className="bg-white border rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1.5 gap-2">
+                      <div className="flex items-center gap-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${mm.color}`}>{mm.label}</span><span className="text-xs text-slate-500">{fmtDate(m.date)}</span>{issuer && <span className="text-[10px] text-slate-400">by {issuer.name||issuer.email}</span>}</div>
+                      <button onClick={async ()=>{ if(!confirm('Delete this memo?')) return; const { error } = await sb.from('employee_memos').delete().eq('id', m.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-[10px] text-rose-500 hover:underline">Delete</button>
+                    </div>
+                    {m.subject && <div className="font-semibold text-sm">{m.subject}</div>}
+                    {m.description && <div className="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{m.description}</div>}
+                    {m.resolution && <div className="text-xs text-emerald-700 mt-1 bg-emerald-50 border border-emerald-200 rounded p-1.5"><strong>Resolution:</strong> {m.resolution}</div>}
+                  </div>
+                );
+              })}</div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: Timeline */}
+        {tab==='timeline' && (
+          <div className="space-y-3">
+            <div className="flex justify-end"><button onClick={()=>setAddingNote(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Add timeline entry</button></div>
+            {notes.length===0 ? <div className="text-sm text-slate-400 text-center py-6">No timeline entries yet.</div> : (
+              <div className="space-y-2">{notes.map(n=>{
+                const author = n.created_by ? (profiles||[]).find(p=>p.id===n.created_by) : null;
+                return (
+                  <div key={n.id} className="bg-white border rounded-lg p-3 flex items-start gap-2">
+                    <div className="text-xs text-slate-400 w-24 shrink-0 pt-0.5">{fmtDate(n.date)}<div className="text-[9px] uppercase mt-0.5">{n.category||'note'}</div></div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-sm">{n.title}</div>
+                      {n.description && <div className="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{n.description}</div>}
+                      {author && <div className="text-[10px] text-slate-400 mt-1">— {author.name||author.email}</div>}
+                    </div>
+                    <button onClick={async ()=>{ if(!confirm('Delete this entry?')) return; const { error } = await sb.from('employee_notes').delete().eq('id', n.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-[10px] text-rose-500 hover:underline shrink-0">Delete</button>
+                  </div>
+                );
+              })}</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Sub-modals */}
+      {editing && <EmployeeFormModal employee={e} profiles={profiles} profile={profile} allEmployees={allEmployees} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); onSaved(); }} />}
+      {addingMemo && <EmployeeMemoForm employeeId={e.id} profile={profile} onClose={()=>setAddingMemo(false)} onSaved={()=>{ setAddingMemo(false); onSaved(); }} />}
+      {addingNote && <EmployeeNoteForm employeeId={e.id} profile={profile} onClose={()=>setAddingNote(false)} onSaved={()=>{ setAddingNote(false); onSaved(); }} />}
+      {addingDoc && <EmployeeDocForm employeeId={e.id} profile={profile} onClose={()=>setAddingDoc(false)} onSaved={()=>{ setAddingDoc(false); onSaved(); }} />}
+    </Modal>
+  );
+}
+
+// Helpers used inside the detail
+function Field({ label, value, multiline }){
+  if(!value && value !== 0) return (
+    <div className="flex justify-between py-1 text-xs border-b last:border-b-0 border-slate-100"><span className="text-slate-500">{label}</span><span className="text-slate-300">—</span></div>
+  );
+  return (
+    <div className={`py-1 text-xs border-b last:border-b-0 border-slate-100 ${multiline?'':'flex justify-between gap-2'}`}>
+      <span className="text-slate-500">{label}</span>
+      <span className={`text-slate-800 ${multiline?'block mt-0.5 whitespace-pre-wrap':'text-right'}`}>{value}</span>
+    </div>
+  );
+}
+function CopyField({ label, value }){
+  const [copied,setCopied]=useState(false);
+  function copy(){ if(!value) return; try { navigator.clipboard.writeText(value); setCopied(true); setTimeout(()=>setCopied(false),1200); } catch(_){} }
+  if(!value) return <div className="flex justify-between py-1 text-xs border-b last:border-b-0 border-slate-100"><span className="text-slate-500">{label}</span><span className="text-slate-300">—</span></div>;
+  return (
+    <div className="flex justify-between gap-2 py-1 text-xs border-b last:border-b-0 border-slate-100 items-center">
+      <span className="text-slate-500">{label}</span>
+      <div className="flex items-center gap-1">
+        <span className="text-slate-800 font-mono">{value}</span>
+        <button onClick={copy} className="text-[10px] text-indigo-600 hover:underline">{copied?'✓':'copy'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Employee create/edit form
+function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose, onSaved }){
+  const isEdit = !!employee;
+  const [f,setF]=useState(employee || {
+    employee_number:'', first_name:'', middle_name:'', last_name:'', nickname:'',
+    gender:'', civil_status:'', date_of_birth:'', photo_url:'',
+    phone:'', personal_email:'', work_email:'', address:'',
+    emergency_contact_name:'', emergency_contact_relationship:'', emergency_contact_phone:'',
+    position:'', department:'', hire_date:'', status:'probationary',
+    regularization_date:null, resignation_date:null, manager_id:null,
+    sss:'', philhealth:'', pagibig:'', tin:'',
+    bank_name:'', bank_account_name:'', bank_account_number:'',
+    basic_salary:0, allowances:0, salary_notes:'',
+    sprout_employee_id:'', sprout_url:'',
+    profile_id:null, notes:'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploadingPhoto,setUploadingPhoto]=useState(false);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+
+  async function uploadPhoto(file){
+    if(!file) return;
+    setUploadingPhoto(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `employees/photos/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      up('photo_url', pu.publicUrl);
+    } catch(e){ alert('Photo upload failed: '+e.message); }
+    setUploadingPhoto(false);
+  }
+
+  async function save(){
+    if(!f.first_name?.trim() || !f.last_name?.trim()){ setMsg('First and last name required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      ...f,
+      employee_number: f.employee_number||null,
+      first_name: f.first_name.trim(), middle_name: f.middle_name||null,
+      last_name: f.last_name.trim(), nickname: f.nickname||null,
+      gender: f.gender||null, civil_status: f.civil_status||null,
+      date_of_birth: f.date_of_birth||null,
+      manager_id: f.manager_id||null,
+      profile_id: f.profile_id||null,
+      hire_date: f.hire_date||null,
+      regularization_date: f.regularization_date||null,
+      resignation_date: f.resignation_date||null,
+      basic_salary: Number(f.basic_salary)||null,
+      allowances: Number(f.allowances)||0,
+    };
+    if(!isEdit) payload.created_by = profile.id;
+    const { data, error } = isEdit
+      ? await sb.from('employees').update(payload).eq('id', employee.id).select().single()
+      : await sb.from('employees').insert(payload).select().single();
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved(data);
+  }
+
+  return (
+    <Modal title={isEdit?'Edit 201 File':'New employee'} onClose={onClose} xwide>
+      <div className="space-y-4">
+        {/* IDENTITY */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">Identity</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Employee #"><input className="input" value={f.employee_number||''} onChange={e=>up('employee_number',e.target.value)} placeholder="EMP-001" /></TpLbl>
+            <TpLbl t="First name *"><input className="input" value={f.first_name||''} onChange={e=>up('first_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Last name *"><input className="input" value={f.last_name||''} onChange={e=>up('last_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Middle name"><input className="input" value={f.middle_name||''} onChange={e=>up('middle_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Nickname"><input className="input" value={f.nickname||''} onChange={e=>up('nickname',e.target.value)} /></TpLbl>
+            <TpLbl t="Gender"><select className="input" value={f.gender||''} onChange={e=>up('gender',e.target.value||null)}><option value="">—</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select></TpLbl>
+            <TpLbl t="Civil status"><select className="input" value={f.civil_status||''} onChange={e=>up('civil_status',e.target.value||null)}><option value="">—</option><option value="single">Single</option><option value="married">Married</option><option value="widowed">Widowed</option><option value="separated">Separated</option><option value="divorced">Divorced</option></select></TpLbl>
+            <TpLbl t="Date of birth"><input type="date" className="input" value={f.date_of_birth||''} onChange={e=>up('date_of_birth',e.target.value||null)} /></TpLbl>
+            <TpLbl t="Profile photo">
+              <div className="flex items-center gap-2">
+                {f.photo_url && <img src={f.photo_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
+                <input type="file" accept="image/*" onChange={e=>uploadPhoto(e.target.files?.[0])} className="text-xs" />
+                {uploadingPhoto && <span className="text-xs text-slate-500">Uploading…</span>}
+              </div>
+            </TpLbl>
+          </div>
+        </div>
+
+        {/* CONTACT */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">Contact</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Phone"><input className="input" value={f.phone||''} onChange={e=>up('phone',e.target.value)} placeholder="09XX XXX XXXX" /></TpLbl>
+            <TpLbl t="Personal email"><input type="email" className="input" value={f.personal_email||''} onChange={e=>up('personal_email',e.target.value)} /></TpLbl>
+            <TpLbl t="Work email"><input type="email" className="input" value={f.work_email||''} onChange={e=>up('work_email',e.target.value)} /></TpLbl>
+          </div>
+          <TpLbl t="Complete address"><textarea className="input min-h-[60px]" value={f.address||''} onChange={e=>up('address',e.target.value)} placeholder="Street, Barangay, City, Province, Postal" /></TpLbl>
+        </div>
+
+        {/* EMERGENCY */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">Emergency contact</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Name"><input className="input" value={f.emergency_contact_name||''} onChange={e=>up('emergency_contact_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Relationship"><input className="input" value={f.emergency_contact_relationship||''} onChange={e=>up('emergency_contact_relationship',e.target.value)} placeholder="Spouse / Parent / Sibling" /></TpLbl>
+            <TpLbl t="Phone"><input className="input" value={f.emergency_contact_phone||''} onChange={e=>up('emergency_contact_phone',e.target.value)} /></TpLbl>
+          </div>
+        </div>
+
+        {/* EMPLOYMENT */}
+        <div className="border rounded-lg p-3 bg-emerald-50 border-emerald-200">
+          <div className="text-xs font-bold uppercase text-emerald-700 mb-2">Employment</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Position"><input className="input" value={f.position||''} onChange={e=>up('position',e.target.value)} placeholder="Sewing Operator / Sales Rep / Designer" /></TpLbl>
+            <TpLbl t="Department"><input className="input" value={f.department||''} onChange={e=>up('department',e.target.value)} placeholder="Production / Sales / Admin / etc." /></TpLbl>
+            <TpLbl t="Status">
+              <select className="input" value={f.status||'probationary'} onChange={e=>up('status',e.target.value)}>
+                {EMP_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+            </TpLbl>
+            <TpLbl t="Hire date"><input type="date" className="input" value={f.hire_date||''} onChange={e=>up('hire_date',e.target.value||null)} /></TpLbl>
+            <TpLbl t="Regularization date"><input type="date" className="input" value={f.regularization_date||''} onChange={e=>up('regularization_date',e.target.value||null)} placeholder="Auto = hire+6mo" /></TpLbl>
+            <TpLbl t="Resignation date"><input type="date" className="input" value={f.resignation_date||''} onChange={e=>up('resignation_date',e.target.value||null)} /></TpLbl>
+            <TpLbl t="Manager">
+              <select className="input" value={f.manager_id||''} onChange={e=>up('manager_id',e.target.value||null)}>
+                <option value="">—</option>
+                {(allEmployees||[]).filter(x=>x.id!==employee?.id).map(x=>(<option key={x.id} value={x.id}>{fullName(x)}{x.position?` · ${x.position}`:''}</option>))}
+              </select>
+            </TpLbl>
+          </div>
+        </div>
+
+        {/* GOVERNMENT IDs */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">Government IDs</div>
+          <div className="grid grid-cols-4 gap-2">
+            <TpLbl t="SSS"><input className="input" value={f.sss||''} onChange={e=>up('sss',e.target.value)} /></TpLbl>
+            <TpLbl t="PhilHealth"><input className="input" value={f.philhealth||''} onChange={e=>up('philhealth',e.target.value)} /></TpLbl>
+            <TpLbl t="Pag-IBIG"><input className="input" value={f.pagibig||''} onChange={e=>up('pagibig',e.target.value)} /></TpLbl>
+            <TpLbl t="TIN"><input className="input" value={f.tin||''} onChange={e=>up('tin',e.target.value)} /></TpLbl>
+          </div>
+        </div>
+
+        {/* BANK */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">Bank (reference — Sprout disburses)</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Bank name"><input className="input" value={f.bank_name||''} onChange={e=>up('bank_name',e.target.value)} placeholder="BPI / BDO / UnionBank…" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.bank_account_name||''} onChange={e=>up('bank_account_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Account number"><input className="input" value={f.bank_account_number||''} onChange={e=>up('bank_account_number',e.target.value)} /></TpLbl>
+          </div>
+        </div>
+
+        {/* COMPENSATION */}
+        <div className="border rounded-lg p-3 bg-amber-50/40 border-amber-200">
+          <div className="text-xs font-bold uppercase text-amber-700 mb-2">💰 Compensation (reference only — Sprout is authoritative)</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Basic salary (PHP)"><input type="number" className="input" value={f.basic_salary||''} onChange={e=>up('basic_salary',e.target.value)} /></TpLbl>
+            <TpLbl t="Allowances (PHP)"><input type="number" className="input" value={f.allowances||0} onChange={e=>up('allowances',e.target.value)} /></TpLbl>
+            <TpLbl t="Notes"><input className="input" value={f.salary_notes||''} onChange={e=>up('salary_notes',e.target.value)} placeholder="COLA, transport, last raise, etc." /></TpLbl>
+          </div>
+        </div>
+
+        {/* SPROUT */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-xs font-bold uppercase text-slate-600 mb-2">🌱 Sprout integration link</div>
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Sprout employee ID"><input className="input" value={f.sprout_employee_id||''} onChange={e=>up('sprout_employee_id',e.target.value)} /></TpLbl>
+            <TpLbl t="Sprout URL"><input className="input" value={f.sprout_url||''} onChange={e=>up('sprout_url',e.target.value)} placeholder="https://app.sprout.ph/…" /></TpLbl>
+          </div>
+        </div>
+
+        {/* STEEZE ACCESS */}
+        <div className="border rounded-lg p-3 bg-indigo-50 border-indigo-200">
+          <div className="text-xs font-bold uppercase text-indigo-700 mb-2">🔐 Steeze access (optional)</div>
+          <TpLbl t="Link to Steeze profile (only if employee logs into the ERP)">
+            <select className="input" value={f.profile_id||''} onChange={e=>up('profile_id',e.target.value||null)}>
+              <option value="">— No Steeze access —</option>
+              {(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email} ({p.role})</option>)}
+            </select>
+          </TpLbl>
+        </div>
+
+        <TpLbl t="General notes"><textarea className="input min-h-[60px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Any internal observations or context" /></TpLbl>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create 201 file')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function EmployeeMemoForm({ employeeId, profile, onClose, onSaved }){
+  const [f,setF]=useState({ date: new Date().toISOString().slice(0,10), type:'memo', subject:'', description:'', resolution:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.subject?.trim()){ setMsg('Subject required.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('employee_memos').insert({ ...f, employee_id: employeeId, issued_by: profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Log memo / disciplinary action" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Type">
+            <select className="input" value={f.type} onChange={e=>up('type',e.target.value)}>
+              {MEMO_TYPES.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Subject *"><input className="input" value={f.subject} onChange={e=>up('subject',e.target.value)} placeholder="Brief headline (e.g. Tardiness — 3 instances this month)" /></TpLbl>
+        <TpLbl t="Description"><textarea className="input min-h-[80px]" value={f.description} onChange={e=>up('description',e.target.value)} placeholder="Details, incident, what was discussed" /></TpLbl>
+        <TpLbl t="Resolution (if any)"><textarea className="input min-h-[60px]" value={f.resolution} onChange={e=>up('resolution',e.target.value)} placeholder="Action taken, outcome, follow-up" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Log memo'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function EmployeeNoteForm({ employeeId, profile, onClose, onSaved }){
+  const [f,setF]=useState({ date: new Date().toISOString().slice(0,10), category:'note', title:'', description:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title?.trim()){ setMsg('Title required.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('employee_notes').insert({ ...f, employee_id: employeeId, created_by: profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Add timeline entry" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Category">
+            <select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>
+              {NOTE_CATEGORIES.map(c=><option key={c} value={c}>{c.replace(/_/g,' ')}</option>)}
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Title *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} placeholder="Promoted to Senior Sewer / Salary adjusted to ₱X / etc." /></TpLbl>
+        <TpLbl t="Description"><textarea className="input min-h-[80px]" value={f.description} onChange={e=>up('description',e.target.value)} placeholder="Context, reasoning, before/after" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Add entry'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function EmployeeDocForm({ employeeId, profile, onClose, onSaved }){
+  const [f,setF]=useState({ doc_type:'contract', name:'', notes:'', url:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploading,setUploading]=useState(false);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function handleFile(file){
+    if(!file) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `employees/${employeeId}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      up('url', pu.publicUrl);
+      if(!f.name) up('name', file.name);
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setUploading(false);
+  }
+  async function save(){
+    if(!f.url){ setMsg('Upload a file first.'); return; }
+    if(!f.name?.trim()){ setMsg('Give it a name.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('employee_documents').insert({ ...f, employee_id: employeeId, uploaded_by: profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Upload document" onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="File"><input type="file" onChange={e=>handleFile(e.target.files?.[0])} className="text-xs" />{uploading && <span className="text-xs text-slate-500 ml-2">Uploading…</span>}{f.url && <span className="text-xs text-emerald-600 ml-2">✓ Uploaded</span>}</TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Document type">
+            <select className="input" value={f.doc_type} onChange={e=>up('doc_type',e.target.value)}>
+              {DOC_TYPES.map(d=><option key={d.key} value={d.key}>{d.label}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. Contract 2024" /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy||!f.url} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Add document'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+
 /* ─────────── REPORTS — admin-only analytics across the whole business ───────────
    One page with multiple tabbed reports. All numbers are computed live from
    the same state the rest of the app uses, with a period selector at top.
@@ -12201,6 +12934,9 @@ function App(){
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
   // Stock movements (in/out audit log). Used by Purchasing → Stock Out view.
   const [stockMovements,setStockMovements]=useState([]);
+  // HR Module: 201 file master + documents + memos + notes timeline
+  const [employees,setEmployees]=useState([]); const [employeeDocs,setEmployeeDocs]=useState([]);
+  const [employeeMemos,setEmployeeMemos]=useState([]); const [employeeNotes,setEmployeeNotes]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('dashboard');
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
@@ -12259,7 +12995,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -12297,6 +13033,11 @@ function App(){
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
       sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      // HR module — 201 file system
+      sb.from('employees').select('*').is('deleted_at', null).order('last_name',{ascending:true}),
+      sb.from('employee_documents').select('*').order('uploaded_at',{ascending:false}),
+      sb.from('employee_memos').select('*').order('date',{ascending:false}),
+      sb.from('employee_notes').select('*').order('date',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -12313,6 +13054,11 @@ function App(){
     // Graceful empty fallback for the two new boards — fail-safe if SQL hasn't been run.
     setEmbroideryJobs(emb && !emb.error ? (emb.data||[]) : []);
     setKnittingJobs(knt && !knt.error ? (knt.data||[]) : []);
+    // HR — same fail-safe pattern
+    setEmployees(emp && !emp.error ? (emp.data||[]) : []);
+    setEmployeeDocs(edoc && !edoc.error ? (edoc.data||[]) : []);
+    setEmployeeMemos(emem && !emem.error ? (emem.data||[]) : []);
+    setEmployeeNotes(enotes && !enotes.error ? (enotes.data||[]) : []);
     setItems(it.data||[]); setSuppliers(sp.data||[]); setDepartments(dp.data||[]);
     setRequests(pq.data||[]); setOrders(po.data||[]);
     setSampleJobs(sj.data||[]);
@@ -12728,6 +13474,7 @@ function App(){
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
     ];
   }
@@ -12815,6 +13562,7 @@ function App(){
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} />}
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} />}
+        {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} reload={loadAll} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
