@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 24e · Styles: Calculate materials for project qty';
+const BUILD = 'Live build 25a · Pull from Stock restricted to Purchasing/Admin/Accounting';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1647,7 +1647,174 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
 }
 
 /* ----------------------- Production board ----------------------- */
-function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reload, openActivity, openTechpack }){
+/* ─────────── PULL MATERIALS / MATERIAL ISSUANCE (Purchasing Layer 3) ───────────
+   Records actual consumption of inventory by a production job. Pre-fills
+   candidate items from the PR linked to the same lead (if any), shows current
+   on-hand qty per item, and on submit:
+     • Inserts stock_movements rows (direction='out', reason='production')
+     • Decrements items.qty
+     • Clears matching PR.lines.stock_allocated so reservations release
+   Visible to: Production, Purchasing, Admin, Accounting. */
+function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved }){
+  // Find PR linked to the same lead — used to pre-fill candidate items.
+  const linkedPR = (requests||[]).find(r => r.linked_lead_id === job.lead_id && r.deleted_at == null);
+  // Build initial rows from the PR.lines (only ones with stock_allocated > 0 are
+  // the obvious "pull from stock" intent). Fall back to all PR lines if none.
+  const initialRows = (()=>{
+    if(!linkedPR) return [{ item_id:null, qty:0, unit:'pc', notes:'' }];
+    const lines = linkedPR.lines || [];
+    const allocated = lines.filter(l => l.item_id && Number(l.stock_allocated||0) > 0);
+    const source = allocated.length > 0 ? allocated : lines.filter(l => l.item_id);
+    if(source.length === 0) return [{ item_id:null, qty:0, unit:'pc', notes:'' }];
+    return source.map(l => {
+      const it = (items||[]).find(x=>x.id===l.item_id);
+      const allocatedAmt = Number(l.stock_allocated||0);
+      return {
+        item_id: l.item_id,
+        qty: allocatedAmt > 0 ? allocatedAmt : (Number(l.qty)||0),
+        unit: it?.unit || 'pc',
+        notes: '',
+        pr_line_idx: lines.indexOf(l),  // remember which PR line this came from
+      };
+    });
+  })();
+  const [rows,setRows]=useState(initialRows);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  function setRow(i, patch){ setRows(rs => rs.map((r,j)=> j===i?{...r,...patch}:r)); }
+  function addRow(){ setRows(rs => [...rs, { item_id:null, qty:0, unit:'pc', notes:'' }]); }
+  function removeRow(i){ setRows(rs => rs.filter((_,j)=>j!==i)); }
+  function pickItem(i, itemId){
+    const it = (items||[]).find(x=>x.id===itemId);
+    setRow(i, { item_id: itemId||null, unit: it?.unit || 'pc' });
+  }
+  async function save(){
+    const valid = rows.filter(r => r.item_id && Number(r.qty) > 0);
+    if(valid.length === 0){ setMsg('Add at least one material with qty > 0.'); return; }
+    // Sanity check: no row exceeds on-hand qty (warn + ask)
+    const overs = valid.map(r => {
+      const it = (items||[]).find(x=>x.id===r.item_id);
+      return { r, it, exceeds: Number(r.qty) > Number(it?.qty||0) };
+    }).filter(x => x.exceeds);
+    if(overs.length > 0){
+      const list = overs.map(o => `• ${o.it?.name||'(item)'} ${o.it?.color?`(${o.it.color})`:''}: pulling ${o.r.qty} but only ${o.it?.qty||0} on hand`).join('\n');
+      if(!confirm(`⚠ Some materials exceed on-hand qty:\n\n${list}\n\nSave anyway? Inventory will go negative for these.`)) return;
+    }
+    setBusy(true); setMsg('');
+    try {
+      // 1. Insert stock_movements (one per material). Use type='out', reason='production'.
+      const movements = valid.map(r => ({
+        item_id: r.item_id, type: 'out', qty: Number(r.qty),
+        reason: 'production', ref_type: 'production_job', ref_id: job.id,
+        actor_id: profile.id, notes: r.notes || null, date,
+      }));
+      const { error: smErr } = await sb.from('stock_movements').insert(movements);
+      if(smErr){
+        // Some installs don't have date/notes columns. Retry without them.
+        const stripped = movements.map(({date, notes, ...rest})=>rest);
+        const { error: retry } = await sb.from('stock_movements').insert(stripped);
+        if(retry) throw retry;
+      }
+      // 2. Decrement items.qty for each issued material.
+      for(const r of valid){
+        const it = (items||[]).find(x=>x.id===r.item_id);
+        const newQty = Number(it?.qty||0) - Number(r.qty);
+        await sb.from('items').update({ qty: newQty }).eq('id', r.item_id);
+      }
+      // 3. If the rows came from a PR, clear (or reduce) the matching stock_allocated
+      //    so the reservation releases. We map by item_id — the closest active PR
+      //    line for the same item gets reduced.
+      if(linkedPR){
+        const newLines = (linkedPR.lines||[]).map(l => {
+          if(!l.item_id) return l;
+          const issued = valid.filter(r => r.item_id === l.item_id).reduce((s,r)=>s+Number(r.qty),0);
+          if(issued <= 0) return l;
+          const wasAllocated = Number(l.stock_allocated||0);
+          const reduceBy = Math.min(issued, wasAllocated);
+          if(reduceBy <= 0) return l;
+          return { ...l, stock_allocated: wasAllocated - reduceBy };
+        });
+        await sb.from('purchase_requests').update({ lines: newLines }).eq('id', linkedPR.id);
+      }
+      setBusy(false); onSaved();
+    } catch(e){
+      setBusy(false);
+      setMsg(`Could not save: ${e.message || e}. The stock_movements table may not exist yet — run steeze-erp-purchasing.sql in Supabase if you haven't.`);
+    }
+  }
+  return (
+    <Modal title={`📦 Pull materials — ${job.number} · ${job.item||''}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs flex items-center justify-between flex-wrap gap-2">
+          <span>Recording materials taken from stock for this production job. Inventory drops and a stock movement is logged.</span>
+          {linkedPR && <span className="font-semibold text-amber-800">Pre-filled from {linkedPR.number}</span>}
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date pulled"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+          <div className="col-span-2 self-end text-xs text-slate-500">Production job: <strong>{job.number}</strong> · <strong>{job.client_name||''}</strong></div>
+        </div>
+
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">Materials being pulled ({rows.length} row{rows.length===1?'':'s'})</div>
+            <button onClick={addRow} className="text-xs text-indigo-600 font-semibold">+ Add row</button>
+          </div>
+          <div className="space-y-1.5">{rows.map((r,i)=>{
+            const it = r.item_id ? (items||[]).find(x=>x.id===r.item_id) : null;
+            const onHand = Number(it?.qty||0);
+            const afterPull = onHand - Number(r.qty||0);
+            const isOver = Number(r.qty||0) > onHand;
+            return (
+              <div key={i} className="bg-white border rounded p-2">
+                <div className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-5">
+                    <label className="text-[10px] uppercase text-slate-500">Material</label>
+                    <select className="input text-xs" value={r.item_id||''} onChange={e=>pickItem(i,e.target.value)}>
+                      <option value="">— pick an inventory item —</option>
+                      {(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(it=>(
+                        <option key={it.id} value={it.id}>{it.name}{it.color?` - ${it.color}`:''}{it.sku?` · ${it.sku}`:''} (on-hand {it.qty||0})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] uppercase text-slate-500">Qty pulled</label>
+                    <input type="number" step="0.01" className={`input text-xs text-right ${isOver?'border-rose-500':''}`} value={r.qty} onChange={e=>setRow(i,{qty:e.target.value})} />
+                  </div>
+                  <div className="col-span-1 text-xs">
+                    <label className="text-[10px] uppercase text-slate-500">Unit</label>
+                    <div className="font-medium pt-1">{r.unit||'pc'}</div>
+                  </div>
+                  <div className="col-span-3">
+                    <label className="text-[10px] uppercase text-slate-500">Notes</label>
+                    <input className="input text-xs" placeholder="Optional" value={r.notes||''} onChange={e=>setRow(i,{notes:e.target.value})} />
+                  </div>
+                  <div className="col-span-1 text-right"><button onClick={()=>removeRow(i)} className="text-rose-400 text-sm">✕</button></div>
+                </div>
+                {it && Number(r.qty||0) > 0 && (
+                  <div className={`text-[10px] mt-1 px-2 py-1 rounded border flex items-center justify-between gap-2 ${isOver?'bg-rose-50 border-rose-200 text-rose-800':'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+                    <span><strong>On-hand:</strong> {onHand} {r.unit||'pc'} → After pull: <strong>{afterPull}</strong> {r.unit||'pc'}</span>
+                    {isOver && <span className="font-bold">⚠ Exceeds on-hand by {(Number(r.qty)-onHand).toFixed(2)}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}{rows.length===0 && <div className="text-xs text-slate-400 text-center py-3">No rows. Click "+ Add row".</div>}</div>
+        </div>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'✓ Confirm pull from stock'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack }){
+  const [pulling,setPulling]=useState(null);  // job we're currently pulling materials for
+  // Roles that can pull materials FROM stock — Purchasing owns this so the
+  // inventory custody chain is clean. Production team can request the pull
+  // verbally / via chat; Purchasing records it in the system. Admin/Accounting
+  // get access for audit/correction.
+  const canPull = ['purchasing','admin','accounting'].includes(profile.role);
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
   const [filterOwner,setFilterOwner]=useState('');
@@ -1807,6 +1974,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
                 <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
               </button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+              {canPull && <button onClick={()=>setPulling(j)} className="text-xs text-emerald-700 hover:underline mr-2" title="Pull materials from stock for this job">📦 Pull</button>}
               {canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
             </td>
           </tr>
@@ -1876,6 +2044,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
                             <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
                           </button>
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                          {canPull && <button onClick={()=>setPulling(j)} className="text-xs text-emerald-700 hover:underline mr-2" title="Pull materials from stock">📦</button>}
                           {canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
                         </td>
                       </tr>
@@ -1892,6 +2061,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, activityCounts, reloa
         );
       })}</div>
       )}
+      {pulling && <PullMaterialsModal job={pulling} items={items} requests={requests} profile={profile} onClose={()=>setPulling(null)} onSaved={()=>{ setPulling(null); reload(); alert('Materials pulled. Inventory updated.'); }} />}
     </div>
   );
 }
@@ -10962,7 +11132,7 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
