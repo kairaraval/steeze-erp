@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 33 · HR Module — 201 File directory, docs, memos, timeline';
+const BUILD = 'Live build 34 · HR Tier 2 — Checklists + Trainings + HR Reports';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4027,7 +4027,7 @@ function daysToRegular(e){
   return Math.round((new Date(dl+'T00:00:00') - t) / 86400000);
 }
 
-function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, reload }){
+function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, hrTemplates, hrChecklists, hrTrainings, reload }){
   const [search,setSearch]=useState('');
   const [filterDept,setFilterDept]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
@@ -4151,7 +4151,7 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
         })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No employees match the filters. {totalCount===0 && 'Click "+ New employee" to add the first one.'}</td></tr>}</tbody>
       </table></div></div>
 
-      {opening && <EmployeeDetailModal employee={opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
+      {opening && <EmployeeDetailModal employee={opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} checklists={(hrChecklists||[]).filter(c=>c.employee_id===opening.id)} trainings={(hrTrainings||[]).filter(t=>t.employee_id===opening.id)} hrTemplates={hrTemplates} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
       {creating && <EmployeeFormModal employee={null} profiles={profiles} profile={profile} allEmployees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
     </div>
   );
@@ -4159,12 +4159,15 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
 
 // 201 Detail with tabs (Overview / Documents / Memos / Timeline). Edit button
 // at the top opens the form modal in edit mode.
-function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, memos, notes, onClose, onSaved }){
+function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, memos, notes, checklists, trainings, hrTemplates, onClose, onSaved }){
   const [tab,setTab]=useState('overview');
   const [editing,setEditing]=useState(false);
   const [addingMemo,setAddingMemo]=useState(false);
   const [addingNote,setAddingNote]=useState(false);
   const [addingDoc,setAddingDoc]=useState(false);
+  const [addingChecklist,setAddingChecklist]=useState(false);
+  const [addingTraining,setAddingTraining]=useState(false);
+  const [editingTraining,setEditingTraining]=useState(null);
   const e = employee;
   const meta = empStatusMeta(e.status);
   const manager = e.manager_id ? (allEmployees||[]).find(x=>x.id===e.manager_id) : null;
@@ -4214,12 +4217,14 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 border-b">
+        <div className="flex gap-1 border-b flex-wrap">
           {[
-            { k:'overview',  l:'Overview',  i:'👤' },
-            { k:'docs',      l:`Documents (${docs.length})`, i:'📎' },
-            { k:'memos',     l:`Memos (${memos.length})`, i:'📝' },
-            { k:'timeline',  l:`Timeline (${notes.length})`, i:'🕐' },
+            { k:'overview',   l:'Overview',  i:'👤' },
+            { k:'docs',       l:`Documents (${docs.length})`, i:'📎' },
+            { k:'checklists', l:`Checklists (${(checklists||[]).length})`, i:'📋' },
+            { k:'trainings',  l:`Trainings (${(trainings||[]).length})`, i:'🎓' },
+            { k:'memos',      l:`Memos (${memos.length})`, i:'📝' },
+            { k:'timeline',   l:`Timeline (${notes.length})`, i:'🕐' },
           ].map(t => (
             <button key={t.k} onClick={()=>setTab(t.k)} className={`text-sm px-4 py-2 rounded-t-lg ${tab===t.k?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>{t.i} {t.l}</button>
           ))}
@@ -4324,6 +4329,54 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
           </div>
         )}
 
+        {/* TAB: Checklists */}
+        {tab==='checklists' && (
+          <div className="space-y-3">
+            <div className="flex justify-end"><button onClick={()=>setAddingChecklist(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Start checklist</button></div>
+            {(checklists||[]).length===0 ? <div className="text-sm text-slate-400 text-center py-6">No checklists yet. Start an onboarding or offboarding checklist using one of your templates.</div> : (
+              <div className="space-y-3">{(checklists||[]).map(c => (
+                <EmployeeChecklistCard key={c.id} checklist={c} profile={profile} profiles={profiles} onChanged={onSaved} />
+              ))}</div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: Trainings */}
+        {tab==='trainings' && (
+          <div className="space-y-3">
+            <div className="flex justify-end"><button onClick={()=>setAddingTraining(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Add training</button></div>
+            {(trainings||[]).length===0 ? <div className="text-sm text-slate-400 text-center py-6">No trainings recorded.</div> : (
+              <div className="space-y-2">{(trainings||[]).map(t => {
+                const isExpired = t.expiry_date && t.expiry_date < new Date().toISOString().slice(0,10);
+                return (
+                  <div key={t.id} className={`bg-white border rounded-lg p-3 ${isExpired?'border-rose-200':''}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${t.category==='certification'?'bg-emerald-100 text-emerald-700':t.category==='training'?'bg-blue-100 text-blue-700':t.category==='workshop'?'bg-purple-100 text-purple-700':'bg-slate-100 text-slate-700'}`}>{t.category||'training'}</span>
+                          <div className="font-semibold text-sm">{t.title}</div>
+                          {isExpired && <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Expired</span>}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {t.provider && <span>by {t.provider} · </span>}
+                          {t.date_completed && <span>completed {fmtDate(t.date_completed)}</span>}
+                          {t.expiry_date && <span className={isExpired?' text-rose-700 font-semibold':' text-slate-500'}> · expires {fmtDate(t.expiry_date)}</span>}
+                        </div>
+                        {t.notes && <div className="text-xs text-slate-600 mt-1 whitespace-pre-wrap">{t.notes}</div>}
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        {t.certificate_url && <a href={t.certificate_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">📎 Cert</a>}
+                        <button onClick={()=>setEditingTraining(t)} className="text-xs text-slate-500 hover:underline">Edit</button>
+                        <button onClick={async ()=>{ if(!confirm('Delete this training?')) return; const { error } = await sb.from('hr_trainings').delete().eq('id', t.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-xs text-rose-500 hover:underline">Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}</div>
+            )}
+          </div>
+        )}
+
         {/* TAB: Memos */}
         {tab==='memos' && (
           <div className="space-y-3">
@@ -4377,6 +4430,8 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
       {addingMemo && <EmployeeMemoForm employeeId={e.id} profile={profile} onClose={()=>setAddingMemo(false)} onSaved={()=>{ setAddingMemo(false); onSaved(); }} />}
       {addingNote && <EmployeeNoteForm employeeId={e.id} profile={profile} onClose={()=>setAddingNote(false)} onSaved={()=>{ setAddingNote(false); onSaved(); }} />}
       {addingDoc && <EmployeeDocForm employeeId={e.id} profile={profile} onClose={()=>setAddingDoc(false)} onSaved={()=>{ setAddingDoc(false); onSaved(); }} />}
+      {addingChecklist && <StartChecklistModal employeeId={e.id} profile={profile} templates={hrTemplates} onClose={()=>setAddingChecklist(false)} onSaved={()=>{ setAddingChecklist(false); onSaved(); }} />}
+      {(addingTraining || editingTraining) && <EmployeeTrainingForm training={editingTraining} employeeId={e.id} profile={profile} onClose={()=>{ setAddingTraining(false); setEditingTraining(null); }} onSaved={()=>{ setAddingTraining(false); setEditingTraining(null); onSaved(); }} />}
     </Modal>
   );
 }
@@ -4708,12 +4763,366 @@ function EmployeeDocForm({ employeeId, profile, onClose, onSaved }){
 }
 
 
+/* ─────────── HR TIER 2 — Checklist templates manager ─────────── */
+function HRTemplatesView({ profile, hrTemplates, reload }){
+  const [filter,setFilter]=useState(''); // '' | 'onboarding' | 'offboarding'
+  const [editing,setEditing]=useState(null);
+  const [creating,setCreating]=useState(false);
+  const rows = (hrTemplates||[]).filter(t => !filter || t.type===filter);
+  async function del(t){
+    if(!confirm(`Delete template "${t.name}"?\n\nExisting checklists already issued from this template are not affected — they keep their own snapshot of items.`)) return;
+    const { error } = await sb.from('hr_checklist_templates').delete().eq('id', t.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function toggleActive(t){
+    const { error } = await sb.from('hr_checklist_templates').update({ active: !t.active }).eq('id', t.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📋 Checklist Templates</h1>
+            <p className="text-slate-500 text-sm">Reusable onboarding & offboarding checklists · {hrTemplates.length} template{hrTemplates.length===1?'':'s'}</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New template</button>
+        </div>
+      </div>
+      <div className="flex gap-1 mb-4">
+        {[{k:'',l:'All'},{k:'onboarding',l:'🟢 Onboarding'},{k:'offboarding',l:'🔴 Offboarding'}].map(t=>(
+          <button key={t.k} onClick={()=>setFilter(t.k)} className={`text-xs px-3 py-1.5 rounded ${filter===t.k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{t.l}</button>
+        ))}
+      </div>
+      <div className="grid md:grid-cols-2 gap-3">{rows.map(t=>(
+        <div key={t.id} className={`bg-white border-2 rounded-xl p-4 ${t.active?'border-slate-200':'border-slate-300 bg-slate-50/50'}`}>
+          <div className="flex items-start justify-between mb-2 gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <div className="font-bold text-slate-900">{t.name}</div>
+                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${t.type==='onboarding'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{t.type}</span>
+                {!t.active && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">Inactive</span>}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">{(t.items||[]).length} item{(t.items||[]).length===1?'':'s'}</div>
+            </div>
+            <div className="flex gap-1 shrink-0">
+              <button onClick={()=>setEditing(t)} className="text-xs text-indigo-600 hover:underline">Edit</button>
+              <button onClick={()=>toggleActive(t)} className="text-xs text-slate-500 hover:underline">{t.active?'Deactivate':'Activate'}</button>
+              <button onClick={()=>del(t)} className="text-xs text-rose-500 hover:underline">Delete</button>
+            </div>
+          </div>
+          {t.description && <div className="text-xs text-slate-600 mb-2">{t.description}</div>}
+          <div className="bg-slate-50 border rounded p-2 max-h-40 overflow-y-auto text-xs space-y-0.5">
+            {(t.items||[]).slice(0,8).map((it,i)=>(<div key={it.id||i} className="flex items-center gap-2"><span className="text-slate-400">{i+1}.</span><span className="truncate flex-1">{it.title}</span><span className="text-[10px] text-slate-400">{it.category||''}</span></div>))}
+            {(t.items||[]).length>8 && <div className="text-[10px] text-slate-400">+ {(t.items||[]).length-8} more</div>}
+          </div>
+        </div>
+      ))}{rows.length===0 && <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-sm text-slate-400">No templates in this filter. Run steeze-erp-hr-tier2.sql to seed the defaults, or click "+ New template".</div>}</div>
+      {(creating||editing) && <ChecklistTemplateForm template={editing} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function ChecklistTemplateForm({ template, profile, onClose, onSaved }){
+  const isEdit = !!template;
+  const [f,setF]=useState(template || { name:'', type:'onboarding', description:'', items:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function addItem(){
+    const newId = 'it'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+    setF(p=>({ ...p, items: [...(p.items||[]), { id:newId, title:'', category:'paperwork' }] }));
+  }
+  function updateItem(idx, patch){
+    setF(p => ({ ...p, items: p.items.map((it,i)=>i===idx?{...it,...patch}:it) }));
+  }
+  function removeItem(idx){
+    setF(p => ({ ...p, items: p.items.filter((_,i)=>i!==idx) }));
+  }
+  function move(idx, dir){
+    setF(p => {
+      const arr = [...p.items];
+      const ni = idx + dir;
+      if(ni<0 || ni>=arr.length) return p;
+      [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
+      return { ...p, items: arr };
+    });
+  }
+  async function save(){
+    if(!f.name?.trim()){ setMsg('Name required.'); return; }
+    if((f.items||[]).length===0){ setMsg('Add at least one item.'); return; }
+    if((f.items||[]).some(it => !it.title?.trim())){ setMsg('Every item needs a title.'); return; }
+    setBusy(true); setMsg('');
+    const payload = { name:f.name.trim(), type:f.type, description:f.description||null, items:f.items, active: f.active !== false };
+    if(!isEdit) payload.created_by = profile.id;
+    const { error } = isEdit
+      ? await sb.from('hr_checklist_templates').update(payload).eq('id', template.id)
+      : await sb.from('hr_checklist_templates').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  const CATEGORIES = ['paperwork','equipment','accounts','training','clearance','other'];
+  return (
+    <Modal title={isEdit?'Edit template':'New checklist template'} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Name *"><input className="input" value={f.name||''} onChange={e=>up('name',e.target.value)} placeholder="Standard Onboarding" /></TpLbl>
+          <TpLbl t="Type">
+            <select className="input" value={f.type} onChange={e=>up('type',e.target.value)}>
+              <option value="onboarding">Onboarding</option>
+              <option value="offboarding">Offboarding</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="Description"><input className="input" value={f.description||''} onChange={e=>up('description',e.target.value)} /></TpLbl>
+        </div>
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-bold text-slate-700">Items ({(f.items||[]).length})</div>
+            <button onClick={addItem} className="text-xs text-indigo-600 font-semibold">+ Add item</button>
+          </div>
+          <div className="space-y-1.5">{(f.items||[]).map((it,i)=>(
+            <div key={it.id||i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-center">
+              <div className="col-span-1 flex flex-col items-center text-xs text-slate-400">
+                <button onClick={()=>move(i,-1)} disabled={i===0} className="hover:text-slate-700 disabled:opacity-30">▲</button>
+                <span>{i+1}</span>
+                <button onClick={()=>move(i,1)} disabled={i===(f.items||[]).length-1} className="hover:text-slate-700 disabled:opacity-30">▼</button>
+              </div>
+              <div className="col-span-7"><input className="input text-xs" value={it.title||''} onChange={e=>updateItem(i,{title:e.target.value})} placeholder="Task title" /></div>
+              <div className="col-span-3"><select className="input text-xs" value={it.category||'paperwork'} onChange={e=>updateItem(i,{category:e.target.value})}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
+              <div className="col-span-1 text-right"><button onClick={()=>removeItem(i)} className="text-rose-400">✕</button></div>
+            </div>
+          ))}</div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create template')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Per-employee checklist instance — renders inside the 201 detail
+function EmployeeChecklistCard({ checklist, profile, profiles, onChanged }){
+  const [busy,setBusy]=useState(false);
+  const items = checklist.items || [];
+  const doneCount = items.filter(i=>i.done).length;
+  const pct = items.length>0 ? Math.round(doneCount / items.length * 100) : 0;
+  async function setItem(idx, patch){
+    const next = items.map((it,i)=> i===idx ? { ...it, ...patch } : it);
+    const allDone = next.every(it => it.done);
+    const update = { items: next };
+    if(allDone && checklist.status==='active'){ update.status = 'completed'; update.completed_at = new Date().toISOString(); }
+    if(!allDone && checklist.status==='completed'){ update.status = 'active'; update.completed_at = null; }
+    setBusy(true);
+    const { error } = await sb.from('hr_checklists').update(update).eq('id', checklist.id);
+    setBusy(false);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function toggleItem(idx){
+    const it = items[idx];
+    if(it.done){
+      await setItem(idx, { done:false, done_at:null, done_by:null });
+    } else {
+      await setItem(idx, { done:true, done_at: new Date().toISOString(), done_by: profile.id });
+    }
+  }
+  async function cancel(){
+    if(!confirm('Cancel this checklist?')) return;
+    const { error } = await sb.from('hr_checklists').update({ status:'cancelled' }).eq('id', checklist.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function reactivate(){
+    const { error } = await sb.from('hr_checklists').update({ status:'active', completed_at:null }).eq('id', checklist.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  async function del(){
+    if(!confirm('Delete this checklist? Items cannot be recovered.')) return;
+    const { error } = await sb.from('hr_checklists').delete().eq('id', checklist.id);
+    if(error){ alert(error.message); return; }
+    onChanged();
+  }
+  const statusMeta = checklist.status==='completed' ? { c:'bg-emerald-100 text-emerald-700', l:'Completed' }
+    : checklist.status==='cancelled' ? { c:'bg-slate-200 text-slate-600', l:'Cancelled' }
+    : { c:'bg-amber-100 text-amber-700', l:'Active' };
+  return (
+    <div className="bg-white border rounded-lg p-3">
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${checklist.type==='onboarding'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{checklist.type}</span>
+          <div className="font-semibold text-sm truncate">{checklist.title || (checklist.type==='onboarding'?'Onboarding':'Offboarding')}</div>
+          <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusMeta.c}`}>{statusMeta.l}</span>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          {checklist.status==='active' && <button onClick={cancel} className="text-[10px] text-slate-500 hover:underline">Cancel</button>}
+          {checklist.status==='cancelled' && <button onClick={reactivate} className="text-[10px] text-emerald-600 hover:underline">Reactivate</button>}
+          <button onClick={del} className="text-[10px] text-rose-500 hover:underline">Delete</button>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden"><div className="bg-emerald-500 h-full" style={{width:`${pct}%`}}></div></div>
+        <div className="text-xs font-bold w-16 text-right">{doneCount}/{items.length}</div>
+      </div>
+      {checklist.target_completion_date && <div className="text-[10px] text-slate-500 mb-2">Target completion: <strong>{fmtDate(checklist.target_completion_date)}</strong></div>}
+      <div className="space-y-0.5">{items.map((it,i)=>{
+        const doneBy = it.done_by ? (profiles||[]).find(p=>p.id===it.done_by) : null;
+        return (
+          <div key={it.id||i} className={`flex items-center gap-2 text-xs py-1 px-1.5 rounded ${it.done?'bg-emerald-50':'hover:bg-slate-50'}`}>
+            <input type="checkbox" checked={!!it.done} disabled={busy || checklist.status==='cancelled'} onChange={()=>toggleItem(i)} className="shrink-0" />
+            <span className={`flex-1 ${it.done?'line-through text-slate-500':''}`}>{it.title}</span>
+            <span className="text-[10px] text-slate-400 shrink-0">{it.category||''}</span>
+            {it.done && doneBy && <span className="text-[10px] text-emerald-700 shrink-0">✓ {(doneBy.name||doneBy.email||'').split(' ')[0]}</span>}
+          </div>
+        );
+      })}</div>
+    </div>
+  );
+}
+
+// Modal to start a new checklist from a template
+function StartChecklistModal({ employeeId, profile, templates, onClose, onSaved }){
+  const [type,setType]=useState('onboarding');
+  const [templateId,setTemplateId]=useState('');
+  const [title,setTitle]=useState('');
+  const [targetDate,setTargetDate]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const filtered = (templates||[]).filter(t => t.type===type && t.active!==false);
+  // Default to first matching template
+  useEffect(()=>{
+    if(filtered.length>0 && !templateId) setTemplateId(filtered[0].id);
+  }, [type]);
+  async function save(){
+    if(!templateId){ setMsg('Pick a template.'); return; }
+    const tpl = (templates||[]).find(t=>t.id===templateId);
+    if(!tpl){ setMsg('Template not found.'); return; }
+    setBusy(true); setMsg('');
+    // Clone template items into the checklist, adding the completion fields
+    const clonedItems = (tpl.items||[]).map(it => ({
+      ...it,
+      done: false, done_at: null, done_by: null, assignee: null, notes: ''
+    }));
+    const payload = {
+      employee_id: employeeId, template_id: templateId, type,
+      title: title || tpl.name,
+      target_completion_date: targetDate || null,
+      items: clonedItems,
+      status: 'active',
+      created_by: profile.id,
+    };
+    const { error } = await sb.from('hr_checklists').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Start checklist" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Type">
+            <select className="input" value={type} onChange={e=>{ setType(e.target.value); setTemplateId(''); }}>
+              <option value="onboarding">Onboarding</option>
+              <option value="offboarding">Offboarding</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="Template">
+            <select className="input" value={templateId} onChange={e=>setTemplateId(e.target.value)}>
+              <option value="">— pick —</option>
+              {filtered.map(t=><option key={t.id} value={t.id}>{t.name} ({(t.items||[]).length} items)</option>)}
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Title (optional — defaults to template name)"><input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="Override the template name for this instance" /></TpLbl>
+        <TpLbl t="Target completion date (optional)"><input type="date" className="input" value={targetDate} onChange={e=>setTargetDate(e.target.value)} /></TpLbl>
+        {filtered.length===0 && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">⚠ No active {type} templates. Create one in HR → Templates first.</div>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy||!templateId} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Start checklist'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Training / certification form
+const TRAINING_CATEGORIES = [
+  { key:'training',      label:'Training' },
+  { key:'certification', label:'Certification' },
+  { key:'workshop',      label:'Workshop' },
+  { key:'seminar',       label:'Seminar' },
+];
+function EmployeeTrainingForm({ training, employeeId, profile, onClose, onSaved }){
+  const isEdit = !!training;
+  const [f,setF]=useState(training || { title:'', category:'training', provider:'', date_completed:'', expiry_date:'', certificate_url:'', notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [uploading,setUploading]=useState(false);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function uploadCert(file){
+    if(!file) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const key = `employees/${employeeId}/trainings/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      up('certificate_url', pu.publicUrl);
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setUploading(false);
+  }
+  async function save(){
+    if(!f.title?.trim()){ setMsg('Title required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      ...f,
+      title: f.title.trim(),
+      provider: f.provider||null,
+      date_completed: f.date_completed||null,
+      expiry_date: f.expiry_date||null,
+      certificate_url: f.certificate_url||null,
+      notes: f.notes||null,
+    };
+    if(!isEdit){ payload.employee_id = employeeId; payload.created_by = profile.id; }
+    const { error } = isEdit
+      ? await sb.from('hr_trainings').update(payload).eq('id', training.id)
+      : await sb.from('hr_trainings').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit training / certification':'Add training / certification'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. First Aid Certification 2024" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Category">
+            <select className="input" value={f.category||'training'} onChange={e=>up('category',e.target.value)}>
+              {TRAINING_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Provider"><input className="input" value={f.provider||''} onChange={e=>up('provider',e.target.value)} placeholder="Red Cross / TESDA / etc." /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date completed"><input type="date" className="input" value={f.date_completed||''} onChange={e=>up('date_completed',e.target.value||null)} /></TpLbl>
+          <TpLbl t="Expiry date (optional)"><input type="date" className="input" value={f.expiry_date||''} onChange={e=>up('expiry_date',e.target.value||null)} /></TpLbl>
+        </div>
+        <TpLbl t="Certificate file (optional)">
+          <div className="flex items-center gap-2">
+            <input type="file" onChange={e=>uploadCert(e.target.files?.[0])} className="text-xs flex-1" />
+            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+            {f.certificate_url && <a href={f.certificate_url} target="_blank" rel="noreferrer" className="text-xs text-emerald-600">✓ View</a>}
+          </div>
+        </TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+
 /* ─────────── REPORTS — admin-only analytics across the whole business ───────────
    One page with multiple tabbed reports. All numbers are computed live from
    the same state the rest of the app uses, with a period selector at top.
    Covers: Sales, Production, Customers (AR), Suppliers (Spend), Team.
 */
-function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements }){
+function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees }){
   const [tab,setTab]=useState('sales');
   const [period,setPeriod]=useState('ytd'); // 'month' | 'quarter' | 'ytd' | 'all'
   const today = new Date();
@@ -4934,6 +5343,52 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
     return s + Number(m.qty||0) * Number(it?.cost||0);
   }, 0);
 
+  // ───── HR / People report ─────
+  const liveEmployees = (employees||[]).filter(e => e.status!=='resigned' && e.status!=='terminated');
+  const hrByDept = {};
+  liveEmployees.forEach(e => { const k = e.department||'(no department)'; hrByDept[k] = (hrByDept[k]||0)+1; });
+  const hrDeptRows = Object.entries(hrByDept).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({ dept:k, count:v }));
+  const hrByStatus = {};
+  (employees||[]).forEach(e => { const k = e.status||'unknown'; hrByStatus[k] = (hrByStatus[k]||0)+1; });
+  // Tenure: in years, for active employees with hire_date
+  const tenureBuckets = { '<1y':0, '1-3y':0, '3-5y':0, '5-10y':0, '10y+':0 };
+  liveEmployees.forEach(e => {
+    if(!e.hire_date) return;
+    const years = (today - new Date(e.hire_date+'T00:00:00')) / (365.25 * 86400000);
+    if(years < 1) tenureBuckets['<1y']++;
+    else if(years < 3) tenureBuckets['1-3y']++;
+    else if(years < 5) tenureBuckets['3-5y']++;
+    else if(years < 10) tenureBuckets['5-10y']++;
+    else tenureBuckets['10y+']++;
+  });
+  // Hires per month — last 12 months
+  const hireMonths = [];
+  for(let i=11;i>=0;i--){
+    const d = new Date(year, today.getMonth()-i, 1);
+    hireMonths.push({ key: d.toISOString().slice(0,7), label: d.toLocaleString('en-PH',{month:'short'})+' '+String(d.getFullYear()).slice(2), count:0 });
+  }
+  (employees||[]).forEach(e => {
+    if(!e.hire_date) return;
+    const slot = hireMonths.find(m => m.key === e.hire_date.slice(0,7));
+    if(slot) slot.count++;
+  });
+  const maxHires = Math.max(1, ...hireMonths.map(m=>m.count));
+  // Departures per month — last 12 months
+  const deptMonths = [];
+  for(let i=11;i>=0;i--){
+    const d = new Date(year, today.getMonth()-i, 1);
+    deptMonths.push({ key: d.toISOString().slice(0,7), label: d.toLocaleString('en-PH',{month:'short'})+' '+String(d.getFullYear()).slice(2), count:0 });
+  }
+  (employees||[]).forEach(e => {
+    if(!e.resignation_date) return;
+    const slot = deptMonths.find(m => m.key === e.resignation_date.slice(0,7));
+    if(slot) slot.count++;
+  });
+  const maxDepartures = Math.max(1, ...deptMonths.map(m=>m.count));
+  const probationaryCount = liveEmployees.filter(e => e.status==='probationary').length;
+  const regularCount = liveEmployees.filter(e => e.status==='regular').length;
+  const steezeAccessCount = liveEmployees.filter(e => e.profile_id).length;
+
   const TABS = [
     { key:'sales',      label:'Sales',      icon:'📈' },
     { key:'production', label:'Production', icon:'🏭' },
@@ -4941,6 +5396,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
     { key:'suppliers',  label:'Suppliers',  icon:'⚒' },
     { key:'inventory',  label:'Inventory',  icon:'📦' },
     { key:'team',       label:'Team',       icon:'🏆' },
+    { key:'hr',         label:'HR',         icon:'👤' },
   ];
 
   return (
@@ -5279,6 +5735,83 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
                 ))}</tbody>
               </table>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ───── HR ───── */}
+      {tab==='hr' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Tile label="Total headcount" value={liveEmployees.length} sub={`${(employees||[]).length} including resigned/terminated`} color="indigo" />
+            <Tile label="Regular" value={regularCount} sub={`${liveEmployees.length>0?Math.round(regularCount/liveEmployees.length*100):0}% of active`} color="emerald" />
+            <Tile label="Probationary" value={probationaryCount} color="amber" />
+            <Tile label="With Steeze access" value={steezeAccessCount} sub={`${liveEmployees.length>0?Math.round(steezeAccessCount/liveEmployees.length*100):0}% of active`} color="blue" />
+          </div>
+
+          <div className="bg-white border rounded-xl p-4">
+            <div className="text-sm font-bold mb-3">Headcount by department</div>
+            {hrDeptRows.length===0 ? <div className="text-sm text-slate-400 py-4">No active employees.</div> : (
+              <div className="space-y-2">{hrDeptRows.map(r=>(
+                <div key={r.dept} className="flex items-center gap-3">
+                  <span className="text-xs font-medium text-slate-700 w-40 shrink-0 truncate">{r.dept}</span>
+                  <div className="flex-1"><Bar value={r.count} max={hrDeptRows[0].count} color="bg-indigo-500" /></div>
+                  <div className="text-xs font-bold w-10 text-right">{r.count}</div>
+                </div>
+              ))}</div>
+            )}
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-white border rounded-xl p-4">
+              <div className="text-sm font-bold mb-3">Status breakdown</div>
+              {EMP_STATUSES.map(s => {
+                const c = hrByStatus[s.key] || 0;
+                return c>0 ? (
+                  <div key={s.key} className="flex items-center justify-between py-1.5 border-t first:border-t-0 text-sm">
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${s.color}`}>{s.label}</span>
+                    <span className="font-bold">{c}</span>
+                  </div>
+                ) : null;
+              })}
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <div className="text-sm font-bold mb-3">Tenure distribution (active only)</div>
+              <div className="space-y-2">{Object.entries(tenureBuckets).filter(([k,v])=>v>0).map(([k,v])=>(
+                <div key={k} className="flex items-center gap-3">
+                  <span className="text-xs font-medium w-16 shrink-0">{k}</span>
+                  <div className="flex-1"><Bar value={v} max={Math.max(...Object.values(tenureBuckets))} color="bg-emerald-500" /></div>
+                  <div className="text-xs font-bold w-10 text-right">{v}</div>
+                </div>
+              ))}{Object.values(tenureBuckets).every(v=>v===0) && <div className="text-sm text-slate-400">No active employees with hire dates.</div>}</div>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-white border rounded-xl p-4">
+              <div className="text-sm font-bold mb-3">Hires — last 12 months</div>
+              <div className="flex items-end gap-1.5 h-32">
+                {hireMonths.map(m => (
+                  <div key={m.key} className="flex flex-col items-center gap-1 flex-1">
+                    <div className="text-[9px] text-slate-500 font-mono">{m.count>0?m.count:''}</div>
+                    <div className="bg-emerald-500 rounded-t w-full transition-all" style={{height: `${(m.count/maxHires)*100}%`}} title={`${m.label}: ${m.count} hires`} />
+                    <div className="text-[9px] text-slate-500">{m.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <div className="text-sm font-bold mb-3">Departures — last 12 months</div>
+              <div className="flex items-end gap-1.5 h-32">
+                {deptMonths.map(m => (
+                  <div key={m.key} className="flex flex-col items-center gap-1 flex-1">
+                    <div className="text-[9px] text-slate-500 font-mono">{m.count>0?m.count:''}</div>
+                    <div className="bg-rose-500 rounded-t w-full transition-all" style={{height: `${(m.count/maxDepartures)*100}%`}} title={`${m.label}: ${m.count} departures`} />
+                    <div className="text-[9px] text-slate-500">{m.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -12937,6 +13470,9 @@ function App(){
   // HR Module: 201 file master + documents + memos + notes timeline
   const [employees,setEmployees]=useState([]); const [employeeDocs,setEmployeeDocs]=useState([]);
   const [employeeMemos,setEmployeeMemos]=useState([]); const [employeeNotes,setEmployeeNotes]=useState([]);
+  // HR Tier 2: checklist templates + per-employee checklists + trainings
+  const [hrTemplates,setHrTemplates]=useState([]); const [hrChecklists,setHrChecklists]=useState([]);
+  const [hrTrainings,setHrTrainings]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('dashboard');
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
@@ -12995,7 +13531,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -13038,6 +13574,10 @@ function App(){
       sb.from('employee_documents').select('*').order('uploaded_at',{ascending:false}),
       sb.from('employee_memos').select('*').order('date',{ascending:false}),
       sb.from('employee_notes').select('*').order('date',{ascending:false}),
+      // HR Tier 2
+      sb.from('hr_checklist_templates').select('*').order('name',{ascending:true}),
+      sb.from('hr_checklists').select('*').order('started_at',{ascending:false}),
+      sb.from('hr_trainings').select('*').order('date_completed',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -13059,6 +13599,9 @@ function App(){
     setEmployeeDocs(edoc && !edoc.error ? (edoc.data||[]) : []);
     setEmployeeMemos(emem && !emem.error ? (emem.data||[]) : []);
     setEmployeeNotes(enotes && !enotes.error ? (enotes.data||[]) : []);
+    setHrTemplates(htpl && !htpl.error ? (htpl.data||[]) : []);
+    setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
+    setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
     setItems(it.data||[]); setSuppliers(sp.data||[]); setDepartments(dp.data||[]);
     setRequests(pq.data||[]); setOrders(po.data||[]);
     setSampleJobs(sj.data||[]);
@@ -13474,7 +14017,7 @@ function App(){
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
     ];
   }
@@ -13561,8 +14104,9 @@ function App(){
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} />}
-        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} />}
-        {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} reload={loadAll} />}
+        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
+        {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
+        {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
