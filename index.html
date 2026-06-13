@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 28 · Supplier defaults pre-fill POs + auto-PR toast + Stock Out names';
+const BUILD = 'Live build 29 · Finance Home dashboard — daily to-dos for Finance team';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2036,6 +2036,185 @@ function MaterialsBuyListView({ profile, requests, items, suppliers, orders, pro
    queues across PRs, Materials Queue, POs, Stock Out, and Reorder alerts so
    the purchaser doesn't have to dig through 6 different views. Each tile is
    clickable and jumps to the relevant page (with a filter when applicable). */
+/* ─────────── FINANCE HOME (landing dashboard) ───────────
+   Same idea as Purchasing Home but for the Finance team: surface the work
+   queue across RFPs, voucher disbursement, collections, bank reconciliation,
+   and BIR filings — so the team doesn't have to remember the order to check
+   every morning. */
+function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPayments, expenses, budgetRequests, bankAccounts, bankTransactions, orders, navTo }){
+  // ---- Action tile counts ----
+  // 1. RFPs awaiting Finance review (the first approval step)
+  const rfpsToApprove = (rfps||[]).filter(r => r.status==='pending_finance');
+  // 2. RFPs already approved end-to-end → ready to disburse (Finance issues voucher)
+  const rfpsToPay = (rfps||[]).filter(r => r.status==='approved');
+  // 3. Open / partial SOs with balance — these are the AR collections that need follow-up.
+  //    Overdue if expected_delivery is past and still has balance.
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+  const openSOs = (salesOrders||[]).filter(s => s.status!=='paid' && s.status!=='cancelled' && Number(s.balance_due||0) > 0);
+  const overdueSOs = openSOs.filter(s => s.expected_delivery && s.expected_delivery < todayStr);
+  // 4. Unreconciled bank transactions (this month) — easy to fall behind on.
+  const monthKey = todayStr.slice(0,7);
+  const unreconciledThisMonth = (bankTransactions||[]).filter(t => !t.reconciled && (t.date||'').startsWith(monthKey));
+  // 5. BIR deadline countdown — find the next applicable BIR deadline day.
+  const day = today.getDate();
+  const BIR_DAYS = [10, 12, 20, 25];
+  const nextBirDay = BIR_DAYS.find(d => d >= day);
+  const daysToBir = nextBirDay ? (nextBirDay - day) : ((30 - day) + 10); // wrap to next month's 10th
+  const birLabel = nextBirDay ? `Day ${nextBirDay}` : 'Day 10 (next mo)';
+  const birDeadlineMeta = (
+    nextBirDay===10 ? '1601-C (WHT on comp.)' :
+    nextBirDay===12 ? '2550M (Monthly VAT)' :
+    nextBirDay===20 ? '1601-EQ (Expanded WHT)' :
+    nextBirDay===25 ? '2550Q / 1701Q (Quarterly)' : '1601-C (WHT on comp.)'
+  );
+  // Pre-compute for the secondary tiles
+  const totalCash = (bankAccounts||[]).reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
+  const totalAR = openSOs.reduce((s,o)=>s+Number(o.balance_due||0), 0);
+  const totalAP = (rfps||[]).filter(r => r.status!=='paid' && r.status!=='rejected').reduce((s,r)=>s+Number(r.amount||0), 0);
+  // VAT payable for current month (rough): Output - Input from delivered SOs and received POs.
+  const vatPayable = (()=>{
+    const outRows = (salesOrders||[]).filter(s => s.status!=='cancelled' && (s.delivered_at||s.date||'').startsWith(monthKey));
+    const inRows = (orders||[]).filter(o => o.vat_enabled && o.status!=='draft' && o.status!=='cancelled' && (o.received_at||o.date||'').startsWith(monthKey));
+    const outVat = outRows.reduce((s,o)=>s+(Number(o.vat_amount)||Number(o.vatable_sales||0)*0.12), 0);
+    const inVat = inRows.reduce((s,o)=>{
+      const sub = (o.lines||[]).reduce((ss,l)=>ss+(Number(l.qty)||0)*(Number(l.unit_cost)||0), 0);
+      return s + sub*0.12;
+    }, 0);
+    return Math.max(0, outVat - inVat);
+  })();
+  // Pending budget requests (admin sees them in For Approval but Finance also wants to know)
+  const pendingBudgets = (budgetRequests||[]).filter(b => b.status==='pending');
+  // Top-5 overdue invoices for the drill-down panel
+  const topOverdue = openSOs
+    .filter(s => s.expected_delivery && s.expected_delivery < todayStr)
+    .map(s => {
+      const days = Math.floor((today.getTime() - new Date(s.expected_delivery).getTime()) / 86400000);
+      return { so:s, days };
+    })
+    .sort((a,b)=>b.days - a.days)
+    .slice(0, 5);
+
+  // Recent activity — last 6 finance events
+  const recentEvents = (()=>{
+    const events = [];
+    (vouchers||[]).slice(0, 15).forEach(v => events.push({ when:v.created_at, kind:'voucher', label:`💳 Voucher ${v.number||''} issued — ${v.payee||''} (${peso(v.amount)})`, click:()=>navTo('vouchers') }));
+    (soPayments||[]).slice(0, 15).forEach(p => {
+      const so = (salesOrders||[]).find(s => s.id===p.sales_order_id);
+      events.push({ when:p.created_at||p.date, kind:'payment', label:`💰 Payment received — ${so?.client_name||'client'} (${peso(p.amount)})`, click:()=>navTo('sales-orders') });
+    });
+    (expenses||[]).slice(0, 15).forEach(e => events.push({ when:e.created_at||e.date, kind:'expense', label:`💸 Expense — ${e.category||'?'} · ${e.vendor||'?'} (${peso(e.amount)})`, click:()=>navTo('expenses') }));
+    (rfps||[]).slice(0, 15).forEach(r => events.push({ when:r.created_at, kind:'rfp', label:`📝 RFP ${r.number||''} — ${r.supplier_name||''} (${peso(r.amount)})`, click:()=>navTo('rfps') }));
+    return events.sort((a,b)=>String(b.when||'').localeCompare(String(a.when||''))).slice(0, 6);
+  })();
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greet = hour<12 ? 'Good morning' : hour<18 ? 'Good afternoon' : 'Good evening';
+  const firstName = (profile?.name||profile?.email||'team').split(' ')[0].split('@')[0];
+
+  function Tile({ icon, label, count, sub, color='indigo', urgent, onClick, formatPeso }){
+    const palette = {
+      indigo:   'border-indigo-200 hover:border-indigo-400 bg-white',
+      emerald:  'border-emerald-200 hover:border-emerald-400 bg-emerald-50/40',
+      amber:    'border-amber-200 hover:border-amber-400 bg-amber-50/40',
+      rose:     'border-rose-200 hover:border-rose-400 bg-rose-50/40',
+      blue:     'border-blue-200 hover:border-blue-400 bg-blue-50/40',
+      purple:   'border-purple-200 hover:border-purple-400 bg-purple-50/40',
+    };
+    const display = formatPeso ? peso(count) : (typeof count==='number' ? count : count);
+    const numColor = urgent ? 'text-rose-700' : (typeof count==='number' && count>0) ? 'text-slate-900' : (formatPeso ? 'text-slate-900' : 'text-slate-300');
+    return (
+      <button onClick={onClick} className={`text-left rounded-xl border-2 p-4 transition shadow-sm hover:shadow-md ${palette[color]}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="text-2xl">{icon}</div>
+          {urgent && <span className="text-[9px] uppercase font-bold tracking-wider bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">Urgent</span>}
+        </div>
+        <div className={`text-3xl font-extrabold mt-2 ${numColor}`}>{display}</div>
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">{label}</div>
+        {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">💼 Finance Home</h1>
+        <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — here's what needs your attention today.</p>
+      </div>
+
+      {/* PRIMARY tiles — actionable items */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 mt-1">▸ Your action queue</div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <Tile icon="📝" label="RFPs to approve" count={rfpsToApprove.length} sub={rfpsToApprove.length>0?'First-step approval':'All clear'} color="indigo" onClick={()=>navTo('rfps')} />
+        <Tile icon="💰" label="Vouchers to issue" count={rfpsToPay.length} sub={rfpsToPay.length>0?'Approved — ready to pay':'No payouts queued'} color="emerald" onClick={()=>navTo('rfps')} urgent={rfpsToPay.length>0} />
+        <Tile icon="📜" label="Overdue invoices" count={overdueSOs.length} sub={overdueSOs.length>0?`AR ${peso(totalAR)} open`:'No overdue'} color="rose" onClick={()=>navTo('ledger')} urgent={overdueSOs.length>0} />
+        <Tile icon="🏦" label="Unreconciled" count={unreconciledThisMonth.length} sub={unreconciledThisMonth.length>0?'This month — tick off bank stmt':'All reconciled'} color="amber" onClick={()=>navTo('banks')} />
+        <Tile icon="🧾" label="BIR deadline" count={daysToBir>=0 ? `${daysToBir}d` : 'today'} sub={`${birLabel} · ${birDeadlineMeta}`} color="purple" urgent={daysToBir<=3} onClick={()=>navTo('bir')} />
+      </div>
+
+      {/* SECONDARY tiles — financial pulse */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Financial pulse</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Tile icon="💎" label="Cash on hand" count={totalCash} formatPeso color="emerald" sub="All banks combined" onClick={()=>navTo('cash-position')} />
+        <Tile icon="📜" label="Open AR" count={totalAR} formatPeso color="blue" sub={`${openSOs.length} unpaid SO${openSOs.length===1?'':'s'}`} onClick={()=>navTo('ledger')} />
+        <Tile icon="📝" label="Open AP (RFP queue)" count={totalAP} formatPeso color="amber" sub="What we still owe suppliers" onClick={()=>navTo('rfps')} />
+        <Tile icon="🧾" label="VAT payable this month" count={vatPayable} formatPeso color="purple" sub="Output VAT − Input VAT" onClick={()=>navTo('bir')} />
+      </div>
+
+      {/* Overdue invoices teaser */}
+      {topOverdue.length>0 && (
+        <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-bold text-rose-900">⏰ {overdueSOs.length} invoice{overdueSOs.length===1?'':'s'} overdue — {peso(overdueSOs.reduce((s,o)=>s+Number(o.balance_due||0),0))} owed</div>
+            <button onClick={()=>navTo('ledger')} className="text-xs text-rose-700 font-semibold hover:underline">View full ledger →</button>
+          </div>
+          <div className="space-y-1.5">
+            {topOverdue.map(({so, days})=>(
+              <div key={so.id} className="bg-white border border-rose-200 rounded p-2 flex items-center justify-between text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{so.client_name||'(no client)'} <span className="text-slate-400 ml-1">· {so.number}</span></div>
+                  <div className="text-[10px] text-slate-500">Expected delivery {fmtDate(so.expected_delivery)}</div>
+                </div>
+                <div className="text-right shrink-0 ml-2">
+                  <div className="font-bold text-rose-700">{peso(so.balance_due)}</div>
+                  <div className="text-[10px] text-rose-600 font-semibold">{days} day{days===1?'':'s'} overdue</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pending Budgets teaser (only if any) */}
+      {pendingBudgets.length>0 && (
+        <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-6 flex items-center justify-between">
+          <div className="text-sm text-purple-900"><strong>💰 {pendingBudgets.length}</strong> budget request{pendingBudgets.length===1?'':'s'} pending review</div>
+          <button onClick={()=>navTo('budgets')} className="text-xs text-purple-700 font-semibold hover:underline">Open Budget Requests →</button>
+        </div>
+      )}
+
+      {/* Recent activity */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Recent activity</div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        {recentEvents.length===0 ? (
+          <div className="text-center text-slate-400 text-sm py-6">No recent activity yet.</div>
+        ) : (
+          <table className="w-full text-sm">
+            <tbody>{recentEvents.map((e,i)=>(
+              <tr key={i} className="border-t first:border-t-0 hover:bg-slate-50 cursor-pointer" onClick={e.click}>
+                <td className="px-3 py-2 text-sm">{e.label}</td>
+                <td className="px-3 py-2 text-xs text-slate-500 text-right whitespace-nowrap">{e.when ? fmtTime(e.when) : '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PurchasingHomeView({ profile, profiles, requests, orders, items, suppliers, prodJobs, leads, rfps, stockMovements, navTo }){
   // ---- Tile counts ----
   // 1. PRs awaiting approval — status='submitted', not deleted
@@ -11321,8 +11500,8 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow','payment-calendar','pnl','bir']);
-      fallback = 'cash-position';
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home']);
+      fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       allowed = new Set(['inbox','payroll','logistics','budgets']);
       fallback = 'payroll';
@@ -11571,6 +11750,7 @@ function App(){
   // single RFP entry so they can track their submissions. Sales Manager gets
   // SOs + Customer Ledger (read-only feel for them).
   const FINANCE_FULL = { group:'Finance', items:[
+    ['fin-home','Home','💼'],
     ['cash-position','Cash Position','💎'],
     ['cash-flow','Cash Flow','📈'],
     ['payment-calendar','Payment Calendar','🗓'],
@@ -11784,6 +11964,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
+        {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
