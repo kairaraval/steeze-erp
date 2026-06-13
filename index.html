@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 25b · Stock Out moved to Purchasing module (standalone view)';
+const BUILD = 'Live build 26 · Purchasing Home dashboard — what to work on today';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1805,6 +1805,172 @@ function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved })
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'✓ Confirm pull from stock'}</button>
       </div>
     </Modal>
+  );
+}
+
+/* ─────────── PURCHASING HOME (landing dashboard) ───────────
+   Single-screen answer to "what should I work on today?" Surfaces the action
+   queues across PRs, Materials Queue, POs, Stock Out, and Reorder alerts so
+   the purchaser doesn't have to dig through 6 different views. Each tile is
+   clickable and jumps to the relevant page (with a filter when applicable). */
+function PurchasingHomeView({ profile, profiles, requests, orders, items, suppliers, prodJobs, leads, rfps, stockMovements, navTo }){
+  // ---- Tile counts ----
+  // 1. PRs awaiting approval — status='submitted', not deleted
+  const prsToApprove = (requests||[]).filter(r => r.status==='submitted' && !r.deleted_at);
+  // 2. Materials Queue: count of unique supplier groups with at-least-one
+  //    unfulfilled approved-or-submitted PR line.
+  const queueSupplierCount = (()=>{
+    const set = new Set();
+    (requests||[]).filter(r => (r.status==='approved'||r.status==='submitted') && !r.deleted_at).forEach(pr=>{
+      (pr.lines||[]).forEach(line=>{
+        if(line.linked_po_id) return;
+        const it = line.item_id ? (items||[]).find(i=>i.id===line.item_id) : null;
+        const sid = line.supplier_id || it?.supplier_id || '__unassigned';
+        set.add(sid);
+      });
+    });
+    return set.size;
+  })();
+  const queueLineCount = (()=>{
+    let n = 0;
+    (requests||[]).filter(r => (r.status==='approved'||r.status==='submitted') && !r.deleted_at).forEach(pr=>{
+      (pr.lines||[]).forEach(line=>{ if(!line.linked_po_id) n++; });
+    });
+    return n;
+  })();
+  // 3. Draft POs (awaiting finalize)
+  const draftPOs = (orders||[]).filter(o => o.status==='draft');
+  // 4. Open / Partial POs (received pending)
+  const openPOs = (orders||[]).filter(o => o.status==='open' || o.status==='partial');
+  // 5. Below reorder point — qty <= reorder and reorder > 0
+  const lowStock = (items||[]).filter(it => Number(it.qty||0) <= Number(it.reorder||0) && Number(it.reorder||0) > 0);
+  // 6. RFPs in finance pipeline (Purchasing wants to know which they sent)
+  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_finance' || r.status==='pending_admin' || r.status==='approved');
+  // 7. Active production jobs needing materials
+  const activeProdJobs = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
+  // 8. Stock issuances today (out movements, created_at = today)
+  const today = new Date().toISOString().slice(0,10);
+  const stockOutToday = (stockMovements||[]).filter(s => s.type==='out' && (s.created_at||'').startsWith(today));
+  // 9. Total reserved stock value (for Layer 2 visibility)
+  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  const reservedValue = (items||[]).reduce((s,it)=>{ const r = reservations.get(it.id)||0; return s + r * Number(it.cost||0); }, 0);
+  // 10. Recent activity (last 5 PR/PO/Issuance events). Build cheaply from existing arrays.
+  const recentEvents = (()=>{
+    const events = [];
+    (requests||[]).slice(0, 20).forEach(r => events.push({ when:r.created_at, kind:'pr', label:`PR ${r.number||'#'} created`, status:r.status, click:()=>navTo('requests') }));
+    (orders||[]).slice(0, 20).forEach(o => events.push({ when:o.created_at, kind:'po', label:`PO ${o.number||'#'} ${o.status==='draft'?'created':o.status==='open'?'finalized':o.status}`, status:o.status, click:()=>navTo('orders') }));
+    (stockMovements||[]).filter(s => s.type==='out').slice(0, 10).forEach(s => {
+      const it = (items||[]).find(x=>x.id===s.item_id);
+      events.push({ when:s.created_at, kind:'out', label:`Stock out: ${it?.name||'(item)'} ${it?.color?'· '+it.color:''} (qty ${s.qty})`, click:()=>navTo('stock-out') });
+    });
+    return events.sort((a,b)=>String(b.when||'').localeCompare(String(a.when||''))).slice(0, 6);
+  })();
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greet = hour<12 ? 'Good morning' : hour<18 ? 'Good afternoon' : 'Good evening';
+  const firstName = (profile?.name||profile?.email||'team').split(' ')[0].split('@')[0];
+
+  // Tile helper
+  function Tile({ icon, label, count, sub, color='indigo', urgent, onClick, big }){
+    const palette = {
+      indigo:   'border-indigo-200 hover:border-indigo-400 bg-white',
+      emerald:  'border-emerald-200 hover:border-emerald-400 bg-emerald-50/40',
+      amber:    'border-amber-200 hover:border-amber-400 bg-amber-50/40',
+      rose:     'border-rose-200 hover:border-rose-400 bg-rose-50/40',
+      blue:     'border-blue-200 hover:border-blue-400 bg-blue-50/40',
+      purple:   'border-purple-200 hover:border-purple-400 bg-purple-50/40',
+    };
+    const numColor = urgent ? 'text-rose-700' : count>0 ? 'text-slate-900' : 'text-slate-300';
+    return (
+      <button onClick={onClick} className={`text-left rounded-xl border-2 p-4 transition shadow-sm hover:shadow-md ${palette[color]} ${big?'md:col-span-2':''}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="text-2xl">{icon}</div>
+          {urgent && count>0 && <span className="text-[9px] uppercase font-bold tracking-wider bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">Urgent</span>}
+        </div>
+        <div className={`text-3xl font-extrabold mt-2 ${numColor}`}>{count}</div>
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">{label}</div>
+        {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">🛒 Purchasing Home</h1>
+        <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — here's what needs your attention today.</p>
+      </div>
+
+      {/* PRIMARY tiles — the 5 things a purchaser should look at every morning */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 mt-1">▸ Your action queue</div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <Tile icon="📝" label="PRs to approve" count={prsToApprove.length} sub={prsToApprove.length>0?'Click to review':'All clear'} color="indigo" onClick={()=>navTo('requests')} />
+        <Tile icon="📥" label="Supplier groups ready" count={queueSupplierCount} sub={queueLineCount>0?`${queueLineCount} unfulfilled line${queueLineCount===1?'':'s'}`:'Nothing queued'} color="blue" onClick={()=>navTo('queue')} />
+        <Tile icon="📝" label="Draft POs to finalize" count={draftPOs.length} sub={draftPOs.length>0?'Finalize to lock pricing':'No drafts pending'} color="amber" onClick={()=>navTo('orders')} />
+        <Tile icon="🧾" label="POs to receive" count={openPOs.length} sub={openPOs.length>0?'Placed but not received':'All received'} color="emerald" onClick={()=>navTo('orders')} />
+        <Tile icon="🚨" label="Below reorder" count={lowStock.length} sub={lowStock.length>0?'Low on stock':'Stock healthy'} color="rose" urgent={lowStock.length>0} onClick={()=>navTo('inventory')} />
+      </div>
+
+      {/* SECONDARY tiles — useful but not daily action items */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ At a glance</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Tile icon="📤" label="Issuances today" count={stockOutToday.length} sub="Materials to production" color="purple" onClick={()=>navTo('stock-out')} />
+        <Tile icon="💳" label="RFPs in Finance" count={rfpsInPipeline.length} sub="Sent to Finance" color="indigo" onClick={()=>navTo('rfps')} />
+        <Tile icon="⚙" label="Active prod jobs" count={activeProdJobs.length} sub="Awaiting materials" color="blue" onClick={()=>navTo('prod')} />
+        <button onClick={()=>navTo('inventory')} className="text-left rounded-xl border-2 border-emerald-200 hover:border-emerald-400 bg-emerald-50/40 p-4 transition shadow-sm hover:shadow-md">
+          <div className="text-2xl">📦</div>
+          <div className="text-2xl font-extrabold mt-2 text-emerald-800">{peso(reservedValue)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">Reserved stock value</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">Locked by approved PRs</div>
+        </button>
+      </div>
+
+      {/* Low stock teaser */}
+      {lowStock.length>0 && (
+        <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-bold text-rose-900">🚨 {lowStock.length} item{lowStock.length===1?'':'s'} below reorder point</div>
+            <button onClick={()=>navTo('inventory')} className="text-xs text-rose-700 font-semibold hover:underline">View all in Inventory →</button>
+          </div>
+          <div className="grid md:grid-cols-2 gap-2 text-xs">
+            {lowStock.slice(0, 6).map(it=>(
+              <div key={it.id} className="bg-white border border-rose-200 rounded p-2 flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{it.name}{it.color?<span className="text-slate-500"> · {it.color}</span>:''}</div>
+                  <div className="text-[10px] text-slate-500">{it.bucket||'other'}{it.sku?` · ${it.sku}`:''}</div>
+                </div>
+                <div className="text-right shrink-0 ml-2">
+                  <div className="font-bold text-rose-700">{it.qty||0} {it.unit||''}</div>
+                  <div className="text-[10px] text-slate-500">reorder at {it.reorder}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {lowStock.length > 6 && <div className="text-[11px] text-slate-500 mt-2 text-center">+ {lowStock.length-6} more below threshold</div>}
+        </div>
+      )}
+
+      {/* Recent activity */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Recent activity</div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        {recentEvents.length===0 ? (
+          <div className="text-center text-slate-400 text-sm py-6">No recent activity yet.</div>
+        ) : (
+          <table className="w-full text-sm">
+            <tbody>{recentEvents.map((e,i)=>(
+              <tr key={i} className="border-t first:border-t-0 hover:bg-slate-50 cursor-pointer" onClick={e.click}>
+                <td className="px-3 py-2 w-10 text-center">
+                  <span className="text-lg">{e.kind==='pr'?'📝':e.kind==='po'?'🧾':'📤'}</span>
+                </td>
+                <td className="px-3 py-2 text-sm">{e.label}</td>
+                <td className="px-3 py-2 text-xs text-slate-500 text-right whitespace-nowrap">{e.when ? fmtTime(e.when) : '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -10847,11 +11013,12 @@ function App(){
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','queue','orders','styles','stock-out','logistics','rfps','budgets']);
-      fallback = 'inventory';
+      // Default landing is the Purchasing Home dashboard.
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','logistics','rfps','budgets']);
+      fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow','payment-calendar','pnl','bir']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-position','cash-flow','payment-calendar','pnl','bir']);
       fallback = 'cash-position';
     } else if(profile.role==='sewing_lead'){
       allowed = new Set(['inbox','payroll','logistics','budgets']);
@@ -11122,7 +11289,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
     ];
@@ -11133,7 +11300,7 @@ function App(){
       FINANCE_FULL,
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
     ];
@@ -11172,7 +11339,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -11285,6 +11452,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
+        {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
