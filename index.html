@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 36 · Auto-create Sampling job when lead enters Sampling stage';
+const BUILD = 'Live build 37b · Plot Logistics at production-job CREATION (max lead time)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2831,7 +2831,22 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
     .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
     .slice() // don't mutate the prop
     .sort(compareJobs);
-  async function move(j,st){ const {error}=await sb.from('production_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
+  async function move(j,st){
+    const {error}=await sb.from('production_jobs').update({ status:st }).eq('id',j.id);
+    if(error){ alert(error.message); return; }
+    // When a job hits Ready for Delivery, plot it on the Logistics calendar
+    // for its due date. Idempotent — won't double-plot if already scheduled.
+    if(st === 'ready for delivery' && j.status !== 'ready for delivery'){
+      const updatedJob = { ...j, status: st };
+      const newDelivery = await maybeAutoCreateDeliveryFromJob(profile, updatedJob, 'production_job');
+      if(newDelivery){
+        // Quiet toast — alert() would interrupt drag-and-drop UX. Logistics
+        // sees the new row appear on their calendar; production team sees the
+        // status badge update. Audit trail lives in the delivery's source_id link.
+      }
+    }
+    reload();
+  }
   async function sendTo(j, table, status, label){ if(!confirm(`Send ${j.number||''} to ${label}?`)) return;
     const row={ number:(table==='printing_jobs'?'PR-P-':'GD-')+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, attachments:[], status, due_date:j.due_date||null, notes:'' };
     const {error}=await sb.from(table).insert(row); if(error){ alert(error.message); return; } alert(`Sent to ${label}.`); }
@@ -3055,7 +3070,18 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
     .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
     .slice()
     .sort(compareJobs);
-  async function move(j,st){ const {error}=await sb.from('sampling_jobs').update({ status:st }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
+  async function move(j,st){
+    const {error}=await sb.from('sampling_jobs').update({ status:st }).eq('id',j.id);
+    if(error){ alert(error.message); return; }
+    // Sampling jobs share the Logistics calendar — when one hits For Delivery,
+    // plot it on the same delivery schedule so the driver picks up the sample
+    // alongside any orders that day.
+    if(st === 'for delivery' && j.status !== 'for delivery'){
+      const updatedJob = { ...j, status: st };
+      await maybeAutoCreateDeliveryFromJob(profile, updatedJob, 'sampling_job');
+    }
+    reload();
+  }
   async function del(id){ if(!confirm('Send this sampling job to Trash?\n\nIt\'ll be recoverable from Settings → Trash.')) return; const {error}=await sb.from('sampling_jobs').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const tile=(label,value,sub,active2,onClick)=>(
     <button onClick={onClick} className={`text-left rounded-xl border p-4 transition ${active2?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
@@ -8420,6 +8446,8 @@ function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, on
           <div className={`font-semibold ${isDone?'text-slate-500 line-through':'text-slate-800'}`}>{d.item || '(no item)'}</div>
           {isTransit && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">In transit</span>}
           {isFail && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Failed</span>}
+          {d.source_type==='production_job' && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700" title="Auto-plotted from Production Board">⚙ From Production</span>}
+          {d.source_type==='sampling_job'   && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700" title="Auto-plotted from Sampling Board">🧵 From Sampling</span>}
         </div>
         <div className="text-xs text-slate-500 mt-0.5">
           📍 {d.address || '—'}
@@ -10294,6 +10322,14 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
       if(String(error.code||'').startsWith('23')) return null;
       console.warn('Production auto-create insert failed:', error.message); return null;
     }
+    // Plot the delivery on the Logistics calendar IMMEDIATELY at creation so
+    // logistics has the maximum lead time to plan the route. We only auto-plot
+    // when there's a real future due_date — without one, we'd dirty the
+    // calendar with a "today" entry for an order that isn't ready. In that
+    // case, the 'ready for delivery' status trigger picks up the slack later.
+    if(data && data.due_date){
+      try { await maybeAutoCreateDeliveryFromJob(profile, data, 'production_job'); } catch(_){}
+    }
     return data;
   } catch(e){
     console.warn('Production auto-create unexpected error:', e);
@@ -10420,6 +10456,66 @@ async function maybeAutoCreateSamplingJobForLead(profile, lead, clients){
     return data;
   } catch(e){
     console.warn('Sampling auto-create unexpected error:', e);
+    return null;
+  }
+}
+
+// Idempotent auto-create: a Logistics delivery row when a job is ready to be
+// shipped. Fires when:
+//   • a production_job hits status 'ready for delivery'
+//   • a sampling_job hits status 'for delivery'
+// The delivery is plotted on the Logistics calendar for the job's due_date
+// (or today if missing / in the past), unassigned, status='pending' — the
+// logistics team then assigns a driver and sequences the route.
+//
+// jobType: 'production_job' | 'sampling_job'  (matches the source_type column)
+async function maybeAutoCreateDeliveryFromJob(profile, job, jobType){
+  if(!profile || !job) return null;
+  try {
+    // Guard: skip if a delivery row for this job already exists.
+    const { data: existing, error: lookupErr } = await sb.from('logistics_deliveries')
+      .select('id,date').eq('source_type', jobType).eq('source_id', job.id).limit(1);
+    if(lookupErr){ console.warn('Logistics auto-create lookup failed:', lookupErr.message); return null; }
+    if(existing && existing.length > 0) return null;
+    // Pick a date — prefer job.due_date, but never schedule into the past.
+    const today = new Date().toISOString().slice(0,10);
+    const dueDate = (job.due_date && job.due_date >= today) ? job.due_date : today;
+    // Look up the client to pre-fill address + primary contact.
+    let client = null;
+    if(job.client_id){
+      const { data: c } = await sb.from('clients').select('id,company,address,contact,phone,contacts').eq('id', job.client_id).maybeSingle();
+      client = c || null;
+    }
+    const primary = (client && Array.isArray(client.contacts) && client.contacts.length>0) ? client.contacts[0] : null;
+    const contactName  = (primary && primary.name)  || client?.contact || '';
+    const contactPhone = (primary && primary.phone) || client?.phone   || '';
+    const tag = jobType === 'sampling_job' ? 'Sample' : 'Order';
+    const noteParts = [`${tag} ${job.number||''}`.trim()];
+    if(job.quantity) noteParts.push(`${job.quantity} pcs`);
+    if(job.item)     noteParts.push(job.item);
+    const payload = {
+      date: dueDate,
+      driver_id: null,                                      // logistics assigns
+      client_id: job.client_id || null,
+      client_name: client?.company || job.client_name || '',
+      item: job.item || (jobType === 'sampling_job' ? 'Sample' : 'Order'),
+      address: client?.address || '',
+      contact: contactName,
+      contact_phone: contactPhone,
+      notes: noteParts.filter(Boolean).join(' · '),
+      status: 'pending',
+      source_type: jobType,
+      source_id: job.id,
+    };
+    const { data, error } = await sb.from('logistics_deliveries').insert(payload).select().single();
+    if(error){
+      // 23505 = unique-constraint race. Another tab already inserted — no-op.
+      if(String(error.code||'').startsWith('23')) return null;
+      console.warn('Logistics auto-create insert failed:', error.message); return null;
+    }
+    return data;
+  } catch(e){
+    console.warn('Logistics auto-create unexpected error:', e);
     return null;
   }
 }
@@ -14556,7 +14652,8 @@ function App(){
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
-    const { error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:lead.delivery_date||lead.expected_close||null, sales_owner_id: lead.manager_id||null });
+    const dueDate = lead.delivery_date || lead.expected_close || null;
+    const { data: newJob, error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:dueDate, sales_owner_id: lead.manager_id||null }).select().single();
     if(error){
       // DB-level UNIQUE index (steeze-erp-dedupe-by-lead.sql) returns 23505 on conflict.
       // Treat that as "duplicate" — open the existing instead.
@@ -14565,6 +14662,11 @@ function App(){
         setDetailLead(null); setView('prod'); loadAll(); return;
       }
       alert(error.message); return;
+    }
+    // Plot the delivery on the Logistics calendar at creation so logistics
+    // has maximum lead time — only if there's a real due date to plot to.
+    if(newJob && newJob.due_date){
+      try { await maybeAutoCreateDeliveryFromJob(profile, newJob, 'production_job'); } catch(_){}
     }
     alert('Sent "'+lead.title+'" to Production.'); setDetailLead(null); setView('prod'); loadAll();
   }
