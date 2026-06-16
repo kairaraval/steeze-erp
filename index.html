@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 39 · Inbox: company name always visible';
+const BUILD = 'Live build 40 · Production/Sampling sort: use resolved deadline (job + lead fallback)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2816,16 +2816,26 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   function deadlineOf(j, lead){ return j.due_date || lead?.delivery_date || lead?.expected_close || ''; }
   async function del(j){ if(!confirm(`Send production job ${j.number||''} — ${j.item||''} for ${j.client_name||''} to Trash?\n\nIt'll be recoverable from Settings → Trash.`)) return; const { error } = await sb.from('production_jobs').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
+  // Resolve a job's effective due date the SAME way the column does
+  // (job.due_date → lead.delivery_date → lead.expected_close). Without this,
+  // older jobs where due_date wasn't set on the job row itself sort to the
+  // bottom of "earliest due" — and don't count in Overdue / Due-this-week
+  // tiles — even though they display a real date.
+  function effectiveDueOf(j){
+    const lead = j.lead_id ? (leads||[]).find(l=>l.id===j.lead_id) : null;
+    return j.due_date || lead?.delivery_date || lead?.expected_close || '';
+  }
   const active=jobs.filter(j=>!PRODUCTION_DONE.includes(j.status));
-  const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
-  const dueThisWeek=active.filter(j=>{ const d=daysUntil(j.due_date); return d!==null && d>=0 && d<=7; }).length;
+  const overdue=active.filter(j=>deadlineInfo(effectiveDueOf(j),false).overdue).length;
+  const dueThisWeek=active.filter(j=>{ const d=daysUntil(effectiveDueOf(j)); return d!==null && d>=0 && d<=7; }).length;
   const awaiting=active.filter(j=>j.status==='materials to purchase').length;
   function compareJobs(a,b){
     if(sortBy==='due_asc' || sortBy==='due_desc'){
-      // Treat missing due_date as "infinity" so it always sinks to the bottom in asc,
-      // and to the top in desc (but we apply the same rule and just invert otherwise).
-      const aT = a.due_date ? new Date(a.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
-      const bT = b.due_date ? new Date(b.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const aDue = effectiveDueOf(a);
+      const bDue = effectiveDueOf(b);
+      // Treat missing due_date as "infinity" so it always sinks to the bottom in asc.
+      const aT = aDue ? new Date(aDue+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const bT = bDue ? new Date(bDue+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
       if(aT!==bT) return sortBy==='due_asc' ? (aT-bT) : (bT-aT);
       return 0;
     }
@@ -2838,7 +2848,10 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   }
   const shown=(viewMode==='active'?active:jobs.filter(j=>PRODUCTION_DONE.includes(j.status)))
     .filter(j=>!filterStatus||j.status===filterStatus)
-    .filter(j=>{ if(filterDeadline==='overdue') return deadlineInfo(j.due_date,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(j.due_date); return d!==null&&d>=0&&d<=7; } return true; })
+    // Use the resolved deadline for the Overdue / This Week filters too — same
+    // reason: filtering off j.due_date only would miss jobs whose date lives
+    // on the linked lead.
+    .filter(j=>{ const due = effectiveDueOf(j); if(filterDeadline==='overdue') return deadlineInfo(due,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(due); return d!==null&&d>=0&&d<=7; } return true; })
     .filter(j=>{ if(filterOwner==='__mine') return j.sales_owner_id===profile.id; if(filterOwner==='__unassigned') return !j.sales_owner_id; if(filterOwner) return j.sales_owner_id===filterOwner; return true; })
     .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
     .slice() // don't mutate the prop
@@ -3057,14 +3070,24 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   // Sampling jobs don't carry their own sales_owner_id — derive it from the linked lead.
   const ownerIdFor=(j)=>{ const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return lead?lead.manager_id||null:null; };
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
+  // Sampling targets the Sample Due Date (lead.delivery_date), falling back
+  // to the client's Due Date (lead.expected_close). Mirrors what the deadline
+  // column displays — without this, jobs whose own due_date is null sort to
+  // the bottom of "earliest due" even though they show a real date.
+  function effectiveDueOf(j){
+    const lead = j.lead_id ? (leads||[]).find(l=>l.id===j.lead_id) : null;
+    return j.due_date || lead?.delivery_date || lead?.expected_close || '';
+  }
   const active=jobs.filter(j=>!SAMPLING_DONE.includes(j.status));
-  const overdue=active.filter(j=>deadlineInfo(j.due_date,false).overdue).length;
-  const dueThisWeek=active.filter(j=>{ const d=daysUntil(j.due_date); return d!==null && d>=0 && d<=7; }).length;
+  const overdue=active.filter(j=>deadlineInfo(effectiveDueOf(j),false).overdue).length;
+  const dueThisWeek=active.filter(j=>{ const d=daysUntil(effectiveDueOf(j)); return d!==null && d>=0 && d<=7; }).length;
   const endorsed=active.filter(j=>j.status==='endorsed').length;
   function compareJobs(a,b){
     if(sortBy==='due_asc' || sortBy==='due_desc'){
-      const aT = a.due_date ? new Date(a.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
-      const bT = b.due_date ? new Date(b.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const aDue = effectiveDueOf(a);
+      const bDue = effectiveDueOf(b);
+      const aT = aDue ? new Date(aDue+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
+      const bT = bDue ? new Date(bDue+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
       if(aT!==bT) return sortBy==='due_asc' ? (aT-bT) : (bT-aT);
       return 0;
     }
@@ -3077,7 +3100,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   }
   const shown=(viewMode==='active'?active:jobs.filter(j=>SAMPLING_DONE.includes(j.status)))
     .filter(j=>!filterStatus||j.status===filterStatus)
-    .filter(j=>{ if(filterDeadline==='overdue') return deadlineInfo(j.due_date,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(j.due_date); return d!==null&&d>=0&&d<=7; } return true; })
+    .filter(j=>{ const due = effectiveDueOf(j); if(filterDeadline==='overdue') return deadlineInfo(due,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(due); return d!==null&&d>=0&&d<=7; } return true; })
     .filter(j=>{ if(filterOwner==='__mine') return ownerIdFor(j)===profile.id; if(filterOwner==='__unassigned') return !ownerIdFor(j); if(filterOwner) return ownerIdFor(j)===filterOwner; return true; })
     .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
     .slice()
@@ -3617,6 +3640,10 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('pipelineLayout',v); }catch(e){} }
   const [collapsed,setCollapsed]=useState({}); // stage.key -> true if collapsed
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
+  // Kanban drag-and-drop state for the Board layout. draggedLeadId fades the
+  // grabbed card; dragOverStage highlights the drop column.
+  const [draggedLeadId,setDraggedLeadId]=useState(null);
+  const [dragOverStage,setDragOverStage]=useState(null);
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   // Admin-only: pick which manager's pipeline to view.
