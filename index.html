@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 41 · Pipeline: sticky column headers + drag-drop leads';
+const BUILD = 'Live build 41b · Pipeline: kanban-style column scrolling (headers truly frozen)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3745,9 +3745,12 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
         </div>
       </div>
       {layout==='board' && (
-      <div className="flex gap-3 overflow-x-auto px-6 pt-4 pb-4">{STAGES.map(st=>{ const col=visible.filter(l=>l.stage===st.key); const colTotal=col.reduce((s,l)=>s+(Number(l.value)||0),0);
-        // Drop-zone handlers — accept a card from a different stage; reject if
-        // the user can't edit that particular lead.
+      // Each column has its own vertical scroll (standard kanban pattern). The
+      // outer container takes the rest of the viewport below the page header
+      // and is horizontally scrollable so the columns can extend past the
+      // viewport width. Column headers never move — they're at the top of
+      // their column's flex container, not sticky-positioned.
+      <div className="flex gap-3 overflow-x-auto px-6 pt-4 pb-4 h-[calc(100vh-150px)]">{STAGES.map(st=>{ const col=visible.filter(l=>l.stage===st.key); const colTotal=col.reduce((s,l)=>s+(Number(l.value)||0),0);
         const isDragTarget = dragOverStage === st.key;
         const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStage!==st.key) setDragOverStage(st.key); };
         const onColumnDragLeave = (e)=>{ if(dragOverStage===st.key) setDragOverStage(null); };
@@ -3765,18 +3768,18 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
         };
         return (
         <div key={st.key}
-             className={`flex-shrink-0 w-72 transition ${isDragTarget?'scale-[1.02]':''}`}
+             className={`flex-shrink-0 w-72 flex flex-col h-full transition ${isDragTarget?'ring-2 ring-indigo-300 rounded-xl':''}`}
              onDragOver={onColumnDragOver}
              onDragLeave={onColumnDragLeave}
              onDrop={onColumnDrop}>
-          {/* Sticky column header — top-[112px] sits just below the page-level
-              sticky header (h1 + filter row). Frosted bg so cards behind it
-              don't bleed through. */}
-          <div className={`sticky top-[112px] z-10 rounded-t-xl px-3 py-2.5 bg-white/95 backdrop-blur border border-b-0 flex items-center justify-between ${isDragTarget?'ring-2 ring-indigo-300 ring-inset':''}`}>
+          {/* Fixed-position header at top of column (no sticky needed — column
+              body scrolls independently below) */}
+          <div className="shrink-0 rounded-t-xl px-3 py-2.5 bg-white border border-b-0 flex items-center justify-between">
             <span className={`text-sm font-bold ${st.key==='qualified'?'text-blue-700':st.key==='proposal'?'text-indigo-700':st.key==='negotiation'?'text-amber-700':st.key==='sampling'?'text-purple-700':st.key==='won'?'text-emerald-700':st.key==='lost'?'text-rose-700':'text-slate-700'}`}>{st.label}</span>
             <span className="text-xs text-slate-500">{col.length} · {peso(colTotal)}</span>
           </div>
-          <div className={`rounded-b-xl border border-t-0 p-2 space-y-2 min-h-[140px] transition ${isDragTarget?'bg-indigo-50/80 ring-2 ring-indigo-300 ring-inset':'bg-slate-100/70'}`}>{col.map(l=>{ const mgr=profiles.find(p=>p.id===l.manager_id); const canEdit=isAdmin||isAssistant||l.manager_id===profile.id;
+          {/* Scrollable column body */}
+          <div className={`flex-1 overflow-y-auto rounded-b-xl border border-t-0 p-2 space-y-2 min-h-[140px] transition ${isDragTarget?'bg-indigo-50/80':'bg-slate-100/70'}`}>{col.map(l=>{ const mgr=profiles.find(p=>p.id===l.manager_id); const canEdit=isAdmin||isAssistant||l.manager_id===profile.id;
             const isDragging = draggedLeadId === l.id;
             return (
             <div key={l.id}
