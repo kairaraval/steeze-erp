@@ -126,7 +126,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 42 · Kanban scrolling + drag-drop in Graphics, Printing, Embroidery, Knitting';
+const BUILD = 'Live build 43 · Purchasing: fabric colors in PO picker, Ready Made bucket, inline supplier add';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9175,11 +9175,12 @@ function TechpacksList({ profile, profiles, leads, clients, onOpen }){
 // stored in items.bucket; the `match` patterns are used as a fallback in case
 // an item came from a legacy import without a bucket assigned.
 const INV_BUCKETS = [
-  { key:'fabrics',  label:'Fabrics',          icon:'🧵' },
-  { key:'trims',    label:'Trims',            icon:'🔗' },
-  { key:'printing', label:'Printing Supplies', icon:'🖨' },
-  { key:'office',   label:'Office Supplies',  icon:'📎' },
-  { key:'other',    label:'Other',            icon:'•••' }, // catch-all
+  { key:'fabrics',    label:'Fabrics',           icon:'🧵' },
+  { key:'ready_made', label:'Ready Made Items',  icon:'👕' },
+  { key:'trims',      label:'Trims',             icon:'🔗' },
+  { key:'printing',   label:'Printing Supplies', icon:'🖨' },
+  { key:'office',     label:'Office Supplies',   icon:'📎' },
+  { key:'other',      label:'Other Supplies',    icon:'•••' }, // catch-all (legacy 'other' rows still bucket here)
 ];
 const INV_BUCKET_KEYS = INV_BUCKETS.map(b=>b.key);
 function bucketOf(item){
@@ -9616,9 +9617,63 @@ function ItemImportModal({ suppliers, departments, onClose, onDone }){
   );
 }
 
+// Quick-add a supplier from inside any form. Lightweight — just enough fields
+// to identify the vendor; the rest can be filled in later from Suppliers view.
+// onSaved receives the new supplier row so the caller can immediately select it.
+function SupplierQuickAdd({ defaultName, onClose, onSaved }){
+  const [company,setCompany]=useState(defaultName||'');
+  const [contact,setContact]=useState('');
+  const [phone,setPhone]=useState('');
+  const [email,setEmail]=useState('');
+  const [leadTime,setLeadTime]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  async function save(){
+    if(!company.trim()){ setMsg('Company name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      company: company.trim(),
+      contact: contact.trim() || null,
+      phone: phone.trim() || null,
+      email: email.trim() || null,
+    };
+    if(leadTime.trim()){ payload.default_lead_time_days = Number(leadTime) || null; }
+    const { data, error } = await sb.from('suppliers').insert(payload).select().single();
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved(data);
+  }
+  return (
+    <Modal title="+ New supplier" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
+          Quick add — fill the essentials now. You can complete the rest later from the Suppliers view.
+        </div>
+        <TpLbl t="Company *"><input className="input" value={company} onChange={e=>setCompany(e.target.value)} autoFocus /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Contact person"><input className="input" value={contact} onChange={e=>setContact(e.target.value)} /></TpLbl>
+          <TpLbl t="Phone"><input className="input" value={phone} onChange={e=>setPhone(e.target.value)} /></TpLbl>
+          <TpLbl t="Email"><input className="input" type="email" value={email} onChange={e=>setEmail(e.target.value)} /></TpLbl>
+          <TpLbl t="Lead time (days)"><input className="input" type="number" value={leadTime} onChange={e=>setLeadTime(e.target.value)} placeholder="e.g. 7" /></TpLbl>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Create supplier'}</button>
+      </div>
+    </Modal>
+  );
+}
+
 function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, onSaved }){
   const [f,setF]=useState(existing||{ sku:'', name:'', bucket:(defaultBucket && defaultBucket!=='other')?defaultBucket:'fabrics', category:'', brand:'', model:'', color:'', size:'', unit:'pc', qty:0, cost:0, price:0, reorder:0, dept_id:null, supplier_id:null, location:'', notes:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Locally-added suppliers (just-created via quick-add) so the dropdown shows
+  // them immediately, before the parent component reloads its list.
+  const [extraSuppliers,setExtraSuppliers]=useState([]);
+  const [addingSupplier,setAddingSupplier]=useState(false);
+  const allSuppliers = (()=>{
+    const seen = new Set((suppliers||[]).map(s=>s.id));
+    return [...(suppliers||[]), ...extraSuppliers.filter(s=>!seen.has(s.id))];
+  })();
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){ if(!f.name.trim()){ setMsg('Name is required.'); return; } setBusy(true); setMsg('');
     const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'' };
@@ -9646,9 +9701,19 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
           <TpLbl t="Cost ₱"><input type="number" className="input" value={f.cost} onChange={e=>up('cost',e.target.value)} /></TpLbl>
           <TpLbl t="Sell price ₱"><input type="number" className="input" value={f.price} onChange={e=>up('price',e.target.value)} /></TpLbl>
           <TpLbl t="Min stock to maintain (0 = make-to-order)"><input type="number" className="input" value={f.reorder} onChange={e=>up('reorder',e.target.value)} placeholder="0 = only buy when ordered" /></TpLbl>
-          <TpLbl t="Supplier"><select className="input" value={f.supplier_id||''} onChange={e=>up('supplier_id',e.target.value||null)}><option value="">—</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select></TpLbl>
+          <TpLbl t="Supplier"><select className="input" value={f.supplier_id||''} onChange={e=>{ if(e.target.value==='__new__'){ setAddingSupplier(true); return; } up('supplier_id',e.target.value||null); }}><option value="">—</option><option value="__new__" style={{fontWeight:'bold', color:'#4f46e5'}}>+ Add new supplier…</option>{allSuppliers.slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select></TpLbl>
           <TpLbl t="Location"><input className="input" value={f.location} onChange={e=>up('location',e.target.value)} placeholder="Bin / shelf" /></TpLbl>
         </div>
+        {addingSupplier && (
+          <SupplierQuickAdd
+            onClose={()=>setAddingSupplier(false)}
+            onSaved={(newSup)=>{
+              setExtraSuppliers(prev=>[...prev, newSup]);
+              up('supplier_id', newSup.id);
+              setAddingSupplier(false);
+            }}
+          />
+        )}
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(existing?'Save changes':'Create item')}</button>
@@ -10913,9 +10978,9 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
   const styleName = linkedLead?.techpack?.styleName || linkedLead?.title || '';
 
   // Group inventory items by bucket so the picker shows them under labeled
-  // optgroups (🧵 Fabrics / 🔗 Trims / 🖨 Printing / 📎 Office).
+  // optgroups (🧵 Fabrics / 👕 Ready Made / 🔗 Trims / 🖨 Printing / 📎 Office / Other Supplies).
   const itemsByBucket = (()=>{
-    const out = { fabrics:[], trims:[], printing:[], office:[], other:[] };
+    const out = { fabrics:[], ready_made:[], trims:[], printing:[], office:[], other:[] };
     (items||[]).forEach(i => {
       const b = (i.bucket||'').toLowerCase().trim();
       if(out[b]) out[b].push(i); else out.other.push(i);
@@ -10923,7 +10988,7 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
     Object.keys(out).forEach(k => out[k].sort((a,b)=>(a.name||'').localeCompare(b.name||'')));
     return out;
   })();
-  const BUCKET_META = { fabrics:{label:'Fabrics', icon:'🧵'}, trims:{label:'Trims', icon:'🔗'}, printing:{label:'Printing Supplies', icon:'🖨'}, office:{label:'Office Supplies', icon:'📎'}, other:{label:'Other / Unassigned', icon:'•'} };
+  const BUCKET_META = { fabrics:{label:'Fabrics', icon:'🧵'}, ready_made:{label:'Ready Made Items', icon:'👕'}, trims:{label:'Trims', icon:'🔗'}, printing:{label:'Printing Supplies', icon:'🖨'}, office:{label:'Office Supplies', icon:'📎'}, other:{label:'Other Supplies', icon:'•'} };
   const itemById = (id)=> (items||[]).find(i=>i.id===id);
   const supplierName = (id)=> (suppliers||[]).find(s=>s.id===id)?.company || '';
 
@@ -11074,7 +11139,7 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
                     <select className="input text-xs" value={l.item_id||''} onChange={e=>pickItem(i, e.target.value)} disabled={readOnly}>
                       <option value="">— pick an inventory item —</option>
                       <option value="__new__" style={{fontWeight:'bold', color:'#4f46e5'}}>+ Add new inventory item…</option>
-                      {['fabrics','trims','printing','office','other'].map(bk => itemsByBucket[bk].length>0 && (
+                      {['fabrics','ready_made','trims','printing','office','other'].map(bk => itemsByBucket[bk].length>0 && (
                         <optgroup key={bk} label={`${BUCKET_META[bk].icon} ${BUCKET_META[bk].label}`}>
                           {itemsByBucket[bk].map(it=>(<option key={it.id} value={it.id}>{it.name}{it.color?` - ${it.color}`:''}{it.sku?` · ${it.sku}`:''}</option>))}
                         </optgroup>
@@ -11448,6 +11513,14 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     withholding_tax_rate: isEdit?(Number(existing.withholding_tax_rate)||2):2,
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Locally-added suppliers (just-created via quick-add) so the PO supplier
+  // dropdown picks them up immediately, before the page-level loadAll reloads.
+  const [extraSuppliers,setExtraSuppliers]=useState([]);
+  const [addingSupplier,setAddingSupplier]=useState(false);
+  const allSuppliers = (()=>{
+    const seen = new Set((suppliers||[]).map(s=>s.id));
+    return [...(suppliers||[]), ...extraSuppliers.filter(s=>!seen.has(s.id))];
+  })();
   // Determines whether the user can still tweak qty/lines. Drafts are fully
   // editable; once finalized (Placed/Partial/Received/Cancelled) the lines lock.
   const locked = isEdit && existing.status !== 'draft';
@@ -11602,7 +11675,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
 
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Purchasing date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} disabled={locked} /></TpLbl>
-          <TpLbl t="Supplier *"><select className="input" value={f.supplier_id||''} onChange={e=>up('supplier_id',e.target.value||null)} disabled={locked}><option value="">—</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select></TpLbl>
+          <TpLbl t="Supplier *"><select className="input" value={f.supplier_id||''} onChange={e=>{ if(e.target.value==='__new__'){ setAddingSupplier(true); return; } up('supplier_id',e.target.value||null); }} disabled={locked}><option value="">—</option><option value="__new__" style={{fontWeight:'bold', color:'#4f46e5'}}>+ Add new supplier…</option>{allSuppliers.slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select></TpLbl>
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{PO_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
         </div>
 
@@ -11616,7 +11689,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
             return (
               <div key={i} className="bg-white border rounded p-2">
                 <div className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Inventory item</label><select className="input mt-0.5 text-xs" value={l.item_id||''} disabled={locked} onChange={e=>{ const it2=items.find(x=>x.id===e.target.value); setLine(i,{ item_id:e.target.value||null, description:it2?.name||l.description, unit_cost:l.unit_cost||it2?.cost||0 }); }}><option value="">— optional —</option>{items.map(it2=><option key={it2.id} value={it2.id}>{it2.name}{it2.sku?' · '+it2.sku:''}</option>)}</select></div>
+                  <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Inventory item</label><select className="input mt-0.5 text-xs" value={l.item_id||''} disabled={locked} onChange={e=>{ const it2=items.find(x=>x.id===e.target.value); setLine(i,{ item_id:e.target.value||null, description: it2 ? (it2.name + (it2.color?` - ${it2.color}`:'')) : l.description, unit_cost:l.unit_cost||it2?.cost||0 }); }}><option value="">— optional —</option>{items.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(it2=><option key={it2.id} value={it2.id}>{it2.name}{it2.color?` — ${it2.color}`:''}{it2.sku?` · ${it2.sku}`:''}</option>)}</select></div>
                   <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5 text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} /></div>
                   <div className="col-span-1"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5 text-xs" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={locked} /></div>
                   <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Unit ₱</label><input type="number" className="input mt-0.5 text-xs" value={l.unit_cost} onChange={e=>setLine(i,{unit_cost:e.target.value})} disabled={locked} /></div>
@@ -11750,6 +11823,16 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
           </div>
         )}
       </div>
+      {addingSupplier && (
+        <SupplierQuickAdd
+          onClose={()=>setAddingSupplier(false)}
+          onSaved={(newSup)=>{
+            setExtraSuppliers(prev=>[...prev, newSup]);
+            up('supplier_id', newSup.id);
+            setAddingSupplier(false);
+          }}
+        />
+      )}
     </Modal>
   );
 }
