@@ -129,7 +129,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 63b · Fix Stock Out sidebar entry (broken by stray replace-all)';
+const BUILD = 'Live build 64 · PR header: fabric + items + qty (removed deal value)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11449,23 +11449,46 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
   return (
     <Modal title={titleText} onClose={onClose} wide>
       <div className="space-y-3">
-        {/* BOM header — make the connection to the deal obvious at a glance. */}
-        {linkedLead && (
-          <div className="bg-gradient-to-r from-indigo-50 to-teal-50 border border-indigo-200 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">
-            <div className="min-w-0 flex-1">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Materials request (BOM) for</div>
-              <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{styleName}</div>
-              <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3">
-                {client && <span>👤 Client: <strong>{client.company}</strong></span>}
-                {techpackNumber && <span>📋 Techpack: <strong>{techpackNumber}</strong></span>}
-                {linkedLead.value && <span>💰 Deal value: <strong>{peso(linkedLead.value)}</strong></span>}
+        {/* BOM header — make the connection to the deal obvious at a glance.
+            Surfaces what's being made (items + qty) and the fabric callout
+            from the techpack so Purchasing can sanity-check the BOM against
+            the order without bouncing to the techpack. */}
+        {linkedLead && (()=>{
+          const leadItems = Array.isArray(linkedLead.items) ? linkedLead.items : [];
+          const totalQty = leadItems.reduce((s,it)=>s+(Number(it.quantity)||0), 0);
+          // Try a few common spots where fabric lives on the techpack.
+          const tp = linkedLead.techpack || {};
+          const fabric = tp.fabric || tp.fabricName || tp.mainFabric || linkedLead.fabric || '';
+          return (
+            <div className="bg-gradient-to-r from-indigo-50 to-teal-50 border border-indigo-200 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Materials request (BOM) for</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{styleName}</div>
+                <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
+                  {client && <span>👤 Client: <strong>{client.company}</strong></span>}
+                  {techpackNumber && <span>📋 Techpack: <strong>{techpackNumber}</strong></span>}
+                  {fabric && <span>🧵 Fabric: <strong>{fabric}</strong></span>}
+                  {totalQty > 0 && <span>📦 Total qty: <strong>{totalQty}</strong></span>}
+                </div>
+                {leadItems.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {leadItems.map((it,i)=>(
+                      <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-white border border-slate-300 text-slate-700">
+                        <strong>{it.itemType||'Item'}</strong>
+                        <span className="text-slate-400">·</span>
+                        <span className="font-semibold text-indigo-700">{Number(it.quantity)||0} pcs</span>
+                        {it.category && <span className="text-slate-400">· {it.category}</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
+              {linkedLead.techpack && onViewTechpack && (
+                <button onClick={()=>onViewTechpack(linkedLead)} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 shrink-0">📋 View techpack</button>
+              )}
             </div>
-            {linkedLead.techpack && onViewTechpack && (
-              <button onClick={()=>onViewTechpack(linkedLead)} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 shrink-0">📋 View techpack</button>
-            )}
-          </div>
-        )}
+          );
+        })()}
 
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} disabled={readOnly} /></TpLbl>
