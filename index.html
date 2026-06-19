@@ -129,7 +129,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 62 · Payment Terms: dropdown across Supplier / PO / Sales Order forms';
+const BUILD = 'Live build 63 · Stock Movements view (In + Out unified daily audit)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2865,6 +2865,181 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
       )}
 
       {pulling && <PullMaterialsModal job={pulling} items={items} requests={requests} profile={profile} onClose={()=>setPulling(null)} onSaved={()=>{ setPulling(null); reload(); alert('Materials issued. Inventory updated.'); }} />}
+    </div>
+  );
+}
+
+/* ====================== STOCK MOVEMENTS (In + Out audit) ======================
+   Daily review view that shows BOTH ins (from PO receives) and outs (from
+   production issuances). The Stock Out tab is for action ("issue materials");
+   this view is for review ("did everything land correctly today?").
+*/
+function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements }){
+  const [type,setType]=useState('');         // '' | 'in' | 'out'
+  const [search,setSearch]=useState('');
+  const [from,setFrom]=useState('');
+  const [to,setTo]=useState('');
+  const [reason,setReason]=useState('');
+  // Build the LOCAL today string (don't use toISOString — UTC offsets us).
+  const t = (()=>{
+    const d=new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })();
+  const monthKey = t.slice(0,7);
+  function startOfWeek(){
+    const d = new Date(t+'T00:00:00');
+    const day = d.getDay();
+    const diff = day===0 ? -6 : 1-day;
+    d.setDate(d.getDate()+diff);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  const weekStart = startOfWeek();
+
+  // Normalize every movement once so the table + tiles can read from the same shape.
+  // s.created_at is timestamptz; we slice the date portion of LOCAL time.
+  function localDateOf(s){
+    const d = new Date(s.created_at || s.date || t);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  const enriched = (stockMovements||[]).map(s => {
+    const it = (items||[]).find(x=>x.id===s.item_id);
+    const job = s.ref_type==='production_job' ? (prodJobs||[]).find(j=>j.id===s.ref_id) : null;
+    const po  = s.ref_type==='po'             ? (orders||[]).find(o=>o.id===s.ref_id) : null;
+    return {
+      ...s,
+      _date: localDateOf(s),
+      _item: it,
+      _job: job,
+      _po: po,
+      _ref: job?job.number : (po?po.number : ''),
+      _client: job?job.client_name : '',
+    };
+  });
+
+  // Today / week / month tile totals (always computed from FULL data, not filtered)
+  const summarize = (rows) => {
+    const inRows  = rows.filter(s => s.type==='in');
+    const outRows = rows.filter(s => s.type==='out');
+    return {
+      inCount:  inRows.length,
+      outCount: outRows.length,
+      inQty:    inRows.reduce((a,r)=>a+Number(r.qty||0), 0),
+      outQty:   outRows.reduce((a,r)=>a+Number(r.qty||0), 0),
+    };
+  };
+  const today    = summarize(enriched.filter(s => s._date === t));
+  const thisWeek = summarize(enriched.filter(s => s._date >= weekStart && s._date <= t));
+  const thisMonth= summarize(enriched.filter(s => s._date.startsWith(monthKey)));
+
+  // Distinct reasons for the dropdown filter (derived from data)
+  const reasons = Array.from(new Set(enriched.map(s=>s.reason).filter(Boolean))).sort();
+
+  // Apply filters
+  const filtered = enriched.filter(s => {
+    if(type && s.type !== type) return false;
+    if(from && s._date < from) return false;
+    if(to && s._date > to) return false;
+    if(reason && s.reason !== reason) return false;
+    if(search){
+      const q = search.toLowerCase();
+      const haystack = `${s._item?.name||''} ${s._item?.color||''} ${s._ref||''} ${s._client||''} ${s.reason||''}`.toLowerCase();
+      if(!haystack.includes(q)) return false;
+    }
+    return true;
+  }).sort((a,b) => String(b.created_at||'').localeCompare(String(a.created_at||'')));
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <h1 className="text-2xl font-bold">📦 Stock Movements</h1>
+        <p className="text-slate-500 text-sm">Every IN and OUT, in one log — use this to double-check stock changes daily.</p>
+      </div>
+
+      {/* Summary tiles: Today / This Week / This Month */}
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold">Today · {fmtDate(t)}</div>
+          <div className="flex items-center gap-4 mt-2">
+            <div><div className="text-[10px] uppercase text-emerald-700">IN</div><div className="text-xl font-bold text-emerald-700">+{today.inQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{today.inCount} entries</div></div>
+            <div className="text-slate-300">·</div>
+            <div><div className="text-[10px] uppercase text-rose-700">OUT</div><div className="text-xl font-bold text-rose-700">−{today.outQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{today.outCount} entries</div></div>
+          </div>
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold">This Week (Mon → Today)</div>
+          <div className="flex items-center gap-4 mt-2">
+            <div><div className="text-[10px] uppercase text-emerald-700">IN</div><div className="text-xl font-bold text-emerald-700">+{thisWeek.inQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{thisWeek.inCount} entries</div></div>
+            <div className="text-slate-300">·</div>
+            <div><div className="text-[10px] uppercase text-rose-700">OUT</div><div className="text-xl font-bold text-rose-700">−{thisWeek.outQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{thisWeek.outCount} entries</div></div>
+          </div>
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold">This Month · {monthKey}</div>
+          <div className="flex items-center gap-4 mt-2">
+            <div><div className="text-[10px] uppercase text-emerald-700">IN</div><div className="text-xl font-bold text-emerald-700">+{thisMonth.inQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{thisMonth.inCount} entries</div></div>
+            <div className="text-slate-300">·</div>
+            <div><div className="text-[10px] uppercase text-rose-700">OUT</div><div className="text-xl font-bold text-rose-700">−{thisMonth.outQty.toFixed(2)}</div><div className="text-[10px] text-slate-400">{thisMonth.outCount} entries</div></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white border rounded-xl p-3 mb-4">
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+            <button onClick={()=>setType('')}    className={`px-3 py-1.5 rounded-md ${type===''?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All</button>
+            <button onClick={()=>setType('in')}  className={`px-3 py-1.5 rounded-md ${type==='in'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>IN only</button>
+            <button onClick={()=>setType('out')} className={`px-3 py-1.5 rounded-md ${type==='out'?'bg-rose-600 text-white font-semibold':'text-slate-600'}`}>OUT only</button>
+          </div>
+          <TpLbl t="From"><input type="date" className="input max-w-[10rem]" value={from} onChange={e=>setFrom(e.target.value)} /></TpLbl>
+          <TpLbl t="To"><input type="date" className="input max-w-[10rem]" value={to} onChange={e=>setTo(e.target.value)} /></TpLbl>
+          <TpLbl t="Reason">
+            <select className="input max-w-[12rem]" value={reason} onChange={e=>setReason(e.target.value)}>
+              <option value="">All reasons</option>
+              {reasons.map(r=><option key={r} value={r}>{r}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Search"><input className="input max-w-[14rem]" placeholder="Item, color, PO#, Job#, client…" value={search} onChange={e=>setSearch(e.target.value)} /></TpLbl>
+          <div className="flex gap-1 flex-wrap text-xs ml-auto">
+            <button onClick={()=>{ setFrom(t); setTo(t); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">Today</button>
+            <button onClick={()=>{ setFrom(weekStart); setTo(t); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">This week</button>
+            <button onClick={()=>{ setFrom(`${monthKey}-01`); setTo(t); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">This month</button>
+            <button onClick={()=>{ setSearch(''); setType(''); setReason(''); setFrom(''); setTo(''); }} className="px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Reset</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Movement log */}
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">When</th>
+          <th className="text-left px-3 py-2">Type</th>
+          <th className="text-left px-3 py-2">Item</th>
+          <th className="text-right px-3 py-2">Qty</th>
+          <th className="text-left px-3 py-2">Reason</th>
+          <th className="text-left px-3 py-2">Reference</th>
+          <th className="text-left px-3 py-2">Client / Notes</th>
+          <th className="text-left px-3 py-2">By</th>
+        </tr></thead>
+        <tbody>{filtered.map(s=>{
+          const isIn = s.type==='in';
+          const actor = s.actor_id ? (profiles||[]).find(p=>p.id===s.actor_id) : null;
+          return (
+            <tr key={s.id} className={`border-t hover:bg-slate-50 ${isIn?'bg-emerald-50/30':'bg-rose-50/20'}`}>
+              <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtTime(s.created_at)}</td>
+              <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${isIn?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{isIn?'IN':'OUT'}</span></td>
+              <td className="px-3 py-2">{s._item ? <>{s._item.name}{s._item.color?<span className="text-slate-500"> · {s._item.color}</span>:''}</> : <span className="text-slate-300">(item deleted)</span>}</td>
+              <td className={`px-3 py-2 text-right font-bold ${isIn?'text-emerald-700':'text-rose-700'}`}>{isIn?'+':'−'}{Number(s.qty||0).toFixed(2)} {s._item?.unit||''}</td>
+              <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{s.reason||'—'}</span></td>
+              <td className="px-3 py-2 text-xs font-mono">{s._ref || '—'}</td>
+              <td className="px-3 py-2 text-xs">{s._client || s.notes || '—'}</td>
+              <td className="px-3 py-2 text-xs">{actor ? <span className="text-slate-700 font-medium">{actor.name||actor.email}</span> : <span className="text-slate-400">{s.actor_id?'unknown':'—'}</span>}</td>
+            </tr>
+          );
+        })}
+        {filtered.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No movements match this filter.</td></tr>}
+        </tbody>
+      </table></div></div>
     </div>
   );
 }
@@ -15885,11 +16060,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','logistics','rfps','budgets']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','rfps','budgets']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -16208,7 +16383,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','stock-movements','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
     ];
@@ -16219,7 +16394,7 @@ function App(){
       FINANCE_FULL,
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','stock-movements','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
     ];
@@ -16261,7 +16436,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','stock-movements','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -16383,6 +16558,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
+        {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='buy-list' && <MaterialsBuyListView profile={profile} requests={requests} items={items} suppliers={suppliers} orders={orders} prodJobs={prodJobs} leads={leads} reload={loadAll} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} />}
