@@ -129,7 +129,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 56 · Petty Cash: starting balance + Add expense + running outstanding';
+const BUILD = 'Live build 57 · Finance: Payment Calendar + Add event + Expense Log';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14474,11 +14474,12 @@ const BIR_DEADLINES = [
 
 
 /* ─────────── PAYMENT CALENDAR ─────────── */
-function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouchers, suppliers }){
+function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouchers, suppliers, calendarEvents, reload }){
   const today = new Date();
   const [year,setYear]=useState(today.getFullYear());
   const [month,setMonth]=useState(today.getMonth()); // 0-indexed
   const [selectedDay,setSelectedDay]=useState(null);
+  const [adding,setAdding]=useState(false);
   const monthKey = `${year}-${String(month+1).padStart(2,'0')}`;
 
   // Build events for the month. Each event has: day, type, direction, amount, label, status, raw
@@ -14515,6 +14516,17 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
   BIR_DEADLINES.forEach(d=> events.push({
     day:d.day, type:'bir', direction:'out', amount:0, label:`📋 ${d.label}`, status:'pinned', raw:d,
   }));
+  // Custom Finance-added calendar events
+  (calendarEvents||[]).filter(e => (e.date||'').startsWith(monthKey))
+    .forEach(e => events.push({
+      day: parseInt((e.date||'').slice(8,10),10),
+      type:'custom',
+      direction: e.direction || 'out',
+      amount: Number(e.amount||0),
+      label: `📌 ${e.title||''}`,
+      status: e.status || 'pinned',
+      raw: e,
+    }));
 
   // Group by day
   const byDay = {};
@@ -14561,6 +14573,7 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
             <p className="text-slate-500 text-sm">{monthName} · Expected in <strong className="text-emerald-700">{peso(totalIn)}</strong> · Expected out <strong className="text-rose-700">{peso(totalOut)}</strong></p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={()=>setAdding(true)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ Add event</button>
             <button onClick={()=>nav(-1)} className="px-3 py-1.5 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">‹ Prev</button>
             <button onClick={gotoToday} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Today</button>
             <button onClick={()=>nav(1)} className="px-3 py-1.5 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">Next ›</button>
@@ -14621,7 +14634,7 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
               <thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1">Type</th><th className="text-left py-1">Description</th><th className="text-left py-1">Status</th><th className="text-right py-1">Amount</th></tr></thead>
               <tbody>{(byDay[selectedDay]||[]).map((e,i)=>(
                 <tr key={i} className="border-t">
-                  <td className="py-1.5"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${e.type==='bir'?'bg-purple-100 text-purple-700':e.type==='so'?'bg-emerald-100 text-emerald-700':e.type==='rfp'?'bg-amber-100 text-amber-700':e.type==='budget'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-700'}`}>{e.type==='so'?'SO':e.type==='rfp'?'RFP':e.type==='budget'?'Budget':e.type==='voucher'?'Voucher':'BIR'}</span></td>
+                  <td className="py-1.5"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${e.type==='bir'?'bg-purple-100 text-purple-700':e.type==='so'?'bg-emerald-100 text-emerald-700':e.type==='rfp'?'bg-amber-100 text-amber-700':e.type==='budget'?'bg-blue-100 text-blue-700':e.type==='custom'?'bg-rose-100 text-rose-700':'bg-slate-100 text-slate-700'}`}>{e.type==='so'?'SO':e.type==='rfp'?'RFP':e.type==='budget'?'Budget':e.type==='voucher'?'Voucher':e.type==='custom'?'Event':'BIR'}</span></td>
                   <td className="py-1.5">{e.label}</td>
                   <td className="py-1.5"><span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${e.status==='paid'?'bg-emerald-100 text-emerald-700':e.status==='approved'?'bg-blue-100 text-blue-700':e.status==='pinned'?'bg-purple-100 text-purple-700':'bg-amber-100 text-amber-700'}`}>{e.status}</span></td>
                   <td className={`py-1.5 text-right font-semibold ${e.direction==='in'?'text-emerald-700':e.amount>0?'text-rose-700':'text-slate-400'}`}>{e.amount>0?(e.direction==='in'?'+':'−')+peso(e.amount):'—'}</td>
@@ -14631,7 +14644,67 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
           )}
         </div>
       )}
+      {adding && <CalendarEventModal profile={profile} defaultDate={selectedDay ? `${year}-${String(month+1).padStart(2,'0')}-${String(selectedDay).padStart(2,'0')}` : new Date().toISOString().slice(0,10)} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload && reload(); }} />}
     </div>
+  );
+}
+
+// Quick-add a custom Payment Calendar event. Finance uses this for reminders
+// that don't fit the SO / RFP / Voucher / Budget auto categories — recurring
+// rent, insurance renewals, ad-hoc planned spend, etc.
+function CalendarEventModal({ profile, defaultDate, onClose, onSaved }){
+  const [f,setF]=useState({
+    date: defaultDate || new Date().toISOString().slice(0,10),
+    title: '',
+    amount: 0,
+    direction: 'out',
+    category: 'Other',
+    notes: '',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim()){ setMsg('Enter a title.'); return; }
+    if(!f.date){ setMsg('Pick a date.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('calendar_events').insert({
+      date: f.date,
+      title: f.title.trim(),
+      amount: Number(f.amount)||0,
+      direction: f.direction,
+      category: f.category || null,
+      notes: f.notes || null,
+      created_by: profile.id,
+    });
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved && onSaved();
+  }
+  return (
+    <Modal title="+ New calendar event" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-800">
+          Use this for reminders or planned spend that doesn't come from an SO, RFP, budget request, or voucher. Examples: insurance renewal, government registration, recurring subscriptions, scheduled disbursements.
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date *"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Direction">
+            <select className="input" value={f.direction} onChange={e=>up('direction',e.target.value)}>
+              <option value="out">Money out</option>
+              <option value="in">Money in</option>
+            </select>
+          </TpLbl>
+        </div>
+        <TpLbl t="Title *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} placeholder="e.g. Building insurance renewal" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount"><input type="number" step="0.01" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0 for reminder only" /></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Anything finance / admin should know" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'📌 Add to calendar'}</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -14758,6 +14831,164 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
   );
 }
 
+/* ─────────── EXPENSE LOG ───────────
+   Unified feed of every money-out event across the company:
+     • Vouchers (CV / Cash / Bank Transfer disbursements)
+     • Expenses (incl. petty cash charges)
+     • Approved budget requests (planned spend)
+   Aggregated to today / week / month / year tiles + a filterable feed.
+*/
+function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances }){
+  // Build a normalized list of money-out items.
+  const rows = useMemo(()=>{
+    const out = [];
+    (vouchers||[]).forEach(v=> out.push({
+      date: v.date, source:'voucher', amount: Number(v.amount||0),
+      label: v.payee || '(payee)', category: v.expense_category || '—',
+      ref: v.number, raw:v,
+    }));
+    (expenses||[]).forEach(e=> out.push({
+      date: e.date, source:'expense', amount: Number(e.amount||0),
+      label: e.description || e.vendor || '(expense)',
+      category: e.category || '—', ref: e.id?.slice(0,6) || '', raw:e,
+    }));
+    (budgetRequests||[]).filter(b=> b.status==='approved' || b.status==='spent')
+      .forEach(b=> out.push({
+        date: b.date_needed || (b.approved_at||'').slice(0,10) || b.date, source:'budget',
+        amount: Number(b.amount||0),
+        label: `${b.department||''} · ${b.purpose||'(budget)'}`,
+        category: 'Budget', ref: b.id?.slice(0,6) || '', raw:b,
+      }));
+    (cashAdvances||[]).forEach(c=> out.push({
+      date: c.date, source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
+      amount: Number(c.amount||0),
+      label: c.purpose || c.custodian_name || '(CA)',
+      category: c.kind==='petty_cash' ? 'Petty Cash' : 'Cash Advance',
+      ref: c.number, raw:c,
+    }));
+    return out.filter(r => r.date).sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+  },[vouchers,expenses,budgetRequests,cashAdvances]);
+
+  const [search,setSearch]=useState('');
+  const [src,setSrc]=useState('');
+  const [from,setFrom]=useState('');
+  const [to,setTo]=useState('');
+  const today = new Date().toISOString().slice(0,10);
+  const monthKey = today.slice(0,7);
+  const yearKey = today.slice(0,4);
+  function startOfWeek(){ const d=new Date(today+'T00:00:00'); const day=d.getDay(); const diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); return d.toISOString().slice(0,10); }
+  const weekStart = startOfWeek();
+  const sumWhere = (pred) => rows.filter(pred).reduce((s,r)=>s+r.amount, 0);
+  const tot = {
+    today:  sumWhere(r => r.date === today),
+    week:   sumWhere(r => r.date >= weekStart && r.date <= today),
+    month:  sumWhere(r => r.date.startsWith(monthKey)),
+    year:   sumWhere(r => r.date.startsWith(yearKey)),
+  };
+  const cnt = {
+    today:  rows.filter(r => r.date === today).length,
+    week:   rows.filter(r => r.date >= weekStart && r.date <= today).length,
+    month:  rows.filter(r => r.date.startsWith(monthKey)).length,
+    year:   rows.filter(r => r.date.startsWith(yearKey)).length,
+  };
+  const filtered = rows.filter(r=>{
+    if(src && r.source !== src) return false;
+    if(from && r.date < from) return false;
+    if(to && r.date > to) return false;
+    if(search){ const q = search.toLowerCase(); if(!`${r.label} ${r.category} ${r.ref||''}`.toLowerCase().includes(q)) return false; }
+    return true;
+  });
+  const filteredTotal = filtered.reduce((s,r)=>s+r.amount, 0);
+  const byCat = {};
+  filtered.forEach(r=>{ byCat[r.category] = (byCat[r.category]||0) + r.amount; });
+  const sortedCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  function srcBadge(s){
+    const map = {
+      voucher:      { label:'Voucher',      cls:'bg-blue-100 text-blue-700' },
+      expense:      { label:'Expense',      cls:'bg-amber-100 text-amber-700' },
+      budget:       { label:'Budget',       cls:'bg-violet-100 text-violet-700' },
+      petty_cash:   { label:'Petty Cash',   cls:'bg-emerald-100 text-emerald-700' },
+      cash_advance: { label:'Cash Advance', cls:'bg-rose-100 text-rose-700' },
+    };
+    return map[s] || { label:'Other', cls:'bg-slate-100 text-slate-600' };
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <h1 className="text-2xl font-bold">📚 Expense Log</h1>
+        <p className="text-slate-500 text-sm">Every money-out event in one place — vouchers, expenses, budgets, petty cash, and cash advances.</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Today</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.today)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.today} item{cnt.today===1?'':'s'} · {fmtDate(today)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">This Week (Mon → Today)</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.week)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.week} item{cnt.week===1?'':'s'}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">This Month</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.month)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.month} item{cnt.month===1?'':'s'} · {monthKey}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">This Year</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.year)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.year} item{cnt.year===1?'':'s'} · {yearKey}</div></div>
+      </div>
+
+      <div className="bg-white border rounded-xl p-3 mb-4">
+        <div className="flex flex-wrap gap-2 items-end">
+          <TpLbl t="Search"><input className="input max-w-[14rem]" placeholder="Description, vendor, category…" value={search} onChange={e=>setSearch(e.target.value)} /></TpLbl>
+          <TpLbl t="Source">
+            <select className="input max-w-[12rem]" value={src} onChange={e=>setSrc(e.target.value)}>
+              <option value="">All sources</option>
+              <option value="voucher">Vouchers</option>
+              <option value="expense">Expenses</option>
+              <option value="budget">Budget Requests</option>
+              <option value="petty_cash">Petty Cash</option>
+              <option value="cash_advance">Cash Advances</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="From"><input type="date" className="input max-w-[10rem]" value={from} onChange={e=>setFrom(e.target.value)} /></TpLbl>
+          <TpLbl t="To"><input type="date" className="input max-w-[10rem]" value={to} onChange={e=>setTo(e.target.value)} /></TpLbl>
+          <div className="flex gap-1 flex-wrap text-xs ml-auto">
+            <button onClick={()=>{ setFrom(today); setTo(today); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">Today</button>
+            <button onClick={()=>{ setFrom(weekStart); setTo(today); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">This week</button>
+            <button onClick={()=>{ setFrom(`${monthKey}-01`); setTo(today); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">This month</button>
+            <button onClick={()=>{ setFrom(`${yearKey}-01-01`); setTo(today); }} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">YTD</button>
+            <button onClick={()=>{ setSearch(''); setSrc(''); setFrom(''); setTo(''); }} className="px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Reset</button>
+          </div>
+        </div>
+      </div>
+
+      {sortedCats.length>0 && (
+        <div className="bg-white border rounded-xl p-3 mb-4">
+          <div className="text-xs uppercase font-semibold text-slate-500 mb-2">By category · Filtered total: <span className="text-rose-700 font-bold">{peso(filteredTotal)}</span></div>
+          <div className="flex flex-wrap gap-2">
+            {sortedCats.slice(0,12).map(([cat,amt])=>(
+              <div key={cat} className="bg-slate-50 border rounded px-2 py-1 text-xs"><strong>{cat}</strong> <span className="text-rose-700 font-bold">{peso(amt)}</span></div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+            <tr>
+              <th className="text-left px-3 py-2">Date</th>
+              <th className="text-left px-3 py-2">Source</th>
+              <th className="text-left px-3 py-2">Description</th>
+              <th className="text-left px-3 py-2">Category</th>
+              <th className="text-left px-3 py-2">Ref</th>
+              <th className="text-right px-3 py-2">Amount</th>
+            </tr>
+          </thead>
+          <tbody>{filtered.map((r,i)=>{ const b=srcBadge(r.source); return (
+            <tr key={r.source+'_'+(r.ref||i)+'_'+i} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(r.date)}</td>
+              <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${b.cls}`}>{b.label}</span></td>
+              <td className="px-3 py-2">{r.label}</td>
+              <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{r.category}</span></td>
+              <td className="px-3 py-2 font-mono text-xs">{r.ref||'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(r.amount)}</td>
+            </tr>
+          ); })}{filtered.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No matching expense events.</td></tr>}</tbody>
+        </table></div>
+      </div>
+    </div>
+  );
+}
 
 /* ─────────── BIR TAX HELPERS ─────────── */
 function BIRHelpersView({ profile, orders, salesOrders, suppliers, vouchers }){
@@ -15282,6 +15513,9 @@ function App(){
   const [budgetRequests,setBudgetRequests]=useState([]);
   // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
+  // Custom Payment Calendar events — Finance-added items that don't fit the
+  // auto categories (recurring reminders, ad-hoc planned spend, etc.)
+  const [calendarEvents,setCalendarEvents]=useState([]);
   // Stock movements (in/out audit log). Used by Purchasing → Stock Out view.
   const [stockMovements,setStockMovements]=useState([]);
   // HR Module: 201 file master + documents + memos + notes timeline
@@ -15351,7 +15585,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -15403,6 +15637,8 @@ function App(){
       sb.from('hr_reviews').select('*').order('created_at',{ascending:false}),
       sb.from('hr_job_postings').select('*').order('created_at',{ascending:false}),
       sb.from('hr_applicants').select('*').order('applied_date',{ascending:false}),
+      // Custom Payment Calendar events
+      sb.from('calendar_events').select('*').order('date',{ascending:true}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -15446,6 +15682,7 @@ function App(){
     setExpenses(ex && !ex.error ? (ex.data||[]) : []);
     setCashAdvances(ca && !ca.error ? (ca.data||[]) : []);
     setStockMovements(sm && !sm.error ? (sm.data||[]) : []);
+    setCalendarEvents(ce && !ce.error ? (ce.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
   }
@@ -15484,7 +15721,7 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -15754,6 +15991,7 @@ function App(){
     ['rfps','Request for Payment','📝'],
     ['vouchers','Check / Cash Vouchers','💳'],
     ['expenses','Expenses','💸'],
+    ['expense-log','Expense Log','📚'],
     ['petty-cash','Petty Cash','💵'],
     ['cash-advances','Cash Advances','🧾'],
     ['budgets','Budget Requests','💰'],
@@ -15988,13 +16226,14 @@ function App(){
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="cash_advance" />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
-        {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} />}
+        {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} reload={loadAll} />}
