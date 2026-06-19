@@ -129,7 +129,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 64 · PR header: fabric + items + qty (removed deal value)';
+const BUILD = 'Live build 66 · Expense Log: drop Budget Requests + dedupe petty-cash expenses';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7519,6 +7519,10 @@ function TrashView({ profile, profiles, reload }){
     { key:'sampling_jobs',        table:'sampling_jobs',        icon:'🧵', label:'Sampling',           titleOf: r=>`${r.number||''} · ${r.item||''}`,                    metaOf: r=>r.client_name||'' },
     { key:'purchase_requests',    table:'purchase_requests',    icon:'📝', label:'Purchase Requests',  titleOf: r=>`${r.number||''} · ${(r.lines||[])[0]?.description || (r.justification||'').slice(0,40) || 'PR'}`, metaOf: r=>`Status: ${r.status||''} · ${(r.lines||[]).length} line${(r.lines||[]).length===1?'':'s'}` },
     { key:'purchase_orders',      table:'purchase_orders',      icon:'🧾', label:'Purchase Orders',    titleOf: r=>`${r.number||''}`,                                       metaOf: r=>`Status: ${r.status||''} · Total: ₱${(r.total||0).toLocaleString('en-PH')}` },
+    { key:'sales_orders',         table:'sales_orders',         icon:'📜', label:'Sales Orders',       titleOf: r=>`${r.number||''} · ${r.client_name||''}`,                metaOf: r=>`Status: ${r.status||''} · Total: ₱${(r.total||0).toLocaleString('en-PH')}` },
+    { key:'rfps',                 table:'rfps',                 icon:'📝', label:'Requests for Payment', titleOf: r=>`${r.number||''} · ${r.supplier_name||''}`,             metaOf: r=>`Status: ${r.status||''} · Amount: ₱${(r.amount||0).toLocaleString('en-PH')}` },
+    { key:'budget_requests',      table:'budget_requests',      icon:'💰', label:'Budget Requests',    titleOf: r=>`${r.department||''} · ${(r.purpose||'').slice(0,40)}`, metaOf: r=>`Status: ${r.status||''} · Amount: ₱${(r.amount||0).toLocaleString('en-PH')}` },
+    { key:'cash_advances',        table:'cash_advances',        icon:'💵', label:'Petty Cash / Cash Advances', titleOf: r=>`${r.number||''} · ${r.custodian_name||''}`,     metaOf: r=>`Kind: ${r.kind||'cash_advance'} · Amount: ₱${(r.amount||0).toLocaleString('en-PH')}` },
   ];
 
   async function loadTrash(){
@@ -12527,6 +12531,24 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
   const [paying,setPaying]=useState(null);     // SO to record payment for
   const [filter,setFilter]=useState('');
   const [search,setSearch]=useState('');
+  const isAdmin = profile.role === 'admin';
+  // Admin-only soft-delete. SOs are tied to leads and payments so accidental
+  // deletion is recoverable from Settings → Trash. Paid SOs get an extra
+  // confirmation since the bank txns + lead.sales_order_id link still point at them.
+  async function deleteSO(o){
+    const isPaid = o.status === 'paid' || Number(o.amount_paid||0) > 0;
+    if(isPaid){
+      if(!confirm(`⚠ This SO is marked ${o.status==='paid'?'PAID':'partially paid'} (${peso(o.amount_paid)} received).\n\nDeleting it does NOT reverse the recorded payment(s) or unlink the lead.\n\nReally send ${o.number||'this SO'} to Trash?`)) return;
+    } else {
+      if(!confirm(`Send SO ${o.number||''} to Trash?\n\nIt'll be recoverable from Settings → Trash.`)) return;
+    }
+    const { error } = await sb.from('sales_orders').update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: profile.id,
+    }).eq('id', o.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
 
   if(!bankAccounts || bankAccounts.length===0){
     return (
@@ -12588,7 +12610,8 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
             <td className="px-3 py-2 text-xs">{o.qb_invoice_number ? <a href={o.qb_invoice_url||'#'} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-indigo-600 hover:underline">{o.qb_invoice_number}</a> : <span className="text-slate-300">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               {o.status!=='paid' && o.status!=='cancelled' && <button onClick={(e)=>{e.stopPropagation(); setPaying(o);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Record payment</button>}
-              <button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline">Open</button>
+              <button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
+              {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteSO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No sales orders yet. They auto-create when a deal hits Closed Won.</td></tr>}</tbody>
@@ -12917,6 +12940,20 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   const [filter,setFilter]=useState('');
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
+  async function deleteRFP(r){
+    const isPaid = r.status === 'paid';
+    if(isPaid){
+      if(!confirm(`⚠ This RFP is marked PAID.\n\nDeleting it does NOT reverse the voucher or bank transaction — those records stay intact.\n\nReally send ${r.number||'this RFP'} to Trash?`)) return;
+    } else {
+      if(!confirm(`Send RFP ${r.number||''} to Trash?\n\nThe linked PO stays untouched. Recoverable from Settings → Trash.`)) return;
+    }
+    const { error } = await sb.from('rfps').update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: profile.id,
+    }).eq('id', r.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
   const counts = RFP_STATUSES.reduce((a,s)=>{ a[s.key]=rfps.filter(r=>r.status===s.key).length; return a; }, {});
   const rows = rfps.filter(r=>!filter||r.status===filter);
   return (
@@ -12947,7 +12984,8 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
             <td className="px-3 py-2 text-right">
               {r.status==='approved' && (isAdmin||isAccounting) && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Pay</button>}
-              <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline">Open</button>
+              <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
+              {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteRFP(r);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
@@ -13993,6 +14031,15 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
   // ADMIN / ACCOUNTING VIEW — full list, all departments
   // ────────────────────────────────────────────────────────────
   const rows = budgetRequests.filter(b=>!filter||b.status===filter);
+  async function deleteBR(b){
+    if(!confirm(`Send this budget request to Trash?\n\n${b.department||''} · ${b.purpose||''}\nAmount: ${peso(b.amount)}\n\nRecoverable from Settings → Trash.`)) return;
+    const { error } = await sb.from('budget_requests').update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: profile.id,
+    }).eq('id', b.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
   const counts = STATUSES.reduce((a,s)=>{ a[s.key]=budgetRequests.filter(b=>b.status===s.key).length; return a; },{});
   return (
     <div className="p-6">
@@ -14031,7 +14078,10 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
             <td className="px-3 py-2 text-right font-bold">{peso(b.amount)}</td>
             <td className="px-3 py-2 text-xs">{b.date_needed?fmtDate(b.date_needed):'—'}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-            <td className="px-3 py-2 text-right">{b.attachment_url && <a href={b.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs text-indigo-600 hover:underline">📎</a>}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap">
+              {b.attachment_url && <a href={b.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎</a>}
+              {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteBR(b);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
+            </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No budget requests yet. Click "+ New request" to submit one.</td></tr>}</tbody>
       </table></div></div>
@@ -14311,6 +14361,21 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
   const canEdit = isAdmin || isAccounting;
+  async function deleteCA(c){
+    const label = isPetty ? 'petty cash float' : 'cash advance';
+    const linkedExpenses = expensesFor(c);
+    if(linkedExpenses.length > 0){
+      if(!confirm(`⚠ This ${label} has ${linkedExpenses.length} linked expense${linkedExpenses.length===1?'':'s'} totaling ${peso(spentOn(c))}.\n\nDeleting it does NOT remove those expenses — they'll appear as orphaned charges. Consider deleting the linked expenses first.\n\nReally send ${c.number||''} to Trash?`)) return;
+    } else {
+      if(!confirm(`Send ${label} ${c.number||''} to Trash?\n\nRecoverable from Settings → Trash.`)) return;
+    }
+    const { error } = await sb.from('cash_advances').update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: profile.id,
+    }).eq('id', c.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
 
   const STATUSES = [
     { key:'open',       label:'Open',       color:'bg-amber-100 text-amber-700' },
@@ -14404,12 +14469,13 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
               <td className="px-3 py-2 text-right text-blue-700">{peso(c.amount_returned)}</td>
               <td className={`px-3 py-2 text-right font-bold ${outstanding>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(outstanding)}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-              <td className="px-3 py-2 text-right">
+              <td className="px-3 py-2 text-right whitespace-nowrap">
                 {isPetty ? (
-                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline">+ Add expense</button>
+                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline mr-2">+ Add expense</button>
                 ) : (
-                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline">Liquidate →</button>
+                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
                 )}
+                {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteCA(c);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
               </td>
             </tr>
           );
@@ -15208,23 +15274,36 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   // Build a normalized list of money-out items.
   const rows = useMemo(()=>{
     const out = [];
+    // Money movements ONLY — never approval artifacts. Each source below
+    // represents an actual bank outflow OR a petty cash usage.
+    //
+    // Why budget_requests is NOT in the feed:
+    //   A Budget Request is a planning / approval document, not a money
+    //   movement. An "approved" BR has not actually paid anyone yet — the
+    //   matching Voucher (or Expense) is what moves the money. Including BRs
+    //   would double-count once Finance disburses against the approval.
+    //
+    // Why petty-cash-charged expenses are deduplicated:
+    //   When you issue a petty cash float, the bank is debited once (one
+    //   cash_advance row). When you later charge expenses against that
+    //   float, those expenses do NOT touch the bank again — they only
+    //   categorize how the float was spent. Counting both would overstate
+    //   actual cash out by the sum of the charges. We keep the cash_advance
+    //   row (the real bank movement) and skip the expenses tied to it.
     (vouchers||[]).forEach(v=> out.push({
       date: v.date, source:'voucher', amount: Number(v.amount||0),
       label: v.payee || '(payee)', category: v.expense_category || '—',
       ref: v.number, raw:v,
     }));
-    (expenses||[]).forEach(e=> out.push({
-      date: e.date, source:'expense', amount: Number(e.amount||0),
-      label: e.description || e.vendor || '(expense)',
-      category: e.category || '—', ref: e.id?.slice(0,6) || '', raw:e,
-    }));
-    (budgetRequests||[]).filter(b=> b.status==='approved' || b.status==='spent')
-      .forEach(b=> out.push({
-        date: b.date_needed || (b.approved_at||'').slice(0,10) || b.date, source:'budget',
-        amount: Number(b.amount||0),
-        label: `${b.department||''} · ${b.purpose||'(budget)'}`,
-        category: 'Budget', ref: b.id?.slice(0,6) || '', raw:b,
-      }));
+    (expenses||[]).forEach(e=>{
+      // Skip expenses paid from petty cash — already counted at float issuance.
+      if(e.petty_cash_id || e.paid_via === 'petty_cash') return;
+      out.push({
+        date: e.date, source:'expense', amount: Number(e.amount||0),
+        label: e.description || e.vendor || '(expense)',
+        category: e.category || '—', ref: e.id?.slice(0,6) || '', raw:e,
+      });
+    });
     (cashAdvances||[]).forEach(c=> out.push({
       date: c.date, source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
       amount: Number(c.amount||0),
@@ -15272,7 +15351,6 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     const map = {
       voucher:      { label:'Voucher',      cls:'bg-blue-100 text-blue-700' },
       expense:      { label:'Expense',      cls:'bg-amber-100 text-amber-700' },
-      budget:       { label:'Budget',       cls:'bg-violet-100 text-violet-700' },
       petty_cash:   { label:'Petty Cash',   cls:'bg-emerald-100 text-emerald-700' },
       cash_advance: { label:'Cash Advance', cls:'bg-rose-100 text-rose-700' },
     };
@@ -15282,7 +15360,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <h1 className="text-2xl font-bold">📚 Expense Log</h1>
-        <p className="text-slate-500 text-sm">Every money-out event in one place — vouchers, expenses, budgets, petty cash, and cash advances.</p>
+        <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
@@ -15300,7 +15378,6 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
               <option value="">All sources</option>
               <option value="voucher">Vouchers</option>
               <option value="expense">Expenses</option>
-              <option value="budget">Budget Requests</option>
               <option value="petty_cash">Petty Cash</option>
               <option value="cash_advance">Cash Advances</option>
             </select>
@@ -15978,12 +16055,12 @@ function App(){
       sb.from('sales_order_payments').select('*').order('date',{ascending:false}),
       sb.from('bank_accounts').select('*').order('position'),
       sb.from('bank_transactions').select('*').order('date',{ascending:false}),
-      sb.from('rfps').select('*').order('created_at',{ascending:false}),
+      sb.from('rfps').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('vouchers').select('*').order('created_at',{ascending:false}),
-      sb.from('budget_requests').select('*').order('created_at',{ascending:false}),
+      sb.from('budget_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       // Sprint 2 — graceful if tables aren't there yet
       sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
-      sb.from('cash_advances').select('*').order('date',{ascending:false}),
+      sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false}),
       // Stock movements for the Stock Out view (Purchasing Layer 3).
       sb.from('stock_movements').select('*').order('created_at',{ascending:false}).limit(1000),
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
