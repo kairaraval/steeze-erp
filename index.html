@@ -129,7 +129,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 66 · Expense Log: drop Budget Requests + dedupe petty-cash expenses';
+const BUILD = 'Live build 68 · Spent BRs in Expense Log: stamp spent_at + Budget badge + date fallback';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14150,7 +14150,15 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
   async function markSpent(){
     if(!confirm('Mark this budget as spent? Use this once the expense has been logged.')) return;
     setBusy(true);
-    const { error } = await sb.from('budget_requests').update({ status:'spent' }).eq('id', existing.id);
+    // Try to stamp spent_at so the Expense Log can use the actual spend date.
+    // Falls back gracefully if the column doesn't exist yet.
+    let { error } = await sb.from('budget_requests').update({
+      status:'spent', spent_at: new Date().toISOString().slice(0,10),
+    }).eq('id', existing.id);
+    if(error && /spent_at/i.test(error.message||'')){
+      const r2 = await sb.from('budget_requests').update({ status:'spent' }).eq('id', existing.id);
+      error = r2.error;
+    }
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
@@ -15274,36 +15282,48 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   // Build a normalized list of money-out items.
   const rows = useMemo(()=>{
     const out = [];
-    // Money movements ONLY — never approval artifacts. Each source below
-    // represents an actual bank outflow OR a petty cash usage.
+    // The feed represents actual money-out events. We include each source
+    // below and only suppress one specific dedupe case:
     //
-    // Why budget_requests is NOT in the feed:
-    //   A Budget Request is a planning / approval document, not a money
-    //   movement. An "approved" BR has not actually paid anyone yet — the
-    //   matching Voucher (or Expense) is what moves the money. Including BRs
-    //   would double-count once Finance disburses against the approval.
+    //   • Expenses LINKED to a petty cash float (petty_cash_id set) are NOT
+    //     counted, because the float itself already counted that money at
+    //     issuance. Counting both would double the per-expense charges.
     //
-    // Why petty-cash-charged expenses are deduplicated:
-    //   When you issue a petty cash float, the bank is debited once (one
-    //   cash_advance row). When you later charge expenses against that
-    //   float, those expenses do NOT touch the bank again — they only
-    //   categorize how the float was spent. Counting both would overstate
-    //   actual cash out by the sum of the charges. We keep the cash_advance
-    //   row (the real bank movement) and skip the expenses tied to it.
+    //   • Standalone expenses tagged paid_via='petty_cash' but with NO
+    //     petty_cash_id ARE counted — they're their own money movement,
+    //     not piggybacking on a float row that already exists.
+    //
+    // Budget Requests are included when status='spent' (actual paid),
+    // since some teams record real spend ONLY in the BR (no separate
+    // voucher). Approved / pending / rejected BRs stay out — they're
+    // commitments, not movements.
     (vouchers||[]).forEach(v=> out.push({
       date: v.date, source:'voucher', amount: Number(v.amount||0),
       label: v.payee || '(payee)', category: v.expense_category || '—',
       ref: v.number, raw:v,
     }));
     (expenses||[]).forEach(e=>{
-      // Skip expenses paid from petty cash — already counted at float issuance.
-      if(e.petty_cash_id || e.paid_via === 'petty_cash') return;
+      // Skip ONLY expenses that are linked to a specific petty cash float —
+      // their cash movement is already counted in that float's issuance row.
+      if(e.petty_cash_id) return;
       out.push({
         date: e.date, source:'expense', amount: Number(e.amount||0),
         label: e.description || e.vendor || '(expense)',
         category: e.category || '—', ref: e.id?.slice(0,6) || '', raw:e,
       });
     });
+    (budgetRequests||[]).filter(b => b.status === 'spent').forEach(b=> out.push({
+      // Use whichever date is set; fall back to created_at so rows can't
+      // silently drop out of the feed because no other date was filled.
+      date: b.spent_at
+            || b.date_needed
+            || (b.approved_at||'').slice(0,10)
+            || b.date
+            || (b.created_at||'').slice(0,10),
+      source:'budget', amount: Number(b.amount||0),
+      label: `${b.department||''} · ${b.purpose||'(budget)'}`,
+      category: 'Budget Request', ref: b.id?.slice(0,6) || '', raw:b,
+    }));
     (cashAdvances||[]).forEach(c=> out.push({
       date: c.date, source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
       amount: Number(c.amount||0),
@@ -15351,6 +15371,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     const map = {
       voucher:      { label:'Voucher',      cls:'bg-blue-100 text-blue-700' },
       expense:      { label:'Expense',      cls:'bg-amber-100 text-amber-700' },
+      budget:       { label:'Budget',       cls:'bg-violet-100 text-violet-700' },
       petty_cash:   { label:'Petty Cash',   cls:'bg-emerald-100 text-emerald-700' },
       cash_advance: { label:'Cash Advance', cls:'bg-rose-100 text-rose-700' },
     };
@@ -15378,6 +15399,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
               <option value="">All sources</option>
               <option value="voucher">Vouchers</option>
               <option value="expense">Expenses</option>
+              <option value="budget">Budget Requests (Spent)</option>
               <option value="petty_cash">Petty Cash</option>
               <option value="cash_advance">Cash Advances</option>
             </select>
