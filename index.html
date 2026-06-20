@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 70 · Modal prints default to portrait Letter (vouchers, POs, PRs)';
+const BUILD = 'Live build 71 · Delivery Receipts: list view + Production / Sampling / SO entry buttons + SO auto-update';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3103,7 +3103,25 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
   );
 }
 
-function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack }){
+function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack, onCreateDR }){
+  // Helper to build the DR prefill context from a production job + linked lead.
+  // Triggered by the "Create DR" button below; the App passes setDrCreateCtx
+  // as onCreateDR so the DR modal opens with everything ready to go.
+  function buildDrCtxFromJob(j, lead){
+    return {
+      kind: 'production',
+      client_id: lead?.client_id || null,
+      sales_order_id: j.sales_order_id || null,
+      production_job_id: j.id,
+      items: [{
+        description: j.item || lead?.title || '',
+        style: j.style || lead?.style || '',
+        size: '', color: '',
+        quantity: j.quantity || lead?.quantity || 0,
+        uom: 'pcs',
+      }],
+    };
+  }
   // Note: "Pull from Stock" lives in the Purchasing module → 📤 Stock Out.
   // Purchasing controls all inventory custody (in via PO Receive, out via Stock Out).
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
@@ -3293,6 +3311,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                 <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
               </button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+              {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromJob(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Delivery Receipt for this job">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
             </td>
           </tr>
@@ -3362,6 +3381,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                             <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
                           </button>
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                          {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromJob(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Delivery Receipt for this job">🚚 DR</button>}
                           {canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
                         </td>
                       </tr>
@@ -3383,7 +3403,21 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
 }
 
 /* ----------------------- Sampling board ----------------------- */
-function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack }){
+function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack, onCreateDR }){
+  function buildDrCtxFromSample(j, lead){
+    return {
+      kind: 'sample',
+      client_id: lead?.client_id || null,
+      sampling_job_id: j.id,
+      items: [{
+        description: 'Sample · ' + (j.title || lead?.title || ''),
+        style: j.style || lead?.style || '',
+        size: j.size || '', color: j.color || '',
+        quantity: j.quantity || 1,
+        uom: 'pcs',
+      }],
+    };
+  }
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
   const [filterOwner,setFilterOwner]=useState('');
@@ -3516,6 +3550,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+              {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
             </td>
           </tr>
@@ -12585,7 +12620,21 @@ const SO_STATUSES = [
 ];
 function soMeta(k){ return SO_STATUSES.find(s=>s.key===k)||SO_STATUSES[0]; }
 
-function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccounts, clients, leads, reload }){
+function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccounts, clients, leads, reload, onCreateDR }){
+  // Build DR pre-fill from an SO row. Lines come from the SO if items exist;
+  // otherwise we start with one blank line so the user types what's actually
+  // being delivered (partial delivery is the common case).
+  function buildDrCtxFromSO(o){
+    const items = Array.isArray(o.items) && o.items.length
+      ? o.items.map(it=> ({ description:it.description||it.name||'', style:it.style||'', size:it.size||'', color:it.color||'', quantity:it.quantity||0, uom:'pcs' }))
+      : [{ description:'', style:'', size:'', color:'', quantity:0, uom:'pcs' }];
+    return {
+      kind: 'production',
+      client_id: o.client_id || null,
+      sales_order_id: o.id,
+      items,
+    };
+  }
   const [editing,setEditing]=useState(null);   // SO to open
   const [paying,setPaying]=useState(null);     // SO to record payment for
   const [filter,setFilter]=useState('');
@@ -12669,6 +12718,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
             <td className="px-3 py-2 text-xs">{o.qb_invoice_number ? <a href={o.qb_invoice_url||'#'} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-indigo-600 hover:underline">{o.qb_invoice_number}</a> : <span className="text-slate-300">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               {o.status!=='paid' && o.status!=='cancelled' && <button onClick={(e)=>{e.stopPropagation(); setPaying(o);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Record payment</button>}
+              {onCreateDR && canManageDR(profile) && <button onClick={(e)=>{e.stopPropagation(); onCreateDR(buildDrCtxFromSO(o));}} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Delivery Receipt linked to this SO">🚚 + DR</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteSO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
@@ -16012,6 +16062,494 @@ function StyleForm({ existing, items, suppliers, departments, profile, requests,
   );
 }
 
+/* ============================================================================
+   DELIVERY RECEIPTS — create/edit modal + view/print modal + list view
+   ============================================================================
+   Workflow:
+     1. From Production Board, Sampling Board, or SO detail, an authorised user
+        (Admin / Sales Assistant / Production Supervisor) clicks "Create DR".
+     2. DeliveryReceiptModal opens with line items pre-filled from the job/SO.
+     3. User reviews, saves as Draft. They can re-open to edit.
+     4. User clicks "Release" — DR locks (only Admin can edit), released_at is
+        stamped, and if the DR is linked to a Sales Order the SO delivered_qty
+        rolls up + the SO auto-flips to 'Delivered' when fully covered.
+     5. View/Print modal renders portrait Letter with the modal-print pipeline
+        (build 69-70): no backdrop, no header, no clipping, page-aware print.
+   ============================================================================ */
+
+// Sum quantity across all line items for a DR (used for SO roll-ups + display).
+function drTotalQty(items){ return (items||[]).reduce((s,it)=> s + Number(it.quantity||0), 0); }
+
+// Permission helper — who can create/edit DRs (in draft) at all.
+function canManageDR(profile){
+  const r = profile?.role;
+  return r==='admin' || r==='sales_assistant' || r==='production_supervisor';
+}
+// After Release only Admin can edit/void — DRs are official documents.
+function canEditReleasedDR(profile){ return profile?.role==='admin'; }
+
+// Roll up delivered qty for an SO across all its non-void / non-draft DRs and
+// flip the SO status if fully covered. Called after DR insert/update/release.
+async function syncSODeliveryStatus(salesOrderId){
+  if(!salesOrderId) return;
+  // Read all DRs against this SO that are released or received (not draft/void).
+  const { data: drs } = await sb
+    .from('delivery_receipts')
+    .select('id,status')
+    .eq('sales_order_id', salesOrderId)
+    .is('deleted_at', null);
+  const liveIds = (drs||[]).filter(d=> d.status==='released' || d.status==='received').map(d=> d.id);
+  let delivered = 0;
+  if(liveIds.length){
+    const { data: lines } = await sb
+      .from('dr_items').select('quantity').in('dr_id', liveIds);
+    delivered = (lines||[]).reduce((s,l)=> s + Number(l.quantity||0), 0);
+  }
+  // Read the SO so we know the ordered qty + current status.
+  const { data: so } = await sb
+    .from('sales_orders').select('id,status,total_qty,quantity').eq('id', salesOrderId).single();
+  if(!so) return;
+  const ordered = Number(so.total_qty || so.quantity || 0);
+  const next = (ordered>0 && delivered >= ordered) ? 'delivered' : (delivered>0 ? 'in_progress' : so.status);
+  if(next && next !== so.status){
+    await sb.from('sales_orders').update({ status: next }).eq('id', so.id);
+  }
+}
+
+// ─────────── DR CREATE / EDIT MODAL ───────────
+function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJobs, sampleJobs, drCtx, existing, drItems, onClose, onSaved }){
+  // Modes: 'edit' (existing DR) vs 'create' (drCtx with pre-fill context).
+  const isEdit = !!existing;
+  const ctx = drCtx || {};
+  // Header state.
+  const [date,setDate]=useState(existing?.date || new Date().toISOString().slice(0,10));
+  const [kind,setKind]=useState(existing?.kind || ctx.kind || 'production');
+  const [clientId,setClientId]=useState(existing?.client_id || ctx.client_id || '');
+  const [soId,setSoId]=useState(existing?.sales_order_id || ctx.sales_order_id || '');
+  const [pjId]=useState(existing?.production_job_id || ctx.production_job_id || null);
+  const [smId]=useState(existing?.sampling_job_id || ctx.sampling_job_id || null);
+  const [releasedBy,setReleasedBy]=useState(existing?.released_by_name || (profile?.name||''));
+  const [receivedBy,setReceivedBy]=useState(existing?.received_by_name || '');
+  const [vehicle,setVehicle]=useState(existing?.vehicle || '');
+  const [notes,setNotes]=useState(existing?.notes || '');
+  // Line items state. For edit, seeded from drItems prop. For create, from ctx.items.
+  const seedLines = ()=>{
+    if(isEdit){
+      return (drItems||[]).filter(it=> it.dr_id === existing.id)
+        .sort((a,b)=>(a.position||0)-(b.position||0))
+        .map(it=> ({ description:it.description||'', style:it.style||'', size:it.size||'', color:it.color||'', quantity:it.quantity||0, uom:it.uom||'pcs' }));
+    }
+    if(Array.isArray(ctx.items) && ctx.items.length){
+      return ctx.items.map(it=> ({ description:it.description||'', style:it.style||'', size:it.size||'', color:it.color||'', quantity:it.quantity||0, uom:it.uom||'pcs' }));
+    }
+    return [{ description:'', style:'', size:'', color:'', quantity:0, uom:'pcs' }];
+  };
+  const [lines,setLines]=useState(seedLines);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+
+  // Permission: if existing DR is released, only Admin can edit.
+  const locked = isEdit && existing.status !== 'draft' && !canEditReleasedDR(profile);
+
+  function setLine(i, patch){
+    setLines(prev=> prev.map((r,idx)=> idx===i ? { ...r, ...patch } : r));
+  }
+  function addLine(){ setLines(prev=> [...prev, { description:'', style:'', size:'', color:'', quantity:0, uom:'pcs' }]); }
+  function removeLine(i){ setLines(prev=> prev.filter((_,idx)=> idx!==i)); }
+
+  // Save the DR + line items. Idempotent: existing DR → update + replace items.
+  // New DR → allocate a DR-YYYY-MM-NNN number, insert header, then bulk insert items.
+  async function save(targetStatus){
+    setBusy(true); setMsg('');
+    try {
+      if(!clientId){ throw new Error('Pick a client.'); }
+      if(lines.length===0 || lines.every(l=> !l.description && !l.style)){
+        throw new Error('Add at least one line item.');
+      }
+      const payload = {
+        date, kind, client_id: clientId,
+        sales_order_id: soId || null,
+        production_job_id: pjId || null,
+        sampling_job_id: smId || null,
+        released_by_name: releasedBy || null,
+        received_by_name: receivedBy || null,
+        vehicle: vehicle || null,
+        notes: notes || null,
+        status: targetStatus || existing?.status || 'draft',
+      };
+      if(targetStatus === 'released' && !existing?.released_at){
+        payload.released_at = new Date().toISOString();
+      }
+      let drId;
+      if(isEdit){
+        const { error } = await sb.from('delivery_receipts').update(payload).eq('id', existing.id);
+        if(error) throw error;
+        drId = existing.id;
+        // Wipe + re-insert line items (simpler than diffing).
+        await sb.from('dr_items').delete().eq('dr_id', drId);
+      } else {
+        // Allocate DR number — DR-YYYY-MM-NNN scoped to the calendar month.
+        const monthKey = date.slice(0,7); // YYYY-MM
+        const { data: monthRows } = await sb.from('delivery_receipts')
+          .select('id').like('number', `DR-${monthKey}-%`);
+        const seq = String((monthRows?.length||0)+1).padStart(3,'0');
+        payload.number = `DR-${monthKey}-${seq}`;
+        payload.created_by = profile.id;
+        payload.prepared_by = profile.id;
+        const { data: ins, error } = await sb.from('delivery_receipts').insert(payload).select('id').single();
+        if(error) throw error;
+        drId = ins.id;
+      }
+      const liveLines = lines
+        .filter(l=> l.description || l.style || Number(l.quantity||0)>0)
+        .map((l,i)=> ({
+          dr_id: drId,
+          description: l.description || null,
+          style: l.style || null,
+          size: l.size || null,
+          color: l.color || null,
+          quantity: Number(l.quantity||0),
+          uom: l.uom || 'pcs',
+          position: i,
+        }));
+      if(liveLines.length){
+        const { error: e2 } = await sb.from('dr_items').insert(liveLines);
+        if(e2) throw e2;
+      }
+      // If we just released a DR linked to an SO, roll up delivered qty.
+      if(payload.status === 'released' && payload.sales_order_id){
+        await syncSODeliveryStatus(payload.sales_order_id);
+      }
+      setBusy(false); onSaved && onSaved(drId);
+    } catch(err){
+      setBusy(false); setMsg(err.message||String(err));
+    }
+  }
+
+  return (
+    <Modal title={isEdit ? `DR ${existing.number}` : 'New Delivery Receipt'} onClose={onClose} xwide>
+      <div className="space-y-3 text-sm">
+        {/* Header */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Date</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} disabled={locked} className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Type</label>
+            <select value={kind} onChange={e=>setKind(e.target.value)} disabled={locked} className="w-full border rounded px-2 py-1.5">
+              <option value="production">Production</option>
+              <option value="sample">Sample</option>
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Client</label>
+            <select value={clientId} onChange={e=>setClientId(e.target.value)} disabled={locked} className="w-full border rounded px-2 py-1.5">
+              <option value="">— pick a client —</option>
+              {(clients||[]).slice().sort((a,b)=> String(a.company||'').localeCompare(String(b.company||''))).map(c=> (
+                <option key={c.id} value={c.id}>{c.company}</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Sales Order (optional — links DR to SO for auto-update)</label>
+            <select value={soId} onChange={e=>setSoId(e.target.value)} disabled={locked} className="w-full border rounded px-2 py-1.5">
+              <option value="">— no SO link —</option>
+              {(salesOrders||[]).filter(s=> !clientId || s.client_id === clientId).map(s=> (
+                <option key={s.id} value={s.id}>{s.number} · {s.title||s.project_name||''}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Released by</label>
+            <input value={releasedBy} onChange={e=>setReleasedBy(e.target.value)} disabled={locked} placeholder="Name" className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Vehicle / Courier</label>
+            <input value={vehicle} onChange={e=>setVehicle(e.target.value)} disabled={locked} placeholder="Plate / Courier name" className="w-full border rounded px-2 py-1.5" />
+          </div>
+        </div>
+
+        {/* Line items */}
+        <div className="border rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-b">
+            <div className="font-semibold text-xs uppercase tracking-wide text-slate-600">Items delivered</div>
+            <div className="text-xs text-slate-500">Total qty: <strong className="text-slate-800">{drTotalQty(lines)}</strong></div>
+          </div>
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="text-left px-2 py-1.5">Description</th>
+                <th className="text-left px-2 py-1.5">Style</th>
+                <th className="text-left px-2 py-1.5">Size</th>
+                <th className="text-left px-2 py-1.5">Color</th>
+                <th className="text-right px-2 py-1.5 w-20">Qty</th>
+                <th className="text-left px-2 py-1.5 w-16">UOM</th>
+                <th className="w-8"></th>
+              </tr>
+            </thead>
+            <tbody>{lines.map((r,i)=> (
+              <tr key={i} className="border-t">
+                <td className="px-2 py-1"><input value={r.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1"><input value={r.style} onChange={e=>setLine(i,{style:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1"><input value={r.size} onChange={e=>setLine(i,{size:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1"><input value={r.color} onChange={e=>setLine(i,{color:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1"><input type="number" value={r.quantity} onChange={e=>setLine(i,{quantity:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1 text-right" /></td>
+                <td className="px-2 py-1"><input value={r.uom} onChange={e=>setLine(i,{uom:e.target.value})} disabled={locked} className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1 text-center">
+                  {!locked && <button onClick={()=>removeLine(i)} className="text-rose-500 hover:text-rose-700 text-base leading-none" title="Remove row">×</button>}
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {!locked && <div className="p-2 border-t bg-slate-50"><button onClick={addLine} className="text-xs px-2 py-1 rounded bg-white border hover:bg-slate-100">+ Add line</button></div>}
+        </div>
+
+        {/* Notes + received by */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Received by (will be printed on the DR)</label>
+            <input value={receivedBy} onChange={e=>setReceivedBy(e.target.value)} disabled={locked} placeholder="Name of receiver" className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Notes</label>
+            <input value={notes} onChange={e=>setNotes(e.target.value)} disabled={locked} placeholder="Optional remarks" className="w-full border rounded px-2 py-1.5" />
+          </div>
+        </div>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        {locked && <div className="text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded p-2">This DR is {existing.status}. Only Admin can edit a released DR.</div>}
+
+        {/* Footer actions */}
+        <div className="flex flex-wrap gap-2 pt-2 border-t">
+          {!locked && (
+            <>
+              <button disabled={busy} onClick={()=>save('draft')} className="px-3 py-2 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 disabled:opacity-50">Save Draft</button>
+              <button disabled={busy} onClick={()=>save('released')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">Save & Release</button>
+            </>
+          )}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────── DR VIEW / PRINT MODAL ───────────
+function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders, onClose }){
+  const items = (drItems||[]).filter(it=> it.dr_id === dr.id).sort((a,b)=>(a.position||0)-(b.position||0));
+  const client = (clients||[]).find(c=> c.id === dr.client_id);
+  const so = (salesOrders||[]).find(s=> s.id === dr.sales_order_id);
+  const preparedBy = (profiles||[]).find(p=> p.id === dr.prepared_by);
+  const totalQty = drTotalQty(items);
+  return (
+    <Modal title={`Delivery Receipt — ${dr.number||''}`} onClose={onClose} wide>
+      <div className="bg-white p-6 text-sm" style={{fontFamily:'serif'}}>
+        {/* Header */}
+        <div className="text-center mb-4 border-b-2 border-slate-800 pb-3">
+          <div className="text-2xl font-bold tracking-wide">STEEZE CORPORATION</div>
+          <div className="text-xs text-slate-600">Custom apparel manufacturer</div>
+          <div className="mt-3 inline-block px-6 py-1 bg-slate-800 text-white text-base font-bold tracking-widest">DELIVERY RECEIPT</div>
+        </div>
+
+        {/* Meta */}
+        <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
+          <div><div className="font-semibold uppercase text-slate-500">DR No.</div><div className="font-mono text-base font-bold">{dr.number||'—'}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Date</div><div className="font-medium">{fmtDate(dr.date)}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Type</div><div className="font-medium capitalize">{dr.kind||'production'}</div></div>
+        </div>
+
+        {/* Client */}
+        <div className="border-2 border-slate-800 p-3 mb-3">
+          <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">DELIVER TO</div>
+          <div className="text-xl font-bold mt-1">{client?.company || '—'}</div>
+          {client && <div className="text-xs text-slate-600 mt-0.5">{client.address||''}{client.contact?` · Attn: ${client.contact}`:''}</div>}
+          {so && <div className="text-[10px] text-slate-500 mt-1">Sales Order: <span className="font-mono font-bold">{so.number}</span>{so.title?` · ${so.title}`:''}</div>}
+        </div>
+
+        {/* Items */}
+        <div className="mb-4">
+          <table className="w-full text-xs border-2 border-slate-800">
+            <thead className="bg-slate-100">
+              <tr className="border-b-2 border-slate-800">
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Description</th>
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Style</th>
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Size</th>
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Color</th>
+                <th className="text-right px-2 py-1.5 border-r border-slate-800">Qty</th>
+                <th className="text-left px-2 py-1.5">UOM</th>
+              </tr>
+            </thead>
+            <tbody>{items.map((it,i)=> (
+              <tr key={i} className="border-b border-slate-400">
+                <td className="px-2 py-1.5 border-r border-slate-400">{it.description||'—'}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400">{it.style||'—'}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400">{it.size||'—'}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400">{it.color||'—'}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400 text-right font-semibold">{it.quantity||0}</td>
+                <td className="px-2 py-1.5">{it.uom||'pcs'}</td>
+              </tr>
+            ))}
+              <tr className="bg-slate-50 font-bold">
+                <td colSpan="4" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total Quantity</td>
+                <td className="px-2 py-2 text-right border-r border-slate-800 text-base">{totalQty}</td>
+                <td className="px-2 py-2"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Vehicle + notes */}
+        {(dr.vehicle || dr.notes) && (
+          <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
+            {dr.vehicle && <div><div className="font-semibold uppercase text-slate-500">Vehicle / Courier</div><div>{dr.vehicle}</div></div>}
+            {dr.notes && <div><div className="font-semibold uppercase text-slate-500">Notes</div><div>{dr.notes}</div></div>}
+          </div>
+        )}
+
+        {/* Signature block */}
+        <div className="grid grid-cols-3 gap-6 mt-10 text-xs">
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1">
+              {preparedBy && <div className="pt-7 text-sm font-medium">{preparedBy.name||preparedBy.email}</div>}
+            </div>
+            <div className="font-semibold text-slate-700">Prepared by</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(dr.date)}</div>
+          </div>
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1">
+              {dr.released_by_name && <div className="pt-7 text-sm font-medium">{dr.released_by_name}</div>}
+            </div>
+            <div className="font-semibold text-slate-700">Released by</div>
+            {dr.released_at && <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(dr.released_at.slice(0,10))}</div>}
+          </div>
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1">
+              {dr.received_by_name && <div className="pt-7 text-sm font-medium">{dr.received_by_name}</div>}
+            </div>
+            <div className="font-semibold text-slate-700">Received by</div>
+            {dr.received_at && <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(dr.received_at)}</div>}
+          </div>
+        </div>
+
+        <div className="mt-6 text-[10px] text-slate-500 text-center border-t pt-2">
+          Goods received in good order and condition. Any discrepancy must be reported within 24 hours of receipt.
+        </div>
+      </div>
+
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this DR</button>
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────── DR LIST VIEW ───────────
+function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliveryReceipts, drItems, prodJobs, sampleJobs, onCreate, onView, onEdit, reload }){
+  const [search,setSearch]=useState('');
+  const [statusFilter,setStatusFilter]=useState('');
+  const [kindFilter,setKindFilter]=useState('');
+  const rows = (deliveryReceipts||[])
+    .filter(d=> !statusFilter || d.status === statusFilter)
+    .filter(d=> !kindFilter || d.kind === kindFilter)
+    .filter(d=> {
+      if(!search) return true;
+      const q = search.toLowerCase();
+      const client = (clients||[]).find(c=> c.id===d.client_id);
+      return `${d.number||''} ${client?.company||''} ${d.received_by_name||''}`.toLowerCase().includes(q);
+    });
+  async function voidDR(d){
+    if(!confirm(`Void DR ${d.number}? It will be soft-deleted and the SO delivered qty will recalculate.`)) return;
+    const { error } = await sb.from('delivery_receipts').update({
+      deleted_at: new Date().toISOString(), deleted_by: profile.id,
+    }).eq('id', d.id);
+    if(error){ alert(error.message); return; }
+    if(d.sales_order_id) await syncSODeliveryStatus(d.sales_order_id);
+    reload && reload();
+  }
+  return (
+    <div>
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🚚 Delivery Receipts</h1>
+            <p className="text-slate-500 text-sm">Every released or in-progress DR. Reprint, edit drafts, or view past deliveries.</p>
+          </div>
+          <div className="flex-1"></div>
+          {canManageDR(profile) && <button onClick={()=>onCreate({ kind:'production' })} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New DR</button>}
+        </div>
+        <div className="flex flex-wrap gap-2 mt-3">
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search DR #, client, receiver…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+          <select value={kindFilter} onChange={e=>setKindFilter(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+            <option value="">All types</option>
+            <option value="production">Production</option>
+            <option value="sample">Sample</option>
+          </select>
+          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="released">Released</option>
+            <option value="received">Received</option>
+            <option value="void">Void</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+            <tr>
+              <th className="text-left px-3 py-2">DR #</th>
+              <th className="text-left px-3 py-2">Date</th>
+              <th className="text-left px-3 py-2">Client</th>
+              <th className="text-left px-3 py-2">SO</th>
+              <th className="text-left px-3 py-2">Type</th>
+              <th className="text-right px-3 py-2">Qty</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-right px-3 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>{rows.length===0 ? (
+            <tr><td colSpan="8" className="text-center px-3 py-10 text-slate-400">No delivery receipts yet. Click + New DR or use the button on a production / sampling job.</td></tr>
+          ) : rows.map(d=> {
+            const client = (clients||[]).find(c=> c.id===d.client_id);
+            const so = (salesOrders||[]).find(s=> s.id===d.sales_order_id);
+            const itemsForDr = (drItems||[]).filter(it=> it.dr_id===d.id);
+            const qty = drTotalQty(itemsForDr);
+            const statusCls = d.status==='released' ? 'bg-emerald-100 text-emerald-700'
+              : d.status==='received' ? 'bg-blue-100 text-blue-700'
+              : d.status==='void' ? 'bg-rose-100 text-rose-700'
+              : 'bg-slate-100 text-slate-600';
+            return (
+              <tr key={d.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-mono text-xs font-bold">{d.number}</td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(d.date)}</td>
+                <td className="px-3 py-2">{client?.company || '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs">{so?.number || '—'}</td>
+                <td className="px-3 py-2 text-xs capitalize">{d.kind}</td>
+                <td className="px-3 py-2 text-right font-semibold">{qty}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{d.status}</span></td>
+                <td className="px-3 py-2 text-right">
+                  <div className="inline-flex gap-1">
+                    <button onClick={()=>onView(d)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">View / Print</button>
+                    {canManageDR(profile) && (d.status==='draft' || canEditReleasedDR(profile)) && (
+                      <button onClick={()=>onEdit(d)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">Edit</button>
+                    )}
+                    {profile.role==='admin' && d.status!=='void' && (
+                      <button onClick={()=>voidDR(d)} className="text-xs px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Void</button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------- App ----------------------- */
 function App(){
   const [session,setSession]=useState(undefined); const [profile,setProfile]=useState(null); const [profiles,setProfiles]=useState([]);
@@ -16042,6 +16580,16 @@ function App(){
   const [calendarEvents,setCalendarEvents]=useState([]);
   // Stock movements (in/out audit log). Used by Purchasing → Stock Out view.
   const [stockMovements,setStockMovements]=useState([]);
+  // Delivery Receipts (DR) + line items. Created from Production / Sampling /
+  // Sales Order entry points by Admin / Sales Assistant / Production Supervisor.
+  const [deliveryReceipts,setDeliveryReceipts]=useState([]);
+  const [drItems,setDrItems]=useState([]);
+  // When a "Create DR" button is clicked anywhere in the app, this holds the
+  // pre-fill context { kind, sales_order_id?, production_job_id?, sampling_job_id?,
+  // client_id?, items?[] }. The modal reads it on mount and pre-populates.
+  const [drCreateCtx,setDrCreateCtx]=useState(null);
+  const [drViewing,setDrViewing]=useState(null);   // DR row being viewed/printed
+  const [drEditing,setDrEditing]=useState(null);   // DR row being edited
   // HR Module: 201 file master + documents + memos + notes timeline
   const [employees,setEmployees]=useState([]); const [employeeDocs,setEmployeeDocs]=useState([]);
   const [employeeMemos,setEmployeeMemos]=useState([]); const [employeeNotes,setEmployeeNotes]=useState([]);
@@ -16109,7 +16657,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -16163,6 +16711,9 @@ function App(){
       sb.from('hr_applicants').select('*').order('applied_date',{ascending:false}),
       // Custom Payment Calendar events
       sb.from('calendar_events').select('*').order('date',{ascending:true}),
+      // Delivery Receipts + line items (graceful empty if SQL not yet run)
+      sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      sb.from('dr_items').select('*').order('position',{ascending:true}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -16207,6 +16758,8 @@ function App(){
     setCashAdvances(ca && !ca.error ? (ca.data||[]) : []);
     setStockMovements(sm && !sm.error ? (sm.data||[]) : []);
     setCalendarEvents(ce && !ce.error ? (ce.data||[]) : []);
+    setDeliveryReceipts(dr && !dr.error ? (dr.data||[]) : []);
+    setDrItems(dri && !dri.error ? (dri.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
   }
@@ -16241,11 +16794,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','rfps','budgets']);
+      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','delivery-receipts','rfps','budgets']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -16501,7 +17054,10 @@ function App(){
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
-  const LOGISTICS_GROUP = { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] };
+  // Logistics — daily schedule + Delivery Receipts (DRs are deliveries, so
+  // they live here logically. Visibility on the page is gated by role at
+  // create-time, but read-only viewing is available to everyone with this nav).
+  const LOGISTICS_GROUP = { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] };
   // Finance group — full module for Admin + Accounting. Purchasing gets a
   // single RFP entry so they can track their submissions. Sales Manager gets
   // SOs + Customer Ledger (read-only feel for them).
@@ -16619,7 +17175,7 @@ function App(){
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_FULL,
-      { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'] ] },
+      { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
@@ -16723,8 +17279,8 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
-        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
@@ -16752,6 +17308,7 @@ function App(){
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
+        {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="cash_advance" />}
@@ -16761,7 +17318,7 @@ function App(){
         {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
-        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} reload={loadAll} />}
+        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
@@ -16850,6 +17407,17 @@ function App(){
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
       {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
+
+      {/* Delivery Receipt modals — create (drCreateCtx), edit (drEditing), view/print (drViewing). */}
+      {drCreateCtx && canManageDR(profile) && (
+        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} drCtx={drCreateCtx} drItems={drItems} onClose={()=>setDrCreateCtx(null)} onSaved={()=>{ setDrCreateCtx(null); loadAll(); }} />
+      )}
+      {drEditing && canManageDR(profile) && (
+        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} existing={drEditing} drItems={drItems} onClose={()=>setDrEditing(null)} onSaved={()=>{ setDrEditing(null); loadAll(); }} />
+      )}
+      {drViewing && (
+        <DeliveryReceiptViewModal dr={drViewing} drItems={drItems} clients={clients} profiles={profiles} salesOrders={salesOrders} onClose={()=>setDrViewing(null)} />
+      )}
 
       <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
     </div>
