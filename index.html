@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 73 · Remove Transmittal button from Sample Board (still in Sales sidebar)';
+const BUILD = 'Live build 74 · Letterhead (logo + Las Piñas address + TIN) on Voucher / DR / Transmittal / PR / PO / Payslip / BIR 2307';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -178,6 +178,37 @@ function SteezeBolt({ className, fill }){
     <path d={STEEZE_BOLT_PATH_1} />
     <path d={STEEZE_BOLT_PATH_2} />
   </svg>);
+}
+
+// Company info constants — single source of truth for printables.
+const STEEZE_ADDRESS = 'Lot 25 Blk 26 Marcos Alvarez Ext. Road, Talon Singko, Las Piñas City, NCR 1747';
+const STEEZE_TIN     = '008-794-398-000';
+
+// Shared printable letterhead — lightning logo on the left, company name +
+// address + TIN in the middle, optional document-type label on the right.
+// Used by Voucher, Delivery Receipt, and Transmittal printables. The
+// Purchase Order / Purchase Request use DocPrintHeader (also letterhead-style
+// but with a right-side meta block instead of a label chip).
+function SteezeLetterhead({ docTitle }){
+  return (
+    <div className="flex items-stretch border-2 border-slate-900 mb-4">
+      <div className="flex items-center justify-center px-5 border-r-2 border-slate-900 bg-white">
+        <SteezeBolt className="w-14 h-14" fill="#203A5D" />
+      </div>
+      <div className="flex-1 px-4 py-2.5 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-xl font-extrabold tracking-wide text-slate-900">STEEZE CORPORATION</div>
+          <div className="text-[10px] text-slate-600 leading-snug">{STEEZE_ADDRESS}</div>
+          <div className="text-[10px] text-slate-600">TIN: {STEEZE_TIN}</div>
+        </div>
+        {docTitle && (
+          <div className="text-right">
+            <div className="inline-block px-4 py-1 bg-slate-800 text-white text-sm font-bold tracking-widest">{docTitle}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // On-screen error reporter so problems show as readable text, not a blank page.
@@ -8424,6 +8455,8 @@ function PayrollPayslips({ sewers, entries, money, entryEarnings, entryDescribe,
           const dates = Object.keys(byDate).sort();
           return (
             <div key={s.id} className="bg-white border rounded-xl p-6 mb-4 payslip">
+              {/* Steeze letterhead — appears at the top of every printed payslip */}
+              <SteezeLetterhead docTitle="PAYSLIP" />
               <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3 mb-4">
                 <div><div className="text-lg font-bold">{s.name}</div><div className="text-xs text-slate-500">Piece-rate payslip</div></div>
                 <div className="text-right text-xs text-slate-500"><div><strong>{periodLabel}:</strong> {fmtPayrollDate(from)} – {fmtPayrollDate(to)}</div><div>Generated: {fmtPayrollDate(todayISOd())}</div></div>
@@ -10566,14 +10599,16 @@ function DocPrintHeader({ title, leftBlocks, rightBlocks }){
   return (
     <div className="flex items-stretch border-2 border-slate-900">
       <div className="flex items-center justify-center px-6 border-r-2 border-slate-900 bg-white">
-        <SteezeBolt className="w-12 h-12" fill="#203A5D" />
+        <SteezeBolt className="w-14 h-14" fill="#203A5D" />
       </div>
       <div className="flex-1 px-4 py-2 flex items-center justify-between gap-4">
-        <div>
-          <div className="text-2xl font-extrabold tracking-wide text-slate-900">{title}</div>
-          <div className="text-[10px] text-slate-600 mt-0.5">Steeze Corporation · Quezon City, Philippines</div>
+        <div className="min-w-0">
+          <div className="text-xl font-extrabold tracking-wide text-slate-900 uppercase">Steeze Corporation</div>
+          <div className="text-[10px] text-slate-600 leading-snug">{STEEZE_ADDRESS}</div>
+          <div className="text-[10px] text-slate-600">TIN: {STEEZE_TIN}</div>
+          <div className="text-base font-bold tracking-wider text-slate-900 mt-1.5">{title}</div>
         </div>
-        <div className="text-right text-[11px] leading-snug">
+        <div className="text-right text-[11px] leading-snug shrink-0">
           {rightBlocks}
         </div>
       </div>
@@ -13549,12 +13584,8 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, autoPrin
         }
       `}</style>
       <div className="voucher-print bg-white p-6 rounded text-sm" style={{fontFamily:'serif'}}>
-        {/* Header */}
-        <div className="text-center mb-4 border-b-2 border-slate-800 pb-3">
-          <div className="text-2xl font-bold tracking-wide">STEEZE CORPORATION</div>
-          <div className="text-xs text-slate-600">Custom apparel manufacturer</div>
-          <div className="mt-3 inline-block px-6 py-1 bg-slate-800 text-white text-base font-bold tracking-widest">{typeLabel}</div>
-        </div>
+        {/* Steeze letterhead: logo + address + TIN + doc type chip */}
+        <SteezeLetterhead docTitle={typeLabel} />
 
         {/* Voucher meta — number / date / type / category */}
         <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
@@ -15739,8 +15770,8 @@ function BIR2307PrintView({ data, profile, onClose }){
             <div className="border border-slate-400 p-3">
               <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART I — Payor (Withholding Agent)</div>
               <div className="text-[11px]"><strong>Name:</strong> Steeze Corporation</div>
-              <div className="text-[11px]"><strong>TIN:</strong> ___-___-___-000</div>
-              <div className="text-[11px]"><strong>Address:</strong> Quezon City, Philippines</div>
+              <div className="text-[11px]"><strong>TIN:</strong> {STEEZE_TIN}</div>
+              <div className="text-[11px]"><strong>Address:</strong> {STEEZE_ADDRESS}</div>
             </div>
             <div className="border border-slate-400 p-3">
               <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART II — Payee (Income Recipient)</div>
@@ -16349,12 +16380,8 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
   return (
     <Modal title={`Delivery Receipt — ${dr.number||''}`} onClose={onClose} wide>
       <div className="bg-white p-6 text-sm" style={{fontFamily:'serif'}}>
-        {/* Header */}
-        <div className="text-center mb-4 border-b-2 border-slate-800 pb-3">
-          <div className="text-2xl font-bold tracking-wide">STEEZE CORPORATION</div>
-          <div className="text-xs text-slate-600">Custom apparel manufacturer</div>
-          <div className="mt-3 inline-block px-6 py-1 bg-slate-800 text-white text-base font-bold tracking-widest">DELIVERY RECEIPT</div>
-        </div>
+        {/* Steeze letterhead: logo + address + TIN + doc type chip */}
+        <SteezeLetterhead docTitle="DELIVERY RECEIPT" />
 
         {/* Meta */}
         <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
@@ -16895,11 +16922,8 @@ function TransmittalViewModal({ trn, transmittalItems, clients, profiles, salesO
     <Modal title={`Transmittal — ${trn.number||''}`} onClose={onClose} wide>
       {/* The PRINTABLE document */}
       <div className="bg-white p-6 text-sm" style={{fontFamily:'serif'}}>
-        <div className="text-center mb-4 border-b-2 border-slate-800 pb-3">
-          <div className="text-2xl font-bold tracking-wide">STEEZE CORPORATION</div>
-          <div className="text-xs text-slate-600">Custom apparel manufacturer</div>
-          <div className="mt-3 inline-block px-6 py-1 bg-slate-800 text-white text-base font-bold tracking-widest">TRANSMITTAL</div>
-        </div>
+        {/* Steeze letterhead: logo + address + TIN + doc type chip */}
+        <SteezeLetterhead docTitle="TRANSMITTAL" />
         <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
           <div><div className="font-semibold uppercase text-slate-500">No.</div><div className="font-mono text-base font-bold">{trn.number||'—'}</div></div>
           <div><div className="font-semibold uppercase text-slate-500">Date sent</div><div className="font-medium">{fmtDate(trn.date_sent)}</div></div>
