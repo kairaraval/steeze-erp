@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 71 · Delivery Receipts: list view + Production / Sampling / SO entry buttons + SO auto-update';
+const BUILD = 'Live build 72 · Transmittals: track loaned samples/sizers + Outstanding view + return tracking';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3403,7 +3403,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
 }
 
 /* ----------------------- Sampling board ----------------------- */
-function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack, onCreateDR }){
+function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack, onCreateDR, onCreateTrn }){
   function buildDrCtxFromSample(j, lead){
     return {
       kind: 'sample',
@@ -3415,6 +3415,21 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
         size: j.size || '', color: j.color || '',
         quantity: j.quantity || 1,
         uom: 'pcs',
+      }],
+    };
+  }
+  // Build a Transmittal context from a sample job. Used when the client is
+  // borrowing the sample (not keeping it) — most sample sends are this kind.
+  function buildTrnCtxFromSample(j, lead){
+    return {
+      client_id: lead?.client_id || null,
+      sampling_job_id: j.id,
+      lead_id: lead?.id || null,
+      purpose: j.item ? `Sample for review · ${j.item}` : 'Sample for client review',
+      items: [{
+        description: j.item || lead?.title || 'Sample garment',
+        item_type: 'sample_garment',
+        quantity_sent: j.quantity || 1,
       }],
     };
   }
@@ -3551,6 +3566,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
               {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
+              {onCreateTrn && canManageTrn(profile) && <button onClick={()=>onCreateTrn(buildTrnCtxFromSample(j, lead))} className="text-xs text-violet-700 hover:underline mr-2" title="Loan this sample to the client (transmittal)">📤 Transmittal</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
             </td>
           </tr>
@@ -16221,7 +16237,11 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
       }
       setBusy(false); onSaved && onSaved(drId);
     } catch(err){
-      setBusy(false); setMsg(err.message||String(err));
+      setBusy(false);
+      // Surface the full error in the console so a missing FK / RLS denial
+      // is immediately visible; also bubble a friendly message in the modal.
+      console.error('[DR save failed]', err, 'payload kind:', kind, 'sampling_job_id:', smId, 'production_job_id:', pjId);
+      setMsg(`Save failed: ${err.message||String(err)}`);
     }
   }
 
@@ -16550,6 +16570,623 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
   );
 }
 
+/* ============================================================================
+   TRANSMITTALS — create/edit modal + view/print modal + list view
+   ============================================================================
+   A Transmittal logs items LOANED to a client (samples, sizers, swatches,
+   mockups). Two-way flow — items must come back. Each line tracks its own
+   quantity_returned so partial returns work naturally.
+
+   Key view: "Outstanding" — every transmittal with at least one item still
+   out, sorted by age. Color-coded by days outstanding:
+     green  <14 days
+     amber  14-30 days
+     red    >30 days
+   This is the page Sales reviews every Monday to chase clients.
+   ============================================================================ */
+
+// Item type pre-loaded options (locked in via AskUserQuestion).
+const TRN_ITEM_TYPES = [
+  { key:'sample_garment', label:'Sample garment' },
+  { key:'sizer',          label:'Sizer / Size set' },
+  { key:'fabric_swatch',  label:'Fabric swatch' },
+  { key:'mockup',         label:'Mockup / Reference garment' },
+  { key:'other',          label:'Other' },
+];
+function trnTypeLabel(k){ return (TRN_ITEM_TYPES.find(t=>t.key===k)||{}).label || k || '—'; }
+
+// Permission: who can create/edit transmittals.
+function canManageTrn(profile){
+  const r = profile?.role;
+  return r==='admin' || r==='manager' || r==='assistant' || r==='sales_assistant' || r==='production_supervisor';
+}
+
+// Compute outstanding qty for a transmittal across all its lines.
+function trnOutstandingQty(items){
+  return (items||[]).reduce((s,it)=>{
+    const sent = Number(it.quantity_sent||0);
+    const ret  = Number(it.quantity_returned||0);
+    const wof  = Number(it.written_off_qty||0);
+    return s + Math.max(0, sent - ret - wof);
+  }, 0);
+}
+function trnSentQty(items){ return (items||[]).reduce((s,it)=> s + Number(it.quantity_sent||0), 0); }
+function trnReturnedQty(items){ return (items||[]).reduce((s,it)=> s + Number(it.quantity_returned||0), 0); }
+
+// Days a transmittal has been outstanding (from date_sent to today).
+function trnDaysOut(t){
+  if(!t.date_sent) return 0;
+  const sent = new Date(t.date_sent);
+  const now = new Date();
+  return Math.floor((now - sent) / (1000*60*60*24));
+}
+function trnAgingCls(days){
+  if(days <= 14) return 'text-emerald-700 bg-emerald-100';
+  if(days <= 30) return 'text-amber-700 bg-amber-100';
+  return 'text-rose-700 bg-rose-100';
+}
+
+// Auto-derive status from line items: if every line's sent qty equals
+// returned + written_off, the transmittal is fully_returned; if any returns
+// have happened it's partially_returned; else stays at sent.
+function deriveTrnStatus(items){
+  const totalSent = trnSentQty(items);
+  const totalAccountedFor = (items||[]).reduce((s,it)=> s + Number(it.quantity_returned||0) + Number(it.written_off_qty||0), 0);
+  if(totalSent === 0) return 'sent';
+  if(totalAccountedFor >= totalSent) return 'fully_returned';
+  if(totalAccountedFor > 0) return 'partially_returned';
+  return 'sent';
+}
+
+// ─────────── TRN CREATE / EDIT MODAL ───────────
+function TransmittalModal({ profile, profiles, clients, salesOrders, leads, sampleJobs, trnCtx, existing, transmittalItems, onClose, onSaved }){
+  const isEdit = !!existing;
+  const ctx = trnCtx || {};
+  // Default expected return date = today + 14 days (locked in via question).
+  const defaultReturnDate = (()=>{ const d = new Date(); d.setDate(d.getDate()+14); return d.toISOString().slice(0,10); })();
+  const [dateSent,setDateSent]=useState(existing?.date_sent || new Date().toISOString().slice(0,10));
+  const [clientId,setClientId]=useState(existing?.client_id || ctx.client_id || '');
+  const [soId,setSoId]=useState(existing?.sales_order_id || ctx.sales_order_id || '');
+  const [leadId]=useState(existing?.lead_id || ctx.lead_id || null);
+  const [smId]=useState(existing?.sampling_job_id || ctx.sampling_job_id || null);
+  const [purpose,setPurpose]=useState(existing?.purpose || ctx.purpose || '');
+  const [sentBy,setSentBy]=useState(existing?.sent_by_name || (profile?.name||''));
+  const [receivedBy,setReceivedBy]=useState(existing?.received_by_at_client || '');
+  const [expectedReturn,setExpectedReturn]=useState(existing?.expected_return_date || defaultReturnDate);
+  const [notes,setNotes]=useState(existing?.notes || '');
+  const seedLines = ()=>{
+    if(isEdit){
+      return (transmittalItems||[]).filter(it=> it.transmittal_id === existing.id)
+        .sort((a,b)=>(a.position||0)-(b.position||0))
+        .map(it=> ({
+          id: it.id,
+          description: it.description||'',
+          item_type: it.item_type || 'sample_garment',
+          quantity_sent: it.quantity_sent || 0,
+          quantity_returned: it.quantity_returned || 0,
+          written_off_qty: it.written_off_qty || 0,
+          returned_at: it.returned_at || null,
+          notes: it.notes || '',
+        }));
+    }
+    if(Array.isArray(ctx.items) && ctx.items.length){
+      return ctx.items.map(it=> ({
+        description: it.description||'',
+        item_type: it.item_type || 'sample_garment',
+        quantity_sent: it.quantity_sent || it.quantity || 1,
+        quantity_returned: 0, written_off_qty: 0, returned_at: null, notes: '',
+      }));
+    }
+    return [{ description:'', item_type:'sample_garment', quantity_sent:1, quantity_returned:0, written_off_qty:0, returned_at:null, notes:'' }];
+  };
+  const [lines,setLines]=useState(seedLines);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+
+  // Only Admin can edit a transmittal once it's beyond 'sent' status.
+  const lockedFromStatus = isEdit && existing.status !== 'sent' && profile?.role !== 'admin';
+
+  function setLine(i, patch){ setLines(prev=> prev.map((r,idx)=> idx===i ? { ...r, ...patch } : r)); }
+  function addLine(){ setLines(prev=> [...prev, { description:'', item_type:'sample_garment', quantity_sent:1, quantity_returned:0, written_off_qty:0, returned_at:null, notes:'' }]); }
+  function removeLine(i){ setLines(prev=> prev.filter((_,idx)=> idx!==i)); }
+
+  async function save(){
+    setBusy(true); setMsg('');
+    try {
+      if(!clientId) throw new Error('Pick a client.');
+      if(!expectedReturn) throw new Error('Set an expected return date.');
+      if(lines.length===0 || lines.every(l=> !l.description)){
+        throw new Error('Add at least one item.');
+      }
+      const payload = {
+        date_sent: dateSent,
+        client_id: clientId,
+        sales_order_id: soId || null,
+        lead_id: leadId || null,
+        sampling_job_id: smId || null,
+        purpose: purpose || null,
+        sent_by_name: sentBy || null,
+        received_by_at_client: receivedBy || null,
+        expected_return_date: expectedReturn,
+        notes: notes || null,
+      };
+      let trnId;
+      if(isEdit){
+        const { error } = await sb.from('transmittals').update(payload).eq('id', existing.id);
+        if(error) throw error;
+        trnId = existing.id;
+        await sb.from('transmittal_items').delete().eq('transmittal_id', trnId);
+      } else {
+        const monthKey = dateSent.slice(0,7);
+        const { data: monthRows } = await sb.from('transmittals')
+          .select('id').like('number', `TRN-${monthKey}-%`);
+        const seq = String((monthRows?.length||0)+1).padStart(3,'0');
+        payload.number = `TRN-${monthKey}-${seq}`;
+        payload.created_by = profile.id;
+        payload.status = 'sent';
+        const { data: ins, error } = await sb.from('transmittals').insert(payload).select('id').single();
+        if(error) throw error;
+        trnId = ins.id;
+      }
+      const liveLines = lines
+        .filter(l=> l.description || Number(l.quantity_sent||0) > 0)
+        .map((l,i)=> ({
+          transmittal_id: trnId,
+          description: l.description || null,
+          item_type: l.item_type || 'other',
+          quantity_sent: Number(l.quantity_sent||0),
+          quantity_returned: Number(l.quantity_returned||0),
+          written_off_qty: Number(l.written_off_qty||0),
+          returned_at: l.returned_at || null,
+          notes: l.notes || null,
+          position: i,
+        }));
+      if(liveLines.length){
+        const { error: e2 } = await sb.from('transmittal_items').insert(liveLines);
+        if(e2) throw e2;
+      }
+      // Re-derive and persist status (matters in edit mode if user adjusted qty).
+      const newStatus = deriveTrnStatus(liveLines);
+      if(isEdit && newStatus !== existing.status){
+        await sb.from('transmittals').update({ status: newStatus }).eq('id', trnId);
+      }
+      setBusy(false); onSaved && onSaved(trnId);
+    } catch(err){
+      setBusy(false);
+      console.error('[Transmittal save failed]', err);
+      setMsg(`Save failed: ${err.message||String(err)}`);
+    }
+  }
+
+  return (
+    <Modal title={isEdit ? `Transmittal ${existing.number}` : 'New Transmittal'} onClose={onClose} xwide>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Date sent</label>
+            <input type="date" value={dateSent} onChange={e=>setDateSent(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Expected return *</label>
+            <input type="date" value={expectedReturn} onChange={e=>setExpectedReturn(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Client *</label>
+            <select value={clientId} onChange={e=>setClientId(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5">
+              <option value="">— pick a client —</option>
+              {(clients||[]).slice().sort((a,b)=> String(a.company||'').localeCompare(String(b.company||''))).map(c=> (
+                <option key={c.id} value={c.id}>{c.company}</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Sales Order (optional)</label>
+            <select value={soId} onChange={e=>setSoId(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5">
+              <option value="">— no SO link —</option>
+              {(salesOrders||[]).filter(s=> !clientId || s.client_id === clientId).map(s=> (
+                <option key={s.id} value={s.id}>{s.number} · {s.title||s.project_name||''}</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Purpose</label>
+            <input value={purpose} onChange={e=>setPurpose(e.target.value)} disabled={lockedFromStatus} placeholder="e.g. Size approval for Tomorrowland project" className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Sent by (Steeze)</label>
+            <input value={sentBy} onChange={e=>setSentBy(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Received by (client)</label>
+            <input value={receivedBy} onChange={e=>setReceivedBy(e.target.value)} disabled={lockedFromStatus} placeholder="Name at client" className="w-full border rounded px-2 py-1.5" />
+          </div>
+        </div>
+
+        <div className="border rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-b">
+            <div className="font-semibold text-xs uppercase tracking-wide text-slate-600">Items loaned</div>
+            <div className="text-xs text-slate-500">Total qty: <strong className="text-slate-800">{trnSentQty(lines)}</strong></div>
+          </div>
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="text-left px-2 py-1.5">Type</th>
+                <th className="text-left px-2 py-1.5">Description</th>
+                <th className="text-right px-2 py-1.5 w-20">Qty sent</th>
+                <th className="text-left px-2 py-1.5 w-40">Notes</th>
+                <th className="w-8"></th>
+              </tr>
+            </thead>
+            <tbody>{lines.map((r,i)=> (
+              <tr key={i} className="border-t">
+                <td className="px-2 py-1">
+                  <select value={r.item_type} onChange={e=>setLine(i,{item_type:e.target.value})} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1">
+                    {TRN_ITEM_TYPES.map(t=> <option key={t.key} value={t.key}>{t.label}</option>)}
+                  </select>
+                </td>
+                <td className="px-2 py-1"><input value={r.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={lockedFromStatus} placeholder="What is this item?" className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1"><input type="number" value={r.quantity_sent} onChange={e=>setLine(i,{quantity_sent:e.target.value})} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1 text-right" /></td>
+                <td className="px-2 py-1"><input value={r.notes} onChange={e=>setLine(i,{notes:e.target.value})} disabled={lockedFromStatus} placeholder="e.g. color reference" className="w-full border rounded px-2 py-1" /></td>
+                <td className="px-2 py-1 text-center">
+                  {!lockedFromStatus && <button onClick={()=>removeLine(i)} className="text-rose-500 hover:text-rose-700 text-base leading-none" title="Remove row">×</button>}
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {!lockedFromStatus && <div className="p-2 border-t bg-slate-50"><button onClick={addLine} className="text-xs px-2 py-1 rounded bg-white border hover:bg-slate-100">+ Add item</button></div>}
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-500">Notes</label>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={lockedFromStatus} placeholder="Any handling instructions or context" rows={2} className="w-full border rounded px-2 py-1.5" />
+        </div>
+
+        {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        {lockedFromStatus && <div className="text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded p-2">This transmittal has return activity — only Admin can edit it now. Use the View modal to mark items returned instead.</div>}
+
+        <div className="flex flex-wrap gap-2 pt-2 border-t">
+          {!lockedFromStatus && (
+            <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{isEdit ? 'Save changes' : 'Create Transmittal'}</button>
+          )}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────── TRN VIEW / PRINT MODAL + RETURN TRACKING ───────────
+function TransmittalViewModal({ trn, transmittalItems, clients, profiles, salesOrders, profile, onClose, onSaved }){
+  const items = (transmittalItems||[]).filter(it=> it.transmittal_id === trn.id).sort((a,b)=>(a.position||0)-(b.position||0));
+  const client = (clients||[]).find(c=> c.id === trn.client_id);
+  const so = (salesOrders||[]).find(s=> s.id === trn.sales_order_id);
+  const preparedBy = (profiles||[]).find(p=> p.id === trn.created_by);
+  const totalSent = trnSentQty(items);
+  const totalReturned = trnReturnedQty(items);
+  const outstanding = trnOutstandingQty(items);
+  const [returnPanel,setReturnPanel]=useState(false);
+  const [retState,setRetState]=useState(items.map(it=> ({ id: it.id, returning: 0, writingOff: 0 })));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+
+  function setRet(i, patch){ setRetState(prev=> prev.map((r,idx)=> idx===i ? { ...r, ...patch } : r)); }
+
+  // Apply returns: for each line, add the user-entered returning qty to
+  // quantity_returned, and writingOff qty to written_off_qty. Stamps
+  // returned_at on lines that get a new return today. Then re-derive status.
+  async function applyReturns(){
+    setBusy(true); setMsg('');
+    try {
+      const today = new Date().toISOString().slice(0,10);
+      for(let i=0; i<items.length; i++){
+        const it = items[i]; const r = retState[i] || {};
+        const addReturn = Number(r.returning||0);
+        const addWriteoff = Number(r.writingOff||0);
+        if(addReturn === 0 && addWriteoff === 0) continue;
+        const remaining = Number(it.quantity_sent||0) - Number(it.quantity_returned||0) - Number(it.written_off_qty||0);
+        if(addReturn + addWriteoff > remaining){
+          throw new Error(`Line "${it.description||it.item_type}": only ${remaining} outstanding, can't return/write off ${addReturn+addWriteoff}.`);
+        }
+        const newReturned = Number(it.quantity_returned||0) + addReturn;
+        const newWriteoff = Number(it.written_off_qty||0) + addWriteoff;
+        const patch = { quantity_returned: newReturned, written_off_qty: newWriteoff };
+        if(addReturn > 0 && !it.returned_at) patch.returned_at = today;
+        const { error } = await sb.from('transmittal_items').update(patch).eq('id', it.id);
+        if(error) throw error;
+      }
+      // Re-read items to compute new status, then update the transmittal header.
+      const { data: refreshed } = await sb.from('transmittal_items').select('*').eq('transmittal_id', trn.id);
+      const newStatus = deriveTrnStatus(refreshed||[]);
+      if(newStatus !== trn.status){
+        await sb.from('transmittals').update({ status: newStatus }).eq('id', trn.id);
+      }
+      setBusy(false); onSaved && onSaved();
+    } catch(err){
+      setBusy(false);
+      console.error('[Transmittal return failed]', err);
+      setMsg(`Failed: ${err.message||String(err)}`);
+    }
+  }
+
+  return (
+    <Modal title={`Transmittal — ${trn.number||''}`} onClose={onClose} wide>
+      {/* The PRINTABLE document */}
+      <div className="bg-white p-6 text-sm" style={{fontFamily:'serif'}}>
+        <div className="text-center mb-4 border-b-2 border-slate-800 pb-3">
+          <div className="text-2xl font-bold tracking-wide">STEEZE CORPORATION</div>
+          <div className="text-xs text-slate-600">Custom apparel manufacturer</div>
+          <div className="mt-3 inline-block px-6 py-1 bg-slate-800 text-white text-base font-bold tracking-widest">TRANSMITTAL</div>
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
+          <div><div className="font-semibold uppercase text-slate-500">No.</div><div className="font-mono text-base font-bold">{trn.number||'—'}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Date sent</div><div className="font-medium">{fmtDate(trn.date_sent)}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Expected return</div><div className="font-medium">{fmtDate(trn.expected_return_date)}</div></div>
+        </div>
+        <div className="border-2 border-slate-800 p-3 mb-3">
+          <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">TRANSMITTED TO</div>
+          <div className="text-xl font-bold mt-1">{client?.company || '—'}</div>
+          {client && <div className="text-xs text-slate-600 mt-0.5">{client.address||''}{client.contact?` · Attn: ${client.contact}`:''}</div>}
+          {so && <div className="text-[10px] text-slate-500 mt-1">Sales Order: <span className="font-mono font-bold">{so.number}</span></div>}
+          {trn.purpose && <div className="text-xs mt-2"><strong>Purpose:</strong> {trn.purpose}</div>}
+        </div>
+        <div className="mb-4">
+          <table className="w-full text-xs border-2 border-slate-800">
+            <thead className="bg-slate-100">
+              <tr className="border-b-2 border-slate-800">
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Type</th>
+                <th className="text-left px-2 py-1.5 border-r border-slate-800">Description</th>
+                <th className="text-right px-2 py-1.5 border-r border-slate-800">Qty</th>
+                <th className="text-left px-2 py-1.5">Notes</th>
+              </tr>
+            </thead>
+            <tbody>{items.map((it,i)=> (
+              <tr key={i} className="border-b border-slate-400">
+                <td className="px-2 py-1.5 border-r border-slate-400">{trnTypeLabel(it.item_type)}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400">{it.description||'—'}</td>
+                <td className="px-2 py-1.5 border-r border-slate-400 text-right font-semibold">{it.quantity_sent||0}</td>
+                <td className="px-2 py-1.5">{it.notes||''}</td>
+              </tr>
+            ))}
+              <tr className="bg-slate-50 font-bold">
+                <td colSpan="2" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total quantity transmitted</td>
+                <td className="px-2 py-2 text-right border-r border-slate-800 text-base">{totalSent}</td>
+                <td className="px-2 py-2"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {trn.notes && <div className="mb-3 text-xs"><div className="font-semibold uppercase text-slate-500">Notes</div><div>{trn.notes}</div></div>}
+
+        {/* Acknowledgment line — the legal hook */}
+        <div className="mt-4 border-2 border-slate-800 p-3 text-xs italic">
+          The undersigned acknowledges receipt of the above items on loan from Steeze Corporation and agrees to return all items in their original condition by <strong>{fmtDate(trn.expected_return_date)}</strong>. Items not returned by this date may be invoiced at replacement cost.
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 mt-8 text-xs">
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1">
+              {trn.sent_by_name && <div className="pt-7 text-sm font-medium">{trn.sent_by_name}</div>}
+            </div>
+            <div className="font-semibold text-slate-700">Sent by — Steeze Corporation</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(trn.date_sent)}</div>
+          </div>
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1">
+              {trn.received_by_at_client && <div className="pt-7 text-sm font-medium">{trn.received_by_at_client}</div>}
+            </div>
+            <div className="font-semibold text-slate-700">Received by — {client?.company||'Client'}</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Signature over printed name & date</div>
+          </div>
+        </div>
+      </div>
+
+      {/* RETURN TRACKING — not printed (no-print) */}
+      <div className="no-print mt-4 border-t pt-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="text-xs">
+            <span className="text-slate-500 uppercase font-semibold">Sent</span>
+            <span className="ml-1 font-bold">{totalSent}</span>
+          </div>
+          <div className="text-xs">
+            <span className="text-slate-500 uppercase font-semibold">Returned</span>
+            <span className="ml-1 font-bold text-emerald-700">{totalReturned}</span>
+          </div>
+          <div className="text-xs">
+            <span className="text-slate-500 uppercase font-semibold">Outstanding</span>
+            <span className={`ml-1 font-bold ${outstanding>0?'text-rose-700':'text-slate-400'}`}>{outstanding}</span>
+          </div>
+          <div className="flex-1"></div>
+          {outstanding > 0 && canManageTrn(profile) && (
+            <button onClick={()=>setReturnPanel(v=>!v)} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">
+              {returnPanel ? 'Hide return panel' : '↩ Mark items returned'}
+            </button>
+          )}
+        </div>
+
+        {returnPanel && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-3 space-y-2">
+            <div className="text-xs font-semibold text-emerald-800 uppercase">Record what came back</div>
+            <table className="w-full text-xs">
+              <thead className="text-slate-600">
+                <tr>
+                  <th className="text-left py-1">Item</th>
+                  <th className="text-right py-1">Outstanding</th>
+                  <th className="text-right py-1 w-24">Returning now</th>
+                  <th className="text-right py-1 w-24">Writing off</th>
+                </tr>
+              </thead>
+              <tbody>{items.map((it,i)=> {
+                const remaining = Number(it.quantity_sent||0) - Number(it.quantity_returned||0) - Number(it.written_off_qty||0);
+                return (
+                  <tr key={i} className="border-t border-emerald-100">
+                    <td className="py-1">{it.description||'—'} <span className="text-[10px] text-slate-500">({trnTypeLabel(it.item_type)})</span></td>
+                    <td className="py-1 text-right font-semibold">{remaining}</td>
+                    <td className="py-1 text-right"><input type="number" min="0" max={remaining} value={retState[i]?.returning||0} onChange={e=>setRet(i,{returning:e.target.value})} className="w-20 border rounded px-1 py-0.5 text-right" /></td>
+                    <td className="py-1 text-right"><input type="number" min="0" max={remaining} value={retState[i]?.writingOff||0} onChange={e=>setRet(i,{writingOff:e.target.value})} className="w-20 border rounded px-1 py-0.5 text-right" /></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+            {msg && <div className="text-xs text-rose-600">{msg}</div>}
+            <div className="flex gap-2">
+              <button disabled={busy} onClick={applyReturns} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">Apply</button>
+              <button onClick={()=>setReturnPanel(false)} className="text-xs px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
+            </div>
+            <div className="text-[10px] text-slate-500">"Writing off" marks items as not coming back — used when client keeps a sample as their reference copy.</div>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this transmittal</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────── TRN LIST VIEW ───────────
+function TransmittalsView({ profile, profiles, clients, salesOrders, transmittals, transmittalItems, onCreate, onView, onEdit, reload }){
+  const [tab,setTab]=useState('outstanding');
+  const [search,setSearch]=useState('');
+  const [statusFilter,setStatusFilter]=useState('');
+  const rows = (transmittals||[])
+    .filter(t=> {
+      if(tab === 'outstanding'){
+        const its = (transmittalItems||[]).filter(it=> it.transmittal_id===t.id);
+        return trnOutstandingQty(its) > 0 && t.status !== 'cancelled';
+      }
+      return true;
+    })
+    .filter(t=> !statusFilter || t.status === statusFilter)
+    .filter(t=> {
+      if(!search) return true;
+      const q = search.toLowerCase();
+      const client = (clients||[]).find(c=> c.id===t.client_id);
+      return `${t.number||''} ${client?.company||''} ${t.purpose||''}`.toLowerCase().includes(q);
+    })
+    .sort((a,b)=> {
+      if(tab==='outstanding'){
+        // Outstanding sorted by date_sent ASC (oldest = most urgent)
+        return String(a.date_sent||'').localeCompare(String(b.date_sent||''));
+      }
+      return String(b.date_sent||'').localeCompare(String(a.date_sent||''));
+    });
+
+  async function voidTrn(t){
+    if(!confirm(`Void transmittal ${t.number}? Items will no longer count as outstanding. Recoverable from Settings → Trash.`)) return;
+    const { error } = await sb.from('transmittals').update({
+      deleted_at: new Date().toISOString(), deleted_by: profile.id, status:'cancelled',
+    }).eq('id', t.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
+
+  // Counters for the tab badges.
+  const outstandingCount = (transmittals||[]).filter(t=> {
+    const its = (transmittalItems||[]).filter(it=> it.transmittal_id===t.id);
+    return trnOutstandingQty(its) > 0 && t.status !== 'cancelled';
+  }).length;
+  const overdueCount = (transmittals||[]).filter(t=> {
+    const its = (transmittalItems||[]).filter(it=> it.transmittal_id===t.id);
+    if(trnOutstandingQty(its) === 0 || t.status === 'cancelled') return false;
+    if(!t.expected_return_date) return false;
+    return new Date(t.expected_return_date) < new Date();
+  }).length;
+
+  return (
+    <div>
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📤 Transmittals</h1>
+            <p className="text-slate-500 text-sm">
+              Items loaned to clients — samples, sizers, swatches, mockups.
+              {overdueCount > 0 && <span className="ml-2 text-rose-700 font-semibold">{overdueCount} overdue</span>}
+            </p>
+          </div>
+          <div className="flex-1"></div>
+          {canManageTrn(profile) && <button onClick={()=>onCreate({})} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New Transmittal</button>}
+        </div>
+        <div className="flex flex-wrap gap-2 mt-3 items-center">
+          <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+            <button onClick={()=>setTab('outstanding')} className={`px-3 py-1.5 rounded-md ${tab==='outstanding'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>Outstanding {outstandingCount>0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-white/20">{outstandingCount}</span>}</button>
+            <button onClick={()=>setTab('all')} className={`px-3 py-1.5 rounded-md ${tab==='all'?'bg-slate-700 text-white font-semibold':'text-slate-600'}`}>All</button>
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search number, client, purpose…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+          {tab==='all' && (
+            <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+              <option value="">All statuses</option>
+              <option value="sent">Sent</option>
+              <option value="partially_returned">Partially returned</option>
+              <option value="fully_returned">Fully returned</option>
+              <option value="written_off">Written off</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+            <tr>
+              <th className="text-left px-3 py-2">TRN #</th>
+              <th className="text-left px-3 py-2">Date sent</th>
+              <th className="text-left px-3 py-2">Client</th>
+              <th className="text-left px-3 py-2">Purpose</th>
+              <th className="text-right px-3 py-2">Sent</th>
+              <th className="text-right px-3 py-2">Out</th>
+              <th className="text-left px-3 py-2">Expected back</th>
+              <th className="text-left px-3 py-2">Aging</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-right px-3 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>{rows.length===0 ? (
+            <tr><td colSpan="10" className="text-center px-3 py-10 text-slate-400">{tab==='outstanding'?'🎉 Nothing outstanding — every transmittal has been fully returned or written off.':'No transmittals yet.'}</td></tr>
+          ) : rows.map(t=> {
+            const client = (clients||[]).find(c=> c.id===t.client_id);
+            const its = (transmittalItems||[]).filter(it=> it.transmittal_id===t.id);
+            const sent = trnSentQty(its);
+            const out = trnOutstandingQty(its);
+            const days = trnDaysOut(t);
+            const overdueByDate = t.expected_return_date && new Date(t.expected_return_date) < new Date() && out > 0;
+            const statusCls = t.status==='fully_returned' ? 'bg-emerald-100 text-emerald-700'
+              : t.status==='partially_returned' ? 'bg-amber-100 text-amber-700'
+              : t.status==='written_off' ? 'bg-slate-100 text-slate-600'
+              : t.status==='cancelled' ? 'bg-rose-100 text-rose-700'
+              : 'bg-indigo-100 text-indigo-700';
+            return (
+              <tr key={t.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-mono text-xs font-bold">{t.number}</td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(t.date_sent)}</td>
+                <td className="px-3 py-2">{client?.company || '—'}</td>
+                <td className="px-3 py-2 text-xs max-w-[260px] truncate" title={t.purpose}>{t.purpose || '—'}</td>
+                <td className="px-3 py-2 text-right">{sent}</td>
+                <td className={`px-3 py-2 text-right font-semibold ${out>0?'text-rose-700':'text-slate-400'}`}>{out}</td>
+                <td className={`px-3 py-2 text-xs whitespace-nowrap ${overdueByDate?'text-rose-700 font-semibold':''}`}>{fmtDate(t.expected_return_date)}{overdueByDate?' ⚠':''}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trnAgingCls(days)}`}>{days}d</span></td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{t.status.replace('_',' ')}</span></td>
+                <td className="px-3 py-2 text-right">
+                  <div className="inline-flex gap-1">
+                    <button onClick={()=>onView(t)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">View / Track</button>
+                    {canManageTrn(profile) && t.status==='sent' && (
+                      <button onClick={()=>onEdit(t)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">Edit</button>
+                    )}
+                    {profile.role==='admin' && t.status!=='cancelled' && (
+                      <button onClick={()=>voidTrn(t)} className="text-xs px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Void</button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------- App ----------------------- */
 function App(){
   const [session,setSession]=useState(undefined); const [profile,setProfile]=useState(null); const [profiles,setProfiles]=useState([]);
@@ -16590,6 +17227,14 @@ function App(){
   const [drCreateCtx,setDrCreateCtx]=useState(null);
   const [drViewing,setDrViewing]=useState(null);   // DR row being viewed/printed
   const [drEditing,setDrEditing]=useState(null);   // DR row being edited
+  // Transmittals: loaned items to clients (samples, sizers, swatches, mockups).
+  // Two-way flow — items must come back. transmittal_items tracks per-line
+  // returned qty so partial returns work naturally.
+  const [transmittals,setTransmittals]=useState([]);
+  const [transmittalItems,setTransmittalItems]=useState([]);
+  const [trnCreateCtx,setTrnCreateCtx]=useState(null);   // pre-fill ctx for a new Transmittal
+  const [trnViewing,setTrnViewing]=useState(null);       // viewing/printing
+  const [trnEditing,setTrnEditing]=useState(null);       // editing
   // HR Module: 201 file master + documents + memos + notes timeline
   const [employees,setEmployees]=useState([]); const [employeeDocs,setEmployeeDocs]=useState([]);
   const [employeeMemos,setEmployeeMemos]=useState([]); const [employeeNotes,setEmployeeNotes]=useState([]);
@@ -16657,7 +17302,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -16714,6 +17359,9 @@ function App(){
       // Delivery Receipts + line items (graceful empty if SQL not yet run)
       sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('dr_items').select('*').order('position',{ascending:true}),
+      // Transmittals (loaned items) + line items (graceful empty if SQL not yet run)
+      sb.from('transmittals').select('*').is('deleted_at', null).order('date_sent',{ascending:false}),
+      sb.from('transmittal_items').select('*').order('position',{ascending:true}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -16760,6 +17408,8 @@ function App(){
     setCalendarEvents(ce && !ce.error ? (ce.data||[]) : []);
     setDeliveryReceipts(dr && !dr.error ? (dr.data||[]) : []);
     setDrItems(dri && !dri.error ? (dri.data||[]) : []);
+    setTransmittals(trn && !trn.error ? (trn.data||[]) : []);
+    setTransmittalItems(trni && !trni.error ? (trni.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
   }
@@ -16798,7 +17448,7 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -17129,7 +17779,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       FINANCE_FULL,
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['team','Team Overview','🏢'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       LOGISTICS_GROUP,
@@ -17150,7 +17800,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['profile','My Profile','⭐'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -17159,7 +17809,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
@@ -17170,7 +17820,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['profile','My Profile','⭐'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
@@ -17280,7 +17930,7 @@ function App(){
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onCreateTrn={(ctx)=>setTrnCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
@@ -17309,6 +17959,7 @@ function App(){
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
+        {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="cash_advance" />}
@@ -17417,6 +18068,17 @@ function App(){
       )}
       {drViewing && (
         <DeliveryReceiptViewModal dr={drViewing} drItems={drItems} clients={clients} profiles={profiles} salesOrders={salesOrders} onClose={()=>setDrViewing(null)} />
+      )}
+
+      {/* Transmittal modals — create (trnCreateCtx), edit (trnEditing), view/track (trnViewing). */}
+      {trnCreateCtx && canManageTrn(profile) && (
+        <TransmittalModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} leads={leads} sampleJobs={sampleJobs} trnCtx={trnCreateCtx} transmittalItems={transmittalItems} onClose={()=>setTrnCreateCtx(null)} onSaved={()=>{ setTrnCreateCtx(null); loadAll(); }} />
+      )}
+      {trnEditing && canManageTrn(profile) && (
+        <TransmittalModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} leads={leads} sampleJobs={sampleJobs} existing={trnEditing} transmittalItems={transmittalItems} onClose={()=>setTrnEditing(null)} onSaved={()=>{ setTrnEditing(null); loadAll(); }} />
+      )}
+      {trnViewing && (
+        <TransmittalViewModal trn={trnViewing} transmittalItems={transmittalItems} clients={clients} profiles={profiles} salesOrders={salesOrders} profile={profile} onClose={()=>setTrnViewing(null)} onSaved={()=>{ setTrnViewing(null); loadAll(); }} />
       )}
 
       <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
