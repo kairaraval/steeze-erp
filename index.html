@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 74 · Letterhead (logo + Las Piñas address + TIN) on Voucher / DR / Transmittal / PR / PO / Payslip / BIR 2307';
+const BUILD = 'Live build 75 · E-Signatures: profile signature pad + Approve & Sign on Voucher + DR/Transmittal signatures + auto-void on edit';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7223,6 +7223,231 @@ function ClientDetail({ client, profile, profiles, leads, reload, onBack, onOpen
 }
 
 /* ----------------------- My Profile ----------------------- */
+/* ============================================================================
+   E-SIGNATURES
+   ============================================================================
+   • Each user can store ONE base64-encoded PNG signature on their profile.
+   • Approving a document stamps approved_by + signed_at on the doc.
+   • At render time, ApprovedSignature looks up that user's signature image.
+   • Anti-save measures: right-click blocked, drag blocked, selection blocked,
+     subtle watermark overlay so screenshots are traceable.
+   • Any post-sign edit clears the signature — the doc must be re-approved.
+   ============================================================================ */
+
+// SignaturePad — small canvas the user draws on with mouse/touch.
+// onChange(dataUrl) fires when they release the pen.
+function SignaturePad({ value, onChange, width=360, height=140 }){
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const lastRef = useRef({x:0,y:0});
+
+  // Load existing signature into the canvas on mount or when value changes.
+  useEffect(() => {
+    const c = canvasRef.current; if(!c) return;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    if(value){
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img, 0, 0, c.width, c.height); };
+      img.src = value;
+    }
+  }, [value]);
+
+  // Pointer events handle mouse + touch + stylus uniformly.
+  function getPoint(e){
+    const c = canvasRef.current;
+    const rect = c.getBoundingClientRect();
+    const scaleX = c.width / rect.width;
+    const scaleY = c.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    return { x, y };
+  }
+  function start(e){
+    e.preventDefault();
+    drawingRef.current = true;
+    lastRef.current = getPoint(e);
+    canvasRef.current.setPointerCapture(e.pointerId);
+  }
+  function move(e){
+    if(!drawingRef.current) return;
+    const p = getPoint(e);
+    const ctx = canvasRef.current.getContext('2d');
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(lastRef.current.x, lastRef.current.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    lastRef.current = p;
+  }
+  function end(){
+    if(!drawingRef.current) return;
+    drawingRef.current = false;
+    const dataUrl = canvasRef.current.toDataURL('image/png');
+    onChange && onChange(dataUrl);
+  }
+  function clear(){
+    const c = canvasRef.current; const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    onChange && onChange(null);
+  }
+  return (
+    <div className="inline-block">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        onPointerDown={start}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerLeave={end}
+        className="border-2 border-slate-300 rounded bg-white cursor-crosshair touch-none"
+        style={{display:'block'}}
+      />
+      <div className="flex gap-2 mt-2">
+        <button onClick={clear} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700">Clear</button>
+        <div className="text-xs text-slate-500 self-center">Draw your signature above with mouse or finger.</div>
+      </div>
+    </div>
+  );
+}
+
+// Convert an uploaded image file to a base64 data URL (used for upload option).
+function fileToDataUrl(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+// ApprovedSignature — render a user's signature image inline with anti-save
+// measures. Falls back to a clear "(no signature on file)" hint so the doc
+// always renders even if the approver hasn't set up their signature yet.
+function ApprovedSignature({ signerProfile, signedAt, role, sizeClass='h-12' }){
+  // Watermark text — appears subtly across the signature on screen so any
+  // screenshot is traceable to who saw it and when.
+  const watermark = signerProfile ? `STEEZE OS · ${signerProfile.name||signerProfile.email||''} · ${signedAt?fmtDate(String(signedAt).slice(0,10)):''}` : '';
+  if(!signerProfile || !signerProfile.signature_data){
+    return (
+      <div className="text-center">
+        <div className={`${sizeClass} flex items-end justify-center border-b border-slate-400`}>
+          {signerProfile ? <div className="text-[10px] text-slate-400 italic mb-1">{signerProfile.name||signerProfile.email} signature pending</div> : null}
+        </div>
+        {signerProfile && <div className="text-[10px] text-slate-600 font-medium mt-1">{signerProfile.name||signerProfile.email}</div>}
+        {role && <div className="text-[9px] uppercase tracking-wider text-slate-500">{role}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="text-center">
+      <div className={`relative ${sizeClass} flex items-end justify-center border-b border-slate-700 select-none`}>
+        <img
+          src={signerProfile.signature_data}
+          alt=""
+          draggable={false}
+          onContextMenu={e=>e.preventDefault()}
+          onDragStart={e=>e.preventDefault()}
+          className="max-h-full max-w-full object-contain"
+          style={{ userSelect:'none', WebkitUserSelect:'none', WebkitUserDrag:'none', pointerEvents:'none' }}
+        />
+        {/* Diagonal watermark, low opacity, on top of the signature so any
+           screenshot carries the trace. Print uses the same overlay. */}
+        <div
+          className="absolute inset-0 flex items-center justify-center text-[7px] uppercase tracking-widest text-slate-700 font-semibold pointer-events-none"
+          style={{ opacity:0.18, transform:'rotate(-12deg)' }}
+        >{watermark}</div>
+      </div>
+      <div className="text-[10px] text-slate-700 font-medium mt-1">{signerProfile.name||signerProfile.email}</div>
+      {role && <div className="text-[9px] uppercase tracking-wider text-slate-500">{role}</div>}
+      {signedAt && <div className="text-[9px] text-slate-400">Signed {fmtDate(String(signedAt).slice(0,10))}</div>}
+    </div>
+  );
+}
+
+// MySignatureCard — slot rendered inside ProfileView. Lets the current user
+// draw + save their signature, replace it, or remove it. Only the user
+// themselves can change their own signature (RLS + the inline check).
+function MySignatureCard({ profile, reload }){
+  const [draft,setDraft]=useState(profile.signature_data || null);
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  const [mode,setMode]=useState(profile.signature_data ? 'view' : 'draw');
+  const hasSignature = !!profile.signature_data;
+  async function save(){
+    setBusy(true); setMsg('');
+    try {
+      const { error } = await sb.from('profiles').update({ signature_data: draft || null }).eq('id', profile.id);
+      if(error) throw error;
+      setBusy(false); setMsg('Saved.'); setMode('view');
+      reload && reload();
+    } catch(err){
+      setBusy(false); setMsg('Save failed: '+(err.message||String(err)));
+    }
+  }
+  async function remove(){
+    if(!confirm('Remove your e-signature? Documents you previously approved will keep their existing signature record, but new approvals will show no signature until you set a new one.')) return;
+    setBusy(true);
+    const { error } = await sb.from('profiles').update({ signature_data: null }).eq('id', profile.id);
+    setBusy(false);
+    if(error){ setMsg('Failed: '+error.message); return; }
+    setDraft(null); setMode('draw'); reload && reload();
+  }
+  async function onUpload(e){
+    const f = e.target.files?.[0]; if(!f) return;
+    if(f.size > 800*1024){ setMsg('Image too large — keep under 800KB.'); return; }
+    try {
+      const dataUrl = await fileToDataUrl(f);
+      setDraft(dataUrl); setMode('draw');  // show the uploaded image in the pad area
+      setMsg('Loaded. Click Save to commit.');
+    } catch(err){ setMsg('Upload failed: '+err.message); }
+  }
+  return (
+    <div className="bg-white border rounded-xl p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="font-semibold text-slate-900">✍ My E-Signature</div>
+          <div className="text-xs text-slate-500">Added automatically when you approve documents. Only you can update yours.</div>
+        </div>
+        {hasSignature && mode==='view' && (
+          <div className="flex gap-2">
+            <button onClick={()=>{ setMode('draw'); setDraft(null); }} className="text-xs px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200">Redraw</button>
+            <button onClick={remove} disabled={busy} className="text-xs px-3 py-1.5 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 disabled:opacity-50">Remove</button>
+          </div>
+        )}
+      </div>
+
+      {mode==='view' && hasSignature && (
+        <div className="bg-slate-50 border rounded p-4 inline-block">
+          <img src={profile.signature_data} alt="" draggable={false} onContextMenu={e=>e.preventDefault()} className="max-h-24 object-contain" style={{ userSelect:'none' }} />
+        </div>
+      )}
+
+      {mode==='draw' && (
+        <div>
+          <SignaturePad value={draft} onChange={setDraft} />
+          <div className="flex gap-2 mt-3 items-center flex-wrap">
+            <button disabled={busy || !draft} onClick={save} className="text-sm px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">Save signature</button>
+            {hasSignature && <button onClick={()=>{ setDraft(profile.signature_data); setMode('view'); setMsg(''); }} className="text-sm px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>}
+            <label className="text-sm px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 cursor-pointer">
+              📷 Upload image
+              <input type="file" accept="image/png,image/jpeg" onChange={onUpload} className="hidden" />
+            </label>
+          </div>
+        </div>
+      )}
+      {msg && <div className="text-xs text-slate-600 mt-2">{msg}</div>}
+      <div className="text-[10px] text-slate-400 mt-3">
+        ⓘ Your signature is private and rendered with anti-save measures. Other users can see it on documents you approve but can't easily download it. Right-click, drag, and selection are blocked. Any post-sign edit auto-clears your signature from the document.
+      </div>
+    </div>
+  );
+}
+
 function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
@@ -7245,6 +7470,7 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   return (
     <div className="p-6">
       <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'} · {profile.email}</p></div></div>
+      <MySignatureCard profile={profile} reload={reload} />
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} leads</div></div>
         <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won this month</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonMonthVal)}</div><div className="text-xs text-slate-500">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
@@ -13539,11 +13765,29 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, on
 // Printable voucher document. Triggered from the Vouchers list's View / Print
 // buttons. The format mirrors a standard PH Check Voucher: company header,
 // payee, particulars, amount in numbers + words, bank info, signature lines.
-function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, autoPrint, onClose }){
+function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile, autoPrint, onClose, onSaved }){
   const v = voucher;
   const bank = (bankAccounts||[]).find(b=>b.id===v.bank_id);
   const supplier = (suppliers||[]).find(s=>s.id===v.supplier_id);
   const preparedBy = (profiles||[]).find(p=>p.id===v.prepared_by);
+  const approvedBy = (profiles||[]).find(p=>p.id===v.approved_by);
+  const [approving,setApproving]=useState(false);
+  // Approve & Sign — stamps approved_by + approved_at + signed_at with the
+  // current user. The signature comes from their profile.signature_data and
+  // is rendered automatically. Admin or Manager only.
+  async function approveAndSign(){
+    if(!profile?.signature_data){
+      if(!confirm("You don't have an e-signature on file yet. Approve without a signature? (Set up your signature on My Profile to sign documents.)")) return;
+    }
+    setApproving(true);
+    const now = new Date().toISOString();
+    const { error } = await sb.from('vouchers').update({
+      approved_by: profile.id, approved_at: now, signed_at: now,
+    }).eq('id', v.id);
+    setApproving(false);
+    if(error){ alert(error.message); return; }
+    onSaved && onSaved();
+  }
   const typeLabel = v.type==='check' ? 'CHECK VOUCHER'
                   : v.type==='bank_transfer' ? 'BANK TRANSFER VOUCHER'
                   : 'CASH VOUCHER';
@@ -13640,17 +13884,18 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, autoPrin
           </div>
         )}
 
-        {/* Signature block */}
+        {/* Signature block — Prepared by + Approved by carry e-signatures
+           if the respective users have them on file. Verified by remains a
+           blank line for manual sign-off (a third party, e.g. a verifier
+           who doesn't necessarily have a Steeze OS account). */}
         <div className="grid grid-cols-3 gap-6 mt-8 text-xs">
-          {['Prepared by','Verified by','Approved by'].map((role,i)=>(
-            <div key={i} className="text-center">
-              <div className="border-b border-slate-800 h-12 mb-1">
-                {role==='Prepared by' && preparedBy && <div className="pt-7 text-sm font-medium">{preparedBy.name||preparedBy.email}</div>}
-              </div>
-              <div className="font-semibold text-slate-700">{role}</div>
-              {role==='Prepared by' && <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(v.date)}</div>}
-            </div>
-          ))}
+          <ApprovedSignature signerProfile={preparedBy} signedAt={v.date} role="Prepared by" />
+          <div className="text-center">
+            <div className="h-12 border-b border-slate-400"></div>
+            <div className="text-[10px] text-slate-700 font-medium mt-1">&nbsp;</div>
+            <div className="text-[9px] uppercase tracking-wider text-slate-500">Verified by</div>
+          </div>
+          <ApprovedSignature signerProfile={approvedBy} signedAt={v.signed_at||v.approved_at} role="Approved by" />
         </div>
 
         {/* Receipt acknowledgment */}
@@ -13666,7 +13911,13 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, autoPrin
       </div>
 
       {/* Action bar (hidden in print) */}
-      <div className="no-print flex gap-2 mt-3">
+      <div className="no-print flex gap-2 mt-3 flex-wrap">
+        {!v.approved_by && profile && (profile.role==='admin' || profile.role==='manager') && (
+          <button disabled={approving} onClick={approveAndSign} className="py-2 px-3 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">✍ Approve & Sign</button>
+        )}
+        {v.approved_by && approvedBy && (
+          <div className="text-xs text-emerald-700 self-center px-3 py-2 bg-emerald-50 rounded-lg border border-emerald-200">✓ Approved by <strong>{approvedBy.name||approvedBy.email}</strong> on {fmtDate((v.signed_at||v.approved_at||'').slice(0,10))}</div>
+        )}
         <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this voucher</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
@@ -13726,7 +13977,7 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No vouchers yet. Click <b>+ New Voucher</b> to create one, or pay an approved RFP.</td></tr>}</tbody>
       </table></div></div>
       {creating && <StandaloneVoucherModal profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
-      {viewing && <VoucherViewModal voucher={viewing} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} autoPrint={autoPrint} onClose={()=>{ setViewing(null); setAutoPrint(false); }} />}
+      {viewing && <VoucherViewModal voucher={viewing} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} profile={profile} autoPrint={autoPrint} onClose={()=>{ setViewing(null); setAutoPrint(false); }} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
     </div>
   );
 }
@@ -16212,6 +16463,10 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
       }
       let drId;
       if(isEdit){
+        // Editing a signed DR auto-voids the signature — the doc must be
+        // re-approved by Finance/Sales after the change. (User chose strictest
+        // mode in the e-signature design questions.)
+        payload.signed_at = null;
         const { error } = await sb.from('delivery_receipts').update(payload).eq('id', existing.id);
         if(error) throw error;
         drId = existing.id;
@@ -16438,22 +16693,13 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
           </div>
         )}
 
-        {/* Signature block */}
+        {/* Signature block — Prepared by carries the creator's e-signature.
+           Released by uses the created_by user too (typically the same as the
+           Steeze person who released the goods). Received by is the client
+           side and stays a blank line for a wet signature. */}
         <div className="grid grid-cols-3 gap-6 mt-10 text-xs">
-          <div className="text-center">
-            <div className="border-b border-slate-800 h-12 mb-1">
-              {preparedBy && <div className="pt-7 text-sm font-medium">{preparedBy.name||preparedBy.email}</div>}
-            </div>
-            <div className="font-semibold text-slate-700">Prepared by</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(dr.date)}</div>
-          </div>
-          <div className="text-center">
-            <div className="border-b border-slate-800 h-12 mb-1">
-              {dr.released_by_name && <div className="pt-7 text-sm font-medium">{dr.released_by_name}</div>}
-            </div>
-            <div className="font-semibold text-slate-700">Released by</div>
-            {dr.released_at && <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(dr.released_at.slice(0,10))}</div>}
-          </div>
+          <ApprovedSignature signerProfile={preparedBy} signedAt={dr.date} role="Prepared by" />
+          <ApprovedSignature signerProfile={preparedBy} signedAt={dr.released_at||dr.date} role={`Released by · ${dr.released_by_name||''}`} />
           <div className="text-center">
             <div className="border-b border-slate-800 h-12 mb-1">
               {dr.received_by_name && <div className="pt-7 text-sm font-medium">{dr.received_by_name}</div>}
@@ -16722,6 +16968,8 @@ function TransmittalModal({ profile, profiles, clients, salesOrders, leads, samp
       };
       let trnId;
       if(isEdit){
+        // Auto-void signature on any post-sign edit (strictest mode).
+        payload.signed_at = null; payload.signed_by = null;
         const { error } = await sb.from('transmittals').update(payload).eq('id', existing.id);
         if(error) throw error;
         trnId = existing.id;
@@ -16970,13 +17218,9 @@ function TransmittalViewModal({ trn, transmittalItems, clients, profiles, salesO
         </div>
 
         <div className="grid grid-cols-2 gap-6 mt-8 text-xs">
-          <div className="text-center">
-            <div className="border-b border-slate-800 h-12 mb-1">
-              {trn.sent_by_name && <div className="pt-7 text-sm font-medium">{trn.sent_by_name}</div>}
-            </div>
-            <div className="font-semibold text-slate-700">Sent by — Steeze Corporation</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(trn.date_sent)}</div>
-          </div>
+          {/* Sent by carries the Steeze user's e-signature. Received by stays
+             a blank line for the client's wet signature. */}
+          <ApprovedSignature signerProfile={preparedBy} signedAt={trn.date_sent} role={`Sent by — Steeze · ${trn.sent_by_name||''}`} />
           <div className="text-center">
             <div className="border-b border-slate-800 h-12 mb-1">
               {trn.received_by_at_client && <div className="pt-7 text-sm font-medium">{trn.received_by_at_client}</div>}
