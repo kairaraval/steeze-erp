@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 99 · Size Guide: 2 photo slots (center single), remove text fields + right-side breakdown';
+const BUILD = 'Live build 100 · Vouchers: Admin Edit + Delete (reconciles bank transaction, auto-voids signature on edit)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13942,10 +13942,24 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
    chain — rent, government contributions, payroll, sales commissions, etc.
    Mirrors the RFP-driven VoucherFormModal but without the RFP/PO linkage.
 */
-function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, onClose, onSaved }){
+function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, existing, onClose, onSaved }){
+  const isEdit = !!existing;
   const today = new Date().toISOString().slice(0,10);
   const monthKey = ymdToMonthKey(today);
-  const [f,setF]=useState({
+  const [f,setF]=useState(isEdit ? {
+    type: existing.type || 'check',
+    date: existing.date || today,
+    payee: existing.payee || '',
+    supplier_id: existing.supplier_id || null,
+    expense_category: existing.expense_category || EXPENSE_CATEGORIES[0],
+    amount: existing.amount || 0,
+    particulars: existing.particulars || '',
+    check_number: existing.check_number || '',
+    check_date: existing.check_date || today,
+    bank_id: existing.bank_id || bankAccounts[0]?.id || null,
+    received_by: existing.received_by || '',
+    notes: existing.notes || '',
+  } : {
     type: 'check',
     date: today,
     payee: '',
@@ -13984,6 +13998,49 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, on
     if(f.type==='cash' && !f.received_by.trim()){ setMsg('Who is receiving the cash?'); return; }
     setBusy(true); setMsg('');
     try {
+      const voucherPatch = {
+        type:f.type, date:f.date,
+        supplier_id: f.supplier_id || null,
+        payee: f.payee.trim(),
+        amount: Number(f.amount),
+        particulars: f.particulars || null,
+        expense_category: f.expense_category || null,
+        check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
+        check_date:   f.type==='check' ? (f.check_date||null)   : null,
+        bank_id:      f.bank_id || null,
+        received_by:  f.type==='cash'  ? (f.received_by||null)  : null,
+        notes: f.notes || null,
+      };
+      if(isEdit){
+        // EDIT MODE: update the voucher + reconcile the linked bank_transaction
+        // (amount/bank/date/payee/particulars/reference may have changed).
+        // Also auto-void any signature so the edited doc must be re-approved.
+        const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, signed_at: null, approved_by: null, approved_at: null }).eq('id', existing.id);
+        if(vErr) throw vErr;
+        if(existing.bank_transaction_id){
+          // Update the existing linked bank transaction. If the user moved the
+          // voucher to a different bank, this row follows (effectively transferring
+          // the txn between bank registers).
+          await sb.from('bank_transactions').update({
+            bank_id: f.bank_id, date: f.date, amount: Number(f.amount),
+            description: `${existing.number} — ${f.payee} — ${f.particulars||f.expense_category||''}`.slice(0,200),
+            reference_number: f.check_number || existing.number,
+          }).eq('id', existing.bank_transaction_id);
+        } else if(f.bank_id){
+          // Pre-existing voucher had no linked bank transaction — create one now
+          // so the bank balance reflects this disbursement going forward.
+          const { data: btx } = await sb.from('bank_transactions').insert({
+            bank_id: f.bank_id, date: f.date, direction: 'out', amount: Number(f.amount),
+            description: `${existing.number} — ${f.payee} — ${f.particulars||f.expense_category||''}`.slice(0,200),
+            ref_type: 'voucher', ref_id: existing.id,
+            reference_number: f.check_number||existing.number, created_by: profile.id,
+          }).select('id').single();
+          if(btx?.id) await sb.from('vouchers').update({ bank_transaction_id: btx.id }).eq('id', existing.id);
+        }
+        setBusy(false); onSaved();
+        return;
+      }
+      // CREATE MODE
       const prefix = f.type==='check' ? 'CV' : (f.type==='bank_transfer' ? 'BT' : 'CASH');
       const number = nextFinanceNumber(vouchers, prefix, monthKey);
       // Bank transaction first (so we have the id to link back). Bank balance
@@ -14000,22 +14057,10 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, on
         bankTxId = btx.id;
       }
       const { data: vdata, error: vErr } = await sb.from('vouchers').insert({
-        number, type:f.type, date:f.date,
+        ...voucherPatch, number,
         rfp_id: null, po_id: null,
-        supplier_id: f.supplier_id || null,
-        payee: f.payee.trim(),
-        amount: Number(f.amount),
-        particulars: f.particulars || null,
-        expense_category: f.expense_category || null,
-        // check_number doubles as the bank-transfer reference # since both
-        // identify the disbursement in the bank statement.
-        check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
-        check_date:   f.type==='check' ? (f.check_date||null)   : null,
-        bank_id:      f.bank_id || null,
-        received_by:  f.type==='cash'  ? (f.received_by||null)  : null,
         bank_transaction_id: bankTxId,
         prepared_by: profile.id,
-        notes: f.notes || null,
         released_at: new Date().toISOString(),
       }).select('id').single();
       if(vErr) throw vErr;
@@ -14030,7 +14075,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, on
                   : f.type==='bank_transfer' ? 'Bank Transfer'
                   : 'Cash Voucher';
   return (
-    <Modal title={`+ New ${typeLabel}`} onClose={onClose} wide>
+    <Modal title={isEdit ? `Edit ${typeLabel} — ${existing.number}` : `+ New ${typeLabel}`} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-800">
           Direct disbursement — for things outside the Purchasing PR/PO chain (rent, government contributions, payroll, commissions, etc.). Deducts from the chosen bank.
@@ -14291,8 +14336,24 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
   const [filter,setFilter]=useState('');  // 'check' | 'cash' | ''
   const [search,setSearch]=useState('');
   const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);   // voucher row being edited (admin only)
   const [viewing,setViewing]=useState(null);   // voucher row being viewed/printed
   const [autoPrint,setAutoPrint]=useState(false);
+  const isAdmin = profile.role==='admin';
+  // Admin-only soft-delete. Also hard-deletes the linked bank_transaction so
+  // the bank balance corrects (deleted vouchers shouldn't leak as expenses).
+  async function deleteVoucher(v){
+    const warning = `Delete voucher ${v.number}?\n\nThis will:\n• Soft-delete the voucher (recoverable from Trash later)\n• Reverse the linked bank transaction (${peso(v.amount)} restored to the bank balance)\n\nContinue?`;
+    if(!confirm(warning)) return;
+    if(v.bank_transaction_id){
+      try { await sb.from('bank_transactions').delete().eq('id', v.bank_transaction_id); } catch(_){}
+    }
+    const { error } = await sb.from('vouchers').update({
+      deleted_at: new Date().toISOString(), deleted_by: profile.id,
+    }).eq('id', v.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
   const rows = vouchers
     .filter(v=>!filter||v.type===filter)
     .filter(v=>!search || `${v.number} ${v.payee} ${v.particulars||''}`.toLowerCase().includes(search.toLowerCase()));
@@ -14331,12 +14392,15 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
             <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(v.amount)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>{ setAutoPrint(false); setViewing(v); }} className="text-xs text-indigo-600 hover:underline font-medium mr-3">👁 View</button>
-              <button onClick={()=>{ setAutoPrint(true); setViewing(v); }} className="text-xs text-slate-600 hover:underline font-medium">🖨 Print</button>
+              <button onClick={()=>{ setAutoPrint(true); setViewing(v); }} className="text-xs text-slate-600 hover:underline font-medium mr-3">🖨 Print</button>
+              {isAdmin && <button onClick={()=>setEditing(v)} className="text-xs text-amber-600 hover:underline font-medium mr-3" title="Edit voucher (admin only)">✎ Edit</button>}
+              {isAdmin && <button onClick={()=>deleteVoucher(v)} className="text-xs text-rose-500 hover:underline font-medium" title="Delete voucher + reverse bank transaction (admin only)">🗑 Delete</button>}
             </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No vouchers yet. Click <b>+ New Voucher</b> to create one, or pay an approved RFP.</td></tr>}</tbody>
       </table></div></div>
       {creating && <StandaloneVoucherModal profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
+      {editing && <StandaloneVoucherModal key={editing.id} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
       {viewing && <VoucherViewModal voucher={viewing} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} profile={profile} autoPrint={autoPrint} onClose={()=>{ setViewing(null); setAutoPrint(false); }} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
     </div>
   );
@@ -18166,7 +18230,7 @@ function App(){
       sb.from('bank_accounts').select('*').order('position'),
       sb.from('bank_transactions').select('*').order('date',{ascending:false}),
       sb.from('rfps').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('vouchers').select('*').order('created_at',{ascending:false}),
+      sb.from('vouchers').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('budget_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       // Sprint 2 — graceful if tables aren't there yet
       sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
