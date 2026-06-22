@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 90 · Transmittal: Sales Manager (prints) + internal "received back by" (stamps on Apply)';
+const BUILD = 'Live build 91 · Lead: Duplicate as new lead — carries over client, items, techpack, attachments, notes for reorders';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1302,7 +1302,7 @@ function SendLeadToPrintingModal({ profile, lead, client, onClose, onSent }){
 }
 
 /* ----------------------- Lead detail ----------------------- */
-function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onClose, activityCount }){
+function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
   const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Inline notes editor — saves without opening the full Edit lead form
@@ -1366,6 +1366,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendPr
             {lead.stage==='sampling' && <button onClick={onSendPrinting} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
             {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendProduction} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">⚙ Send to Production</button>}
             {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendToPR} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">📝 Send to PR</button>}
+            {onDuplicate && <button onClick={onDuplicate} className="py-2 px-3 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700" title="Duplicate this lead — useful for reorders (client + items + techpack carry over)">📋 Duplicate as new lead</button>}
             <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
           </div>
         </div>
@@ -18310,6 +18311,48 @@ function App(){
     alert('Created '+(data.number||'PR')+' from "'+lead.title+'". Opening Purchase Requests…');
     setView('requests'); loadAll();
   }
+  // Duplicate a lead for a reorder. Copies the client + item / techpack /
+  // attachments / notes so the user doesn't have to redo product setup, but
+  // resets stage to 'new' and clears every closed-stage field (won_at,
+  // lost_at, payment_status, sales_order_id, expected dates). The new lead
+  // lands at the top of the New Lead column and opens in Edit mode so the
+  // user can immediately adjust price / qty / dates for the reorder.
+  async function duplicateLead(lead){
+    if(!lead) return;
+    if(!confirm(`Duplicate "${lead.title}" as a new lead?\n\nClient, items, techpack, attachments, and notes will be copied. Pricing, dates, and stage will reset so you can edit them for the new order.`)) return;
+    // Build the copy payload. Whitelist only the fields we want to carry
+    // over — never blindly copy the full row (id, timestamps, etc. would
+    // collide).
+    const payload = {
+      client_id:        lead.client_id,
+      client_name:      lead.client_name,
+      title:            (lead.title || 'Lead') + ' (Reorder)',
+      lead_source:      lead.lead_source || null,
+      manager_id:       lead.manager_id || profile.id,
+      items:            Array.isArray(lead.items) ? lead.items : [],
+      attachments:      Array.isArray(lead.attachments) ? lead.attachments : [],
+      techpack:         lead.techpack || null,
+      techpack_number:  null,                   // fresh techpack ID — same content, new number
+      decoration_notes: lead.decoration_notes || null,
+      packing_notes:    lead.packing_notes || null,
+      notes:            lead.notes ? `Reorder of "${lead.title}".\n\n${lead.notes}` : `Reorder of "${lead.title}".`,
+      value:            lead.value || 0,        // sensible default — user re-edits
+      vat_amount:       lead.vat_amount || 0,
+      stage:            'new',                  // always lands in New Lead column
+      payment_status:   'unpaid',
+      // Explicitly NOT copied:
+      //   won_at / lost_at / sales_order_id / delivery_date / expected_close
+      //   po_number — new reorder will have its own PO from the client
+    };
+    const { data: newLead, error } = await sb.from('leads').insert(payload).select().single();
+    if(error){ alert('Duplicate failed: '+error.message); return; }
+    // Close the source detail modal and open the new lead in Edit mode so
+    // the user can adjust details right away.
+    setDetailLead(null);
+    setEditLead(newLead);
+    loadAll();
+  }
+
   async function sendLeadToSampling(lead){
     // Check for an existing active sampling job for this lead
     const { data: existing } = await sb.from('sampling_jobs')
@@ -18754,6 +18797,7 @@ function App(){
           onSendSampling={()=>sendLeadToSampling(liveDetail)}
           onSendPrinting={()=>setSendPrintLead(liveDetail)}
           onSendToPR={()=>{ closeLeadDetail(); sendLeadToPR(liveDetail); }}
+          onDuplicate={()=>duplicateLead(liveDetail)}
           onOpenTechpack={()=>{ const l=liveDetail; closeLeadDetail(); openTechpackEdit(l); }} onClose={closeLeadDetail} />
       )}
       {/* Dept-board "Open lead" → side-by-side modal: team chat (left) + read-only order info (right) */}
