@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 95 · Duplicate lead: also clear prodFormNo inside the techpack JSON';
+const BUILD = 'Live build 96 · Techpack size table: add custom columns next to Male / Female (Kids, Plus Size, etc.)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9700,19 +9700,49 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         </div>
       );
     }
+    // Extra columns alongside Male / Female (e.g. KIDS, PLUS SIZE, CUSTOM).
+    // Stable id per column so renaming a label doesn't lose existing values.
+    // Per-row values live in r.extras keyed by col.id.
+    const extraCols = Array.isArray(s.extraCols) ? s.extraCols : [];
     const sumMale   = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.male)||0),  0);
     const sumFemale = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.female)||0),0);
-    const grand = sumMale + sumFemale;
-    function addRow(){ setSec(pageType,{sizeRows:[...s.sizeRows,{size:'',male:'',female:''}]}); }
+    const sumExtras = extraCols.map(c => (s.sizeRows||[]).reduce((acc,r)=> acc + (Number((r.extras||{})[c.id])||0), 0));
+    const grand = sumMale + sumFemale + sumExtras.reduce((a,b)=>a+b, 0);
+    function addRow(){ setSec(pageType,{sizeRows:[...s.sizeRows,{size:'',male:'',female:'',extras:{}}]}); }
     function deleteTable(){
       if(!confirm('Remove the size table from this page?\n\nThe page will then just show whatever images/photos are on it. You can restore the table anytime.')) return;
       setSec(pageType,{hideSizeTable:true});
+    }
+    function addExtraCol(){
+      const id = 'col_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+      setSec(pageType,{ extraCols: [...extraCols, { id, label: '' }] });
+    }
+    function removeExtraCol(colId){
+      if(!confirm('Remove this column? All values typed in it will be lost.')) return;
+      setSec(pageType,{
+        extraCols: extraCols.filter(c => c.id !== colId),
+        sizeRows: (s.sizeRows||[]).map(r => {
+          if(!r.extras) return r;
+          const ne = { ...r.extras };
+          delete ne[colId];
+          return { ...r, extras: ne };
+        }),
+      });
+    }
+    function setExtraLabel(colId, label){
+      setSec(pageType,{ extraCols: extraCols.map(c => c.id===colId ? { ...c, label } : c) });
+    }
+    function setExtraCell(rowIdx, colId, value){
+      setSec(pageType,{ sizeRows: s.sizeRows.map((r,i) => i===rowIdx ? { ...r, extras: { ...(r.extras||{}), [colId]: value } } : r) });
     }
     return (
       <div className="border rounded-lg p-2">
         <div className="flex items-center justify-between mb-1">
           <div className="text-[10px] uppercase text-slate-400">Size table</div>
-          <button onClick={deleteTable} className="text-[10px] text-rose-500 hover:underline" title="Remove the size table from this page">🗑 Delete table</button>
+          <div className="flex gap-3">
+            <button onClick={addExtraCol} className="text-[10px] text-indigo-600 hover:underline font-semibold" title="Add a column next to Male / Female (e.g. Kids, Plus Size)">+ Add column</button>
+            <button onClick={deleteTable} className="text-[10px] text-rose-500 hover:underline" title="Remove the size table from this page">🗑 Delete table</button>
+          </div>
         </div>
         <table className="w-full text-xs">
           <thead>
@@ -9720,36 +9750,56 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               <th className="text-left pb-1">Size</th>
               <th className="pb-1"><input className="input text-xs px-1 py-1 text-center font-semibold" placeholder="MALE" value={s.sizeColMale||''} onChange={e=>setSec(pageType,{sizeColMale:e.target.value})} title="Edit Male category label" /></th>
               <th className="pb-1"><input className="input text-xs px-1 py-1 text-center font-semibold" placeholder="FEMALE" value={s.sizeColFemale||''} onChange={e=>setSec(pageType,{sizeColFemale:e.target.value})} title="Edit Female category label" /></th>
+              {extraCols.map(col => (
+                <th key={col.id} className="pb-1">
+                  <div className="flex items-center gap-1">
+                    <input className="input text-xs px-1 py-1 text-center font-semibold flex-1" placeholder="Label" value={col.label||''} onChange={e=>setExtraLabel(col.id, e.target.value)} title="Edit column label" />
+                    <button onClick={()=>removeExtraCol(col.id)} className="text-rose-400 hover:text-rose-600 text-base leading-none" title="Remove this column">×</button>
+                  </div>
+                </th>
+              ))}
               <th className="text-center pb-1 font-semibold text-slate-600">TOTAL</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {s.sizeRows.map((r,i)=>{ const rowTotal=(Number(r.male)||0)+(Number(r.female)||0); return (
-              <tr key={i}>
-                <td><input className="input text-xs px-1 py-1" value={r.size} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,size:e.target.value}:x)})} /></td>
-                <td><input type="number" className="input text-xs px-1 py-1" value={r.male} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,male:e.target.value}:x)})} /></td>
-                <td><input type="number" className="input text-xs px-1 py-1" value={r.female} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,female:e.target.value}:x)})} /></td>
-                <td className="text-center font-semibold text-slate-700 px-1">{rowTotal||''}</td>
-                <td><button onClick={()=>setSec(pageType,{sizeRows:s.sizeRows.filter((_,j)=>j!==i)})} className="text-rose-400 px-1">✕</button></td>
-              </tr>
-            ); })}
+            {s.sizeRows.map((r,i)=>{
+              const extras = r.extras || {};
+              const rowExtraTotal = extraCols.reduce((a,c)=> a + (Number(extras[c.id])||0), 0);
+              const rowTotal = (Number(r.male)||0) + (Number(r.female)||0) + rowExtraTotal;
+              return (
+                <tr key={i}>
+                  <td><input className="input text-xs px-1 py-1" value={r.size} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,size:e.target.value}:x)})} /></td>
+                  <td><input type="number" className="input text-xs px-1 py-1" value={r.male} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,male:e.target.value}:x)})} /></td>
+                  <td><input type="number" className="input text-xs px-1 py-1" value={r.female} onChange={e=>setSec(pageType,{sizeRows:s.sizeRows.map((x,j)=>j===i?{...x,female:e.target.value}:x)})} /></td>
+                  {extraCols.map(col => (
+                    <td key={col.id}><input type="number" className="input text-xs px-1 py-1" value={extras[col.id]||''} onChange={e=>setExtraCell(i, col.id, e.target.value)} /></td>
+                  ))}
+                  <td className="text-center font-semibold text-slate-700 px-1">{rowTotal||''}</td>
+                  <td><button onClick={()=>setSec(pageType,{sizeRows:s.sizeRows.filter((_,j)=>j!==i)})} className="text-rose-400 px-1">✕</button></td>
+                </tr>
+              );
+            })}
             <tr className="font-bold bg-slate-50">
               <td className="px-1 py-1">TOTAL</td>
               <td className="text-center">{sumMale||''}</td>
               <td className="text-center">{sumFemale||''}</td>
+              {extraCols.map((col,ci) => (
+                <td key={col.id} className="text-center">{sumExtras[ci]||''}</td>
+              ))}
               <td className="text-center text-indigo-700">{grand||''}</td>
               <td></td>
             </tr>
-            {/* Inline add buttons in the Male / Female column footers — clicking
-                either appends a new blank row, then the user fills in the size
-                + qty for whichever side they intended. Lets people who think
-                in "I need more male sizes" / "I need more female sizes" act
-                without scrolling to a separate button. */}
+            {/* Inline add buttons in the column footers — clicking any
+                appends a new blank row. Lets people who think in "I need
+                more <category> sizes" act without scrolling. */}
             <tr>
               <td></td>
-              <td className="text-center pt-1"><button onClick={addRow} className="text-[10px] text-indigo-600 hover:underline font-semibold w-full">+ Add to Male</button></td>
-              <td className="text-center pt-1"><button onClick={addRow} className="text-[10px] text-indigo-600 hover:underline font-semibold w-full">+ Add to Female</button></td>
+              <td className="text-center pt-1"><button onClick={addRow} className="text-[10px] text-indigo-600 hover:underline font-semibold w-full">+ Add to {s.sizeColMale||'Male'}</button></td>
+              <td className="text-center pt-1"><button onClick={addRow} className="text-[10px] text-indigo-600 hover:underline font-semibold w-full">+ Add to {s.sizeColFemale||'Female'}</button></td>
+              {extraCols.map(col => (
+                <td key={col.id} className="text-center pt-1"><button onClick={addRow} className="text-[10px] text-indigo-600 hover:underline font-semibold w-full">+ Add to {col.label||'col'}</button></td>
+              ))}
               <td></td>
               <td></td>
             </tr>
@@ -9767,9 +9817,14 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
     // When the editor's "Delete table" was clicked, render nothing so the
     // page becomes photo-only.
     if(s.hideSizeTable) return null;
+    const extraCols = Array.isArray(s.extraCols) ? s.extraCols : [];
     const sumMale   = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.male)||0),  0);
     const sumFemale = (s.sizeRows||[]).reduce((acc,r)=>acc+(Number(r.female)||0),0);
-    const grand = sumMale + sumFemale;
+    const sumExtras = extraCols.map(c => (s.sizeRows||[]).reduce((acc,r)=> acc + (Number((r.extras||{})[c.id])||0), 0));
+    const grand = sumMale + sumFemale + sumExtras.reduce((a,b)=>a+b, 0);
+    // Light colour tints for extra columns — rotate through a small palette
+    // so each extra column is visually distinct.
+    const extraTints = ['#f7e9c5','#d5e8d4','#e1d5f0','#f7d5e0'];
     return (
       <table style={{borderCollapse:'collapse', fontSize:'9pt', width:'100%'}}>
         <thead>
@@ -9777,22 +9832,36 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
             <th style={{...TP.cell, background:'#f0f0f0'}}>SIZE</th>
             <th style={{...TP.cell, background:'#b0c4de'}}>{s.sizeColMale||'MALE'}</th>
             <th style={{...TP.cell, background:'#f7d5d5'}}>{s.sizeColFemale||'FEMALE'}</th>
+            {extraCols.map((col,ci) => (
+              <th key={col.id} style={{...TP.cell, background: extraTints[ci % extraTints.length]}}>{col.label||''}</th>
+            ))}
             <th style={{...TP.cell, background:'#f0f0f0'}}>TOTAL</th>
           </tr>
         </thead>
         <tbody>
-          {(s.sizeRows||[]).map((r,i)=>{ const rowTotal=(Number(r.male)||0)+(Number(r.female)||0); return (
-            <tr key={i}>
-              <td style={TP.cell}>{r.size}</td>
-              <td style={TP.cell}>{r.male}</td>
-              <td style={TP.cell}>{r.female}</td>
-              <td style={{...TP.cell, fontWeight:600}}>{rowTotal||''}</td>
-            </tr>
-          ); })}
+          {(s.sizeRows||[]).map((r,i)=>{
+            const extras = r.extras || {};
+            const rowExtraTotal = extraCols.reduce((a,c)=> a + (Number(extras[c.id])||0), 0);
+            const rowTotal = (Number(r.male)||0)+(Number(r.female)||0)+rowExtraTotal;
+            return (
+              <tr key={i}>
+                <td style={TP.cell}>{r.size}</td>
+                <td style={TP.cell}>{r.male}</td>
+                <td style={TP.cell}>{r.female}</td>
+                {extraCols.map(col => (
+                  <td key={col.id} style={TP.cell}>{extras[col.id]||''}</td>
+                ))}
+                <td style={{...TP.cell, fontWeight:600}}>{rowTotal||''}</td>
+              </tr>
+            );
+          })}
           <tr style={{fontWeight:700, background:'#f5f5f5'}}>
             <td style={TP.cell}>{s.sizeTotalLabel||'TOTAL'}</td>
             <td style={TP.cell}>{sumMale||''}</td>
             <td style={TP.cell}>{sumFemale||''}</td>
+            {extraCols.map((col,ci) => (
+              <td key={col.id} style={TP.cell}>{sumExtras[ci]||''}</td>
+            ))}
             <td style={TP.cell}>{grand||''}</td>
           </tr>
         </tbody>
