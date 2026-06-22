@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 83 · Techpack preview: mobile-friendly zoom (Fit / 100 / 75 / 50 / 33%) — auto-fit on phones';
+const BUILD = 'Live build 84 · Inbox dedupe: one row per lead/job thread + count badge + clear-thread-as-one';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3830,7 +3830,30 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   const nonArchivedMentions = showArchived ? mentions : mentions.filter(m => !isArchived(m));
   const unread = nonArchivedMentions.filter(m=>!(m.read_by||[]).includes(profile.id));
   const archivedCount = mentions.filter(isArchived).length;
-  const visible = filter==='unread'?unread:nonArchivedMentions;
+  const rawVisible = filter==='unread'?unread:nonArchivedMentions;
+  // Collapse multiple mentions in the same lead / job into a single inbox row
+  // so the inbox doesn't get cluttered when a lead has a long conversation.
+  // Most recent mention wins (mentions arrive sorted by created_at desc).
+  // dedupKey identifies the "thread" — lead_id for leads, job_id+source for jobs.
+  function dedupKey(m){
+    if(m.source==='lead') return 'lead:'+(m.lead_id||'');
+    return m.source+':'+(m.job_id||'');
+  }
+  const groupedCounts = {};     // key -> total count of mentions in that thread
+  const groupedAll    = {};     // key -> array of all mention rows (for bulk clear)
+  rawVisible.forEach(m=>{
+    const k = dedupKey(m);
+    groupedCounts[k] = (groupedCounts[k]||0) + 1;
+    (groupedAll[k] = groupedAll[k] || []).push(m);
+  });
+  const seen = new Set();
+  const visible = [];
+  for(const m of rawVisible){
+    const k = dedupKey(m);
+    if(seen.has(k)) continue;
+    seen.add(k);
+    visible.push(m);
+  }
   function ctx(m){
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
@@ -3860,12 +3883,17 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   async function clearOne(m){
     if(busyIds.has(m.id)) return;
     setBusyIds(p=>{ const n=new Set(p); n.add(m.id); return n; });
-    const table = m.source==='lead' ? 'lead_activity' : 'dept_job_activity';
-    const nextRead = Array.from(new Set([...(m.read_by||[]), profile.id]));
-    const nextArchived = Array.from(new Set([...(m.archived_by||[]), profile.id]));
-    const { error } = await sb.from(table).update({ read_by: nextRead, archived_by: nextArchived }).eq('id', m.id);
+    // Because the inbox dedupes mentions per thread (lead / job), clearing the
+    // visible row should clear EVERY underlying mention from that thread —
+    // otherwise the older mentions reappear after the most recent is dismissed.
+    const all = groupedAll[dedupKey(m)] || [m];
+    await Promise.all(all.map(row=>{
+      const table = row.source==='lead' ? 'lead_activity' : 'dept_job_activity';
+      const nextRead = Array.from(new Set([...(row.read_by||[]), profile.id]));
+      const nextArchived = Array.from(new Set([...(row.archived_by||[]), profile.id]));
+      return sb.from(table).update({ read_by: nextRead, archived_by: nextArchived }).eq('id', row.id);
+    }));
     setBusyIds(p=>{ const n=new Set(p); n.delete(m.id); return n; });
-    if(error){ alert(error.message); return; }
     reload && reload();
   }
   // Re-show an archived notification (used when "Show archived" is on).
@@ -3880,12 +3908,13 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     reload && reload();
   }
   async function clearAll(){
-    // Archive every currently visible mention that the user hasn't already
-    // archived. (Includes archived ones if "Show archived" is on so they get
-    // re-archived without effect — harmless.)
-    const toClear = visible.filter(m=>!(m.archived_by||[]).includes(profile.id));
+    // Archive every underlying mention (not just the deduped visible rows) so
+    // older mentions don't reappear after dismiss. We operate on rawVisible
+    // since `visible` only contains one row per thread after the dedupe.
+    const toClear = rawVisible.filter(m=>!(m.archived_by||[]).includes(profile.id));
     if(toClear.length===0) return;
-    if(!confirm(`Clear (archive) ${toClear.length} notification${toClear.length===1?'':'s'}?`)) return;
+    const threadCount = visible.length;
+    if(!confirm(`Clear (archive) ${threadCount} thread${threadCount===1?'':'s'} (${toClear.length} mention${toClear.length===1?'':'s'} total)?`)) return;
     await Promise.all(toClear.map(m=>{
       const table = m.source==='lead' ? 'lead_activity' : 'dept_job_activity';
       const nextRead = Array.from(new Set([...(m.read_by||[]), profile.id]));
@@ -3990,6 +4019,12 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                     <button onClick={()=>onOpen(m)} className="flex-1 min-w-0 text-left text-sm text-slate-600 truncate hover:underline">
                       {renderCommentText(m.text, profiles)}
                     </button>
+                    {/* Thread-count badge — appears when this row represents
+                       multiple mentions in the same lead / job. Tells the user
+                       "the latest message is shown, but N mentions are bundled." */}
+                    {(groupedCounts[dedupKey(m)]||0) > 1 && (
+                      <div className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold whitespace-nowrap" title={`${groupedCounts[dedupKey(m)]} mentions in this thread — clear to dismiss all`}>+{groupedCounts[dedupKey(m)]-1} more</div>
+                    )}
                     {/* Reply count badge */}
                     {replyCount>0 && (
                       <div className="shrink-0 w-6 h-6 rounded-full border border-slate-200 text-[10px] text-slate-500 flex items-center justify-center font-medium">{replyCount}</div>
