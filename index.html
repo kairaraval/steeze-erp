@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 98 · Size table inputs: type=text so existing text data is editable (was hidden by type=number)';
+const BUILD = 'Live build 99 · Size Guide: 2 photo slots (center single), remove text fields + right-side breakdown';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8148,7 +8148,7 @@ function blankTechpack(lead, client, profile){
     breakdown:{ enabled:false, sizeColMale:'MALE', sizeColFemale:'FEMALE', sizeRows:[{size:'M',male:'',female:''}], names:[] },
     garment1:{ enabled:false, sectionSubLabel:'(FOR WITH NAMES)', frontImage:'', backImage:'', annotations:[] },
     collarCuffs:{ enabled:false, photo1:'', photo2:'', caption1:'Collar Design', caption2:'Cuffs Design' },
-    sizechart:{ enabled:false, titleHeading:'', fabricNote:'', chartImage:'', footerNote1:'MEASUREMENTS ARE IN INCHES', footerNote2:'' },
+    sizechart:{ enabled:false, chartImage:'', chartImage2:'', titleHeading:'', fabricNote:'', footerNote1:'MEASUREMENTS ARE IN INCHES', footerNote2:'' },
     materials:{ enabled:false, columns:[{title:'MAIN FABRIC',name:'',colorCode:'',image:''},{title:'LINING FABRIC',name:'',colorCode:'',image:''},{title:'COLLAR PELON',name:'',colorCode:'',image:''}] },
     trims:{ enabled:false, columns:[{title:'WOVEN SIZE LABEL',name:'',image:''},{title:'YKK ZIPPER',name:'',image:''},{title:'BUTTONS',name:'',image:''}], packaging:{title:'PACKAGING',type:'REGULAR PLASTIC',size:''} },
     graphicFront:{ enabled:false, artworkImage:'', placementImage:'', widthLabel:'', cw1:{technique:'',position:'',size:'',extra:''}, cw2:{technique:'',position:'',size:'',extra:''} },
@@ -9556,9 +9556,27 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
     return Number(previewZoom) || 1;
   }, [previewZoom, vw]);
 
-  const [pickingChart,setPickingChart]=useState(false);
-  async function saveChartToLibrary(){ const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return; const garment=(prompt('Garment type (optional):')||'').trim(); const s=tp.sizechart||{}; const { error }=await sb.from('size_charts').insert({ name, garment_type:garment, chart_image:s.chartImage||'', title_heading:s.titleHeading||'', fabric_note:s.fabricNote||'', footer_note1:s.footerNote1||'', footer_note2:s.footerNote2||'', created_by:profile.id }); if(error){ alert(error.message); return; } alert('Saved "'+name+'" to library.'); reloadCharts&&reloadCharts(); }
-  function applyChart(c){ setSec('sizechart',{ chartImage:c.chart_image||'', titleHeading:c.title_heading||'', fabricNote:c.fabric_note||'', footerNote1:c.footer_note1||'', footerNote2:c.footer_note2||'' }); setPickingChart(false); }
+  // pickingChart is null when closed, or a slot key ('chartImage'|'chartImage2')
+  // identifying which image slot the library pick should populate.
+  const [pickingChart,setPickingChart]=useState(null);
+  async function saveChartToLibrary(){
+    const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return;
+    const garment=(prompt('Garment type (optional):')||'').trim();
+    const s=tp.sizechart||{};
+    // We still save the legacy text fields so the library entry stays
+    // backward-compatible, but the editor no longer exposes them.
+    const { error }=await sb.from('size_charts').insert({ name, garment_type:garment, chart_image:s.chartImage||'', title_heading:s.titleHeading||'', fabric_note:s.fabricNote||'', footer_note1:s.footerNote1||'', footer_note2:s.footerNote2||'', created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    alert('Saved "'+name+'" to library.');
+    reloadCharts&&reloadCharts();
+  }
+  function applyChart(c){
+    // Only the image goes into the chosen slot — text metadata is no longer
+    // rendered (the right-side breakdown was removed per user request).
+    const slot = pickingChart || 'chartImage';
+    setSec('sizechart',{ [slot]: c.chart_image||'' });
+    setPickingChart(null);
+  }
   const [pickingMockup,setPickingMockup]=useState(false);
   async function saveMockupToLibrary(){ const name=(prompt('Save this mockup as:')||'').trim(); if(!name) return; const garment=(prompt('Garment type (optional):')||'').trim(); const g=tp.garment1||{}; const { error }=await sb.from('garment_mockups').insert({ name, garment_type:garment, front_image:g.frontImage||'', back_image:g.backImage||'', section_sub_label:g.sectionSubLabel||'', annotations:g.annotations||[], created_by:profile.id }); if(error){ alert(error.message); return; } alert('Saved "'+name+'" to mockup library.'); reloadMockups&&reloadMockups(); }
   function applyMockup(m){ setSec('garment1',{ frontImage:m.front_image||'', backImage:m.back_image||'', sectionSubLabel:m.section_sub_label||'', annotations:m.annotations||[] }); setPickingMockup(false); }
@@ -9634,7 +9652,28 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       case 'breakdown': return (<div className="space-y-3">{sizeTableEditor()}<TpLbl t="Names"><div className="space-y-1">{(sec.names||[]).map((n,i)=>(<div key={i} className="flex gap-1"><input className="input text-xs" value={n} onChange={e=>setSec('breakdown',{names:sec.names.map((x,j)=>j===i?e.target.value:x)})} /><button onClick={()=>setSec('breakdown',{names:sec.names.filter((_,j)=>j!==i)})} className="text-rose-400 px-2">✕</button></div>))}<button onClick={()=>setSec('breakdown',{names:[...(sec.names||[]),'']})} className="text-xs text-indigo-600">+ Add name</button></div></TpLbl></div>);
       case 'garment1': return (<div className="space-y-3"><div className="flex gap-2 flex-wrap"><button onClick={()=>setPickingMockup(true)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📚 Pick mockup from library ({garmentMockups?garmentMockups.length:0})</button><button onClick={saveMockupToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save to library</button></div><TpRow><TpImage scope={scope} label="Front" value={sec.frontImage} onChange={v=>setSec('garment1',{frontImage:v})} /><TpImage scope={scope} label="Back" value={sec.backImage} onChange={v=>setSec('garment1',{backImage:v})} /></TpRow><TpLbl t="Annotations / callouts"><div className="space-y-1">{(sec.annotations||[]).map((a,i)=>(<div key={i} className="flex gap-1"><input className="input text-xs" value={a} onChange={e=>setSec('garment1',{annotations:sec.annotations.map((x,j)=>j===i?e.target.value:x)})} /><button onClick={()=>setSec('garment1',{annotations:sec.annotations.filter((_,j)=>j!==i)})} className="text-rose-400 px-2">✕</button></div>))}<button onClick={()=>setSec('garment1',{annotations:[...(sec.annotations||[]),'']})} className="text-xs text-indigo-600">+ Add note</button></div></TpLbl></div>);
       case 'collarCuffs': return (<div className="space-y-3"><TpRow><div><TpImage scope={scope} label="Photo 1" value={sec.photo1} onChange={v=>setSec('collarCuffs',{photo1:v})} /><input className="input mt-1 text-xs" value={sec.caption1} onChange={e=>setSec('collarCuffs',{caption1:e.target.value})} /></div><div><TpImage scope={scope} label="Photo 2" value={sec.photo2} onChange={v=>setSec('collarCuffs',{photo2:v})} /><input className="input mt-1 text-xs" value={sec.caption2} onChange={e=>setSec('collarCuffs',{caption2:e.target.value})} /></div></TpRow></div>);
-      case 'sizechart': return (<div className="space-y-3"><div className="flex gap-2 flex-wrap"><button onClick={()=>setPickingChart(true)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📚 Pick from library ({sizeCharts?sizeCharts.length:0})</button><button onClick={saveChartToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save to library</button></div><TpRow><TpLbl t="Title heading"><input className="input" value={sec.titleHeading} onChange={e=>setSec('sizechart',{titleHeading:e.target.value})} /></TpLbl><TpLbl t="Fabric note"><input className="input" value={sec.fabricNote} onChange={e=>setSec('sizechart',{fabricNote:e.target.value})} /></TpLbl></TpRow><TpImage scope={scope} label="Size chart image" value={sec.chartImage} onChange={v=>setSec('sizechart',{chartImage:v})} h="h-72" /><TpRow><TpLbl t="Footer note 1"><input className="input" value={sec.footerNote1} onChange={e=>setSec('sizechart',{footerNote1:e.target.value})} /></TpLbl><TpLbl t="Footer note 2"><input className="input" value={sec.footerNote2} onChange={e=>setSec('sizechart',{footerNote2:e.target.value})} /></TpLbl></TpRow></div>);
+      case 'sizechart': return (
+        // Photo-only Size Guide. Two slots side by side. Each slot has its
+        // own "Pick from library" button so the user can fill either slot
+        // from saved size-chart photos. Title heading / fabric note /
+        // footer notes were removed — the printed page is just photos.
+        <div className="space-y-3">
+          <div className="text-[10px] text-slate-500">Upload up to two photos. If only one is set, it'll print centered. Use the library buttons to pick from saved size charts.</div>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={saveChartToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save Photo 1 to library</button>
+          </div>
+          <TpRow>
+            <div>
+              <TpImage scope={scope} label="Photo 1" value={sec.chartImage} onChange={v=>setSec('sizechart',{chartImage:v})} h="h-72" />
+              <button onClick={()=>setPickingChart('chartImage')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 1 from library ({sizeCharts?sizeCharts.length:0})</button>
+            </div>
+            <div>
+              <TpImage scope={scope} label="Photo 2 (optional)" value={sec.chartImage2} onChange={v=>setSec('sizechart',{chartImage2:v})} h="h-72" />
+              <button onClick={()=>setPickingChart('chartImage2')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 2 from library ({sizeCharts?sizeCharts.length:0})</button>
+            </div>
+          </TpRow>
+        </div>
+      );
       case 'materials': return (<div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" /><input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /><input className="input text-xs" placeholder="Color code" value={c.colorCode} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,colorCode:e.target.value}:x)})} /></div>))}<button onClick={()=>setSec('materials',{columns:[...sec.columns,{title:'',name:'',colorCode:'',image:''}]})} className="text-xs text-indigo-600 self-start">+ Add material</button></div>);
       case 'trims': return (<div className="space-y-3"><div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" /><input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /></div>))}</div><div className="border rounded-lg p-2 grid grid-cols-3 gap-2"><input className="input text-xs" value={sec.packaging.title} onChange={e=>setSec('trims',{packaging:{...sec.packaging,title:e.target.value}})} /><input className="input text-xs" value={sec.packaging.type} onChange={e=>setSec('trims',{packaging:{...sec.packaging,type:e.target.value}})} /><input className="input text-xs" placeholder="Size" value={sec.packaging.size} onChange={e=>setSec('trims',{packaging:{...sec.packaging,size:e.target.value}})} /></div></div>);
       case 'graphicFront': case 'graphicBack': { const k=pageType; return (<div className="space-y-3"><TpRow><TpImage scope={scope} label="Artwork" value={sec.artworkImage} onChange={v=>setSec(k,{artworkImage:v})} /><TpImage scope={scope} label="Placement" value={sec.placementImage} onChange={v=>setSec(k,{placementImage:v})} /></TpRow><TpLbl t="Width label"><input className="input" value={sec.widthLabel} onChange={e=>setSec(k,{widthLabel:e.target.value})} /></TpLbl>{['cw1','cw2'].map(cw=>(<div key={cw} className="border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-400 mb-1">{cw==='cw1'?'Colourway 1':'Colourway 2'}</div><div className="grid grid-cols-2 gap-2">{['technique','position','size','extra'].map(f=>(<input key={f} className="input text-xs" placeholder={f} value={sec[cw][f]} onChange={e=>setSec(k,{[cw]:{...sec[cw],[f]:e.target.value}})} />))}</div></div>))}</div>); }
@@ -9946,7 +9985,22 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       </div>);
     }
     if(type==='collarCuffs') return (<div style={{flex:1, display:'flex', flexDirection:'column', gap:'12px', padding:'14px 20px'}}>{[1,2].map(n=>{ const photo=s['photo'+n], cap=s['caption'+n]; return (<div key={n} style={{border:'2px solid #1a1a1a', padding:'10px', flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:0, background:'#fafafa'}}><TImg path={photo} maxH="2.6in" />{cap&&<div style={{marginTop:'6px', fontWeight:700, fontSize:'9pt'}}>{cap}</div>}</div>); })}</div>);
-    if(type==='sizechart') return (<div style={{flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px', padding:'10px', alignItems:'center'}}><div style={{display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}><TImg path={s.chartImage} maxH="5.5in" />{s.fabricNote&&<div style={{marginTop:'10px', fontSize:'9pt', fontWeight:700}}>{s.fabricNote}</div>}</div><div style={{textAlign:'center'}}><div style={{fontSize:'16pt', fontWeight:700, fontStyle:'italic', letterSpacing:'1px', color:'#1d3557'}}>Steeze</div><div style={{letterSpacing:'1px', marginBottom:'10px', fontSize:'11pt'}}>{s.titleHeading}</div>{s.footerNote1&&<div style={{fontSize:'9pt', fontWeight:700, marginTop:'8px'}}>{s.footerNote1}</div>}{s.footerNote2&&<div style={{fontSize:'9pt'}}>{s.footerNote2}</div>}</div></div>);
+    if(type==='sizechart'){
+      // Photo-only Size Guide. If both slots filled → side by side. If only
+      // one → centered. Right-side text/branding block was removed per Kaira.
+      const hasA = !!s.chartImage;
+      const hasB = !!s.chartImage2;
+      if(hasA && hasB){
+        return (<div style={{flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px', padding:'10px', alignItems:'center'}}>
+          <div style={{display:'flex', alignItems:'center', justifyContent:'center'}}><TImg path={s.chartImage} maxH="6.5in" /></div>
+          <div style={{display:'flex', alignItems:'center', justifyContent:'center'}}><TImg path={s.chartImage2} maxH="6.5in" /></div>
+        </div>);
+      }
+      const onePhoto = s.chartImage || s.chartImage2;
+      return (<div style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'10px'}}>
+        <TImg path={onePhoto} maxH="6.5in" />
+      </div>);
+    }
     if(type==='materials'){
       const cols=(s.columns||[]).filter(c=>c && (c.title||c.name||c.colorCode||c.image));
       const rowCount=Math.max(1, Math.ceil(cols.length/3));
@@ -10038,7 +10092,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         </div>
       ) : null}
 
-      {pickingChart && <Modal title="Size chart library" onClose={()=>setPickingChart(false)} wide>
+      {pickingChart && <Modal title={`Pick size chart for ${pickingChart==='chartImage2'?'Photo 2':'Photo 1'}`} onClose={()=>setPickingChart(null)} wide>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {(sizeCharts||[]).map(c=>(
             <div key={c.id} className="border rounded-lg p-3 bg-white hover:border-indigo-500">
