@@ -167,7 +167,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 75 · E-Signatures: profile signature pad + Approve & Sign on Voucher + DR/Transmittal signatures + auto-void on edit';
+const BUILD = 'Live build 76 · Signature upload: Draw + Upload always visible, 3MB cap, MIME check, clear pending preview';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7369,78 +7369,111 @@ function ApprovedSignature({ signerProfile, signedAt, role, sizeClass='h-12' }){
   );
 }
 
-// MySignatureCard — slot rendered inside ProfileView. Lets the current user
-// draw + save their signature, replace it, or remove it. Only the user
-// themselves can change their own signature (RLS + the inline check).
+// MySignatureCard — Profile section where the user can capture / replace /
+// remove their own e-signature. Two capture modes side by side:
+//   • Draw — canvas pad
+//   • Upload — pick a PNG/JPG file from the computer/phone
+// Both modes always visible so the user doesn't have to switch between
+// "view" and "edit" states. The current saved signature shows on top.
 function MySignatureCard({ profile, reload }){
-  const [draft,setDraft]=useState(profile.signature_data || null);
+  // `draft` holds an unsaved draw OR upload. Null = nothing pending.
+  const [draft,setDraft]=useState(null);
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
-  const [mode,setMode]=useState(profile.signature_data ? 'view' : 'draw');
+  const fileInputRef = useRef(null);
   const hasSignature = !!profile.signature_data;
+  const preview = draft || profile.signature_data;
+
   async function save(){
+    if(!draft){ setMsg('Draw or upload a signature first.'); return; }
     setBusy(true); setMsg('');
     try {
-      const { error } = await sb.from('profiles').update({ signature_data: draft || null }).eq('id', profile.id);
+      const { error } = await sb.from('profiles').update({ signature_data: draft }).eq('id', profile.id);
       if(error) throw error;
-      setBusy(false); setMsg('Saved.'); setMode('view');
+      setBusy(false); setMsg('Saved.'); setDraft(null);
       reload && reload();
     } catch(err){
       setBusy(false); setMsg('Save failed: '+(err.message||String(err)));
     }
   }
   async function remove(){
-    if(!confirm('Remove your e-signature? Documents you previously approved will keep their existing signature record, but new approvals will show no signature until you set a new one.')) return;
+    if(!confirm('Remove your e-signature? Documents you previously approved keep their record, but new approvals will show no signature until you set a new one.')) return;
     setBusy(true);
     const { error } = await sb.from('profiles').update({ signature_data: null }).eq('id', profile.id);
     setBusy(false);
     if(error){ setMsg('Failed: '+error.message); return; }
-    setDraft(null); setMode('draw'); reload && reload();
+    setDraft(null); reload && reload();
   }
   async function onUpload(e){
-    const f = e.target.files?.[0]; if(!f) return;
-    if(f.size > 800*1024){ setMsg('Image too large — keep under 800KB.'); return; }
+    const f = e.target.files?.[0];
+    // Reset the input so the same file can be picked twice (e.g. after a fix).
+    if(fileInputRef.current) fileInputRef.current.value = '';
+    if(!f) return;
+    setMsg('');
+    // Hard guard against monster-sized phone photos. 3MB on disk usually
+    // produces a base64 string around 4MB — still saves fine to Postgres text.
+    if(f.size > 3*1024*1024){
+      setMsg(`Image too large (${(f.size/1024/1024).toFixed(1)}MB). Keep under 3MB. Tip: PNG with transparent background works best.`);
+      return;
+    }
+    if(!/^image\//.test(f.type)){
+      setMsg(`That's not an image file (${f.type||'unknown type'}). Pick a PNG or JPG.`);
+      return;
+    }
     try {
       const dataUrl = await fileToDataUrl(f);
-      setDraft(dataUrl); setMode('draw');  // show the uploaded image in the pad area
-      setMsg('Loaded. Click Save to commit.');
-    } catch(err){ setMsg('Upload failed: '+err.message); }
+      setDraft(dataUrl);
+      setMsg(`Loaded ${f.name} (${Math.round(f.size/1024)}KB). Click "Save signature" to commit.`);
+    } catch(err){
+      setMsg('Upload failed: '+(err.message||String(err)));
+    }
   }
+
   return (
     <div className="bg-white border rounded-xl p-4 mb-6">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div>
           <div className="font-semibold text-slate-900">✍ My E-Signature</div>
           <div className="text-xs text-slate-500">Added automatically when you approve documents. Only you can update yours.</div>
         </div>
-        {hasSignature && mode==='view' && (
-          <div className="flex gap-2">
-            <button onClick={()=>{ setMode('draw'); setDraft(null); }} className="text-xs px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200">Redraw</button>
-            <button onClick={remove} disabled={busy} className="text-xs px-3 py-1.5 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 disabled:opacity-50">Remove</button>
-          </div>
+        {hasSignature && !draft && (
+          <button onClick={remove} disabled={busy} className="text-xs px-3 py-1.5 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 disabled:opacity-50">Remove signature</button>
         )}
       </div>
 
-      {mode==='view' && hasSignature && (
-        <div className="bg-slate-50 border rounded p-4 inline-block">
-          <img src={profile.signature_data} alt="" draggable={false} onContextMenu={e=>e.preventDefault()} className="max-h-24 object-contain" style={{ userSelect:'none' }} />
-        </div>
-      )}
-
-      {mode==='draw' && (
-        <div>
-          <SignaturePad value={draft} onChange={setDraft} />
-          <div className="flex gap-2 mt-3 items-center flex-wrap">
-            <button disabled={busy || !draft} onClick={save} className="text-sm px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">Save signature</button>
-            {hasSignature && <button onClick={()=>{ setDraft(profile.signature_data); setMode('view'); setMsg(''); }} className="text-sm px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>}
-            <label className="text-sm px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 cursor-pointer">
-              📷 Upload image
-              <input type="file" accept="image/png,image/jpeg" onChange={onUpload} className="hidden" />
-            </label>
+      {/* Current / draft signature preview */}
+      {preview && (
+        <div className="mb-4">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">{draft ? 'Pending (not saved yet)' : 'Current signature'}</div>
+          <div className="bg-slate-50 border rounded p-4 inline-block">
+            <img src={preview} alt="" draggable={false} onContextMenu={e=>e.preventDefault()} className="max-h-24 object-contain" style={{ userSelect:'none' }} />
           </div>
         </div>
       )}
-      {msg && <div className="text-xs text-slate-600 mt-2">{msg}</div>}
+
+      {/* Capture: Draw + Upload side by side, both always available */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Option 1 — Draw it</div>
+          <SignaturePad value={null} onChange={setDraft} />
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Option 2 — Upload an image</div>
+          <label className="block border-2 border-dashed border-slate-300 rounded p-6 text-center cursor-pointer hover:bg-slate-50">
+            <div className="text-3xl">📷</div>
+            <div className="text-sm font-semibold text-slate-700 mt-1">Click to choose a file</div>
+            <div className="text-[11px] text-slate-500 mt-1">PNG or JPG · up to 3MB · transparent PNG works best</div>
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={onUpload} className="hidden" />
+          </label>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mt-4 flex-wrap items-center">
+        <button disabled={busy || !draft} onClick={save} className="text-sm px-4 py-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">Save signature</button>
+        {draft && <button onClick={()=>{ setDraft(null); setMsg('Discarded.'); }} className="text-sm px-3 py-2 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Discard draft</button>}
+        {msg && <div className={`text-xs ${msg.includes('failed')||msg.includes('large')||msg.includes('not')?'text-rose-600':'text-emerald-700'}`}>{msg}</div>}
+      </div>
+
       <div className="text-[10px] text-slate-400 mt-3">
         ⓘ Your signature is private and rendered with anti-save measures. Other users can see it on documents you approve but can't easily download it. Right-click, drag, and selection are blocked. Any post-sign edit auto-clears your signature from the document.
       </div>
