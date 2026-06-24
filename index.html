@@ -180,7 +180,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = 'Live build 109 · Subcon Monitoring + Weekly Payroll module (send batches, partial returns, variance, per-garment payroll)';
+const BUILD = 'Live build 110 · Subcon Projects: parent for batches (target qty + released/received/balance roll-up)';
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18492,14 +18492,225 @@ function SubconFormModal({ profile, existing, onClose, onSaved }){
   );
 }
 
+// Roll up project totals from its linked send batches + their returns.
+function subconProjectTotals(project, allSends, allReturns){
+  const sends = (allSends||[]).filter(s => s.project_id === project.id && !s.deleted_at);
+  const released = sends.reduce((s,x) => s + Number(x.quantity_sent||0), 0);
+  let received = 0, variance = 0;
+  sends.forEach(send => {
+    (allReturns||[]).filter(r => r.send_id === send.id).forEach(r => {
+      received += Number(r.quantity_returned||0);
+      variance += Number(r.variance_qty||0);
+    });
+  });
+  const outstanding = Math.max(0, released - received - variance);
+  const targetBalance = Math.max(0, Number(project.target_qty||0) - released);
+  return { sends, released, received, variance, outstanding, targetBalance };
+}
+
+// ─────────── PROJECT FORM MODAL ───────────
+function SubconProjectFormModal({ profile, clients, leads, prodJobs, existing, onClose, onSaved }){
+  const isEdit = !!existing;
+  const [f,setF]=useState({
+    name: existing?.name||'',
+    garment: existing?.garment||'',
+    target_qty: existing?.target_qty||0,
+    client_id: existing?.client_id||'',
+    lead_id: existing?.lead_id||'',
+    production_job_id: existing?.production_job_id||'',
+    status: existing?.status||'open',
+    notes: existing?.notes||'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.name.trim()){ setMsg('Project name is required.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload = {
+        name: f.name.trim(),
+        garment: f.garment||null,
+        target_qty: Number(f.target_qty)||0,
+        client_id: f.client_id||null,
+        lead_id: f.lead_id||null,
+        production_job_id: f.production_job_id||null,
+        status: f.status||'open',
+        notes: f.notes||null,
+      };
+      if(isEdit){
+        const { error } = await sb.from('subcon_projects').update(payload).eq('id', existing.id);
+        if(error) throw error;
+      } else {
+        // Allocate SCP-YYYY-MM-NNN
+        const monthKey = new Date().toISOString().slice(0,7);
+        const { data: monthRows } = await sb.from('subcon_projects')
+          .select('number').like('number', `SCP-${monthKey}-%`);
+        let max = 0;
+        (monthRows||[]).forEach(r => {
+          const m = String(r.number||'').match(/-(\d+)$/);
+          if(m){ const n = parseInt(m[1],10); if(n>max) max = n; }
+        });
+        payload.number = `SCP-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        payload.created_by = profile.id;
+        const { error } = await sb.from('subcon_projects').insert(payload);
+        if(error) throw error;
+      }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit ? `Edit project — ${existing.number}` : '+ New subcon project'} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-800">
+          A project groups send batches together so you can track a big order (e.g. 7,000 bucket hats) distributed across many subcons. Target qty is the planned total. Each send batch logged later links back to this project.
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Project name *</label>
+            <input value={f.name} onChange={e=>up('name',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "BUCKET HAT BLUE — Lacoste"' />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Target quantity</label>
+            <input type="number" value={f.target_qty} onChange={e=>up('target_qty',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="7000" />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Garment</label>
+            <input value={f.garment} onChange={e=>up('garment',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Bucket hat"' />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Status</label>
+            <select value={f.status} onChange={e=>up('status',e.target.value)} className="w-full border rounded px-2 py-1.5">
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div className="col-span-3">
+            <label className="text-xs font-semibold text-slate-500">Link to client (optional)</label>
+            <select value={f.client_id} onChange={e=>up('client_id',e.target.value)} className="w-full border rounded px-2 py-1.5">
+              <option value="">— none —</option>
+              {(clients||[]).slice().sort((a,b)=> String(a.company||'').localeCompare(String(b.company||''))).map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
+            </select>
+          </div>
+          <div className="col-span-3">
+            <label className="text-xs font-semibold text-slate-500">Link to production job (optional)</label>
+            <select value={f.production_job_id} onChange={e=>up('production_job_id',e.target.value)} className="w-full border rounded px-2 py-1.5">
+              <option value="">— none —</option>
+              {(prodJobs||[]).filter(j => j.status !== 'delivered' && !j.deleted_at).map(j => (
+                <option key={j.id} value={j.id}>{j.number} · {j.client_name||''} · {j.item||''} ({j.quantity||0})</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-3">
+            <label className="text-xs font-semibold text-slate-500">Notes</label>
+            <textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" />
+          </div>
+        </div>
+        {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{isEdit ? 'Save changes' : 'Create project'}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────── PROJECT DETAIL MODAL ───────────
+function SubconProjectDetailModal({ project, subcons, subconSends, subconReturns, profile, onClose, onEdit, onAddSend, onOpenSend, onDelete }){
+  const totals = subconProjectTotals(project, subconSends, subconReturns);
+  const sends = totals.sends.slice().sort((a,b)=> String(a.date_sent||'').localeCompare(String(b.date_sent||'')));
+  return (
+    <Modal title={`Project ${project.number} — ${project.name}`} onClose={onClose} xwide>
+      <div className="space-y-3 text-sm">
+        <div className="bg-slate-50 border rounded p-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+          <div><div className="text-slate-500 uppercase font-semibold">Garment</div><div className="font-medium">{project.garment||'—'}</div></div>
+          <div><div className="text-slate-500 uppercase font-semibold">Target</div><div className="text-lg font-bold">{project.target_qty}</div></div>
+          <div><div className="text-slate-500 uppercase font-semibold">Released</div><div className={`text-lg font-bold ${totals.released>project.target_qty?'text-amber-700':'text-indigo-700'}`}>{totals.released}</div></div>
+          <div><div className="text-slate-500 uppercase font-semibold">Received</div><div className="text-lg font-bold text-emerald-700">{totals.received}</div></div>
+          <div><div className="text-slate-500 uppercase font-semibold">Outstanding @ subcons</div><div className={`text-lg font-bold ${totals.outstanding>0?'text-rose-700':'text-slate-400'}`}>{totals.outstanding}</div></div>
+          {project.target_qty > 0 && (
+            <div className="col-span-2 md:col-span-5">
+              <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1">Released vs Target</div>
+              <div className="h-2 bg-slate-200 rounded overflow-hidden">
+                <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, totals.released/Number(project.target_qty||1)*100)}%` }}></div>
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">{totals.targetBalance > 0 ? `${totals.targetBalance} pcs still to distribute` : '✓ Fully distributed'}</div>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-semibold text-slate-700 uppercase">Send batches in this project ({sends.length})</div>
+          <div className="flex gap-2">
+            {canManageSubcon(profile) && <button onClick={onAddSend} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">+ Add send batch</button>}
+          </div>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600 uppercase">
+              <tr>
+                <th className="text-left px-2 py-1.5">SCS#</th>
+                <th className="text-left px-2 py-1.5">Subcon</th>
+                <th className="text-left px-2 py-1.5">Date sent</th>
+                <th className="text-right px-2 py-1.5">Released</th>
+                <th className="text-right px-2 py-1.5">Received</th>
+                <th className="text-right px-2 py-1.5">Variance</th>
+                <th className="text-right px-2 py-1.5">Balance</th>
+                <th className="text-left px-2 py-1.5">Status</th>
+              </tr>
+            </thead>
+            <tbody>{sends.length === 0 ? (
+              <tr><td colSpan="8" className="text-center px-2 py-6 text-slate-400">No send batches yet. Click + Add send batch to start distributing this project's quantity.</td></tr>
+            ) : sends.map(s => {
+              const subcon = (subcons||[]).find(x=>x.id===s.subcon_id);
+              const t = subconSendTotals(s, subconReturns);
+              return (
+                <tr key={s.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>onOpenSend(s)}>
+                  <td className="px-2 py-1.5 font-mono text-[10px] font-bold">{s.number}</td>
+                  <td className="px-2 py-1.5 font-semibold">{subcon?.name||'—'}</td>
+                  <td className="px-2 py-1.5">{fmtDate(s.date_sent)}</td>
+                  <td className="px-2 py-1.5 text-right">{s.quantity_sent}</td>
+                  <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">{t.returnedGood}</td>
+                  <td className="px-2 py-1.5 text-right text-amber-700">{t.variance}</td>
+                  <td className={`px-2 py-1.5 text-right font-bold ${t.outstanding>0?'text-rose-700':'text-slate-400'}`}>{t.outstanding}</td>
+                  <td className="px-2 py-1.5"><span className="text-[10px] uppercase">{String(s.status||'').replace('_',' ')}</span></td>
+                </tr>
+              );
+            })}
+              <tr className="font-bold bg-slate-50">
+                <td colSpan="3" className="px-2 py-2 text-right uppercase text-[10px] tracking-wider">TOTAL</td>
+                <td className="px-2 py-2 text-right text-indigo-700">{totals.released}</td>
+                <td className="px-2 py-2 text-right text-emerald-700">{totals.received}</td>
+                <td className="px-2 py-2 text-right text-amber-700">{totals.variance}</td>
+                <td className="px-2 py-2 text-right text-rose-700">{totals.outstanding}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {project.notes && <div className="text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded p-2">📝 {project.notes}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          {canManageSubcon(profile) && <button onClick={onEdit} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 text-xs">✎ Edit project</button>}
+          {profile.role==='admin' && <button onClick={onDelete} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200 text-xs">🗑 Delete project</button>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─────────── SEND BATCH MODAL ───────────
-function SubconSendModal({ profile, subcons, leads, prodJobs, clients, existing, onClose, onSaved }){
+function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects, prefillProjectId, existing, onClose, onSaved }){
   const isEdit = !!existing;
   const today = new Date().toISOString().slice(0,10);
   const activeSubcons = (subcons||[]).filter(s => s.active !== false);
+  const openProjects = (projects||[]).filter(p => p.status === 'open' && !p.deleted_at);
   const [f,setF]=useState({
     date_sent: existing?.date_sent || today,
     subcon_id: existing?.subcon_id || activeSubcons[0]?.id || '',
+    project_id: existing?.project_id || prefillProjectId || '',
     lead_id: existing?.lead_id || '',
     production_job_id: existing?.production_job_id || '',
     client_name: existing?.client_name || '',
@@ -18533,6 +18744,18 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, existing,
       }));
     }
   }, [f.production_job_id]);
+  // When project picked, auto-fill garment label + suggest remaining qty.
+  useEffect(()=>{
+    if(isEdit) return;
+    if(!f.project_id) return;
+    const proj = (projects||[]).find(x => x.id === f.project_id);
+    if(proj){
+      setF(p => ({
+        ...p,
+        garment: p.garment || proj.garment || proj.name,
+      }));
+    }
+  }, [f.project_id]);
 
   async function save(){
     if(!f.subcon_id){ setMsg('Pick a subcon.'); return; }
@@ -18543,6 +18766,7 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, existing,
       const payload = {
         date_sent: f.date_sent,
         subcon_id: f.subcon_id,
+        project_id: f.project_id || null,
         lead_id: f.lead_id || null,
         production_job_id: f.production_job_id || null,
         client_name: f.client_name || null,
@@ -18608,6 +18832,15 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, existing,
           <div className="col-span-3">
             <label className="text-xs font-semibold text-slate-500">Garment / item description *</label>
             <input value={f.garment} onChange={e=>up('garment',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Polo shirt — Lacoste navy" or "T-shirt with print"' />
+          </div>
+          <div className="col-span-3">
+            <label className="text-xs font-semibold text-slate-500">Project (groups multiple batches together — track release vs target)</label>
+            <select value={f.project_id} onChange={e=>up('project_id',e.target.value)} className="w-full border rounded px-2 py-1.5">
+              <option value="">— no project (standalone batch) —</option>
+              {openProjects.map(p => (
+                <option key={p.id} value={p.id}>{p.number} · {p.name}{Number(p.target_qty)>0?` · target ${p.target_qty}pc`:''}</option>
+              ))}
+            </select>
           </div>
           <div className="col-span-3">
             <label className="text-xs font-semibold text-slate-500">Link to production job (optional — auto-fills garment + qty + client)</label>
@@ -19006,17 +19239,21 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
 }
 
 // ─────────── MAIN SUBCON MONITORING VIEW ───────────
-function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, subcons, subconSends, subconReturns, subconPayrolls, subconPayrollItems, reload }){
-  const [tab,setTab]=useState('active');
+function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, subcons, subconSends, subconReturns, subconPayrolls, subconPayrollItems, subconProjects, reload }){
+  const [tab,setTab]=useState('projects');
   const [search,setSearch]=useState('');
   const [creatingSubcon,setCreatingSubcon]=useState(false);
   const [editingSubcon,setEditingSubcon]=useState(null);
   const [creatingSend,setCreatingSend]=useState(false);
+  const [sendPrefillProjectId,setSendPrefillProjectId]=useState(null);
   const [editingSend,setEditingSend]=useState(null);
   const [viewingSend,setViewingSend]=useState(null);
   const [logReturnFor,setLogReturnFor]=useState(null);
   const [generatingPayroll,setGeneratingPayroll]=useState(false);
   const [viewingPayroll,setViewingPayroll]=useState(null);
+  const [creatingProject,setCreatingProject]=useState(false);
+  const [editingProject,setEditingProject]=useState(null);
+  const [viewingProject,setViewingProject]=useState(null);
 
   const sendRows = (subconSends||[])
     .filter(s => !search || (`${s.number} ${s.garment} ${s.client_name||''} ${(subcons||[]).find(x=>x.id===s.subcon_id)?.name||''}`).toLowerCase().includes(search.toLowerCase()))
@@ -19042,6 +19279,14 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  async function deleteProject(p){
+    if(!confirm(`Soft-delete project "${p.name}"? Send batches linked to it stay (just lose their project reference).`)) return;
+    const { error } = await sb.from('subcon_projects').update({
+      deleted_at: new Date().toISOString(), deleted_by: profile.id, status:'cancelled',
+    }).eq('id', p.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
 
   return (
     <div>
@@ -19052,23 +19297,72 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
             <p className="text-slate-500 text-sm">Daily handoff tracking + weekly per-garment payroll</p>
           </div>
           <div className="flex gap-2">
-            {canManageSubcon(profile) && tab==='active' && <button onClick={()=>setCreatingSend(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
+            {canManageSubcon(profile) && tab==='projects' && <button onClick={()=>setCreatingProject(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New project</button>}
+            {canManageSubcon(profile) && tab==='active' && <button onClick={()=>{ setSendPrefillProjectId(null); setCreatingSend(true); }} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
             {canManageSubcon(profile) && tab==='subcons' && <button onClick={()=>setCreatingSubcon(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New subcon</button>}
             {canRunSubconPayroll(profile) && tab==='payroll' && <button onClick={()=>setGeneratingPayroll(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ Generate weekly payroll</button>}
           </div>
         </div>
         <div className="flex gap-2 mt-3 flex-wrap">
           <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+            <button onClick={()=>setTab('projects')} className={`px-3 py-1.5 rounded-md ${tab==='projects'?'bg-amber-600 text-white font-semibold':'text-slate-600'}`}>Projects</button>
             <button onClick={()=>setTab('active')} className={`px-3 py-1.5 rounded-md ${tab==='active'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>Active batches</button>
             <button onClick={()=>setTab('completed')} className={`px-3 py-1.5 rounded-md ${tab==='completed'?'bg-slate-700 text-white font-semibold':'text-slate-600'}`}>Completed</button>
             <button onClick={()=>setTab('subcons')} className={`px-3 py-1.5 rounded-md ${tab==='subcons'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>Subcons</button>
             <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>Weekly payroll</button>
           </div>
           {tab!=='subcons' && tab!=='payroll' && (
-            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SCS # / subcon / garment / client…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SCS # / subcon / garment / client / project…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
           )}
         </div>
       </div>
+
+      {tab==='projects' && (
+        <div className="bg-white rounded-xl border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+              <tr>
+                <th className="text-left px-3 py-2">Project #</th>
+                <th className="text-left px-3 py-2">Name</th>
+                <th className="text-left px-3 py-2">Garment</th>
+                <th className="text-right px-3 py-2">Target</th>
+                <th className="text-right px-3 py-2">Released</th>
+                <th className="text-right px-3 py-2">Received</th>
+                <th className="text-right px-3 py-2">Outstanding</th>
+                <th className="text-right px-3 py-2">Balance to send</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>{(subconProjects||[]).length === 0 ? (
+              <tr><td colSpan="10" className="px-3 py-10 text-center text-slate-400">No projects yet. Click + New project to start tracking a big order distributed across subcons.</td></tr>
+            ) : (subconProjects||[])
+              .filter(p => !search || (`${p.number} ${p.name} ${p.garment||''}`).toLowerCase().includes(search.toLowerCase()))
+              .map(p => {
+                const t = subconProjectTotals(p, subconSends, subconReturns);
+                const statusCls = p.status==='closed' ? 'bg-emerald-100 text-emerald-700'
+                  : p.status==='cancelled' ? 'bg-rose-100 text-rose-700'
+                  : 'bg-amber-100 text-amber-700';
+                return (
+                  <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewingProject(p)}>
+                    <td className="px-3 py-2 font-mono text-xs font-bold">{p.number}</td>
+                    <td className="px-3 py-2 font-semibold">{p.name}</td>
+                    <td className="px-3 py-2 text-xs">{p.garment||'—'}</td>
+                    <td className="px-3 py-2 text-right font-bold">{p.target_qty||0}</td>
+                    <td className="px-3 py-2 text-right text-indigo-700 font-semibold">{t.released}</td>
+                    <td className="px-3 py-2 text-right text-emerald-700 font-semibold">{t.received}</td>
+                    <td className={`px-3 py-2 text-right font-bold ${t.outstanding>0?'text-rose-700':'text-slate-400'}`}>{t.outstanding}</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${t.targetBalance>0?'text-amber-700':'text-emerald-700'}`}>{t.targetBalance===0 ? '✓' : t.targetBalance}</td>
+                    <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={(e)=>{e.stopPropagation(); setViewingProject(p);}} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">Open</button>
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
+          </table>
+        </div>
+      )}
 
       {(tab==='active' || tab==='completed') && (
         <div className="bg-white rounded-xl border overflow-x-auto">
@@ -19197,8 +19491,11 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       {/* Modals */}
       {creatingSubcon && <SubconFormModal profile={profile} onClose={()=>setCreatingSubcon(false)} onSaved={()=>{ setCreatingSubcon(false); reload && reload(); }} />}
       {editingSubcon && <SubconFormModal profile={profile} existing={editingSubcon} onClose={()=>setEditingSubcon(null)} onSaved={()=>{ setEditingSubcon(null); reload && reload(); }} />}
-      {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload && reload(); }} />}
-      {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload && reload(); }} />}
+      {creatingProject && <SubconProjectFormModal profile={profile} clients={clients} leads={leads} prodJobs={prodJobs} onClose={()=>setCreatingProject(false)} onSaved={()=>{ setCreatingProject(false); reload && reload(); }} />}
+      {editingProject && <SubconProjectFormModal profile={profile} clients={clients} leads={leads} prodJobs={prodJobs} existing={editingProject} onClose={()=>setEditingProject(null)} onSaved={()=>{ setEditingProject(null); reload && reload(); }} />}
+      {viewingProject && <SubconProjectDetailModal project={viewingProject} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} profile={profile} onClose={()=>setViewingProject(null)} onEdit={()=>{ setEditingProject(viewingProject); setViewingProject(null); }} onAddSend={()=>{ setSendPrefillProjectId(viewingProject.id); setViewingProject(null); setCreatingSend(true); }} onOpenSend={(s)=>{ setViewingSend(s); setViewingProject(null); }} onDelete={()=>{ deleteProject(viewingProject); setViewingProject(null); }} />}
+      {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={sendPrefillProjectId} onClose={()=>{ setCreatingSend(false); setSendPrefillProjectId(null); }} onSaved={()=>{ setCreatingSend(false); setSendPrefillProjectId(null); reload && reload(); }} />}
+      {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload && reload(); }} />}
       {viewingSend && <SubconSendDetailModal send={viewingSend} subcons={subcons} allReturns={subconReturns} profiles={profiles} profile={profile} onClose={()=>setViewingSend(null)} onAddReturn={()=>{ setLogReturnFor(viewingSend); setViewingSend(null); }} onEdit={()=>{ setEditingSend(viewingSend); setViewingSend(null); }} onDelete={()=>{ deleteSend(viewingSend); setViewingSend(null); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload && reload(); }} />}
       {generatingPayroll && <SubconPayrollGenerateModal profile={profile} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} onClose={()=>setGeneratingPayroll(false)} onSaved={(created, skipped)=>{ setGeneratingPayroll(false); reload && reload(); alert(`Created ${created} payroll${created===1?'':'s'}${skipped?` · Skipped ${skipped} (already exist)`:''}`); }} />}
@@ -19261,6 +19558,7 @@ function App(){
   const [subconReturns,setSubconReturns]=useState([]);
   const [subconPayrolls,setSubconPayrolls]=useState([]);
   const [subconPayrollItems,setSubconPayrollItems]=useState([]);
+  const [subconProjects,setSubconProjects]=useState([]);
   // HR Module: 201 file master + documents + memos + notes timeline
   const [employees,setEmployees]=useState([]); const [employeeDocs,setEmployeeDocs]=useState([]);
   const [employeeMemos,setEmployeeMemos]=useState([]); const [employeeNotes,setEmployeeNotes]=useState([]);
@@ -19331,7 +19629,7 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
-    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi]=await Promise.all([
+    const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
@@ -19397,6 +19695,7 @@ function App(){
       sb.from('subcon_returns').select('*').order('date_returned',{ascending:false}),
       sb.from('subcon_payrolls').select('*').is('deleted_at', null).order('week_ending',{ascending:false}),
       sb.from('subcon_payroll_items').select('*').order('position',{ascending:true}),
+      sb.from('subcon_projects').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
@@ -19450,6 +19749,7 @@ function App(){
     setSubconReturns(sbr && !sbr.error ? (sbr.data||[]) : []);
     setSubconPayrolls(sbp && !sbp.error ? (sbp.data||[]) : []);
     setSubconPayrollItems(sbpi && !sbpi.error ? (sbpi.data||[]) : []);
+    setSubconProjects(sbproj && !sbproj.error ? (sbproj.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
   }
@@ -20137,7 +20437,7 @@ function App(){
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
-        {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} reload={loadAll} />}
+        {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
