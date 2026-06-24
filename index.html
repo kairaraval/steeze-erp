@@ -180,7 +180,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 111 · Subcon payroll: handles additions after a week's payroll exists (refresh drafts / create supplementary for finalized)";
+const BUILD = "Live build 112 · Subcons: bank / payout details on profile + payroll print · Returns: Subcon DR No. captured per return";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18419,6 +18419,9 @@ function SubconFormModal({ profile, existing, onClose, onSaved }){
     phone: existing?.phone||'',
     address: existing?.address||'',
     default_rate: existing?.default_rate||0,
+    bank_name: existing?.bank_name||'',
+    bank_account_name: existing?.bank_account_name||'',
+    bank_account_number: existing?.bank_account_number||'',
     active: existing?.active !== false,
     notes: existing?.notes||'',
   });
@@ -18434,6 +18437,9 @@ function SubconFormModal({ profile, existing, onClose, onSaved }){
         phone: f.phone||null,
         address: f.address||null,
         default_rate: Number(f.default_rate)||0,
+        bank_name: f.bank_name||null,
+        bank_account_name: f.bank_account_name||null,
+        bank_account_number: f.bank_account_number||null,
         active: !!f.active,
         notes: f.notes||null,
       };
@@ -18472,7 +18478,26 @@ function SubconFormModal({ profile, existing, onClose, onSaved }){
             <label className="text-xs font-semibold text-slate-500">Address</label>
             <input value={f.address} onChange={e=>up('address',e.target.value)} className="w-full border rounded px-2 py-1.5" />
           </div>
+
+          {/* Bank / payout details — used so Accounting knows where to send the
+              weekly payroll payment (BPI, BDO, GCash, Maya, etc.). */}
+          <div className="col-span-2 mt-1 pt-3 border-t">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">Bank / payout details</div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Bank / wallet</label>
+            <input value={f.bank_name} onChange={e=>up('bank_name',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. BPI, BDO, GCash, Maya" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Account number</label>
+            <input value={f.bank_account_number} onChange={e=>up('bank_account_number',e.target.value)} className="w-full border rounded px-2 py-1.5 font-mono" placeholder="e.g. 1234-5678-90 or 09171234567" />
+          </div>
           <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Account name</label>
+            <input value={f.bank_account_name} onChange={e=>up('bank_account_name',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="Full name on the account" />
+          </div>
+
+          <div className="col-span-2 mt-1 pt-3 border-t">
             <label className="text-xs font-semibold text-slate-500">Notes</label>
             <textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" />
           </div>
@@ -18880,6 +18905,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
   const totals = subconSendTotals(send, allReturns);
   const [f,setF]=useState({
     date_returned: today,
+    dr_number: '',
     quantity_returned: 0,
     variance_qty: 0,
     variance_reason: '',
@@ -18903,6 +18929,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
       const payload = {
         send_id: send.id,
         date_returned: f.date_returned,
+        dr_number: f.dr_number ? f.dr_number.trim() : null,
         quantity_returned: good,
         variance_qty: variance,
         variance_reason: variance > 0 ? f.variance_reason : null,
@@ -18935,6 +18962,10 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
           <div>
             <label className="text-xs font-semibold text-slate-500">Date returned</label>
             <input type="date" value={f.date_returned} onChange={e=>up('date_returned',e.target.value)} className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-slate-500">Subcon DR No.</label>
+            <input value={f.dr_number} onChange={e=>up('dr_number',e.target.value)} className="w-full border rounded px-2 py-1.5 font-mono" placeholder="DR slip number handed back with the goods" />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Returned (good qty)</label>
@@ -19016,6 +19047,7 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="text-left px-2 py-1.5">Date</th>
+                  <th className="text-left px-2 py-1.5">Subcon DR No.</th>
                   <th className="text-right px-2 py-1.5">Good qty</th>
                   <th className="text-right px-2 py-1.5">Variance</th>
                   <th className="text-left px-2 py-1.5">Reason</th>
@@ -19026,6 +19058,7 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
               <tbody>{totals.returns.sort((a,b)=> String(a.date_returned||'').localeCompare(String(b.date_returned||''))).map(r => (
                 <tr key={r.id} className="border-t">
                   <td className="px-2 py-1.5 whitespace-nowrap">{fmtDate(r.date_returned)}</td>
+                  <td className="px-2 py-1.5 font-mono">{r.dr_number||<span className="text-slate-400">—</span>}</td>
                   <td className="px-2 py-1.5 text-right font-semibold text-emerald-700">{r.quantity_returned||0}</td>
                   <td className="px-2 py-1.5 text-right font-semibold text-amber-700">{r.variance_qty||0}</td>
                   <td className="px-2 py-1.5">{r.variance_qty>0 ? subconVarianceLabel(r.variance_reason) : '—'}{r.variance_notes?<div className="text-[10px] text-slate-500">{r.variance_notes}</div>:null}</td>
@@ -19267,6 +19300,14 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
           <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">PAY TO</div>
           <div className="text-xl font-bold mt-1">{subcon?.name||'—'}</div>
           {subcon && <div className="text-xs text-slate-600 mt-0.5">{[subcon.contact_name, subcon.phone, subcon.address].filter(Boolean).join(' · ')}</div>}
+          {subcon && (subcon.bank_name||subcon.bank_account_number||subcon.bank_account_name) && (
+            <div className="mt-2 pt-2 border-t border-slate-300 text-xs">
+              <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-500 mr-2">REMIT TO</span>
+              <span className="font-semibold">{subcon.bank_name||'—'}</span>
+              {subcon.bank_account_number && <span className="font-mono ml-2">{subcon.bank_account_number}</span>}
+              {subcon.bank_account_name && <span className="ml-2 text-slate-600">({subcon.bank_account_name})</span>}
+            </div>
+          )}
         </div>
         <table className="w-full text-xs border-2 border-slate-800 mb-3">
           <thead className="bg-slate-100">
@@ -19496,18 +19537,28 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                 <th className="text-left px-3 py-2">Name</th>
                 <th className="text-left px-3 py-2">Contact</th>
                 <th className="text-left px-3 py-2">Phone</th>
+                <th className="text-left px-3 py-2">Bank / Account</th>
                 <th className="text-right px-3 py-2">Default rate</th>
                 <th className="text-left px-3 py-2">Active</th>
                 <th className="text-right px-3 py-2">Actions</th>
               </tr>
             </thead>
             <tbody>{(subcons||[]).length === 0 ? (
-              <tr><td colSpan="6" className="px-3 py-10 text-center text-slate-400">No subcons yet. Click + New subcon to add your first one.</td></tr>
+              <tr><td colSpan="7" className="px-3 py-10 text-center text-slate-400">No subcons yet. Click + New subcon to add your first one.</td></tr>
             ) : (subcons||[]).map(s => (
               <tr key={s.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-semibold">{s.name}</td>
                 <td className="px-3 py-2">{s.contact_name||'—'}</td>
                 <td className="px-3 py-2 text-xs">{s.phone||'—'}</td>
+                <td className="px-3 py-2 text-xs">
+                  {s.bank_name||s.bank_account_number||s.bank_account_name ? (
+                    <div>
+                      <div className="font-semibold">{s.bank_name||'—'}</div>
+                      {s.bank_account_number && <div className="font-mono text-slate-700">{s.bank_account_number}</div>}
+                      {s.bank_account_name && <div className="text-slate-500">{s.bank_account_name}</div>}
+                    </div>
+                  ) : <span className="text-slate-400">—</span>}
+                </td>
                 <td className="px-3 py-2 text-right">{s.default_rate ? peso(s.default_rate) : '—'}</td>
                 <td className="px-3 py-2 text-xs">{s.active!==false ? <span className="text-emerald-700 font-semibold">Active</span> : <span className="text-slate-400">Inactive</span>}</td>
                 <td className="px-3 py-2 text-right">
