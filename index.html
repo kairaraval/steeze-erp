@@ -222,7 +222,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 118 · Build B: Per-SO Activity tab (Sales↔Accounting chat with @mentions) + auto-system events + Verify/Void pings sales agent · Inbox handles SO mentions";
+const BUILD = "Live build 119 · Sales Orders: Admin My/All toggle + Payments sub-tab (flat feed with status/range filters + live totals)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13443,19 +13443,31 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment row to verify
   const [filter,setFilter]=useState('');
   const [search,setSearch]=useState('');
+  // Top-level sub-tab: 'orders' = the SO list (default), 'payments' = a flat
+  // chronological feed of all sales_order_payments across visible SOs.
+  // Admin + Accounting both get the Payments sub-view since they need it to
+  // track collections; sales reps stay on Orders only.
+  const [subTab,setSubTab]=useState('orders');
+  // Admin-only "My deals" toggle. Default OFF so admin lands on the full
+  // list (most common case). Toggling ON filters to SOs whose underlying
+  // lead is owned by the admin — useful when Kaira herself is the sales rep
+  // on a deal and wants a quick view of her own collection workload.
+  const [onlyMine,setOnlyMine]=useState(false);
   const isAdmin = profile.role === 'admin';
+  const isAccounting = profile.role === 'accounting';
+  const canSeePaymentsTab = isAdmin || isAccounting;
   // Sales-rep visibility filter: assistant + manager (non-admin/non-accounting)
   // see only SOs whose underlying lead is owned by them. Accounting + admin
-  // see everything. Other roles fall through to seeing all (they likely have
-  // their own filtered views elsewhere).
+  // see everything by default; admin can toggle "Mine" to filter further.
   const restrictToOwn = (profile.role === 'assistant' || profile.role === 'manager');
+  function isMine(o){
+    if(!o.lead_id) return false;
+    const lead = (leads||[]).find(l => l.id === o.lead_id);
+    return lead && lead.manager_id === profile.id;
+  }
   const visibleSOs = restrictToOwn
-    ? (salesOrders || []).filter(o => {
-        if(!o.lead_id) return false;
-        const lead = (leads||[]).find(l => l.id === o.lead_id);
-        return lead && lead.manager_id === profile.id;
-      })
-    : (salesOrders || []);
+    ? (salesOrders || []).filter(isMine)
+    : (isAdmin && onlyMine ? (salesOrders || []).filter(isMine) : (salesOrders || []));
   // Admin-only soft-delete. SOs are tied to leads and payments so accidental
   // deletion is recoverable from Settings → Trash. Paid SOs get an extra
   // confirmation since the bank txns + lead.sales_order_id link still point at them.
@@ -13498,10 +13510,31 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📜 Sales Orders</h1>
-            <p className="text-slate-500 text-sm">{salesOrders.length} order{salesOrders.length===1?'':'s'} · Open AR: <strong className="text-rose-700">{peso(totalAR)}</strong></p>
+            <p className="text-slate-500 text-sm">{visibleSOs.length} order{visibleSOs.length===1?'':'s'} · Open AR: <strong className="text-rose-700">{peso(totalAR)}</strong>{isAdmin && onlyMine && <span className="ml-2 text-indigo-700 font-semibold">· filtered to my deals</span>}</p>
           </div>
+          {/* Admin-only My/All toggle. Lets Kaira flip to just the SOs whose
+             underlying lead she owns — useful when she's actively selling and
+             wants a quick view of her own collection workload. */}
+          {isAdmin && (
+            <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
+              <button onClick={()=>setOnlyMine(false)} className={`px-3 py-1.5 rounded ${!onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>All deals</button>
+              <button onClick={()=>setOnlyMine(true)} className={`px-3 py-1.5 rounded ${onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>My deals</button>
+            </div>
+          )}
         </div>
+
+        {/* Sub-tab nav — Orders (the SO list) vs Payments (flat payment feed).
+            Payments tab is for admin + accounting only since they're the ones
+            tracking collections. */}
+        {canSeePaymentsTab && (
+          <div className="flex gap-1 mt-3 -mb-3 border-b border-slate-200">
+            <button onClick={()=>setSubTab('orders')} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${subTab==='orders'?'border-indigo-600 text-indigo-700':'border-transparent text-slate-500 hover:text-slate-700'}`}>📜 Orders</button>
+            <button onClick={()=>setSubTab('payments')} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${subTab==='payments'?'border-indigo-600 text-indigo-700':'border-transparent text-slate-500 hover:text-slate-700'}`}>💰 Payments {(soPayments||[]).filter(p=>p.status==='pending').length > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">{(soPayments||[]).filter(p=>p.status==='pending').length}</span>}</button>
+          </div>
+        )}
       </div>
+
+      {subTab === 'orders' && <>
 
       <div className="grid grid-cols-4 gap-3 mb-4">
         {SO_STATUSES.map(s => (
@@ -13548,6 +13581,20 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">{restrictToOwn ? 'No sales orders assigned to you yet. SOs auto-create when a lead you own hits Closed Won.' : 'No sales orders yet. They auto-create when a deal hits Closed Won.'}</td></tr>}</tbody>
       </table></div></div>
+
+      </>}
+
+      {subTab === 'payments' && (
+        <SalesOrderPaymentsFeed
+          profile={profile}
+          profiles={profiles}
+          visibleSOs={visibleSOs}
+          soPayments={soPayments}
+          bankAccounts={bankAccounts}
+          onOpenSO={(so)=>{ setSubTab('orders'); setEditing(so); }}
+          onVerify={(payment, so)=>setVerifyingPayment({ payment, so })}
+        />
+      )}
 
       {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
       {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
@@ -14051,6 +14098,137 @@ function canLogSOPayment(profile){
 function canVerifySOPayment(profile){
   // Only Accounting + Admin can convert Pending → Verified.
   return profile?.role === 'admin' || profile?.role === 'accounting';
+}
+
+
+// ─────────── SO PAYMENTS FEED — flat chronological list (Admin / Accounting) ───────────
+// One screen to scan every payment across every SO. Used when you don't want
+// to click into each order — you just want to see: who paid, when, how much,
+// what method, who logged it, what status. Click any row to open the SO.
+function SalesOrderPaymentsFeed({ profile, profiles, visibleSOs, soPayments, bankAccounts, onOpenSO, onVerify }){
+  const [statusFilter,setStatusFilter]=useState('all'); // 'all' | 'pending' | 'verified' | 'voided'
+  const [rangeFilter,setRangeFilter]=useState('30d');    // '7d' | '30d' | '90d' | 'all'
+  const [search,setSearch]=useState('');
+  const soById = (visibleSOs||[]).reduce((a,s)=>{ a[s.id]=s; return a; },{});
+
+  // Date window. Compared against payment.date (the date the payment was
+  // received in the real world, not the row's created_at).
+  const cutoff = (()=>{
+    if(rangeFilter === 'all') return null;
+    const d = new Date();
+    if(rangeFilter === '7d')  d.setDate(d.getDate() - 7);
+    if(rangeFilter === '30d') d.setDate(d.getDate() - 30);
+    if(rangeFilter === '90d') d.setDate(d.getDate() - 90);
+    return d.toISOString().slice(0,10);
+  })();
+
+  const rows = (soPayments||[])
+    // Only include payments on SOs the user can already see (sales-rep
+    // filter + admin's "Mine" toggle are already applied to visibleSOs).
+    .filter(p => soById[p.sales_order_id])
+    .filter(p => statusFilter === 'all' || (p.status||'verified') === statusFilter)
+    .filter(p => !cutoff || (p.date && p.date >= cutoff))
+    .filter(p => {
+      if(!search) return true;
+      const so = soById[p.sales_order_id];
+      const hay = `${so?.number||''} ${so?.client_name||''} ${p.reference||''} ${p.method||''}`.toLowerCase();
+      return hay.includes(search.toLowerCase());
+    })
+    .sort((a,b) => String(b.date||'').localeCompare(String(a.date||'')));
+
+  // Roll-up totals across the filtered set (helps spot the day's haul).
+  const totalVerified = rows.filter(r => r.status==='verified').reduce((s,r) => s + Number(r.amount||0), 0);
+  const totalPending  = rows.filter(r => r.status==='pending').reduce((s,r) => s + Number(r.amount||0), 0);
+
+  return (
+    <div className="space-y-3">
+      {/* Stat cards — quick read of collection activity in the current window. */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold">Verified ({rangeFilter})</div>
+          <div className="text-2xl font-bold text-emerald-700 mt-0.5">{peso(totalVerified)}</div>
+          <div className="text-[10px] text-slate-500 mt-1">{rows.filter(r=>r.status==='verified').length} payment{rows.filter(r=>r.status==='verified').length===1?'':'s'} posted to bank</div>
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold">Pending verification</div>
+          <div className="text-2xl font-bold text-amber-700 mt-0.5">{peso(totalPending)}</div>
+          <div className="text-[10px] text-slate-500 mt-1">{rows.filter(r=>r.status==='pending').length} payment{rows.filter(r=>r.status==='pending').length===1?'':'s'} awaiting accounting</div>
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold">Total in window</div>
+          <div className="text-2xl font-bold text-slate-700 mt-0.5">{peso(totalVerified + totalPending)}</div>
+          <div className="text-[10px] text-slate-500 mt-1">All non-voided payments</div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl p-3">
+        <div className="text-[10px] uppercase text-slate-500 font-semibold mr-2">Status</div>
+        {['all','pending','verified','voided'].map(s => (
+          <button key={s} onClick={()=>setStatusFilter(s)} className={`text-xs px-2.5 py-1 rounded-lg ${statusFilter===s?'bg-indigo-600 text-white font-semibold':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s.charAt(0).toUpperCase()+s.slice(1)}</button>
+        ))}
+        <div className="w-px h-5 bg-slate-300 mx-2" />
+        <div className="text-[10px] uppercase text-slate-500 font-semibold mr-2">Range</div>
+        {[{k:'7d',l:'7 days'},{k:'30d',l:'30 days'},{k:'90d',l:'90 days'},{k:'all',l:'All'}].map(r => (
+          <button key={r.k} onClick={()=>setRangeFilter(r.k)} className={`text-xs px-2.5 py-1 rounded-lg ${rangeFilter===r.k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{r.l}</button>
+        ))}
+        <div className="flex-1"></div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SO# / client / ref / method…" className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 w-72" />
+      </div>
+
+      {/* The flat feed. Click anywhere on a row to open the SO. */}
+      <div className="bg-white rounded-xl border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+            <tr>
+              <th className="text-left px-3 py-2">Date</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">SO# · Client</th>
+              <th className="text-left px-3 py-2">Method</th>
+              <th className="text-left px-3 py-2">Reference</th>
+              <th className="text-left px-3 py-2">Bank</th>
+              <th className="text-right px-3 py-2">Amount</th>
+              <th className="text-left px-3 py-2">Logged / Verified by</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>{rows.length === 0 ? (
+            <tr><td colSpan="9" className="text-center text-slate-400 py-10">No payments match those filters.</td></tr>
+          ) : rows.map(p => {
+            const so = soById[p.sales_order_id];
+            const bank = (bankAccounts||[]).find(b => b.id === p.bank_id);
+            const loggedBy = (profiles||[]).find(x => x.id === p.received_by);
+            const verifiedBy = (profiles||[]).find(x => x.id === p.verified_by);
+            const status = p.status || 'verified';
+            const rowCls = status==='pending' ? 'bg-amber-50/60' : status==='voided' ? 'opacity-50' : '';
+            return (
+              <tr key={p.id} className={`border-t hover:bg-slate-50 cursor-pointer ${rowCls}`} onClick={()=>so && onOpenSO(so)}>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(p.date)}</td>
+                <td className="px-3 py-2">{payStatusBadge(status)}</td>
+                <td className="px-3 py-2">
+                  <div className="font-mono text-xs font-bold">{so?.number||'—'}</div>
+                  <div className="text-[11px] text-slate-600">{so?.client_name||'—'}</div>
+                </td>
+                <td className="px-3 py-2 text-xs">{payMethodLabel(p.method)}</td>
+                <td className="px-3 py-2 font-mono text-[10px]">{p.reference||'—'}</td>
+                <td className="px-3 py-2 text-xs">{bank?bank.bank_name:<span className="text-slate-400">—</span>}</td>
+                <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}{p.bank_charge_amount > 0 && <div className="text-[9px] text-amber-700 font-normal">(−{peso(p.bank_charge_amount)} fee)</div>}</td>
+                <td className="px-3 py-2 text-[10px]">
+                  <div>{loggedBy?(loggedBy.name||loggedBy.email):'—'}</div>
+                  {verifiedBy && <div className="text-emerald-700">✓ {verifiedBy.name||verifiedBy.email}</div>}
+                  {status==='voided' && p.void_reason && <div className="text-rose-600 italic" title={p.void_reason}>voided</div>}
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs mr-1" title="Proof of payment">📷</a>}
+                  {status==='pending' && canVerifySOPayment(profile) && <button onClick={(e)=>{e.stopPropagation(); onVerify(p, so);}} className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Verify</button>}
+                </td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 
