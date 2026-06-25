@@ -222,7 +222,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 121 · Commissions: SO reconciliation panel + one-click Sync from Sales Orders button (flags missing commission rows + reasons)";
+const BUILD = "Live build 122 · Commissions: per-sales-manager filter + expandable payout breakdown (preview every commission row before generating each voucher) + per-rep Generate button";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14289,11 +14289,39 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   const canSeeAll = isAdmin || isAccounting;
   // "Mine" or "Team" — non-admin/non-accounting roles see only their own.
   const [scope,setScope] = useState(canSeeAll ? 'team' : 'mine');
+  // Optional per-rep filter (only meaningful when scope === 'team'). Empty
+  // string = all reps. When set, every panel + the ledger + the payout panel
+  // restrict to just this manager so admin can audit one person at a time.
+  const [repFilter,setRepFilter] = useState('');
   const [rangeFilter,setRangeFilter] = useState('30d'); // '7d' | '30d' | '90d' | 'all'
   const [statusFilter,setStatusFilter] = useState('all'); // 'all' | 'unpaid' | 'paid'
   const [generating,setGenerating] = useState(false);
   const [genMsg,setGenMsg] = useState('');
   const [selectedBankId,setSelectedBankId] = useState(bankAccounts && bankAccounts[0]?.id || null);
+  // Tracks which rep's payout breakdown is expanded in the green panel.
+  const [expandedPayoutRep,setExpandedPayoutRep] = useState(null);
+  // The active rep filter — applies only when scope=team. When scope=mine,
+  // the user's own ID is always the filter.
+  const activeRepId = scope === 'mine' ? profile.id : (repFilter || null);
+  function matchesRepFilter(managerId){
+    if(scope === 'mine') return managerId === profile.id;
+    if(!activeRepId) return true; // All reps
+    return managerId === activeRepId;
+  }
+  // List of reps who appear anywhere in the commissions data (for the filter
+  // dropdown). Sorted by display name.
+  const repsWithCommissions = (()=>{
+    const ids = new Set((salesCommissions||[]).map(r => r.manager_id));
+    // Also include reps who own a lead linked to an SO in scope (so admin can
+    // filter to a rep who SHOULD have commission but doesn't yet — useful
+    // alongside the reconciliation panel).
+    (salesOrders||[]).forEach(so => {
+      if(so.deleted_at) return;
+      const lead = (leads||[]).find(l => l.id === so.lead_id);
+      if(lead && lead.manager_id) ids.add(lead.manager_id);
+    });
+    return Array.from(ids).map(id => (profiles||[]).find(p => p.id === id)).filter(Boolean).sort((a,b) => (a.name||a.email).localeCompare(b.name||b.email));
+  })();
 
   const cutoff = (()=>{
     if(rangeFilter === 'all') return null;
@@ -14304,27 +14332,28 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     return d.toISOString();
   })();
 
-  // Filter ledger rows by scope + filters.
+  // Filter ledger rows by scope + rep + filters.
   const allRows = (salesCommissions||[]).filter(r => {
-    if(scope === 'mine' && r.manager_id !== profile.id) return false;
+    if(!matchesRepFilter(r.manager_id)) return false;
     if(statusFilter === 'unpaid' && r.paid_at) return false;
     if(statusFilter === 'paid' && !r.paid_at) return false;
     if(cutoff && r.earned_at && r.earned_at < cutoff) return false;
     return true;
   }).sort((a,b) => String(b.earned_at||'').localeCompare(String(a.earned_at||'')));
 
-  // Roll-ups
+  // Roll-ups — scoped to the active rep filter (or all-team / all-time when none).
   const monthStart = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d.toISOString(); })();
-  const myRowsAllTime = (salesCommissions||[]).filter(r => scope === 'mine' ? r.manager_id === profile.id : true);
+  const myRowsAllTime = (salesCommissions||[]).filter(r => matchesRepFilter(r.manager_id));
   const earnedThisMonth = myRowsAllTime.filter(r => r.earned_at && r.earned_at >= monthStart).reduce((s,r) => s + Number(r.amount||0), 0);
   const paidThisMonth   = myRowsAllTime.filter(r => r.paid_at   && r.paid_at   >= monthStart).reduce((s,r) => s + Number(r.amount||0), 0);
   const outstanding     = myRowsAllTime.filter(r => !r.paid_at).reduce((s,r) => s + Number(r.amount||0), 0);
 
   // Admin payout panel: per-rep outstanding (across ALL time, status unpaid).
   // We deliberately ignore the range filter here — payouts settle every cent owed.
+  // Rep filter applies so admin can review one rep at a time before paying.
   const payoutByRep = (()=>{
     const map = new Map();
-    (salesCommissions||[]).filter(r => !r.paid_at).forEach(r => {
+    (salesCommissions||[]).filter(r => !r.paid_at && matchesRepFilter(r.manager_id)).forEach(r => {
       const cur = map.get(r.manager_id) || { manager_id: r.manager_id, amount: 0, rows: [] };
       cur.amount += Number(r.amount||0);
       cur.rows.push(r);
@@ -14347,10 +14376,13 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   const inRangeSOs = (salesOrders||[]).filter(so => {
     if(so.deleted_at) return false;
     if(cutoff && so.created_at && so.created_at < cutoff) return false;
-    // When scope=mine, restrict to SOs whose underlying lead I own.
+    // Scope + rep filter — restrict to SOs whose underlying lead's manager
+    // matches the active filter (mine / specific rep / any).
+    const lead = (leads||[]).find(l => l.id === so.lead_id);
     if(scope === 'mine'){
-      const lead = (leads||[]).find(l => l.id === so.lead_id);
       if(!lead || lead.manager_id !== profile.id) return false;
+    } else if(activeRepId){
+      if(!lead || lead.manager_id !== activeRepId) return false;
     }
     return true;
   });
@@ -14430,17 +14462,27 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
 
   // Generate one Cash Voucher per rep with the rep's outstanding total.
   // Voucher numbering reuses the existing CASH- sequence + DB retry helper.
-  async function generatePayoutVouchers(){
+  // If `targetManagerId` is passed, only that rep gets a voucher (used by
+  // the per-rep button in the expanded payout panel). Otherwise every rep
+  // in payoutByRep is processed.
+  async function generatePayoutVouchers(targetManagerId){
     if(!isAdmin){ setGenMsg('Admin only.'); return; }
-    if(payoutByRep.length === 0){ setGenMsg('No outstanding commission to pay.'); return; }
+    const targets = targetManagerId
+      ? payoutByRep.filter(p => p.manager_id === targetManagerId)
+      : payoutByRep;
+    if(targets.length === 0){ setGenMsg('No outstanding commission to pay.'); return; }
     if(!selectedBankId){ setGenMsg('Pick the bank/wallet that will fund the payouts.'); return; }
-    if(!confirm(`Generate ${payoutByRep.length} Cash Voucher${payoutByRep.length===1?'':'s'} totalling ${peso(payoutTotal)}?\n\nEach rep gets one voucher with their outstanding commission. Vouchers go through the standard Admin approval flow before disbursement.`)) return;
+    const targetTotal = targets.reduce((s,x) => s + x.amount, 0);
+    const confirmMsg = targetManagerId
+      ? `Generate voucher for ${repName(targetManagerId)} (${peso(targetTotal)})?\n\nGoes through standard Admin approval before disbursement.`
+      : `Generate ${targets.length} Cash Voucher${targets.length===1?'':'s'} totalling ${peso(targetTotal)}?\n\nEach rep gets one voucher with their outstanding commission. Vouchers go through standard Admin approval flow before disbursement.`;
+    if(!confirm(confirmMsg)) return;
     setGenerating(true); setGenMsg('');
     try {
       const monthKey = new Date().toISOString().slice(0,7); // YYYY-MM
       const prefix = 'CASH-';
       let created = 0, failed = 0;
-      for(const payout of payoutByRep){
+      for(const payout of targets){
         const repProfile = (profiles||[]).find(x => x.id === payout.manager_id);
         const payee = repProfile ? (repProfile.name || repProfile.email) : 'Sales rep';
         const rowsTxt = payout.rows.map(r => `${r.kind==='booking'?'Booking':'Collection'} ${soNumber(r.sales_order_id)} (${peso(r.amount)})`).join('; ');
@@ -14490,12 +14532,23 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
             <h1 className="text-2xl font-bold">💰 Commissions</h1>
             <p className="text-slate-500 text-sm">50% earned on booking (SO created) · 50% earned on full collection · paid end of month</p>
           </div>
-          {canSeeAll && (
-            <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
-              <button onClick={()=>setScope('mine')} className={`px-3 py-1.5 rounded ${scope==='mine'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>My commissions</button>
-              <button onClick={()=>setScope('team')} className={`px-3 py-1.5 rounded ${scope==='team'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>Team</button>
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {canSeeAll && (
+              <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
+                <button onClick={()=>{ setScope('mine'); setRepFilter(''); }} className={`px-3 py-1.5 rounded ${scope==='mine'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>My commissions</button>
+                <button onClick={()=>setScope('team')} className={`px-3 py-1.5 rounded ${scope==='team'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>Team</button>
+              </div>
+            )}
+            {/* Per-rep filter — only meaningful when looking at Team scope.
+               Picks one sales manager and filters every panel + ledger + payout
+               to just their data, so admin can audit one person at a time. */}
+            {scope === 'team' && canSeeAll && (
+              <select value={repFilter} onChange={e=>setRepFilter(e.target.value)} className="text-xs border rounded-lg px-2 py-1.5 bg-white">
+                <option value="">All sales managers</option>
+                {repsWithCommissions.map(r => <option key={r.id} value={r.id}>{r.name||r.email}{Number(r.commission_rate||0) > 0 ? ` · ${(Number(r.commission_rate)*100).toFixed(1)}%` : ''}</option>)}
+              </select>
+            )}
+          </div>
         </div>
       </div>
 
@@ -14569,13 +14622,15 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
         </div>
       )}
 
-      {/* Admin payout panel — generate one cash voucher per rep with the sum
-         of their unpaid commission. */}
+      {/* Admin payout panel — one cash voucher per rep with their outstanding
+         commission. Each row is expandable to preview the breakdown BEFORE
+         generating the voucher. Admin can pay one rep at a time (per-row
+         button) or all at once (header button). */}
       {isAdmin && scope === 'team' && payoutByRep.length > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
             <div>
-              <div className="font-bold text-emerald-900">📤 End-of-month payout</div>
+              <div className="font-bold text-emerald-900">📤 End-of-month payout{activeRepId && <span className="ml-2 text-xs font-normal text-emerald-700">· filtered to {repName(activeRepId)}</span>}</div>
               <div className="text-xs text-emerald-700">{payoutByRep.length} rep{payoutByRep.length===1?'':'s'} have outstanding commission · Total: <strong>{peso(payoutTotal)}</strong></div>
             </div>
             <div className="flex items-center gap-2">
@@ -14583,23 +14638,81 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               <select value={selectedBankId||''} onChange={e=>setSelectedBankId(e.target.value||null)} className="text-xs border rounded px-2 py-1.5 bg-white">
                 {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
               </select>
-              <button disabled={generating || !selectedBankId} onClick={generatePayoutVouchers} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">{generating?'Generating…':`📤 Generate ${payoutByRep.length} payout voucher${payoutByRep.length===1?'':'s'}`}</button>
+              <button disabled={generating || !selectedBankId} onClick={()=>generatePayoutVouchers()} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">{generating?'Generating…':`📤 Generate all ${payoutByRep.length} voucher${payoutByRep.length===1?'':'s'}`}</button>
             </div>
           </div>
-          <table className="w-full text-xs bg-white rounded border">
-            <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
-              <th className="text-left px-3 py-2">Sales rep</th>
-              <th className="text-right px-3 py-2">Rows</th>
-              <th className="text-right px-3 py-2">Payout amount</th>
-            </tr></thead>
-            <tbody>{payoutByRep.map(p => (
-              <tr key={p.manager_id} className="border-t">
-                <td className="px-3 py-2 font-semibold">{repName(p.manager_id)}</td>
-                <td className="px-3 py-2 text-right">{p.rows.length}</td>
-                <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}</td>
-              </tr>
-            ))}</tbody>
-          </table>
+          <div className="bg-white rounded border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
+                <th className="text-left px-3 py-2 w-6"></th>
+                <th className="text-left px-3 py-2">Sales rep</th>
+                <th className="text-right px-3 py-2">Booking rows</th>
+                <th className="text-right px-3 py-2">Collection rows</th>
+                <th className="text-right px-3 py-2">Payout amount</th>
+                <th className="text-right px-3 py-2">Action</th>
+              </tr></thead>
+              <tbody>{payoutByRep.map(p => {
+                const isOpen = expandedPayoutRep === p.manager_id;
+                const bookingRows    = p.rows.filter(r => r.kind === 'booking');
+                const collectionRows = p.rows.filter(r => r.kind === 'collection');
+                const bookingTotal   = bookingRows.reduce((s,r) => s + Number(r.amount||0), 0);
+                const collectionTotal= collectionRows.reduce((s,r) => s + Number(r.amount||0), 0);
+                return (
+                  <React.Fragment key={p.manager_id}>
+                    <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setExpandedPayoutRep(isOpen ? null : p.manager_id)}>
+                      <td className="px-3 py-2 text-slate-400">{isOpen?'▼':'▶'}</td>
+                      <td className="px-3 py-2 font-semibold">{repName(p.manager_id)}</td>
+                      <td className="px-3 py-2 text-right">{bookingRows.length} · {peso(bookingTotal)}</td>
+                      <td className="px-3 py-2 text-right">{collectionRows.length} · {peso(collectionTotal)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <button disabled={generating || !selectedBankId} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-slate-50/60">
+                        <td></td>
+                        <td colSpan="5" className="px-3 py-3">
+                          <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Breakdown — {p.rows.length} commission row{p.rows.length===1?'':'s'} feed into this payout</div>
+                          <table className="w-full text-[11px] bg-white border rounded">
+                            <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
+                              <th className="text-left px-2 py-1.5">Earned</th>
+                              <th className="text-left px-2 py-1.5">SO# · Client</th>
+                              <th className="text-left px-2 py-1.5">Kind</th>
+                              <th className="text-right px-2 py-1.5">SO total</th>
+                              <th className="text-right px-2 py-1.5">Rate</th>
+                              <th className="text-right px-2 py-1.5">Commission</th>
+                            </tr></thead>
+                            <tbody>{p.rows
+                              .slice()
+                              .sort((a,b) => String(b.earned_at||'').localeCompare(String(a.earned_at||'')))
+                              .map(r => (
+                                <tr key={r.id} className="border-t">
+                                  <td className="px-2 py-1.5 whitespace-nowrap">{fmtDate(String(r.earned_at||'').slice(0,10))}</td>
+                                  <td className="px-2 py-1.5">
+                                    <div className="font-mono font-bold">{soNumber(r.sales_order_id)}</div>
+                                    <div className="text-[10px] text-slate-500">{soClient(r.sales_order_id)}</div>
+                                  </td>
+                                  <td className="px-2 py-1.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${r.kind==='booking'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>{r.kind}</span></td>
+                                  <td className="px-2 py-1.5 text-right">{peso(r.base_amount)}</td>
+                                  <td className="px-2 py-1.5 text-right">{(Number(r.rate||0)*100).toFixed(2)}%</td>
+                                  <td className="px-2 py-1.5 text-right font-bold text-emerald-700">{peso(r.amount)}</td>
+                                </tr>
+                              ))}
+                              <tr className="bg-slate-50 font-bold border-t-2">
+                                <td colSpan="5" className="px-2 py-1.5 text-right uppercase text-[9px] tracking-wider">Payout total</td>
+                                <td className="px-2 py-1.5 text-right text-emerald-700">{peso(p.amount)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}</tbody>
+            </table>
+          </div>
           {genMsg && <div className="mt-2 text-xs text-emerald-700 bg-white border border-emerald-200 rounded p-2">{genMsg}</div>}
         </div>
       )}
