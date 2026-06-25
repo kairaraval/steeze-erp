@@ -222,7 +222,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 122 · Commissions: per-sales-manager filter + expandable payout breakdown (preview every commission row before generating each voucher) + per-rep Generate button";
+const BUILD = "Live build 123 · Sales Orders: per-sales-manager filter dropdown (admin + accounting) + inline Sales Rep column with click-to-filter";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13492,21 +13492,50 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
   // lead is owned by the admin — useful when Kaira herself is the sales rep
   // on a deal and wants a quick view of her own collection workload.
   const [onlyMine,setOnlyMine]=useState(false);
+  // Per-sales-manager filter (admin + accounting only). Lets them drill into
+  // one rep's SO list to audit / chase collections for that person. Mutually
+  // exclusive with the "My deals" toggle.
+  const [managerFilter,setManagerFilter]=useState('');
   const isAdmin = profile.role === 'admin';
   const isAccounting = profile.role === 'accounting';
+  const canSeeAllReps = isAdmin || isAccounting;
   const canSeePaymentsTab = isAdmin || isAccounting;
   // Sales-rep visibility filter: assistant + manager (non-admin/non-accounting)
   // see only SOs whose underlying lead is owned by them. Accounting + admin
-  // see everything by default; admin can toggle "Mine" to filter further.
+  // see everything by default; admin can toggle "Mine" or pick a specific
+  // manager from the dropdown.
   const restrictToOwn = (profile.role === 'assistant' || profile.role === 'manager');
   function isMine(o){
     if(!o.lead_id) return false;
     const lead = (leads||[]).find(l => l.id === o.lead_id);
     return lead && lead.manager_id === profile.id;
   }
-  const visibleSOs = restrictToOwn
-    ? (salesOrders || []).filter(isMine)
-    : (isAdmin && onlyMine ? (salesOrders || []).filter(isMine) : (salesOrders || []));
+  function ownerOf(o){
+    if(!o.lead_id) return null;
+    const lead = (leads||[]).find(l => l.id === o.lead_id);
+    return lead ? lead.manager_id : null;
+  }
+  const visibleSOs = (()=>{
+    let base = salesOrders || [];
+    if(restrictToOwn) return base.filter(isMine);
+    if(isAdmin && onlyMine) return base.filter(isMine);
+    if(canSeeAllReps && managerFilter) return base.filter(o => ownerOf(o) === managerFilter);
+    return base;
+  })();
+  // Build the rep dropdown list — anyone who owns at least one SO in the
+  // unfiltered set. Sorted by display name.
+  const repsWithSOs = (()=>{
+    const ids = new Set();
+    (salesOrders||[]).forEach(o => { const m = ownerOf(o); if(m) ids.add(m); });
+    return Array.from(ids)
+      .map(id => (profiles||[]).find(p => p.id === id))
+      .filter(Boolean)
+      .sort((a,b) => (a.name||a.email).localeCompare(b.name||b.email));
+  })();
+  // SO count per rep (used for "all reps" dropdown labels — shows the load).
+  function soCountFor(repId){
+    return (salesOrders||[]).filter(o => !o.deleted_at && ownerOf(o) === repId).length;
+  }
   // Admin-only soft-delete. SOs are tied to leads and payments so accidental
   // deletion is recoverable from Settings → Trash. Paid SOs get an extra
   // confirmation since the bank txns + lead.sales_order_id link still point at them.
@@ -13549,17 +13578,32 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📜 Sales Orders</h1>
-            <p className="text-slate-500 text-sm">{visibleSOs.length} order{visibleSOs.length===1?'':'s'} · Open AR: <strong className="text-rose-700">{peso(totalAR)}</strong>{isAdmin && onlyMine && <span className="ml-2 text-indigo-700 font-semibold">· filtered to my deals</span>}</p>
+            <p className="text-slate-500 text-sm">
+              {visibleSOs.length} order{visibleSOs.length===1?'':'s'} · Open AR: <strong className="text-rose-700">{peso(totalAR)}</strong>
+              {isAdmin && onlyMine && <span className="ml-2 text-indigo-700 font-semibold">· filtered to my deals</span>}
+              {canSeeAllReps && managerFilter && (() => { const r = (profiles||[]).find(p => p.id === managerFilter); return r ? <span className="ml-2 text-indigo-700 font-semibold">· filtered to {r.name||r.email}</span> : null; })()}
+            </p>
           </div>
-          {/* Admin-only My/All toggle. Lets Kaira flip to just the SOs whose
-             underlying lead she owns — useful when she's actively selling and
-             wants a quick view of her own collection workload. */}
-          {isAdmin && (
-            <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
-              <button onClick={()=>setOnlyMine(false)} className={`px-3 py-1.5 rounded ${!onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>All deals</button>
-              <button onClick={()=>setOnlyMine(true)} className={`px-3 py-1.5 rounded ${onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>My deals</button>
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Admin-only My/All toggle. Lets Kaira flip to just the SOs whose
+               underlying lead she owns — useful when she's actively selling and
+               wants a quick view of her own collection workload. */}
+            {isAdmin && (
+              <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
+                <button onClick={()=>{ setOnlyMine(false); }} className={`px-3 py-1.5 rounded ${!onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>All deals</button>
+                <button onClick={()=>{ setOnlyMine(true); setManagerFilter(''); }} className={`px-3 py-1.5 rounded ${onlyMine?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>My deals</button>
+              </div>
+            )}
+            {/* Per-sales-manager filter (admin + accounting). Drill into one
+               rep's SO list — useful for audit + collection chasing. Hidden
+               when "My deals" is active (would be redundant + confusing). */}
+            {canSeeAllReps && !onlyMine && (
+              <select value={managerFilter} onChange={e=>setManagerFilter(e.target.value)} className="text-xs border rounded-lg px-2 py-1.5 bg-white">
+                <option value="">All sales managers</option>
+                {repsWithSOs.map(r => <option key={r.id} value={r.id}>{r.name||r.email} · {soCountFor(r.id)} SO{soCountFor(r.id)===1?'':'s'}</option>)}
+              </select>
+            )}
+          </div>
         </div>
 
         {/* Sub-tab nav — Orders (the SO list) vs Payments (flat payment feed).
@@ -13591,6 +13635,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
           <th className="text-left px-3 py-2">SO#</th>
           <th className="text-left px-3 py-2">Date</th>
           <th className="text-left px-3 py-2">Client</th>
+          {canSeeAllReps && <th className="text-left px-3 py-2">Sales Rep</th>}
           <th className="text-right px-3 py-2">Total</th>
           <th className="text-right px-3 py-2">Paid</th>
           <th className="text-right px-3 py-2">Balance</th>
@@ -13598,11 +13643,16 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
           <th className="text-left px-3 py-2">QB Invoice</th>
           <th></th>
         </tr></thead>
-        <tbody>{rows.map(o => { const meta=soMeta(o.status); const pendN = pendingCountFor(o.id); return (
+        <tbody>{rows.map(o => { const meta=soMeta(o.status); const pendN = pendingCountFor(o.id); const ownerId = ownerOf(o); const owner = ownerId ? (profiles||[]).find(p=>p.id===ownerId) : null; return (
           <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(o)}>
             <td className="px-3 py-2 font-mono text-xs">{o.number}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(o.date)}</td>
             <td className="px-3 py-2">{o.client_name||'—'}</td>
+            {canSeeAllReps && <td className="px-3 py-2 text-xs">
+              {owner
+                ? <button onClick={(e)=>{ e.stopPropagation(); setManagerFilter(ownerId); }} className="text-indigo-600 hover:underline" title={`Filter list to ${owner.name||owner.email}`}>{owner.name||owner.email}</button>
+                : <span className="text-slate-400">—</span>}
+            </td>}
             <td className="px-3 py-2 text-right font-semibold">{peso(o.total)}</td>
             <td className="px-3 py-2 text-right text-emerald-700">{peso(o.amount_paid)}</td>
             <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(o.balance_due)}</td>
@@ -13618,7 +13668,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteSO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">{restrictToOwn ? 'No sales orders assigned to you yet. SOs auto-create when a lead you own hits Closed Won.' : 'No sales orders yet. They auto-create when a deal hits Closed Won.'}</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan={canSeeAllReps?10:9} className="text-center text-slate-400 py-8">{restrictToOwn ? 'No sales orders assigned to you yet. SOs auto-create when a lead you own hits Closed Won.' : (managerFilter ? 'This sales manager has no SOs matching the current filter.' : 'No sales orders yet. They auto-create when a deal hits Closed Won.')}</td></tr>}</tbody>
       </table></div></div>
 
       </>}
