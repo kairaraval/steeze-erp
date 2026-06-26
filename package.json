@@ -1,0 +1,12 @@
+{
+  "name": "steeze-os",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Steeze OS — internal operations system. The app lives in src/app.jsx and is precompiled to app.js by esbuild on deploy (no in-browser Babel).",
+  "scripts": {
+    "build": "esbuild src/app.jsx --outfile=app.js --jsx=transform --target=esnext --log-level=warning"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5"
+  }
+}

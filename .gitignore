@@ -1,0 +1,6 @@
+# Dependencies (installed by Vercel during build)
+node_modules/
+
+# Build output — generated from src/app.jsx by esbuild on each deploy
+app.js
+app.js.map
