@@ -27,12 +27,15 @@
        ──────────────────────────────────────────────────────────────── -->
   <link rel="preconnect" href="https://unpkg.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
   <link rel="preload" as="script" href="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin />
   <link rel="preload" as="script" href="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin />
   <link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tailwind is precompiled to /styles.css by the Tailwind CLI at build time
+       (see package.json + tailwind.config.js). This replaces the ~400KB
+       cdn.tailwindcss.com JIT engine that used to generate CSS in the browser
+       on every load. A small static stylesheet styles the page instantly. -->
+  <link rel="stylesheet" href="/styles.css" />
   <!-- defer = download in parallel but don't block the page from rendering the
        splash; they still execute in order BEFORE the deferred /app.js, so React
        / ReactDOM / Supabase / confetti globals are ready when the app runs. -->

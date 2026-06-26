@@ -4,9 +4,10 @@
   "private": true,
   "description": "Steeze OS — internal operations system. The app lives in src/app.jsx and is precompiled to app.js by esbuild on deploy (no in-browser Babel).",
   "scripts": {
-    "build": "esbuild src/app.jsx --outfile=app.js --jsx=transform --target=esnext --minify --log-level=warning"
+    "build": "esbuild src/app.jsx --outfile=app.js --jsx=transform --target=esnext --minify --log-level=warning && tailwindcss -i src/input.css -o styles.css --minify"
   },
   "devDependencies": {
-    "esbuild": "0.21.5"
+    "esbuild": "0.21.5",
+    "tailwindcss": "3.4.4"
   }
 }

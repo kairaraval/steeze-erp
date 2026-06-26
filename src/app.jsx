@@ -1563,6 +1563,14 @@ const INVOICE_TYPES = [
 ];
 const invTypeLabel = (k) => (INVOICE_TYPES.find(t=>t.key===k)||{}).label || 'Invoice';
 
+// Tile number color → COMPLETE class strings (so the Tailwind compiler can see
+// them; it cannot generate classes built like `text-${color}-700`).
+const TILE_NUM_COLORS = {
+  slate:'text-slate-700', indigo:'text-indigo-700', emerald:'text-emerald-700',
+  rose:'text-rose-700', blue:'text-blue-700', amber:'text-amber-700', purple:'text-purple-700',
+};
+const tileNumColor = (c) => TILE_NUM_COLORS[c] || TILE_NUM_COLORS.slate;
+
 async function nextInvoiceNumber(){
   const monthKey = new Date().toISOString().slice(0,7);
   const { data } = await sb.from('invoices').select('id,number').like('number', `INV-${monthKey}-%`);
@@ -1915,7 +1923,7 @@ function InvoicesListView({ profile, profiles, invoices, salesOrders, leads, cli
   const Tile = ({label,value,sub,color='slate'}) => (
     <div className="rounded-xl border bg-white p-4">
       <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</div>
-      <div className={`text-2xl font-bold text-${color}-700 mt-0.5`}>{value}</div>
+      <div className={`text-2xl font-bold ${tileNumColor(color)} mt-0.5`}>{value}</div>
       {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
     </div>
   );
@@ -2006,7 +2014,7 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
   const Tile = ({label,value,sub,color='slate'}) => (
     <div className={`rounded-xl border bg-white p-4`}>
       <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</div>
-      <div className={`text-2xl font-bold text-${color}-700 mt-0.5`}>{value}</div>
+      <div className={`text-2xl font-bold ${tileNumColor(color)} mt-0.5`}>{value}</div>
       {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
     </div>
   );
