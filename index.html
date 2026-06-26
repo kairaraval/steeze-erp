@@ -1415,13 +1415,36 @@ function SendLeadToPrintingModal({ profile, lead, client, onClose, onSent }){
    items + totals aren't entered twice.
    ============================================================================ */
 const EST_VAT_RATE = 0.12;
+const EST_VALIDITY_DAYS = 7; // estimates are valid for 7 days from creation
+// Status is for tracking the quote only — it never creates a Sales Order.
+// The Sales Order is created elsewhere when the lead reaches Closed Won.
 const ESTIMATE_STATUSES = [
   { key:'draft',    label:'Draft',    color:'bg-slate-200 text-slate-700' },
   { key:'sent',     label:'Sent',     color:'bg-blue-100 text-blue-700' },
-  { key:'approved', label:'Approved', color:'bg-emerald-100 text-emerald-700' },
-  { key:'rejected', label:'Rejected', color:'bg-rose-100 text-rose-700' },
+  { key:'approved', label:'Accepted', color:'bg-emerald-100 text-emerald-700' },
+  { key:'rejected', label:'Declined', color:'bg-rose-100 text-rose-700' },
 ];
 const estStatusMeta = (k) => ESTIMATE_STATUSES.find(s=>s.key===(k||'draft')) || ESTIMATE_STATUSES[0];
+
+// Turns a payment-terms option (the SAME list sales managers pick from —
+// PAYMENT_TERMS_OPTIONS) into the sentence printed on the estimate.
+function paymentTermsClause(term){
+  switch(term){
+    case '50% DP': return 'A 50% DP of the total order value is required before production starts. The 50% balance shall be paid in full upon completion of the order.';
+    case 'Full payment upon delivery': return 'Full payment of the total order value is due upon delivery of the order.';
+    case 'Net 15 - 15 days upon delivery': return 'The total order value shall be paid in full within 15 days upon delivery of the order.';
+    case 'Net 30 - 30 days upon delivery': return 'The total order value shall be paid in full within 30 days upon delivery of the order.';
+    case 'Net 60 - 60 days upon delivery': return 'The total order value shall be paid in full within 60 days upon delivery of the order.';
+    default: return term ? term : 'A 50% DP of the total order value is required before production starts. The 50% balance shall be paid in full upon completion of the order.';
+  }
+}
+// Standard estimate terms (from the company's proposal boilerplate).
+const ESTIMATE_TERMS = {
+  latePenalty: 'A late payment penalty of 2% per month shall be charged on any outstanding balance after the due date.',
+  shipping: 'Free shipping applies exclusively to orders ₱25,000 or more within Metro Manila. For accounts below this amount, or for deliveries located in provincial areas, shipping costs will be shouldered by the client.',
+  validity: `To ensure we can fulfill your order at the quoted price, please confirm within ${EST_VALIDITY_DAYS} days. Prices may change after this date.`,
+  acceptance: 'To confirm order, kindly sign and return this proposal to us at your earliest convenience.',
+};
 
 // Next estimate number for the current month: EST-YYYY-MM-NNN (mirrors the
 // Sales-Order numbering scheme).
@@ -1432,12 +1455,13 @@ async function nextEstimateNumber(){
   return `EST-${monthKey}-${seq}`;
 }
 
-// Seed editable estimate lines from a lead's items.
+// Seed editable estimate lines from a lead's items. Description is free-text
+// the accounting team fills in (pre-seeded with the lead's category as a hint).
 function estLinesFromLead(lead){
   return (lead.items||[]).map((it,i)=>({
     id:'e'+i,
     itemType: it.itemType||'',
-    category: it.category||'',
+    description: it.description || it.category || '',
     quantity: String(it.quantity||''),
     pricePerItem: String(it.pricePerItem||''),
     withVat: !!it.withVat,
@@ -1468,12 +1492,12 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
     const ex = (data && data[0]) || null;
     if(ex){
       setEstimate(ex); setNumber(ex.number); setStatus(ex.status||'draft');
-      setLines((ex.items||[]).map((it,i)=>({ id:'e'+i, itemType:it.itemType||'', category:it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
+      setLines((ex.items||[]).map((it,i)=>({ id:'e'+i, itemType:it.itemType||'', description:it.description||it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
       setDiscount(ex.discount?String(ex.discount):''); setDiscountNote(ex.discount_note||'');
       setPaymentTerms(ex.payment_terms||lead.payment_terms||''); setValidUntil(ex.valid_until||''); setNotes(ex.notes||'');
     } else {
       setLines(estLinesFromLead(lead));
-      const d=new Date(); d.setDate(d.getDate()+30); setValidUntil(d.toISOString().slice(0,10)); // default 30-day validity
+      const d=new Date(); d.setDate(d.getDate()+EST_VALIDITY_DAYS); setValidUntil(d.toISOString().slice(0,10)); // valid 7 days from creation
       setNumber(await nextEstimateNumber());
     }
     setLoading(false);
@@ -1490,7 +1514,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
   function removeLine(idx){ setLines(lines.filter((_,i)=>i!==idx)); }
 
   function buildPayload(nextStatus){
-    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*EST_VAT_RATE:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
+    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*EST_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
     return {
       number, lead_id:lead.id, client_id:lead.client_id||null,
       client_name: client?.company || lead.client_name || '',
@@ -1515,35 +1539,13 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
         if(error) throw error; saved=data;
       }
       setEstimate(saved); setStatus(saved.status);
-      // On approval: ensure the lead has a Sales Order and sync items/totals to it.
-      if(saved.status==='approved'){
-        try{
-          const created = await maybeAutoCreateSalesOrderForLead(profile, { ...lead, items:saved.items, value:saved.total, payment_terms:saved.payment_terms }, clients);
-          let soId = created?.id || null;
-          if(!soId){ const { data:l } = await sb.from('leads').select('sales_order_id').eq('id', lead.id).maybeSingle(); soId = l?.sales_order_id || null; }
-          if(soId){
-            const { data:so } = await sb.from('sales_orders').select('id,amount_paid').eq('id', soId).maybeSingle();
-            const paid = Number(so?.amount_paid)||0;
-            await sb.from('sales_orders').update({
-              items:saved.items, subtotal:saved.subtotal, discount:saved.discount,
-              vat_amount:saved.vat_amount, total:saved.total,
-              balance_due: Math.max(0, saved.total - paid),
-              payment_terms: saved.payment_terms||null,
-            }).eq('id', soId);
-            if(soId!==saved.sales_order_id){ await sb.from('estimates').update({ sales_order_id:soId }).eq('id', saved.id); saved.sales_order_id=soId; setEstimate({...saved}); }
-          }
-        }catch(soErr){ console.warn('Estimate→SO sync failed:', soErr); setMsg('Saved & approved, but linking the Sales Order ran into an issue: '+(soErr.message||soErr)); reload&&reload(); setBusy(false); return; }
-      }
-      setMsg(saved.status==='approved' ? 'Approved — Sales Order updated.' : 'Saved.');
+      // NOTE: estimates never create or touch a Sales Order. The SO is created
+      // separately when the lead reaches Closed Won.
+      setMsg('Saved.');
       reload&&reload();
       setTimeout(()=>setMsg(''),2500);
     }catch(e){ setMsg('Save failed: '+(e.message||e)); }
     finally{ setBusy(false); }
-  }
-
-  function approve(){
-    if(!confirm('Approve this estimate?\n\nThis marks it as the agreed quote and updates the linked Sales Order with these items and totals.')) return;
-    save('approved');
   }
 
   const sm = estStatusMeta(status);
@@ -1591,8 +1593,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
               <thead>
                 <tr className="bg-slate-100">
                   <th className="border border-slate-900 px-2 py-1.5 text-center w-8">#</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-left">Item</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-left w-28">Category</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left w-32">Item</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left">Description</th>
                   <th className="border border-slate-900 px-2 py-1.5 text-right w-16">Qty</th>
                   <th className="border border-slate-900 px-2 py-1.5 text-right w-24">Unit ₱</th>
                   <th className="border border-slate-900 px-2 py-1.5 text-right w-28">Line Total ₱</th>
@@ -1603,7 +1605,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
                   <tr key={i}>
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
                     <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{it.withVat?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{it.category||'—'}</td>
+                    <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(lt)}</td>
@@ -1621,7 +1623,14 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
               </tfoot>
             </table>
             {notes && (<div className="mt-3 border border-slate-400 p-2"><div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Notes</div><div className="text-[10px] whitespace-pre-line">{notes}</div></div>)}
-            <div className="grid grid-cols-2 gap-4 mt-6">
+            <div className="mt-3 space-y-1.5 text-[9.5px] leading-snug text-slate-700">
+              <div><span className="font-bold">PAYMENT TERMS:</span> {paymentTermsClause(paymentTerms)}</div>
+              <div>{ESTIMATE_TERMS.latePenalty}</div>
+              <div><span className="font-bold">SHIPPING POLICY:</span> {ESTIMATE_TERMS.shipping}</div>
+              <div><span className="font-bold">VALIDITY:</span> {ESTIMATE_TERMS.validity}</div>
+              <div><span className="font-bold">ACCEPTANCE:</span> {ESTIMATE_TERMS.acceptance}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mt-5">
               <SignatureBox role="Prepared by" name={preparer?.name} />
               <SignatureBox role="Accepted by (Client)" />
             </div>
@@ -1658,8 +1667,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
                 <tr>
-                  <th className="text-left px-2 py-1.5">Item</th>
-                  <th className="text-left px-2 py-1.5 w-32">Category</th>
+                  <th className="text-left px-2 py-1.5 w-40">Item</th>
+                  <th className="text-left px-2 py-1.5">Description</th>
                   <th className="text-right px-2 py-1.5 w-20">Qty</th>
                   <th className="text-right px-2 py-1.5 w-28">Unit ₱</th>
                   <th className="text-center px-2 py-1.5 w-14">VAT</th>
@@ -1671,12 +1680,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
                 {lines.map((it,idx)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*EST_VAT_RATE:0); return (
                   <tr key={it.id} className="border-t">
                     <td className="px-2 py-1"><input className="input !py-1" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="e.g. Jersey" /></td>
-                    <td className="px-2 py-1">
-                      <select className="input !py-1" value={it.category} onChange={e=>setLine(idx,'category',e.target.value)}>
-                        <option value="">—</option>
-                        {ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </td>
+                    <td className="px-2 py-1"><input className="input !py-1" value={it.description} onChange={e=>setLine(idx,'description',e.target.value)} placeholder="Full sublimation, dri-fit, sizes S–XL…" /></td>
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
                     <td className="px-2 py-1 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} /></td>
@@ -1702,7 +1706,11 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
             </div>
             <div>
               <label className="text-[10px] uppercase text-slate-400 font-semibold">Payment terms</label>
-              <input className="input" value={paymentTerms} onChange={e=>setPaymentTerms(e.target.value)} placeholder="e.g. 50% DP, balance on delivery" />
+              <select className="input" value={paymentTerms} onChange={e=>setPaymentTerms(e.target.value)}>
+                <option value="">— Select —</option>
+                {PAYMENT_TERMS_OPTIONS.map(t=><option key={t} value={t}>{t}</option>)}
+                {paymentTerms && !PAYMENT_TERMS_OPTIONS.includes(paymentTerms) && <option value={paymentTerms}>{paymentTerms} (legacy)</option>}
+              </select>
             </div>
             <div>
               <label className="text-[10px] uppercase text-slate-400 font-semibold">Valid until</label>
@@ -1726,7 +1734,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
         <div className="flex gap-2 pt-3 border-t flex-wrap items-center">
           <button disabled={busy} onClick={()=>save('draft')} className="py-2 px-3 rounded-lg border text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">💾 Save draft</button>
           <button disabled={busy} onClick={()=>save('sent')} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">📤 Save & mark Sent</button>
-          <button disabled={busy||status==='approved'} onClick={approve} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Mark approved and update the Sales Order">✅ Approve → Sales Order</button>
+          <button disabled={busy} onClick={()=>save('approved')} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted this quote (does not create a Sales Order)">✅ Mark accepted</button>
+          <button disabled={busy} onClick={()=>save('rejected')} className="py-2 px-3 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50" title="Client declined this quote">✕ Mark declined</button>
           <button disabled={!hasValidLine} onClick={()=>setView('print')} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50">🖨 Preview / Print</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
@@ -1734,6 +1743,97 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
       </div>
       )}
     </Modal>
+  );
+}
+
+/* ============================================================================
+   ESTIMATES LIST / REPORT — Admin + Accounting view of every estimate.
+   Filter by status, search, see totals, and click any row to open / edit /
+   reprint that estimate (opens the same EstimateModal on its source lead).
+   ============================================================================ */
+function EstimatesListView({ profile, profiles, estimates, leads, clients, reload }){
+  const [statusFilter,setStatusFilter]=useState('all');
+  const [q,setQ]=useState('');
+  const [openLead,setOpenLead]=useState(null);
+
+  const all = estimates||[];
+  const rows = all.filter(e=>{
+    if(statusFilter!=='all' && (e.status||'draft')!==statusFilter) return false;
+    if(q){ const s=q.toLowerCase(); if(!((e.number||'').toLowerCase().includes(s)||(e.client_name||'').toLowerCase().includes(s)||(e.title||'').toLowerCase().includes(s))) return false; }
+    return true;
+  });
+  const byStatus = k => all.filter(e=>(e.status||'draft')===k);
+  const sum = arr => arr.reduce((a,e)=>a+(Number(e.total)||0),0);
+  const preparerName = id => { const p=(profiles||[]).find(x=>x.id===id); return p? (p.name||p.email) : '—'; };
+  const today = new Date().toISOString().slice(0,10);
+
+  function openEstimate(e){
+    const lead=(leads||[]).find(l=>l.id===e.lead_id);
+    if(!lead){ alert('The lead for this estimate was not found — it may have been deleted.'); return; }
+    setOpenLead(lead);
+  }
+
+  const Tile = ({label,value,sub,color='slate'}) => (
+    <div className={`rounded-xl border bg-white p-4`}>
+      <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</div>
+      <div className={`text-2xl font-bold text-${color}-700 mt-0.5`}>{value}</div>
+      {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-2xl font-bold mb-1">🧾 Estimates</h1>
+      <p className="text-slate-500 text-sm mb-5">Every client estimate / quotation. Click any row to open, edit, or reprint it.</p>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <Tile label="Total estimates" value={all.length} sub={`${peso(sum(all))} quoted`} color="indigo" />
+        <Tile label="Sent — awaiting" value={byStatus('sent').length} sub={`${peso(sum(byStatus('sent')))} out`} color="blue" />
+        <Tile label="Accepted" value={byStatus('approved').length} sub={`${peso(sum(byStatus('approved')))} won`} color="emerald" />
+        <Tile label="Declined" value={byStatus('rejected').length} sub={`${peso(sum(byStatus('rejected')))} lost`} color="rose" />
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center mb-3">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search number / client / title…" className="input max-w-xs" />
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="input max-w-[160px]">
+          <option value="all">All statuses</option>
+          {ESTIMATE_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+        <span className="text-xs text-slate-400">{rows.length} shown</span>
+      </div>
+
+      <div className="overflow-x-auto border rounded-xl bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+            <tr>
+              <th className="text-left px-3 py-2">Number</th>
+              <th className="text-left px-3 py-2">Client</th>
+              <th className="text-left px-3 py-2">Title</th>
+              <th className="text-right px-3 py-2">Total</th>
+              <th className="text-center px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">Valid until</th>
+              <th className="text-left px-3 py-2">Prepared by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(e=>{ const sm=estStatusMeta(e.status); const expired=e.valid_until && e.valid_until<today && e.status!=='approved' && e.status!=='rejected'; return (
+              <tr key={e.id} onClick={()=>openEstimate(e)} className="border-t hover:bg-indigo-50/50 cursor-pointer">
+                <td className="px-3 py-2 font-mono text-xs font-semibold">{e.number}</td>
+                <td className="px-3 py-2">{e.client_name||'—'}</td>
+                <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]">{e.title||'—'}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(e.total)}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[11px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span></td>
+                <td className="px-3 py-2 text-xs">{e.valid_until?fmtDate(e.valid_until):'—'}{expired && <span className="ml-1 text-[10px] text-rose-600 font-semibold">expired</span>}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{preparerName(e.prepared_by)}</td>
+              </tr>
+            ); })}
+            {rows.length===0 && <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-400 text-sm">No estimates yet. Create one from a lead in the Sales Pipeline.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {openLead && <EstimateModal profile={profile} lead={openLead} client={(clients||[]).find(c=>c.id===openLead.client_id)} clients={clients} onClose={()=>setOpenLead(null)} reload={reload} />}
+    </div>
   );
 }
 
@@ -21413,6 +21513,7 @@ function App(){
   // Finance Sprint 1 state: SOs, SO payments, bank accounts, bank txns, RFPs, vouchers.
   // All loaded in loadAll() so any view can use them. Sprint 2 adds expenses + budgets + CAs.
   const [salesOrders,setSalesOrders]=useState([]); const [soPayments,setSoPayments]=useState([]);
+  const [estimates,setEstimates]=useState([]); // admin/accounting-only; loaded separately
   const [bankAccounts,setBankAccounts]=useState([]); const [bankTransactions,setBankTransactions]=useState([]);
   const [rfps,setRfps]=useState([]); const [vouchers,setVouchers]=useState([]);
   const [budgetRequests,setBudgetRequests]=useState([]);
@@ -21637,6 +21738,9 @@ function App(){
     // Finance Sprint 1 — Supabase returns error rows when the table doesn't exist
     // yet (SQL not run). Default to [] in that case so nothing crashes.
     setSalesOrders(so && !so.error ? (so.data||[]) : []);
+    // Estimates — admin/accounting only (enforced by RLS). Separate fetch so it
+    // doesn't bloat the main Promise.all; graceful empty for other roles.
+    try { const est = await sb.from('estimates').select('*').order('created_at',{ascending:false}); setEstimates(est && !est.error ? (est.data||[]) : []); } catch(_){ setEstimates([]); }
     setSoPayments(sop && !sop.error ? (sop.data||[]) : []);
     setBankAccounts(ba && !ba.error ? (ba.data||[]) : []);
     setBankTransactions(bt && !bt.error ? (bt.data||[]) : []);
@@ -22093,6 +22197,7 @@ function App(){
     ['cash-position','Cash Position','💎'],
     ['cash-flow','Cash Flow','📈'],
     ['payment-calendar','Payment Calendar','🗓'],
+    ['estimates','Estimates','🧾'],
     ['sales-orders','Sales Orders','📜'],
     ['ledger','Customer Ledger','👥'],
     ['commissions','Commissions','💰'],
@@ -22374,6 +22479,7 @@ function App(){
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} soActivityCounts={soActivityCounts} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
