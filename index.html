@@ -1753,6 +1753,442 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
 }
 
 /* ============================================================================
+   INVOICES — internal billing document / Statement of Account generated from a
+   Sales Order. The OFFICIAL BIR sales invoice still comes from QuickBooks
+   (qb_invoice_* link kept). Admin + Accounting create/edit; sales managers can
+   VIEW invoices for their own projects (read-only). Shows any downpayment
+   already received and the balance due. Does NOT touch the SO totals.
+   ============================================================================ */
+const INV_VAT_RATE = 0.12;
+const INVOICE_STATUSES = [
+  { key:'draft',          label:'Draft',          color:'bg-slate-200 text-slate-700' },
+  { key:'issued',         label:'Issued',         color:'bg-blue-100 text-blue-700' },
+  { key:'partially_paid', label:'Partially paid', color:'bg-amber-100 text-amber-700' },
+  { key:'paid',           label:'Paid',           color:'bg-emerald-100 text-emerald-700' },
+  { key:'cancelled',      label:'Cancelled',      color:'bg-rose-100 text-rose-700' },
+];
+const invStatusMeta = (k) => INVOICE_STATUSES.find(s=>s.key===(k||'draft')) || INVOICE_STATUSES[0];
+const INVOICE_TYPES = [
+  { key:'full',        label:'Full invoice' },
+  { key:'downpayment', label:'Downpayment' },
+  { key:'balance',     label:'Balance' },
+];
+const invTypeLabel = (k) => (INVOICE_TYPES.find(t=>t.key===k)||{}).label || 'Invoice';
+
+async function nextInvoiceNumber(){
+  const monthKey = new Date().toISOString().slice(0,7);
+  const { data } = await sb.from('invoices').select('id,number').like('number', `INV-${monthKey}-%`);
+  const seq = String((data?.length||0) + 1).padStart(3,'0');
+  return `INV-${monthKey}-${seq}`;
+}
+// Seed invoice lines from an SO's items (tolerant of older item shapes).
+function invLinesFromSO(so){
+  return ((so&&so.items)||[]).map((it,i)=>({
+    id:'v'+i,
+    itemType: it.itemType||it.name||'',
+    description: it.description||it.category||'',
+    quantity: String(it.quantity||it.qty||''),
+    pricePerItem: String(it.pricePerItem||it.price||''),
+    withVat: !!it.withVat,
+  }));
+}
+
+function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
+  const canEdit = profile.role==='admin' || profile.role==='accounting';
+  const [loading,setLoading]=useState(true);
+  const [invoice,setInvoice]=useState(existing||null);
+  const [view,setView]=useState('edit');
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  const [number,setNumber]=useState(existing?.number||'');
+  const [status,setStatus]=useState(existing?.status||'draft');
+  const [invoiceType,setInvoiceType]=useState(existing?.invoice_type||'full');
+  const [dpPercent,setDpPercent]=useState(existing?.dp_percent!=null?String(existing.dp_percent):'50');
+  const [lines,setLines]=useState([]);
+  const [paymentTerms,setPaymentTerms]=useState(existing?.payment_terms||so?.payment_terms||'');
+  const [issueDate,setIssueDate]=useState(existing?.issue_date||new Date().toISOString().slice(0,10));
+  const [dueDate,setDueDate]=useState(existing?.due_date||'');
+  const [notes,setNotes]=useState(existing?.notes||'');
+  const [qbNum,setQbNum]=useState(existing?.qb_invoice_number||so?.qb_invoice_number||'');
+  const [qbUrl,setQbUrl]=useState(existing?.qb_invoice_url||so?.qb_invoice_url||'');
+
+  useEffect(()=>{ let alive=true; (async()=>{
+    setLoading(true);
+    if(existing){
+      setLines((existing.items||[]).map((it,i)=>({ id:'v'+i, itemType:it.itemType||it.name||'', description:it.description||it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
+    } else {
+      setLines(invLinesFromSO(so||{}));
+      const num = await nextInvoiceNumber(); if(alive) setNumber(num);
+      const d=new Date(); d.setDate(d.getDate()+30); if(alive) setDueDate(d.toISOString().slice(0,10));
+    }
+    if(alive) setLoading(false);
+  })(); return ()=>{ alive=false; }; },[]);
+
+  const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
+  const vat = lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*INV_VAT_RATE:0); },0);
+  const total = subtotal + vat;
+  const paymentsReceived = Number(so?.amount_paid ?? existing?.payments_received ?? 0)||0;
+  const orderBalance = Math.max(0, total - paymentsReceived);
+  const dp = Number(dpPercent)||0;
+  const amountDue = invoiceType==='downpayment'
+    ? Math.max(0, Math.round(total*dp/100*100)/100 - paymentsReceived)
+    : orderBalance; // full + balance both bill the remaining balance
+  const hasLine = lines.some(it=>it.itemType&&(Number(it.quantity)||0)>0);
+
+  function setLine(i,k,v){ setLines(lines.map((it,idx)=>idx===i?{...it,[k]:v}:it)); }
+  function addLine(){ setLines([...lines,{ id:'v'+Date.now(), itemType:'', description:'', quantity:'', pricePerItem:'', withVat:false }]); }
+  function removeLine(i){ setLines(lines.filter((_,idx)=>idx!==i)); }
+
+  function buildPayload(nextStatus){
+    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const q=Number(it.quantity), p=Number(it.pricePerItem)||0, s=q*p, v=it.withVat?s*INV_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:q, pricePerItem:p, withVat:!!it.withVat, lineTotal:s+v }; });
+    return {
+      number, sales_order_id: so?.id||existing?.sales_order_id||null,
+      lead_id: lead?.id || so?.lead_id || existing?.lead_id || null,
+      client_id: so?.client_id || client?.id || existing?.client_id || null,
+      client_name: client?.company || so?.client_name || existing?.client_name || '',
+      invoice_type: invoiceType, items, subtotal, vat_amount:vat, total,
+      dp_percent: invoiceType==='downpayment'?dp:null,
+      amount_due: amountDue, payments_received: paymentsReceived, balance_due: orderBalance,
+      status: nextStatus||status, issue_date: issueDate||null, due_date: dueDate||null,
+      payment_terms: paymentTerms||null, notes: notes||null,
+      qb_invoice_number: qbNum||null, qb_invoice_url: qbUrl||null,
+      prepared_by: profile.id,
+    };
+  }
+  async function save(nextStatus){
+    if(!hasLine){ setMsg('Add at least one line before saving.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const payload=buildPayload(nextStatus); let saved;
+      if(invoice){ const {data,error}=await sb.from('invoices').update(payload).eq('id',invoice.id).select().single(); if(error)throw error; saved=data; }
+      else { const {data,error}=await sb.from('invoices').insert(payload).select().single(); if(error)throw error; saved=data; }
+      // Keep the SO's QB invoice link in sync if accounting recorded it here.
+      if(so?.id && (qbNum||qbUrl)){ try{ await sb.from('sales_orders').update({ qb_invoice_number:qbNum||null, qb_invoice_url:qbUrl||null }).eq('id',so.id); }catch(_){} }
+      setInvoice(saved); setStatus(saved.status); setMsg('Saved.'); reload&&reload(); setTimeout(()=>setMsg(''),2500);
+    }catch(e){ setMsg('Save failed: '+(e.message||e)); } finally{ setBusy(false); }
+  }
+
+  const sm = invStatusMeta(status);
+
+  // ---------- PRINT VIEW (portal to body, like the estimate) ----------
+  if(view==='print'){
+    const pl = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0);
+    return ReactDOM.createPortal(
+      <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
+        <PortraitPagePrintStyle />
+        <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
+          <div className="min-w-0">
+            <div className="font-bold text-slate-900 truncate">🧾 {number} — invoice preview</div>
+            <div className="text-xs text-slate-500">{client?.company||so?.client_name||'—'} · Amount due {peso(amountDue)}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+            <button onClick={()=>setView('edit')} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">← Back</button>
+          </div>
+        </div>
+        <div className="tp-print py-6">
+          <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
+            <DocPrintHeader title="INVOICE" rightBlocks={
+              <div>
+                <div><strong>No.:</strong> {number}</div>
+                <div><strong>Date:</strong> {issueDate?fmtDate(issueDate):fmtDate(new Date().toISOString())}</div>
+                {dueDate && <div><strong>Due:</strong> {fmtDate(dueDate)}</div>}
+                {so?.number && <div><strong>SO:</strong> {so.number}</div>}
+              </div>
+            } />
+            <div className="grid grid-cols-2 gap-4 mt-3 mb-2 text-[11px]">
+              <div className="border border-slate-400 p-2">
+                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-0.5">Bill to</div>
+                <div className="font-semibold">{client?.company||so?.client_name||'—'}</div>
+                {client?.contact && <div>{client.contact}</div>}
+                {client?.address && <div className="text-slate-600">{client.address}</div>}
+              </div>
+              <div className="border border-slate-400 p-2">
+                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-0.5">Re</div>
+                <div className="font-semibold">{lead?.title||so?.client_name||'—'}</div>
+                <div className="text-slate-600">{invTypeLabel(invoiceType)}{invoiceType==='downpayment'?` · ${dp}%`:''}</div>
+                {paymentTerms && <div className="text-slate-600">Terms: {paymentTerms}</div>}
+              </div>
+            </div>
+            <table className="w-full border-collapse text-[10px]">
+              <thead>
+                <tr className="bg-slate-100">
+                  <th className="border border-slate-900 px-2 py-1.5 text-center w-8">#</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left w-32">Item</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-left">Description</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right w-16">Qty</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right w-24">Unit ₱</th>
+                  <th className="border border-slate-900 px-2 py-1.5 text-right w-28">Line Total ₱</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pl.map((it,i)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*INV_VAT_RATE:0); return (
+                  <tr key={i}>
+                    <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
+                    <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{it.withVat?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
+                    <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(lt)}</td>
+                  </tr>
+                ); })}
+                {Array.from({length: Math.max(0, 4-pl.length)}).map((_,i)=>(
+                  <tr key={'b'+i}><td className="border border-slate-400 px-2 py-1.5 text-center text-slate-300">&nbsp;</td><td className="border border-slate-400 px-2 py-1.5" colSpan="5">&nbsp;</td></tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Subtotal</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(subtotal)}</td></tr>
+                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">VAT (12%)</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(vat)}</td></tr>
+                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Order Total</td><td className="border border-slate-400 px-2 py-1 text-right font-bold">{peso(total)}</td></tr>
+                {paymentsReceived>0 && <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold text-emerald-700">Less: Payments received</td><td className="border border-slate-400 px-2 py-1 text-right text-emerald-700">−{peso(paymentsReceived)}</td></tr>}
+                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Balance of order</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(orderBalance)}</td></tr>
+                <tr className="bg-slate-100"><td colSpan="4" className="border-0"></td><td className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Amount Due{invoiceType==='downpayment'?` (${dp}% DP)`:''}</td><td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(amountDue)}</td></tr>
+              </tfoot>
+            </table>
+            {notes && (<div className="mt-3 border border-slate-400 p-2"><div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Notes</div><div className="text-[10px] whitespace-pre-line">{notes}</div></div>)}
+            <div className="grid grid-cols-2 gap-4 mt-6">
+              <SignatureBox role="Prepared by" name={profile?.name} />
+              <SignatureBox role="Received by (Client)" />
+            </div>
+            <div className="flex justify-between text-[9px] text-slate-500 border-t pt-1 mt-4">
+              <span>© Steeze Corporation {new Date().getFullYear()}. Please make payment on or before {dueDate?fmtDate(dueDate):'the due date'}.</span>
+              <span>{number} · Page 1 of 1</span>
+            </div>
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  // ---------- EDIT / VIEW ----------
+  const MoneyBox = () => (
+    <div className="bg-slate-50 border rounded-lg p-4 h-fit text-sm">
+      <div className="flex justify-between py-1"><span className="text-slate-500">Subtotal</span><span className="font-medium">{peso(subtotal)}</span></div>
+      <div className="flex justify-between py-1"><span className="text-slate-500">VAT (12%)</span><span className="font-medium">{peso(vat)}</span></div>
+      <div className="flex justify-between py-1 border-t mt-1 font-semibold"><span>Order total</span><span>{peso(total)}</span></div>
+      {paymentsReceived>0 && <div className="flex justify-between py-1 text-emerald-700"><span>Less: payments received</span><span>−{peso(paymentsReceived)}</span></div>}
+      <div className="flex justify-between py-1"><span className="text-slate-500">Balance of order</span><span className="font-medium">{peso(orderBalance)}</span></div>
+      <div className="flex justify-between py-2 mt-1 border-t font-bold text-base"><span>Amount due{invoiceType==='downpayment'?` (${dp}% DP)`:''}</span><span>{peso(amountDue)}</span></div>
+    </div>
+  );
+
+  return (
+    <Modal title={`🧾 Invoice · ${so?.number||client?.company||''}`} onClose={onClose} wide>
+      {loading ? <div className="py-10 text-center text-slate-400 text-sm">Loading invoice…</div> : (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-slate-800">{number}</span>
+            <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{invTypeLabel(invoiceType)}</span>
+          </div>
+          <div className="text-xs text-slate-500">{client?.company||so?.client_name||'—'}</div>
+        </div>
+
+        {!canEdit && <div className="text-[11px] text-slate-500 bg-slate-50 border rounded px-3 py-1.5">View only — invoices are managed by Accounting.</div>}
+
+        {canEdit && (
+          <div className="flex flex-wrap gap-3 items-end">
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Invoice type</label>
+              <select className="input" value={invoiceType} onChange={e=>setInvoiceType(e.target.value)}>
+                {INVOICE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+              </select>
+            </div>
+            {invoiceType==='downpayment' && (
+              <div>
+                <label className="text-[10px] uppercase text-slate-400 font-semibold block">DP %</label>
+                <input type="number" className="input w-24" value={dpPercent} onChange={e=>setDpPercent(e.target.value)} />
+              </div>
+            )}
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Issue date</label>
+              <input type="date" className="input" value={issueDate} onChange={e=>setIssueDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Due date</label>
+              <input type="date" className="input" value={dueDate} onChange={e=>setDueDate(e.target.value)} />
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold">Items</div>
+            {canEdit && <button onClick={addLine} className="text-xs px-2 py-1 rounded border hover:bg-slate-50">+ Add item</button>}
+          </div>
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+                <tr>
+                  <th className="text-left px-2 py-1.5 w-40">Item</th>
+                  <th className="text-left px-2 py-1.5">Description</th>
+                  <th className="text-right px-2 py-1.5 w-20">Qty</th>
+                  <th className="text-right px-2 py-1.5 w-28">Unit ₱</th>
+                  <th className="text-center px-2 py-1.5 w-14">VAT</th>
+                  <th className="text-right px-2 py-1.5 w-28">Line ₱</th>
+                  {canEdit && <th className="px-2 py-1.5 w-8"></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((it,idx)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*INV_VAT_RATE:0); return (
+                  <tr key={it.id} className="border-t">
+                    {canEdit ? <>
+                      <td className="px-2 py-1"><input className="input !py-1" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="Item" /></td>
+                      <td className="px-2 py-1"><input className="input !py-1" value={it.description} onChange={e=>setLine(idx,'description',e.target.value)} placeholder="Description" /></td>
+                      <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
+                      <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
+                      <td className="px-2 py-1 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} /></td>
+                      <td className="px-2 py-1 text-right font-medium">{peso(lt)}</td>
+                      <td className="px-2 py-1 text-center"><button onClick={()=>removeLine(idx)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
+                    </> : <>
+                      <td className="px-2 py-1.5">{it.itemType}</td>
+                      <td className="px-2 py-1.5 text-slate-600">{it.description||'—'}</td>
+                      <td className="px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
+                      <td className="px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
+                      <td className="px-2 py-1.5 text-center">{it.withVat?'✓':''}</td>
+                      <td className="px-2 py-1.5 text-right font-medium">{peso(lt)}</td>
+                    </>}
+                  </tr>
+                ); })}
+                {lines.length===0 && <tr><td colSpan={canEdit?7:6} className="px-2 py-3 text-center text-slate-400 text-xs">No items.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold">Payment terms</label>
+              {canEdit ? (
+                <select className="input" value={paymentTerms} onChange={e=>setPaymentTerms(e.target.value)}>
+                  <option value="">— Select —</option>
+                  {PAYMENT_TERMS_OPTIONS.map(t=><option key={t} value={t}>{t}</option>)}
+                  {paymentTerms && !PAYMENT_TERMS_OPTIONS.includes(paymentTerms) && <option value={paymentTerms}>{paymentTerms} (legacy)</option>}
+                </select>
+              ) : <div className="text-sm">{paymentTerms||'—'}</div>}
+            </div>
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold">Notes (shown on the invoice)</label>
+              {canEdit ? <textarea className="input min-h-[60px]" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Bank details, instructions…" /> : <div className="text-sm whitespace-pre-line">{notes||'—'}</div>}
+            </div>
+            <div>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold">QuickBooks invoice # / URL (official BIR invoice)</label>
+              {canEdit ? <div className="flex gap-2">
+                <input className="input" value={qbNum} onChange={e=>setQbNum(e.target.value)} placeholder="QB invoice #" />
+                <input className="input" value={qbUrl} onChange={e=>setQbUrl(e.target.value)} placeholder="https://qbo.intuit.com/…" />
+              </div> : <div className="text-sm">{qbNum||'—'} {qbUrl && <a href={qbUrl} target="_blank" className="text-indigo-600 underline">open</a>}</div>}
+            </div>
+          </div>
+          <MoneyBox />
+        </div>
+
+        {msg && <div className={`text-xs ${/fail/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
+
+        <div className="flex gap-2 pt-3 border-t flex-wrap items-center">
+          {canEdit && <button disabled={busy} onClick={()=>save('draft')} className="py-2 px-3 rounded-lg border text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">💾 Save draft</button>}
+          {canEdit && <button disabled={busy} onClick={()=>save('issued')} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">📤 Save &amp; mark Issued</button>}
+          {canEdit && status!=='cancelled' && <button disabled={busy} onClick={()=>save('paid')} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Mark this invoice fully paid">✅ Mark paid</button>}
+          <button disabled={!hasLine} onClick={()=>setView('print')} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50">🖨 Preview / Print</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+        </div>
+      </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ============================================================================
+   INVOICES LIST / REPORT — Admin + Accounting see all; sales managers see only
+   their own projects' invoices (enforced by RLS). Click a row to open / print.
+   ============================================================================ */
+function InvoicesListView({ profile, profiles, invoices, salesOrders, leads, clients, reload }){
+  const [statusFilter,setStatusFilter]=useState('all');
+  const [q,setQ]=useState('');
+  const [open,setOpen]=useState(null);
+  const isManager = profile.role!=='admin' && profile.role!=='accounting';
+
+  const all = invoices||[];
+  const rows = all.filter(e=>{
+    if(statusFilter!=='all' && (e.status||'draft')!==statusFilter) return false;
+    if(q){ const s=q.toLowerCase(); if(!((e.number||'').toLowerCase().includes(s)||(e.client_name||'').toLowerCase().includes(s))) return false; }
+    return true;
+  });
+  const byStatus = k => all.filter(e=>(e.status||'draft')===k);
+  const sumBalance = arr => arr.reduce((a,e)=>a+(Number(e.balance_due)||0),0);
+  const sumTotal = arr => arr.reduce((a,e)=>a+(Number(e.total)||0),0);
+  const today = new Date().toISOString().slice(0,10);
+  const outstanding = all.filter(e=>e.status==='issued'||e.status==='partially_paid');
+  const preparerName = id => { const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+
+  const Tile = ({label,value,sub,color='slate'}) => (
+    <div className="rounded-xl border bg-white p-4">
+      <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">{label}</div>
+      <div className={`text-2xl font-bold text-${color}-700 mt-0.5`}>{value}</div>
+      {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-2xl font-bold mb-1">🧾 {isManager?'My Invoices':'Invoices'}</h1>
+      <p className="text-slate-500 text-sm mb-5">{isManager?'Invoices for your projects.':'All client invoices. Generated from Sales Orders.'} Click any row to open or print.</p>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <Tile label="Total invoices" value={all.length} sub={`${peso(sumTotal(all))} billed`} color="indigo" />
+        <Tile label="Outstanding AR" value={outstanding.length} sub={`${peso(sumBalance(outstanding))} due`} color="rose" />
+        <Tile label="Paid" value={byStatus('paid').length} sub={`${peso(sumTotal(byStatus('paid')))}`} color="emerald" />
+        <Tile label="Draft" value={byStatus('draft').length} sub="not yet issued" color="slate" />
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center mb-3">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search number / client…" className="input max-w-xs" />
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="input max-w-[170px]">
+          <option value="all">All statuses</option>
+          {INVOICE_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+        <span className="text-xs text-slate-400">{rows.length} shown</span>
+      </div>
+
+      <div className="overflow-x-auto border rounded-xl bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+            <tr>
+              <th className="text-left px-3 py-2">Number</th>
+              <th className="text-left px-3 py-2">Client</th>
+              <th className="text-left px-3 py-2">Type</th>
+              <th className="text-right px-3 py-2">Amount due</th>
+              <th className="text-right px-3 py-2">Balance</th>
+              <th className="text-center px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">Due</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(e=>{ const sm=invStatusMeta(e.status); const overdue=e.due_date && e.due_date<today && (e.status==='issued'||e.status==='partially_paid'); return (
+              <tr key={e.id} onClick={()=>setOpen(e)} className="border-t hover:bg-indigo-50/50 cursor-pointer">
+                <td className="px-3 py-2 font-mono text-xs font-semibold">{e.number}</td>
+                <td className="px-3 py-2">{e.client_name||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{invTypeLabel(e.invoice_type)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(e.amount_due)}</td>
+                <td className="px-3 py-2 text-right">{peso(e.balance_due)}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[11px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span></td>
+                <td className="px-3 py-2 text-xs">{e.due_date?fmtDate(e.due_date):'—'}{overdue && <span className="ml-1 text-[10px] text-rose-600 font-semibold">overdue</span>}</td>
+              </tr>
+            ); })}
+            {rows.length===0 && <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-400 text-sm">No invoices yet. Generate one from a Sales Order.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {open && (()=>{ const soObj=(salesOrders||[]).find(s=>s.id===open.sales_order_id) || { id:open.sales_order_id, number:open.number, amount_paid:open.payments_received, total:open.total, client_name:open.client_name }; const leadObj=(leads||[]).find(l=>l.id===open.lead_id); const clientObj=(clients||[]).find(c=>c.id===open.client_id); return <InvoiceModal profile={profile} so={soObj} lead={leadObj} client={clientObj} existing={open} onClose={()=>setOpen(null)} reload={reload} />; })()}
+    </div>
+  );
+}
+
+/* ============================================================================
    ESTIMATES LIST / REPORT — Admin + Accounting view of every estimate.
    Filter by status, search, see totals, and click any row to open / edit /
    reprint that estimate (opens the same EstimateModal on its source lead).
@@ -13937,7 +14373,7 @@ const SO_STATUSES = [
 ];
 function soMeta(k){ return SO_STATUSES.find(s=>s.key===k)||SO_STATUSES[0]; }
 
-function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccounts, clients, leads, soActivityCounts, reload, onCreateDR }){
+function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices, bankAccounts, clients, leads, soActivityCounts, reload, onCreateDR }){
   // Build DR pre-fill from an SO row. Lines come from the SO if items exist;
   // otherwise we start with one blank line so the user types what's actually
   // being delivered (partial delivery is the common case).
@@ -14160,14 +14596,17 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, bankAccou
         />
       )}
 
-      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
+      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
       {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
   );
 }
 
-function SalesOrderEditModal({ so, profile, profiles, payments, bankAccounts, clients, leads, onClose, onSaved, onPay, onVerifyPayment }){
+function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, onClose, onSaved, onPay, onVerifyPayment }){
+  const canInvoice = profile.role==='admin' || profile.role==='accounting';
+  const [invoicing,setInvoicing]=useState(null); // null | 'new' | invoice object
+  const soInvoices = (invoices||[]).filter(iv=>iv.sales_order_id===so.id);
   // Tabs inside the SO modal — 'details' (everything that used to be here) +
   // 'activity' (per-SO chat thread with @mentions). Activity is the new home
   // for any back-and-forth between Sales and Accounting about payments.
@@ -14336,6 +14775,33 @@ function SalesOrderEditModal({ so, profile, profiles, payments, bankAccounts, cl
           </div>
         )}
 
+        {/* Invoices for this SO — accounting/admin can generate; sales managers
+            who own the deal can view (RLS already filters what they receive). */}
+        <div className="border rounded-lg p-3 bg-slate-50/60">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">🧾 Invoices ({soInvoices.length})</div>
+            {canInvoice && <button onClick={()=>setInvoicing('new')} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">+ Generate invoice</button>}
+          </div>
+          {soInvoices.length===0 ? (
+            <div className="text-xs text-slate-400">No invoices yet for this order.</div>
+          ) : (
+            <div className="divide-y border rounded-lg bg-white">
+              {soInvoices.map(iv=>{ const sm=invStatusMeta(iv.status); return (
+                <button key={iv.id} onClick={()=>setInvoicing(iv)} className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-indigo-50/50">
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs font-semibold">{iv.number}</span>
+                    <span className="text-[11px] text-slate-500 ml-2">{invTypeLabel(iv.invoice_type)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-semibold">{peso(iv.amount_due)}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>
+                  </div>
+                </button>
+              ); })}
+            </div>
+          )}
+        </div>
+
         <TpLbl t="Decoration notes"><textarea className="input min-h-[40px]" value={f.decoration_notes} onChange={e=>up('decoration_notes',e.target.value)} placeholder="Embroidery / DTF / sublimation, logo placement, colors" /></TpLbl>
         <TpLbl t="Packing notes"><textarea className="input min-h-[40px]" value={f.packing_notes} onChange={e=>up('packing_notes',e.target.value)} placeholder="Folded vs hanging, polybag, hangtag, etc." /></TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
@@ -14347,6 +14813,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, bankAccounts, cl
         </div>
       </>}
       </div>
+      {invoicing && <InvoiceModal profile={profile} so={so} lead={lead} client={(clients||[]).find(c=>c.id===so.client_id)} existing={invoicing==='new'?null:invoicing} onClose={()=>setInvoicing(null)} reload={onSaved} />}
     </Modal>
   );
 }
@@ -15301,7 +15768,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
 
 
 /* ─────────── CUSTOMER LEDGER ─────────── */
-function CustomerLedgerView({ clients, salesOrders, soPayments }){
+function CustomerLedgerView({ clients, salesOrders, soPayments, invoices }){
   const [search,setSearch]=useState('');
   const [openClient,setOpenClient]=useState(null);
   // Roll up per client: how many SOs, total invoiced, total paid, balance, last activity.
@@ -15311,8 +15778,9 @@ function CustomerLedgerView({ clients, salesOrders, soPayments }){
     const totalPaid = soForClient.reduce((s,o)=>s+Number(o.amount_paid||0), 0);
     const balance = totalInvoiced - totalPaid;
     const lastDate = soForClient.map(o=>o.date).sort().reverse()[0]||null;
-    return { client: c, soCount: soForClient.length, totalInvoiced, totalPaid, balance, lastDate };
-  }).filter(r => r.soCount>0 || r.balance!==0);
+    const invCount = (invoices||[]).filter(iv => iv.client_id===c.id && iv.status!=='cancelled').length;
+    return { client: c, soCount: soForClient.length, invCount, totalInvoiced, totalPaid, balance, lastDate };
+  }).filter(r => r.soCount>0 || r.invCount>0 || r.balance!==0);
   const filtered = rows.filter(r => !search || (r.client.company||'').toLowerCase().includes(search.toLowerCase()));
   const sorted = filtered.sort((a,b)=>b.balance-a.balance);
   const totalAR = sorted.reduce((s,r)=>s+r.balance, 0);
@@ -15328,25 +15796,26 @@ function CustomerLedgerView({ clients, salesOrders, soPayments }){
         </div>
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Client</th><th className="text-right px-3 py-2">SOs</th><th className="text-right px-3 py-2">Total Invoiced</th><th className="text-right px-3 py-2">Total Paid</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Last SO</th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Client</th><th className="text-right px-3 py-2">SOs</th><th className="text-right px-3 py-2">Invoices</th><th className="text-right px-3 py-2">Total Invoiced</th><th className="text-right px-3 py-2">Total Paid</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Last SO</th><th></th></tr></thead>
         <tbody>{sorted.map(r => (
           <tr key={r.client.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpenClient(r.client)}>
             <td className="px-3 py-2 font-medium">{r.client.company}</td>
             <td className="px-3 py-2 text-right">{r.soCount}</td>
+            <td className="px-3 py-2 text-right">{r.invCount||'—'}</td>
             <td className="px-3 py-2 text-right">{peso(r.totalInvoiced)}</td>
             <td className="px-3 py-2 text-right text-emerald-700">{peso(r.totalPaid)}</td>
             <td className={`px-3 py-2 text-right font-bold ${r.balance>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(r.balance)}</td>
             <td className="px-3 py-2 text-xs">{r.lastDate?fmtDate(r.lastDate):'—'}</td>
             <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setOpenClient(r.client);}} className="text-xs text-indigo-600 hover:underline">View ledger</button></td>
           </tr>
-        ))}{sorted.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No client activity yet. SOs appear here once leads hit Closed Won.</td></tr>}</tbody>
+        ))}{sorted.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No client activity yet. SOs appear here once leads hit Closed Won.</td></tr>}</tbody>
       </table></div></div>
-      {openClient && <CustomerLedgerDetailModal client={openClient} sos={salesOrders.filter(s=>s.client_id===openClient.id)} payments={soPayments.filter(p=>salesOrders.find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} onClose={()=>setOpenClient(null)} />}
+      {openClient && <CustomerLedgerDetailModal client={openClient} sos={salesOrders.filter(s=>s.client_id===openClient.id)} payments={soPayments.filter(p=>salesOrders.find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} onClose={()=>setOpenClient(null)} />}
     </div>
   );
 }
 
-function CustomerLedgerDetailModal({ client, sos, payments, onClose }){
+function CustomerLedgerDetailModal({ client, sos, payments, invoices, onClose }){
   // Build a unified ledger: every SO (debit) and every payment (credit) sorted by date.
   const ledger = [];
   sos.filter(s=>s.status!=='cancelled').forEach(s => ledger.push({ date:s.date, type:'so', ref:s.number, debit:Number(s.total||0), credit:0, raw:s }));
@@ -15377,6 +15846,28 @@ function CustomerLedgerDetailModal({ client, sos, payments, onClose }){
             </tr>
           ))}{withRunning.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-6">No activity for this client yet.</td></tr>}</tbody>
         </table></div></div>
+        {/* Invoices issued against this client's projects (informational — the
+            running balance above stays driven by SOs + payments to avoid
+            double-counting). */}
+        {(invoices||[]).length>0 && (
+          <div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-1.5">🧾 Invoices ({invoices.length})</div>
+            <div className="bg-white border rounded-lg overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Number</th><th className="text-left px-3 py-2">SO</th><th className="text-left px-3 py-2">Type</th><th className="text-right px-3 py-2">Amount due</th><th className="text-right px-3 py-2">Balance</th><th className="text-center px-3 py-2">Status</th><th className="text-left px-3 py-2">Due</th></tr></thead>
+              <tbody>{invoices.map(iv=>{ const sm=invStatusMeta(iv.status); const so=(sos||[]).find(s=>s.id===iv.sales_order_id); return (
+                <tr key={iv.id} className="border-t">
+                  <td className="px-3 py-2 font-mono text-xs font-semibold">{iv.number}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{so?.number||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{invTypeLabel(iv.invoice_type)}</td>
+                  <td className="px-3 py-2 text-right">{peso(iv.amount_due)}</td>
+                  <td className="px-3 py-2 text-right">{peso(iv.balance_due)}</td>
+                  <td className="px-3 py-2 text-center"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span></td>
+                  <td className="px-3 py-2 text-xs">{iv.due_date?fmtDate(iv.due_date):'—'}</td>
+                </tr>
+              ); })}</tbody>
+            </table></div></div>
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -21520,6 +22011,7 @@ function App(){
   // All loaded in loadAll() so any view can use them. Sprint 2 adds expenses + budgets + CAs.
   const [salesOrders,setSalesOrders]=useState([]); const [soPayments,setSoPayments]=useState([]);
   const [estimates,setEstimates]=useState([]); // admin/accounting-only; loaded separately
+  const [invoices,setInvoices]=useState([]);   // admin/accounting all, managers own (RLS); loaded separately
   const [bankAccounts,setBankAccounts]=useState([]); const [bankTransactions,setBankTransactions]=useState([]);
   const [rfps,setRfps]=useState([]); const [vouchers,setVouchers]=useState([]);
   const [budgetRequests,setBudgetRequests]=useState([]);
@@ -21747,6 +22239,8 @@ function App(){
     // Estimates — admin/accounting only (enforced by RLS). Separate fetch so it
     // doesn't bloat the main Promise.all; graceful empty for other roles.
     try { const est = await sb.from('estimates').select('*').order('created_at',{ascending:false}); setEstimates(est && !est.error ? (est.data||[]) : []); } catch(_){ setEstimates([]); }
+    // Invoices — RLS returns all for admin/accounting, own-project rows for managers, empty for others.
+    try { const inv = await sb.from('invoices').select('*').order('created_at',{ascending:false}); setInvoices(inv && !inv.error ? (inv.data||[]) : []); } catch(_){ setInvoices([]); }
     setSoPayments(sop && !sop.error ? (sop.data||[]) : []);
     setBankAccounts(ba && !ba.error ? (ba.data||[]) : []);
     setBankTransactions(bt && !bt.error ? (bt.data||[]) : []);
@@ -22205,6 +22699,7 @@ function App(){
     ['payment-calendar','Payment Calendar','🗓'],
     ['estimates','Estimates','🧾'],
     ['sales-orders','Sales Orders','📜'],
+    ['invoices','Invoices','🧾'],
     ['ledger','Customer Ledger','👥'],
     ['commissions','Commissions','💰'],
     ['rfps','Request for Payment','📝'],
@@ -22224,6 +22719,7 @@ function App(){
   ] };
   const FINANCE_SALES = { group:'Finance', items:[
     ['sales-orders','Sales Orders','📜'],
+    ['invoices','My Invoices','🧾'],
     ['ledger','Customer Ledger','👥'],
     ['commissions','Commissions','💰'],
     ['budgets','Budget Requests','💰'],
@@ -22484,9 +22980,10 @@ function App(){
         {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
-        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} bankAccounts={bankAccounts} clients={clients} leads={leads} soActivityCounts={soActivityCounts} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} soActivityCounts={soActivityCounts} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
-        {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} />}
+        {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
+        {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
