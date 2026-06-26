@@ -1554,8 +1554,13 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
   // ---------- PRINT VIEW ----------
   if(view==='print'){
     const printableLines = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0);
-    return (
-      <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
+    // Portal to <body> so the preview is a SIBLING of the lead modal — not a
+    // child of it. The print CSS hides .steeze-modal-backdrop whenever a
+    // .tp-root is present; if this view lived inside the modal it would be
+    // hidden too (blank preview / nothing prints). This mirrors how the
+    // PO / PR / techpack print previews mount at the top level.
+    return ReactDOM.createPortal(
+      <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
         <PortraitPagePrintStyle />
         <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
           <div className="min-w-0">
@@ -1568,7 +1573,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
           </div>
         </div>
         <div className="tp-print py-6">
-          <div className="est-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
+          <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
             <DocPrintHeader title="ESTIMATE / QUOTATION" rightBlocks={
               <div>
                 <div><strong>No.:</strong> {number}</div>
@@ -1640,7 +1645,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
             </div>
           </div>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   }
 
