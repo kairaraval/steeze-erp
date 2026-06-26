@@ -33,12 +33,15 @@
   <link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" />
 
   <script src="https://cdn.tailwindcss.com"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- defer = download in parallel but don't block the page from rendering the
+       splash; they still execute in order BEFORE the deferred /app.js, so React
+       / ReactDOM / Supabase / confetti globals are ready when the app runs. -->
+  <script defer crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script defer crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <!-- Confetti for "Closed Won" celebrations. ~10KB, zero deps. Exposes
        window.confetti(opts). https://github.com/catdad/canvas-confetti -->
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
   <!-- OneSignal Web SDK for real push notifications (Layer 2). Init runs as
        soon as the page loads; users still need to grant permission via the
        Enable notifications button before they'll start receiving pushes. The
