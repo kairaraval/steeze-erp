@@ -21919,6 +21919,18 @@ function App(){
 
   async function loadAll(){
     if(!session) return; setLoadErr(''); const me=session.user.id;
+    // PERF: render the app shell as soon as we know who the user is. Without
+    // this, the app sits on "Loading your workspace…" until ALL ~50 queries
+    // below resolve (several seconds), because profile is only set after the
+    // whole Promise.all. This fires the profile fetch on its own so the gate
+    // clears in ~150ms; the rest of the data then fills in behind it.
+    if(!profile){ sb.from('profiles').select('*').eq('id',me).single().then(r=>{ if(r.data) setProfile(r.data); }).catch(()=>{}); }
+    // Also stream the essentials the default Pipeline / Dashboard need so cards
+    // show in well under a second instead of after the full Promise.all. These
+    // are re-fetched (identically) in the batch below — harmless idempotent set.
+    sb.from('profiles').select('*').then(r=>{ if(r.data) setProfiles(r.data); }).catch(()=>{});
+    sb.from('clients').select('*').order('company').then(r=>{ if(r.data) setClients(r.data); }).catch(()=>{});
+    sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
