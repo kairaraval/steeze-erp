@@ -16455,6 +16455,25 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
 //   • RFPs at pending_admin (Finance has approved, awaiting Admin sign-off)
 //   • Budget requests at pending (Sprint 2 — already schema-ready)
 // New approval types can be added by extending the sections array below.
+// Mobile card row for the For-Approval lists. On phones each table is hidden
+// (hidden md:table) and these stacked, tap-friendly cards show instead, with
+// the same action buttons so admins can approve straight from their phone.
+function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', children }){
+  return (
+    <div className="p-3">
+      <div className="flex justify-between items-start gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-sm text-slate-900 truncate">{title}</div>
+          {sub && <div className="text-xs text-slate-600 truncate">{sub}</div>}
+          {meta && <div className="text-[11px] text-slate-400 mt-0.5">{meta}</div>}
+        </div>
+        {amount!=null && <div className={`font-bold text-sm shrink-0 ${amountClass}`}>{amount}</div>}
+      </div>
+      {children && <div className="mt-2 flex gap-2">{children}</div>}
+    </div>
+  );
+}
+
 function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
@@ -16505,7 +16524,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
         {pendingRfps.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No RFPs waiting on your approval.</div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
               <th className="text-left px-3 py-2">RFP#</th>
               <th className="text-left px-3 py-2">Submitted</th>
@@ -16533,6 +16552,17 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
             })}</tbody>
           </table>
         )}
+        {pendingRfps.length>0 && (
+          <div className="md:hidden divide-y border-t">{pendingRfps.map(r=>{
+            const po=orders.find(o=>o.id===r.po_id);
+            const waitingDays = r.finance_approved_at ? Math.floor((Date.now() - new Date(r.finance_approved_at).getTime())/86400000) : 0;
+            return (
+              <ApprovalMRow key={r.id} title={r.number} sub={r.supplier_name||'—'} meta={`PO ${po?po.number:'—'} · ${fmtDate(r.date)}${waitingDays>=3?` · ${waitingDays}d waiting`:''}`} amount={peso(r.amount)}>
+                <button onClick={()=>setOpenRfp(r)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">Review &amp; approve →</button>
+              </ApprovalMRow>
+            );
+          })}</div>
+        )}
       </div>
 
       {/* Budget Requests — Sprint 2 will surface these */}
@@ -16544,7 +16574,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
         {pendingBudgets.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No budget requests waiting. Sprint 2 adds the submission UI for departments.</div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
               <th className="text-left px-3 py-2">Date</th>
               <th className="text-left px-3 py-2">Department</th>
@@ -16565,6 +16595,13 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
             ))}</tbody>
           </table>
         )}
+        {pendingBudgets.length>0 && (
+          <div className="md:hidden divide-y border-t">{pendingBudgets.map(b=>(
+            <ApprovalMRow key={b.id} title={b.department||'—'} sub={b.purpose||'—'} meta={`${fmtDate(b.date)}${b.date_needed?` · needed ${fmtDate(b.date_needed)}`:''}`} amount={peso(b.amount)} amountClass="text-slate-900">
+              <button onClick={()=>setOpenBudget(b)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">Review &amp; approve →</button>
+            </ApprovalMRow>
+          ))}</div>
+        )}
       </div>
 
       {/* Vouchers (Cash / Check / Bank Transfer) routed to Admin for sign-off.
@@ -16578,7 +16615,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
         {pendingVouchers.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No vouchers waiting on your approval.</div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
               <th className="text-left px-3 py-2">Voucher#</th>
               <th className="text-left px-3 py-2">Date</th>
@@ -16611,6 +16648,18 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
             })}</tbody>
           </table>
         )}
+        {pendingVouchers.length>0 && (
+          <div className="md:hidden divide-y border-t">{pendingVouchers.map(v=>{
+            const bank = (bankAccounts||[]).find(b=> b.id === v.bank_id);
+            const typeLabel = v.type==='check'?'Check Voucher':v.type==='bank_transfer'?'Bank Transfer':'Cash Voucher';
+            return (
+              <ApprovalMRow key={v.id} title={v.payee} sub={`${v.number} · ${typeLabel}`} meta={`${bank?bank.bank_name:'—'} · ${fmtDate(v.date)}`} amount={peso(v.amount)}>
+                <button onClick={()=>setOpenVoucher(v)} className="flex-1 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-semibold">Review</button>
+                <button onClick={()=>approveVoucher(v)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">✍ Approve &amp; Sign</button>
+              </ApprovalMRow>
+            );
+          })}</div>
+        )}
       </div>
 
       {/* PENDING PAYMENTS — Sales → Accounting verification queue.
@@ -16626,7 +16675,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
           {pendingPayments.length===0 ? (
             <div className="px-4 py-6 text-center text-slate-400 text-sm">No pending payments — nothing waiting on you.</div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="hidden md:table w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
                 <th className="text-left px-3 py-2">Date</th>
                 <th className="text-left px-3 py-2">SO# / Client</th>
@@ -16661,6 +16710,19 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
                   );
                 })}</tbody>
             </table>
+          )}
+          {pendingPayments.length>0 && (
+            <div className="md:hidden divide-y border-t">{pendingPayments
+              .sort((a,b) => String(a.date||'').localeCompare(String(b.date||'')))
+              .map(p => {
+                const so = (salesOrders||[]).find(s => s.id === p.sales_order_id);
+                return (
+                  <ApprovalMRow key={p.id} title={so?.number||'—'} sub={so?.client_name||'—'} meta={`${payMethodLabel(p.method)} · ${fmtDate(p.date)}${p.reference?` · ${p.reference}`:''}`} amount={peso(p.amount)} amountClass="text-emerald-700">
+                    {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" className="py-2 px-3 rounded-lg bg-slate-100 text-sm" title="Proof of payment">📷</a>}
+                    <button onClick={()=>setVerifyingPayment({ payment: p, so })} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">✓ Verify →</button>
+                  </ApprovalMRow>
+                );
+              })}</div>
           )}
         </div>
       )}
