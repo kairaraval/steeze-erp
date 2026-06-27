@@ -4601,15 +4601,14 @@ function SamplingJobForm({ existing, leads, onClose, onSaved }){
 /* ----------------------- Inbox ----------------------- */
 function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, salesOrders, mentions, onOpen, onGoToTask, reload }){
   const [filter,setFilter]=useState('all');
-  const [showArchived,setShowArchived]=useState(false);
   const [busyIds,setBusyIds]=useState(new Set());
-  // archived_by holds the profile ids of users who have cleared (archived)
-  // a mention from their personal inbox. Filter it out by default so the
-  // inbox stays clean; "Show archived" toggle reveals them again.
+  // archived_by holds the profile ids of users who have CLEARED a conversation
+  // from their personal inbox. Clearing is permanent — there's no archive view,
+  // the cleared row simply never shows in this user's inbox again. The
+  // underlying comment stays on the lead / job for everyone else.
   const isArchived = (m) => (m.archived_by||[]).includes(profile.id);
-  const nonArchivedMentions = showArchived ? mentions : mentions.filter(m => !isArchived(m));
+  const nonArchivedMentions = mentions.filter(m => !isArchived(m));
   const unread = nonArchivedMentions.filter(m=>!(m.read_by||[]).includes(profile.id));
-  const archivedCount = mentions.filter(isArchived).length;
   const rawVisible = filter==='unread'?unread:nonArchivedMentions;
   // Collapse multiple mentions in the same lead / job into a single inbox row
   // so the inbox doesn't get cluttered when a lead has a long conversation.
@@ -4671,10 +4670,10 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     const title = j?.item || 'a job';
     return { company, title, label: j ? (company ? `${company} · ${title}` : title) : 'a job', tag, icon, color };
   }
-  // Clear = Archive. Adds the user to both `archived_by` (to hide the
-  // mention from their inbox) and `read_by` (so unread counts elsewhere
-  // also clear). The thread itself stays intact — clearing just removes the
-  // notification from THIS user's inbox.
+  // Clear = remove from THIS user's inbox for good. Adds the user to
+  // `archived_by` (so it never shows in their inbox again) and `read_by` (so
+  // unread counts elsewhere also clear). There's no archive/undo. The comment
+  // itself stays on the lead / job for everyone else.
   async function clearOne(m){
     if(busyIds.has(m.id)) return;
     setBusyIds(p=>{ const n=new Set(p); n.add(m.id); return n; });
@@ -4691,17 +4690,6 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     setBusyIds(p=>{ const n=new Set(p); n.delete(m.id); return n; });
     reload && reload();
   }
-  // Re-show an archived notification (used when "Show archived" is on).
-  async function unarchiveOne(m){
-    if(busyIds.has(m.id)) return;
-    setBusyIds(p=>{ const n=new Set(p); n.add(m.id); return n; });
-    const table = inboxTableFor(m.source);
-    const nextArchived = (m.archived_by||[]).filter(id => id !== profile.id);
-    const { error } = await sb.from(table).update({ archived_by: nextArchived }).eq('id', m.id);
-    setBusyIds(p=>{ const n=new Set(p); n.delete(m.id); return n; });
-    if(error){ alert(error.message); return; }
-    reload && reload();
-  }
   async function clearAll(){
     // Archive every underlying mention (not just the deduped visible rows) so
     // older mentions don't reappear after dismiss. We operate on rawVisible
@@ -4709,7 +4697,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     const toClear = rawVisible.filter(m=>!(m.archived_by||[]).includes(profile.id));
     if(toClear.length===0) return;
     const threadCount = visible.length;
-    if(!confirm(`Clear (archive) ${threadCount} thread${threadCount===1?'':'s'} (${toClear.length} mention${toClear.length===1?'':'s'} total)?`)) return;
+    if(!confirm(`Clear ${threadCount} conversation${threadCount===1?'':'s'} from your inbox? This removes them from your inbox for good — the conversations themselves stay on the leads / jobs.`)) return;
     await Promise.all(toClear.map(m=>{
       const table = inboxTableFor(m.source);
       const nextRead = Array.from(new Set([...(m.read_by||[]), profile.id]));
@@ -4757,11 +4745,6 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
             <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({mentions.length})</button>
             <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
           </div>
-          {archivedCount > 0 && (
-            <button onClick={()=>setShowArchived(s=>!s)} className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border ${showArchived?'border-indigo-300 bg-indigo-50 text-indigo-700':'border-slate-300 text-slate-700 hover:bg-slate-50'} font-medium`} title="Toggle archived notifications">
-              <span>📂</span> {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
-            </button>
-          )}
           {unread.length>0 && (
             <button onClick={clearAll} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium">
               <span className="text-emerald-600">✓</span> Clear all
@@ -4829,25 +4812,14 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                     {/* Hover-reveal action button:
                           - Clear (archives) for any non-archived notification
                           - Unarchive for ones currently shown via "Show archived" */}
-                    {!isArchived(m) ? (
-                      <button
-                        onClick={()=>clearOne(m)}
-                        disabled={busy}
-                        title="Clear (archive) — removes from your inbox"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pink-600 text-white text-xs font-semibold hover:bg-pink-700 shadow disabled:opacity-50"
-                      >
-                        <span>✓</span> {busy?'Clearing…':'Clear'}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={()=>unarchiveOne(m)}
-                        disabled={busy}
-                        title="Bring back to inbox"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-600 text-white text-xs font-semibold hover:bg-slate-700 shadow disabled:opacity-50"
-                      >
-                        <span>↩</span> {busy?'Restoring…':'Unarchive'}
-                      </button>
-                    )}
+                    <button
+                      onClick={()=>clearOne(m)}
+                      disabled={busy}
+                      title="Clear — removes this conversation from your inbox for good"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pink-600 text-white text-xs font-semibold hover:bg-pink-700 shadow disabled:opacity-50"
+                    >
+                      <span>✓</span> {busy?'Clearing…':'Clear'}
+                    </button>
                   </div>
                 );
               })}
