@@ -21831,7 +21831,17 @@ function App(){
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
   // fallback view by the useEffect below — so this only impacts Admin.
-  const [loadErr,setLoadErr]=useState(''); const [view,setView]=useState('pipeline');
+  const [loadErr,setLoadErr]=useState('');
+  const [view,setView]=useState(()=>{
+    // Deep-link: push notifications open "/?view=inbox" so a tap lands on the
+    // Inbox instead of the default landing page. Clean the URL afterward so a
+    // later manual refresh doesn't keep forcing that view.
+    try{
+      const v = new URLSearchParams(window.location.search).get('view');
+      if(v){ try{ window.history.replaceState({}, '', window.location.pathname); }catch(_){} return v; }
+    }catch(_){}
+    return 'pipeline';
+  });
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
@@ -22127,6 +22137,9 @@ function App(){
         try { if(profile && profile.id) await OneSignal.login(String(profile.id)); } catch(_){}
         try { await OneSignal.Notifications.requestPermission(); } catch(_){}
         try { await OneSignal.User.PushSubscription.optIn(); } catch(_){}
+        // If a push is tapped while the app is already open (foreground), jump
+        // straight to the Inbox. Guard so we only register the listener once.
+        try { if(!window.__steezeNotifClick){ window.__steezeNotifClick = true; OneSignal.Notifications.addEventListener('click', ()=>{ setView('inbox'); }); } } catch(_){}
       });
     } catch(_){}
     try { new Notification('Steeze OS notifications on', { body:'You\'ll see a ping when someone @mentions you.', icon:'/icon-192.png' }); } catch(_){}
