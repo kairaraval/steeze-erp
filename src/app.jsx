@@ -21936,8 +21936,8 @@ function App(){
       sb.from('profiles').select('*'),
       sb.from('clients').select('*').order('company'),
       sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
-      sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }),
-      sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }),
+      sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
+      sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       sb.from('lead_activity').select('lead_id').eq('type','comment'),
       sb.from('dept_job_activity').select('job_id,job_type').eq('type','comment'),
       sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
@@ -22001,7 +22001,7 @@ function App(){
       // Sales-order activity: mentions for me (Inbox feed) + all comments
       // (so the per-SO comment count badge can render in the SO modal).
       // Graceful empty fallback if SQL hasn't been run yet.
-      sb.from('sales_order_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }),
+      sb.from('sales_order_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       sb.from('sales_order_activity').select('sales_order_id').eq('type','comment'),
       // Sales commissions ledger (graceful empty if SQL not yet run).
       sb.from('sales_commissions').select('*').order('earned_at',{ ascending:false }),
