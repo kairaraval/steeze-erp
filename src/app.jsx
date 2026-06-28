@@ -3927,6 +3927,19 @@ const PLAN_STAGES = [
 ];
 const planStageMeta = (k) => PLAN_STAGES.find(s=>s.key===k) || PLAN_STAGES[0];
 
+// --- Gantt date helpers (operate on 'YYYY-MM-DD' strings; ISO sorts chronologically) ---
+function ganttDays(a,b){ if(!a||!b) return 0; return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
+function ganttAddDays(iso,n){ const d=new Date((iso||new Date().toISOString().slice(0,10))+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function ganttMin(arr){ return arr.filter(Boolean).slice().sort()[0]||null; }
+function ganttMax(arr){ const f=arr.filter(Boolean).slice().sort(); return f.length?f[f.length-1]:null; }
+// Tailwind status pill class (e.g. 'bg-purple-100 text-purple-700') -> a solid
+// bar color class for the Gantt. Falls back to indigo.
+function ganttBarColor(statusKey){
+  const meta = (PRODUCTION_STATUSES||[]).find(s=>s.key===statusKey);
+  const m = meta && /bg-([a-z]+)-/.exec(meta.color||'');
+  return m ? `bg-${m[1]}-500` : 'bg-indigo-500';
+}
+
 function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload }){
   const [entries,setEntries]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -3940,9 +3953,12 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [notes,setNotes]=useState('');
   const [entryType,setEntryType]=useState('actual'); // 'plan' = forecast, 'actual' = real output
   const [stageDue,setStageDue]=useState(()=> (job.stage_plan && typeof job.stage_plan==='object') ? {...job.stage_plan} : {});
+  const [schedule,setSchedule]=useState(()=> (job.status_schedule && typeof job.status_schedule==='object') ? {...job.status_schedule} : {});
+  const [showGantt,setShowGantt]=useState(false);
 
   const total = Number(job.quantity)||0;
   const todayISO = new Date().toISOString().slice(0,10);
+  const clampPct = (n)=> Math.max(0, Math.min(100, n));
   const canEdit = true; // production floor logs output; RLS allows any signed-in user
 
   async function load(){
@@ -3964,6 +3980,21 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     try{ await sb.from('production_jobs').update({ stage_plan: next }).eq('id', job.id); reload&&reload(); }
     catch(e){ setMsg('Could not save stage deadline: '+(e.message||e)); }
   }
+  async function saveSchedule(stKey, field, val){
+    const next = {...schedule}; const cur = {...(next[stKey]||{})};
+    if(val) cur[field]=val; else delete cur[field];
+    if(!cur.start && !cur.end) delete next[stKey]; else next[stKey]=cur;
+    setSchedule(next);
+    try{ await sb.from('production_jobs').update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
+    catch(e){ setMsg('Could not save schedule: '+(e.message||e)); }
+  }
+  // Gantt range across all plotted statuses (+ due date + today).
+  const schedStarts = Object.values(schedule).map(v=>v&&v.start).filter(Boolean);
+  const schedEnds   = Object.values(schedule).map(v=>v&&v.end).filter(Boolean);
+  const ganttStart  = ganttMin([...schedStarts, todayISO]) || todayISO;
+  const ganttEnd    = ganttMax([...schedEnds, job.due_date, todayISO]) || ganttAddDays(ganttStart, 14);
+  const ganttTotal  = Math.max(1, ganttDays(ganttStart, ganttEnd));
+  const daysToDue   = job.due_date ? ganttDays(todayISO, job.due_date) : null;
   const subconName = (id) => (subcons||[]).find(s=>s.id===id)?.name || 'Subcon';
   const who = (id) => { const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):''; };
 
@@ -4035,6 +4066,50 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           ); })}
         </div>
 
+        {/* Forecast Gantt — plot each production status's start/end vs the due date */}
+        <div className="border rounded-lg">
+          <button onClick={()=>setShowGantt(v=>!v)} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50">
+            <span className="text-sm font-semibold">📅 Forecast timeline (Gantt)</span>
+            <span className="text-xs text-slate-500">{daysToDue!=null ? (daysToDue>=0?`${daysToDue} day${daysToDue===1?'':'s'} to due`:`${Math.abs(daysToDue)}d overdue`) : 'no due date'} · {showGantt?'Hide':'Plot stages'}</span>
+          </button>
+          {showGantt && (
+            <div className="p-3 border-t overflow-x-auto">
+              <div className="min-w-[640px]">
+                <div className="flex items-center text-[10px] text-slate-400 mb-1">
+                  <div className="w-44 shrink-0">Status</div>
+                  <div className="w-[17rem] shrink-0">Start · End</div>
+                  <div className="relative flex-1 h-4">
+                    <span className="absolute left-0">{fmtDate(ganttStart)}</span>
+                    <span className="absolute right-0">{fmtDate(ganttEnd)}</span>
+                    {job.due_date && <span className="absolute -top-0.5 text-rose-500 font-semibold" style={{left:clampPct(ganttDays(ganttStart,job.due_date)/ganttTotal*100)+'%'}} title="Due date">▼due</span>}
+                  </div>
+                </div>
+                {PRODUCTION_STATUSES.map(st=>{
+                  const v = schedule[st.key]||{};
+                  const has = v.start && v.end;
+                  const left = has ? clampPct(ganttDays(ganttStart, v.start)/ganttTotal*100) : 0;
+                  const width = has ? Math.max(1.5, (ganttDays(v.start, v.end)+1)/ganttTotal*100) : 0;
+                  const isCurrent = job.status===st.key;
+                  return (
+                    <div key={st.key} className={`flex items-center gap-2 py-0.5 ${isCurrent?'bg-amber-50 rounded':''}`}>
+                      <div className="w-44 shrink-0 text-[11px] truncate" title={st.label}>{isCurrent?'▶ ':''}{st.label}</div>
+                      <div className="w-[17rem] shrink-0 flex gap-1">
+                        <input type="date" value={v.start||''} onChange={e=>saveSchedule(st.key,'start',e.target.value)} className="text-[10px] px-1 py-0.5 rounded border border-slate-300 flex-1" />
+                        <input type="date" value={v.end||''} onChange={e=>saveSchedule(st.key,'end',e.target.value)} className="text-[10px] px-1 py-0.5 rounded border border-slate-300 flex-1" />
+                      </div>
+                      <div className="relative flex-1 h-4 bg-slate-100 rounded">
+                        {has && <div className={`absolute top-0 h-4 rounded ${ganttBarColor(st.key)}`} style={{left:left+'%', width:width+'%'}} title={`${fmtDate(v.start)} → ${fmtDate(v.end)}`}></div>}
+                        <div className="absolute top-0 h-4 w-px bg-rose-400" style={{left:clampPct(ganttDays(ganttStart,todayISO)/ganttTotal*100)+'%'}} title="Today"></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="text-[10px] text-slate-400 mt-2">Red line = today. Plot start &amp; end per status; bars show how the plan fits before the due date.</div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Log daily output */}
         {canEdit && (
           <div className="border rounded-lg p-3 bg-slate-50/60">
@@ -4100,6 +4175,95 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ============================================================================
+   PRODUCTION TIMELINE — all-projects Gantt overview for the supervisor. Each
+   active job is a bar from its (earliest planned) start to its due date, on a
+   shared date axis, so overlapping deadlines and at-risk projects are obvious.
+   Click any project to open its planning board.
+   ============================================================================ */
+function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reload }){
+  const [planning,setPlanning]=useState(null);
+  const [showDone,setShowDone]=useState(false);
+  const todayISO = new Date().toISOString().slice(0,10);
+  const clampPct = (n)=> Math.max(0, Math.min(100, n));
+  const active = (jobs||[]).filter(j=> showDone ? true : !PRODUCTION_DONE.includes(j.status));
+  function spanOf(j){
+    const sched = (j.status_schedule && typeof j.status_schedule==='object') ? j.status_schedule : {};
+    const starts = Object.values(sched).map(v=>v&&v.start).filter(Boolean);
+    const ends   = Object.values(sched).map(v=>v&&v.end).filter(Boolean);
+    const created = j.created_at ? String(j.created_at).slice(0,10) : null;
+    const start = ganttMin([...starts, created, todayISO]) || todayISO;
+    const end   = ganttMax([...ends, j.due_date]) || ganttAddDays(start, 7);
+    return { start, end };
+  }
+  const rows = active.map(j=>({ job:j, ...spanOf(j) })).sort((a,b)=> String(a.end||'').localeCompare(String(b.end||'')));
+  const rangeStart = ganttMin([...rows.map(r=>r.start), todayISO]) || todayISO;
+  const rangeEnd   = ganttMax([...rows.map(r=>r.end), ganttAddDays(todayISO,14)]) || ganttAddDays(rangeStart,30);
+  const totalDays  = Math.max(1, ganttDays(rangeStart, rangeEnd));
+  const ticks = []; for(let d=0; d<=totalDays; d+=7){ ticks.push(ganttAddDays(rangeStart, d)); }
+  function urgency(j){
+    if(PRODUCTION_DONE.includes(j.status)) return 'bg-emerald-500';
+    if(j.due_date && j.due_date<todayISO) return 'bg-rose-500';
+    if(j.due_date && ganttDays(todayISO,j.due_date)<=7) return 'bg-amber-500';
+    return 'bg-indigo-500';
+  }
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">🗓 Production Timeline</h1>
+          <p className="text-slate-500 text-sm">{rows.length} {showDone?'':'active '}project{rows.length===1?'':'s'} · {fmtDate(rangeStart)} → {fmtDate(rangeEnd)}. Tap a project to open its plan.</p>
+        </div>
+        <label className="text-xs flex items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} /> Show delivered</label>
+      </div>
+      {rows.length===0 ? (
+        <div className="text-center py-16 border rounded-2xl border-dashed bg-white text-slate-400">No active production projects.</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-x-auto">
+          <div className="min-w-[820px]">
+            <div className="flex items-stretch border-b bg-slate-50">
+              <div className="w-60 shrink-0 px-3 py-2 text-[10px] uppercase text-slate-400 font-semibold">Project</div>
+              <div className="relative flex-1 h-7">
+                {ticks.map((t,i)=>(<span key={i} className="absolute top-1.5 text-[9px] text-slate-400 -translate-x-1/2" style={{left:clampPct(ganttDays(rangeStart,t)/totalDays*100)+'%'}}>{fmtDate(t)}</span>))}
+                <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}} title="Today"></div>
+              </div>
+            </div>
+            {rows.map(({job:j,start,end})=>{
+              const left = clampPct(ganttDays(rangeStart,start)/totalDays*100);
+              const width = Math.max(1.5, (ganttDays(start,end)+1)/totalDays*100);
+              const dtd = j.due_date ? ganttDays(todayISO,j.due_date) : null;
+              const meta = PRODUCTION_STATUSES.find(s=>s.key===j.status);
+              return (
+                <div key={j.id} onClick={()=>setPlanning(j)} className="flex items-stretch border-b hover:bg-indigo-50/40 cursor-pointer">
+                  <div className="w-60 shrink-0 px-3 py-2 min-w-0">
+                    <div className="text-xs font-semibold truncate">{j.item||'—'}</div>
+                    <div className="text-[10px] text-slate-500 truncate">{j.client_name||'—'} · {(Number(j.quantity)||0).toLocaleString()} pcs</div>
+                    <div className="text-[10px] text-slate-400 truncate">{meta?meta.label:j.status} · {j.due_date?(dtd>=0?`${dtd}d to due`:`${Math.abs(dtd)}d overdue`):'no due'}</div>
+                  </div>
+                  <div className="relative flex-1 h-12">
+                    <div className={`absolute top-3 h-6 rounded ${urgency(j)} opacity-90 flex items-center px-2 overflow-hidden`} style={{left:left+'%', width:width+'%'}} title={`${fmtDate(start)} → ${fmtDate(end)}`}>
+                      <span className="text-[9px] text-white font-semibold truncate">{j.number||''}</span>
+                    </div>
+                    <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 mt-3 text-[10px] text-slate-500">
+        <span><span className="inline-block w-3 h-3 rounded bg-rose-500 align-middle mr-1"></span>Overdue</span>
+        <span><span className="inline-block w-3 h-3 rounded bg-amber-500 align-middle mr-1"></span>Due ≤7 days</span>
+        <span><span className="inline-block w-3 h-3 rounded bg-indigo-500 align-middle mr-1"></span>On track</span>
+        <span><span className="inline-block w-3 h-3 rounded bg-emerald-500 align-middle mr-1"></span>Delivered</span>
+        <span className="ml-2">Red line = today</span>
+      </div>
+      {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
+    </div>
   );
 }
 
@@ -22790,7 +22954,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Monitoring','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Monitoring','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -22802,7 +22966,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -22811,7 +22975,7 @@ function App(){
     // Purchasing team — Production + Operations + Purchasing + Logistics + RFP visibility + inbox.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'], ['subcon','Subcon Monitoring','🧶'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_PURCHASING,
@@ -22836,7 +23000,7 @@ function App(){
     // coming down to the floor.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -22848,7 +23012,7 @@ function App(){
     // (for setting up their signature on techpack rows and other docs).
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isAssistant){
@@ -22856,7 +23020,7 @@ function App(){
     NAV = [
       { items: [ ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -22866,7 +23030,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -22878,7 +23042,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'], ['subcon','Subcon Monitoring','🧶'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_FULL,
@@ -22988,6 +23152,7 @@ function App(){
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
+        {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
