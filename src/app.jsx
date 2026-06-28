@@ -3914,7 +3914,167 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
   );
 }
 
-function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack, onCreateDR }){
+/* ============================================================================
+   PRODUCTION PLANNING — daily output tracker for a production job. Opened by
+   clicking a job's name on the Production Board. Tracks output per stage
+   (Printing -> Large-format pressing -> Sewing in-house/subcon) against the
+   job's total quantity, replacing the old Google Sheet.
+   ============================================================================ */
+const PLAN_STAGES = [
+  { key:'printing', label:'Printing',               color:'bg-purple-100 text-purple-700', bar:'bg-purple-500' },
+  { key:'pressing', label:'Large-format Pressing',  color:'bg-orange-100 text-orange-700', bar:'bg-orange-500' },
+  { key:'sewing',   label:'Sewing',                 color:'bg-indigo-100 text-indigo-700', bar:'bg-indigo-500' },
+];
+const planStageMeta = (k) => PLAN_STAGES.find(s=>s.key===k) || PLAN_STAGES[0];
+
+function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload }){
+  const [entries,setEntries]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [stage,setStage]=useState('printing');
+  const [sewingMode,setSewingMode]=useState('inhouse');
+  const [subconId,setSubconId]=useState('');
+  const [qty,setQty]=useState('');
+  const [notes,setNotes]=useState('');
+
+  const total = Number(job.quantity)||0;
+  const canEdit = true; // production floor logs output; RLS allows any signed-in user
+
+  async function load(){
+    setLoading(true);
+    const { data } = await sb.from('production_plan_entries').select('*').eq('production_job_id', job.id).order('date',{ ascending:true }).order('created_at',{ ascending:true });
+    setEntries(data||[]);
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[job.id]);
+
+  const sumStage = (k) => entries.filter(e=>e.stage===k).reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sewInhouse = entries.filter(e=>e.stage==='sewing'&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const subconName = (id) => (subcons||[]).find(s=>s.id===id)?.name || 'Subcon';
+  const who = (id) => { const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):''; };
+
+  async function addEntry(){
+    const q = Number(qty)||0;
+    if(q<=0){ setMsg('Enter a quantity greater than 0.'); return; }
+    if(stage==='sewing' && sewingMode==='subcon' && !subconId){ setMsg('Pick which subcon did this sewing.'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      production_job_id: job.id, date: date||new Date().toISOString().slice(0,10),
+      stage, quantity: q, notes: notes||null, created_by: profile.id,
+      sewing_mode: stage==='sewing'?sewingMode:null,
+      subcon_id: (stage==='sewing'&&sewingMode==='subcon'&&subconId)?subconId:null,
+    };
+    const { error } = await sb.from('production_plan_entries').insert(payload);
+    setBusy(false);
+    if(error){ setMsg('Save failed: '+(error.message||error)); return; }
+    setQty(''); setNotes(''); setMsg('Logged ✓');
+    await load(); reload&&reload();
+    setTimeout(()=>setMsg(''),1500);
+  }
+  async function delEntry(id){
+    if(!confirm('Delete this output entry?')) return;
+    const { error } = await sb.from('production_plan_entries').delete().eq('id', id);
+    if(error){ alert(error.message); return; }
+    await load(); reload&&reload();
+  }
+
+  return (
+    <Modal title={`📊 Production Plan · ${job.number||''}`} onClose={onClose} xwide>
+      <div className="space-y-4">
+        {/* Project header */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-lg font-bold truncate">{job.item||'—'}</div>
+            <div className="text-sm text-slate-500 truncate">{job.client_name||'—'} · {job.number||''}</div>
+            {(job.items||[]).length>0 && <div className="text-[11px] text-slate-400 mt-0.5">{job.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}
+          </div>
+          <div className="text-right text-sm shrink-0">
+            <div><span className="text-[10px] uppercase text-slate-400">Target</span> <span className="font-bold ml-1">{total.toLocaleString()} pcs</span></div>
+            <div className="text-xs text-slate-500">Due {job.due_date?fmtDate(job.due_date):'—'}</div>
+          </div>
+        </div>
+
+        {/* Per-stage progress */}
+        <div className="grid sm:grid-cols-3 gap-3">
+          {PLAN_STAGES.map(st=>{ const done=sumStage(st.key); const pct=total>0?Math.min(100,Math.round(done/total*100)):0; return (
+            <div key={st.key} className="border rounded-lg p-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${st.color}`}>{st.label}</span>
+                <span className="text-xs font-bold">{done.toLocaleString()}/{total.toLocaleString()}</span>
+              </div>
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${st.bar}`} style={{width:pct+'%'}}></div></div>
+              <div className="text-[10px] text-slate-400 mt-1">{pct}%{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}</div>
+              {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-1">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
+            </div>
+          ); })}
+        </div>
+
+        {/* Log daily output */}
+        {canEdit && (
+          <div className="border rounded-lg p-3 bg-slate-50/60">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Log daily output</div>
+            <div className="flex flex-wrap gap-2 items-end">
+              <div><label className="text-[10px] text-slate-500 block">Date</label><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></div>
+              <div><label className="text-[10px] text-slate-500 block">Stage</label>
+                <select className="input" value={stage} onChange={e=>setStage(e.target.value)}>{PLAN_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
+              </div>
+              {stage==='sewing' && (
+                <div><label className="text-[10px] text-slate-500 block">Sewing</label>
+                  <select className="input" value={sewingMode} onChange={e=>setSewingMode(e.target.value)}><option value="inhouse">In-house</option><option value="subcon">Subcon</option></select>
+                </div>
+              )}
+              {stage==='sewing' && sewingMode==='subcon' && (
+                <div><label className="text-[10px] text-slate-500 block">Subcon</label>
+                  <select className="input" value={subconId} onChange={e=>setSubconId(e.target.value)}><option value="">— Select —</option>{(subcons||[]).filter(s=>!s.deleted_at).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
+                </div>
+              )}
+              <div><label className="text-[10px] text-slate-500 block">Qty (pcs)</label><input type="number" className="input w-24 text-right" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0" /></div>
+              <div className="flex-1 min-w-[140px]"><label className="text-[10px] text-slate-500 block">Notes</label><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="optional" /></div>
+              <button disabled={busy} onClick={addEntry} className="py-2 px-4 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'+ Log'}</button>
+            </div>
+            {msg && <div className={`text-xs mt-1.5 ${/fail|pick|enter/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
+          </div>
+        )}
+
+        {/* Output log */}
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Output log ({entries.length})</div>
+          {loading ? <div className="py-6 text-center text-slate-400 text-sm">Loading…</div> : entries.length===0 ? (
+            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">No output logged yet — add your first daily entry above.</div>
+          ) : (
+            <div className="border rounded-lg overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                  <th className="text-left px-3 py-2">Date</th>
+                  <th className="text-left px-3 py-2">Stage</th>
+                  <th className="text-right px-3 py-2">Qty</th>
+                  <th className="text-left px-3 py-2">Notes</th>
+                  <th className="text-left px-3 py-2">By</th>
+                  <th></th>
+                </tr></thead>
+                <tbody>{[...entries].reverse().map(e=>{ const sm=planStageMeta(e.stage); return (
+                  <tr key={e.id} className="border-t">
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+                    <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{(Number(e.quantity)||0).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
+                    <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
+                    <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete entry">✕</button>}</td>
+                  </tr>
+                ); })}</tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack, onCreateDR, subcons }){
   // Helper to build the DR prefill context from a production job + linked lead.
   // Triggered by the "Create DR" button below; the App passes setDrCreateCtx
   // as onCreateDR so the DR modal opens with everything ready to go.
@@ -3942,6 +4102,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   function changeSort(v){ setSortBy(v); try{ localStorage.setItem('prodSort',v); }catch(e){} }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('prodLayout')||'table'; }catch(e){ return 'table'; } });
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('prodLayout',v); }catch(e){} }
+  const [planning,setPlanning]=useState(null); // production job whose planning board is open
   const [collapsed,setCollapsed]=useState({}); // status.key -> true if collapsed
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   const isAdmin=profile.role==='admin';
@@ -4118,6 +4279,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
               </div> : <span className="text-xs text-slate-300">— unassigned —</span>}
             </td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
+              <button onClick={()=>setPlanning(j)} className="text-xs mr-2 text-emerald-700 hover:underline font-semibold" title="Open production planning board">📊 Plan</button>
               <button onClick={()=>openActivity({ job:j, jobType:'production', title:`${j.item} · ${j.client_name}` })} className={`text-xs mr-2 inline-flex items-center gap-1 ${cmtCount>0?'text-indigo-700 font-semibold':'text-slate-400 hover:text-indigo-600'}`} title={cmtCount>0?`${cmtCount} comment${cmtCount===1?'':'s'}`:'Open activity'}>
                 <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
               </button>
@@ -4188,6 +4350,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                         <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0" title={`Sales owner: ${owner.name||owner.email} (locked from the lead)`}><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-700 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <button onClick={()=>setPlanning(j)} className="text-xs mr-2 text-emerald-700 hover:underline font-semibold" title="Open production planning board">📊 Plan</button>
                           <button onClick={()=>openActivity({ job:j, jobType:'production', title:`${j.item} · ${j.client_name}` })} className={`text-xs mr-2 inline-flex items-center gap-1 ${cmtCount>0?'text-indigo-700 font-semibold':'text-slate-400 hover:text-indigo-600'}`} title={cmtCount>0?`${cmtCount} comment${cmtCount===1?'':'s'}`:'Open activity'}>
                             <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
                           </button>
@@ -4209,6 +4372,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
         );
       })}</div>
       )}
+      {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
     </div>
   );
 }
@@ -22794,7 +22958,7 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
