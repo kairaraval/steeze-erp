@@ -3991,7 +3991,9 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   // Gantt range across all plotted statuses (+ due date + today).
   const schedStarts = Object.values(schedule).map(v=>v&&v.start).filter(Boolean);
   const schedEnds   = Object.values(schedule).map(v=>v&&v.end).filter(Boolean);
-  const ganttStart  = ganttMin([...schedStarts, todayISO]) || todayISO;
+  // Timeline starts the day the project entered production (closed-won / added).
+  const jobStartISO = job.created_at ? String(job.created_at).slice(0,10) : todayISO;
+  const ganttStart  = ganttMin([jobStartISO, ...schedStarts]) || jobStartISO;
   const ganttEnd    = ganttMax([...schedEnds, job.due_date, todayISO]) || ganttAddDays(ganttStart, 14);
   const ganttTotal  = Math.max(1, ganttDays(ganttStart, ganttEnd));
   const daysToDue   = job.due_date ? ganttDays(todayISO, job.due_date) : null;
@@ -4192,12 +4194,12 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
   const active = (jobs||[]).filter(j=> showDone ? true : !PRODUCTION_DONE.includes(j.status));
   function spanOf(j){
     const sched = (j.status_schedule && typeof j.status_schedule==='object') ? j.status_schedule : {};
-    const starts = Object.values(sched).map(v=>v&&v.start).filter(Boolean);
-    const ends   = Object.values(sched).map(v=>v&&v.end).filter(Boolean);
-    const created = j.created_at ? String(j.created_at).slice(0,10) : null;
-    const start = ganttMin([...starts, created, todayISO]) || todayISO;
-    const end   = ganttMax([...ends, j.due_date]) || ganttAddDays(start, 7);
-    return { start, end };
+    const ends  = Object.values(sched).map(v=>v&&v.end).filter(Boolean);
+    // Start = the day the project entered production (closed-won / added to board).
+    const start = j.created_at ? String(j.created_at).slice(0,10) : todayISO;
+    let end = ganttMax([j.due_date, ...ends]) || ganttAddDays(start, 7);
+    if(ganttDays(start, end) < 0) end = start; // guard against bad dates
+    return { start, end, sched };
   }
   const rows = active.map(j=>({ job:j, ...spanOf(j) })).sort((a,b)=> String(a.end||'').localeCompare(String(b.end||'')));
   const rangeStart = ganttMin([...rows.map(r=>r.start), todayISO]) || todayISO;
@@ -4231,11 +4233,13 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
                 <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}} title="Today"></div>
               </div>
             </div>
-            {rows.map(({job:j,start,end})=>{
+            {rows.map(({job:j,start,end,sched})=>{
               const left = clampPct(ganttDays(rangeStart,start)/totalDays*100);
               const width = Math.max(1.5, (ganttDays(start,end)+1)/totalDays*100);
               const dtd = j.due_date ? ganttDays(todayISO,j.due_date) : null;
               const meta = PRODUCTION_STATUSES.find(s=>s.key===j.status);
+              const overdue = j.due_date && j.due_date<todayISO && !PRODUCTION_DONE.includes(j.status);
+              const segs = Object.entries(sched||{}).map(([k,v])=>({k,s:v&&v.start,e:v&&v.end})).filter(x=>x.s&&x.e).sort((a,b)=>String(a.s).localeCompare(String(b.s)));
               return (
                 <div key={j.id} onClick={()=>setPlanning(j)} className="flex items-stretch border-b hover:bg-indigo-50/40 cursor-pointer">
                   <div className="w-60 shrink-0 px-3 py-2 min-w-0">
@@ -4244,9 +4248,14 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
                     <div className="text-[10px] text-slate-400 truncate">{meta?meta.label:j.status} · {j.due_date?(dtd>=0?`${dtd}d to due`:`${Math.abs(dtd)}d overdue`):'no due'}</div>
                   </div>
                   <div className="relative flex-1 h-12">
-                    <div className={`absolute top-3 h-6 rounded ${urgency(j)} opacity-90 flex items-center px-2 overflow-hidden`} style={{left:left+'%', width:width+'%'}} title={`${fmtDate(start)} → ${fmtDate(end)}`}>
-                      <span className="text-[9px] text-white font-semibold truncate">{j.number||''}</span>
-                    </div>
+                    {/* Overall span: project added (closed-won) → due date. */}
+                    <div className={`absolute top-3.5 h-5 rounded bg-slate-200 ${overdue?'ring-1 ring-rose-400':''}`} style={{left:left+'%', width:width+'%'}} title={`Added ${fmtDate(start)} → due ${fmtDate(end)}`}></div>
+                    {/* Scheduled status phases as colored segments. */}
+                    {segs.map((sg,si)=>{ const sl=clampPct(ganttDays(rangeStart,sg.s)/totalDays*100); const sw=Math.max(1,(ganttDays(sg.s,sg.e)+1)/totalDays*100); const cur=j.status===sg.k; const lbl=(PRODUCTION_STATUSES.find(s=>s.key===sg.k)||{}).label||sg.k; return (
+                      <div key={si} className={`absolute top-3.5 h-5 rounded ${ganttBarColor(sg.k)} ${cur?'ring-2 ring-slate-800':''}`} style={{left:sl+'%', width:sw+'%'}} title={`${lbl}: ${fmtDate(sg.s)} → ${fmtDate(sg.e)}`}></div>
+                    ); })}
+                    {/* No plotted phases yet → fall back to a single urgency bar with the job ref. */}
+                    {segs.length===0 && <div className={`absolute top-3.5 h-5 rounded ${urgency(j)} flex items-center px-2 overflow-hidden`} style={{left:left+'%', width:width+'%'}}><span className="text-[9px] text-white font-semibold truncate">{j.number||''}</span></div>}
                     <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}}></div>
                   </div>
                 </div>
@@ -4255,12 +4264,10 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
           </div>
         </div>
       )}
-      <div className="flex flex-wrap gap-3 mt-3 text-[10px] text-slate-500">
-        <span><span className="inline-block w-3 h-3 rounded bg-rose-500 align-middle mr-1"></span>Overdue</span>
-        <span><span className="inline-block w-3 h-3 rounded bg-amber-500 align-middle mr-1"></span>Due ≤7 days</span>
-        <span><span className="inline-block w-3 h-3 rounded bg-indigo-500 align-middle mr-1"></span>On track</span>
-        <span><span className="inline-block w-3 h-3 rounded bg-emerald-500 align-middle mr-1"></span>Delivered</span>
-        <span className="ml-2">Red line = today</span>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-[10px] text-slate-500">
+        <span className="font-semibold text-slate-600">Colored segments = scheduled status phases (hover any segment for the stage &amp; dates).</span>
+        <span>Projects with nothing plotted yet show one bar: <span className="inline-block w-3 h-3 rounded bg-rose-500 align-middle mx-0.5"></span>overdue <span className="inline-block w-3 h-3 rounded bg-amber-500 align-middle mx-0.5"></span>due ≤7d <span className="inline-block w-3 h-3 rounded bg-indigo-500 align-middle mx-0.5"></span>on track</span>
+        <span>Red line = today · grey bar = added→due span</span>
       </div>
       {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
     </div>
