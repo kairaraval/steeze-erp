@@ -3938,8 +3938,11 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [subconId,setSubconId]=useState('');
   const [qty,setQty]=useState('');
   const [notes,setNotes]=useState('');
+  const [entryType,setEntryType]=useState('actual'); // 'plan' = forecast, 'actual' = real output
+  const [stageDue,setStageDue]=useState(()=> (job.stage_plan && typeof job.stage_plan==='object') ? {...job.stage_plan} : {});
 
   const total = Number(job.quantity)||0;
+  const todayISO = new Date().toISOString().slice(0,10);
   const canEdit = true; // production floor logs output; RLS allows any signed-in user
 
   async function load(){
@@ -3950,9 +3953,17 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   }
   useEffect(()=>{ load(); },[job.id]);
 
-  const sumStage = (k) => entries.filter(e=>e.stage===k).reduce((s,e)=>s+(Number(e.quantity)||0),0);
-  const sewInhouse = entries.filter(e=>e.stage==='sewing'&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
-  const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sumType = (k,t) => entries.filter(e=>e.stage===k && (e.entry_type||'actual')===t).reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const doneStage = (k) => sumType(k,'actual');   // real output produced so far
+  const plannedStage = (k) => sumType(k,'plan');  // forecast plotted (not produced yet)
+  const sewInhouse = entries.filter(e=>e.stage==='sewing'&&(e.entry_type||'actual')==='actual'&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&(e.entry_type||'actual')==='actual'&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  async function saveStageDue(stKey, val){
+    const next = {...stageDue}; if(val) next[stKey]=val; else delete next[stKey];
+    setStageDue(next);
+    try{ await sb.from('production_jobs').update({ stage_plan: next }).eq('id', job.id); reload&&reload(); }
+    catch(e){ setMsg('Could not save stage deadline: '+(e.message||e)); }
+  }
   const subconName = (id) => (subcons||[]).find(s=>s.id===id)?.name || 'Subcon';
   const who = (id) => { const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):''; };
 
@@ -3963,14 +3974,14 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     setBusy(true); setMsg('');
     const payload = {
       production_job_id: job.id, date: date||new Date().toISOString().slice(0,10),
-      stage, quantity: q, notes: notes||null, created_by: profile.id,
+      stage, quantity: q, notes: notes||null, created_by: profile.id, entry_type: entryType,
       sewing_mode: stage==='sewing'?sewingMode:null,
       subcon_id: (stage==='sewing'&&sewingMode==='subcon'&&subconId)?subconId:null,
     };
     const { error } = await sb.from('production_plan_entries').insert(payload);
     setBusy(false);
     if(error){ setMsg('Save failed: '+(error.message||error)); return; }
-    setQty(''); setNotes(''); setMsg('Logged ✓');
+    setQty(''); setNotes(''); setMsg(entryType==='plan'?'Added to plan ✓':'Logged ✓');
     await load(); reload&&reload();
     setTimeout(()=>setMsg(''),1500);
   }
@@ -3999,15 +4010,27 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
 
         {/* Per-stage progress */}
         <div className="grid sm:grid-cols-3 gap-3">
-          {PLAN_STAGES.map(st=>{ const done=sumStage(st.key); const pct=total>0?Math.min(100,Math.round(done/total*100)):0; return (
-            <div key={st.key} className="border rounded-lg p-3">
+          {PLAN_STAGES.map(st=>{
+            const done=doneStage(st.key); const planned=plannedStage(st.key);
+            const pct=total>0?Math.min(100,Math.round(done/total*100)):0;
+            const due=stageDue[st.key]||'';
+            const behind = due && due<todayISO && done<total;       // deadline passed, not finished
+            const planShort = planned>0 && planned<total;            // plotted plan doesn't cover the target
+            return (
+            <div key={st.key} className={`border rounded-lg p-3 ${behind?'border-rose-300 bg-rose-50/40':''}`}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${st.color}`}>{st.label}</span>
                 <span className="text-xs font-bold">{done.toLocaleString()}/{total.toLocaleString()}</span>
               </div>
               <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${st.bar}`} style={{width:pct+'%'}}></div></div>
-              <div className="text-[10px] text-slate-400 mt-1">{pct}%{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}</div>
-              {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-1">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
+              <div className="text-[10px] text-slate-400 mt-1">{pct}% done{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}{planned>0?` · ${planned.toLocaleString()} planned`:''}</div>
+              {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-0.5">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
+              <div className="flex items-center gap-1.5 mt-2">
+                <span className="text-[10px] text-slate-400">Deadline</span>
+                <input type="date" value={due} onChange={e=>saveStageDue(st.key, e.target.value)} className={`text-[11px] px-1.5 py-0.5 rounded border bg-white ${behind?'border-rose-300 text-rose-700 font-semibold':'border-slate-300'}`} />
+              </div>
+              {behind && <div className="text-[10px] text-rose-600 font-semibold mt-1">⚠ Past deadline · {Math.max(0,total-done).toLocaleString()} left</div>}
+              {!behind && planShort && <div className="text-[10px] text-amber-600 mt-1">Plan covers {planned.toLocaleString()}/{total.toLocaleString()} — plot {Math.max(0,total-planned).toLocaleString()} more to hit target</div>}
             </div>
           ); })}
         </div>
@@ -4015,7 +4038,13 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
         {/* Log daily output */}
         {canEdit && (
           <div className="border rounded-lg p-3 bg-slate-50/60">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Log daily output</div>
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <div className="text-[10px] uppercase text-slate-400 font-semibold">{entryType==='plan'?'Plot planned output (forecast)':'Log daily output (actual)'}</div>
+              <div className="inline-flex rounded-lg border bg-white p-0.5 text-[11px]">
+                <button onClick={()=>setEntryType('actual')} className={`px-2.5 py-1 rounded-md ${entryType==='actual'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>✓ Actual output</button>
+                <button onClick={()=>setEntryType('plan')} className={`px-2.5 py-1 rounded-md ${entryType==='plan'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🗓 Plan</button>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2 items-end">
               <div><label className="text-[10px] text-slate-500 block">Date</label><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></div>
               <div><label className="text-[10px] text-slate-500 block">Stage</label>
@@ -4033,7 +4062,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
               )}
               <div><label className="text-[10px] text-slate-500 block">Qty (pcs)</label><input type="number" className="input w-24 text-right" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0" /></div>
               <div className="flex-1 min-w-[140px]"><label className="text-[10px] text-slate-500 block">Notes</label><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="optional" /></div>
-              <button disabled={busy} onClick={addEntry} className="py-2 px-4 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'+ Log'}</button>
+              <button disabled={busy} onClick={addEntry} className={`py-2 px-4 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${entryType==='plan'?'bg-indigo-600 hover:bg-indigo-700':'bg-emerald-600 hover:bg-emerald-700'}`}>{busy?'Saving…':(entryType==='plan'?'+ Add to plan':'+ Log output')}</button>
             </div>
             {msg && <div className={`text-xs mt-1.5 ${/fail|pick|enter/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
           </div>
@@ -4041,9 +4070,9 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
 
         {/* Output log */}
         <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Output log ({entries.length})</div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Plan &amp; output log ({entries.length})</div>
           {loading ? <div className="py-6 text-center text-slate-400 text-sm">Loading…</div> : entries.length===0 ? (
-            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">No output logged yet — add your first daily entry above.</div>
+            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">Nothing yet — plot a plan or log actual output above.</div>
           ) : (
             <div className="border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
@@ -4055,11 +4084,11 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                   <th className="text-left px-3 py-2">By</th>
                   <th></th>
                 </tr></thead>
-                <tbody>{[...entries].reverse().map(e=>{ const sm=planStageMeta(e.stage); return (
-                  <tr key={e.id} className="border-t">
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+                <tbody>{[...entries].reverse().map(e=>{ const sm=planStageMeta(e.stage); const isPlan=(e.entry_type||'actual')==='plan'; return (
+                  <tr key={e.id} className={`border-t ${isPlan?'bg-indigo-50/40':''}`}>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}{isPlan && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-indigo-100 text-indigo-700 font-bold">PLAN</span>}</td>
                     <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{(Number(e.quantity)||0).toLocaleString()}</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${isPlan?'text-indigo-700':''}`}>{(Number(e.quantity)||0).toLocaleString()}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
                     <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
                     <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete entry">✕</button>}</td>
