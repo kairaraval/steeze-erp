@@ -819,14 +819,14 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const [managerId,setManagerId]=useState(existing?.manager_id||profile.id);
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
-  const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]);
+  const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const subtotal=items.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
   const vat=items.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*0.12:0); },0);
   const total=subtotal+vat; const hasItems=items.some(it=>(Number(it.quantity)||0)>0&&(Number(it.pricePerItem)||0)>0); const value=hasItems?total:(Number(manualValue)||0);
   function setItem(idx,k,v){ setItems(items.map((it,i)=>i===idx?{...it,[k]:v}:it)); }
-  function addItem(){ setItems([...items,{ id:'i'+Date.now(), itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]); }
+  function addItem(){ setItems([...items,{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]); }
   function removeItem(idx){ setItems(items.length===1?[{ id:'i'+Date.now(), itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]:items.filter((_,i)=>i!==idx)); }
   // Accepts MULTIPLE files at once — paired with `multiple` on the <input> below.
   // Uploads them sequentially (so Supabase Storage doesn't see a thundering
@@ -865,7 +865,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     try{ let finalClientId=clientId;
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
         const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
-      const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
+      const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
       const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
@@ -964,6 +964,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
               <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
               <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
               <div className="col-span-1 text-right"><button onClick={()=>removeItem(idx)} className="text-rose-400 text-sm">✕</button></div>
+              <div className="col-span-12"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5" value={it.description||''} onChange={e=>setItem(idx,'description',e.target.value)} placeholder="Carries to the estimate — e.g. full sublimation, dri-fit, sizes S–XL" /></div>
               <div className="col-span-12"><label className="flex items-center gap-1.5 text-[11px] cursor-pointer"><input type="checkbox" checked={it.withVat} onChange={e=>setItem(idx,'withVat',e.target.checked)} /><span className={it.withVat?'text-emerald-700':'text-slate-500'}>With VAT 12%</span></label></div>
             </div>))}
           </div>
@@ -1203,7 +1204,7 @@ function SendLeadToPrintingModal({ profile, lead, client, onClose, onSent }){
    items + totals aren't entered twice.
    ============================================================================ */
 const EST_VAT_RATE = 0.12;
-const EST_VALIDITY_DAYS = 7; // estimates are valid for 7 days from creation
+const EST_VALIDITY_DAYS = 15; // estimates are valid for 15 days from creation
 // Status is for tracking the quote only — it never creates a Sales Order.
 // The Sales Order is created elsewhere when the lead reaches Closed Won.
 const ESTIMATE_STATUSES = [
@@ -1256,10 +1257,10 @@ function estLinesFromLead(lead){
   }));
 }
 
-function EstimateModal({ profile, lead, client, clients, onClose, reload }){
+function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdit=true }){
   const [loading,setLoading]=useState(true);
   const [estimate,setEstimate]=useState(null);   // existing DB record, if any
-  const [view,setView]=useState('edit');          // 'edit' | 'print'
+  const [view,setView]=useState(canEdit?'edit':'print'); // view-only users open straight to the PDF
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
   // editable fields
@@ -1357,7 +1358,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
-            <button onClick={()=>setView('edit')} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">← Back to edit</button>
+            <button onClick={()=> canEdit ? setView('edit') : onClose()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">{canEdit?'← Back to edit':'Close'}</button>
           </div>
         </div>
         <div className="tp-print py-6">
@@ -1526,10 +1527,10 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload }){
         {msg && <div className={`text-xs ${/fail|issue/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
 
         <div className="flex gap-2 pt-3 border-t flex-wrap items-center">
-          <button disabled={busy} onClick={()=>save('draft')} className="py-2 px-3 rounded-lg border text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">💾 Save draft</button>
-          <button disabled={busy} onClick={()=>save('sent')} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">📤 Save & mark Sent</button>
-          <button disabled={busy} onClick={()=>save('approved')} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted this quote (does not create a Sales Order)">✅ Mark accepted</button>
-          <button disabled={busy} onClick={()=>save('rejected')} className="py-2 px-3 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50" title="Client declined this quote">✕ Mark declined</button>
+          {canEdit && <button disabled={busy} onClick={()=>save('draft')} className="py-2 px-3 rounded-lg border text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">💾 Save draft</button>}
+          {canEdit && <button disabled={busy} onClick={()=>save('sent')} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">📤 Save & mark Sent</button>}
+          {canEdit && <button disabled={busy} onClick={()=>save('approved')} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted this quote (does not create a Sales Order)">✅ Mark accepted</button>}
+          {canEdit && <button disabled={busy} onClick={()=>save('rejected')} className="py-2 px-3 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50" title="Client declined this quote">✕ Mark declined</button>}
           <button disabled={!hasValidLine} onClick={()=>setView('print')} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50">🖨 Preview / Print</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
@@ -2075,12 +2076,15 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
   );
 }
 
-function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
+function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
   const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
   const canEstimate = profile.role==='admin' || profile.role==='accounting';
   const [showEstimate,setShowEstimate]=useState(false);
+  // Sales managers / assistants get a read-only view button once Accounting/Admin
+  // has sent the estimate (any non-draft estimate exists for this lead).
+  const sentEstimate = (estimates||[]).find(e=>e.lead_id===lead.id && (e.status||'draft')!=='draft');
   // Inline notes editor — saves without opening the full Edit lead form
   const [notesDraft,setNotesDraft]=useState(lead.notes||'');
   const [notesBusy,setNotesBusy]=useState(false);
@@ -2138,6 +2142,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendPr
           <div className="flex gap-2 pt-2 border-t flex-wrap">
             {canEdit && <button onClick={onEdit} className="py-2 px-3 rounded-lg border text-sm hover:bg-slate-50">✎ Edit</button>}
             {canEstimate && <button onClick={()=>setShowEstimate(true)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title="Create / edit a client estimate (Accounting & Admin only)">💰 Create estimate</button>}
+            {!canEstimate && sentEstimate && <button onClick={()=>setShowEstimate(true)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title="View the estimate PDF for this lead">📄 View estimate</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
@@ -2154,7 +2159,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, onEdit, onSendPr
           <ThreadBody profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id: lead.id }} scope={'activity/'+lead.id} titleText={lead.title} afterChange={reload} headerless embedded />
         </div>
       </div>
-      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} onClose={()=>setShowEstimate(false)} reload={reload} />}
+      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} onClose={()=>setShowEstimate(false)} reload={reload} />}
     </Modal>
   );
 }
@@ -14727,7 +14732,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
       )}
 
       {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
-      {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
   );
@@ -14990,11 +14995,12 @@ function payStatusBadge(status){
 }
 
 // ─────────── LOG PAYMENT (Pending) — used by Sales + Accounting ───────────
-function SalesOrderLogPaymentModal({ so, profile, onClose, onSaved }){
+function SalesOrderLogPaymentModal({ so, profile, bankAccounts, onClose, onSaved }){
   const [f,setF]=useState({
     date: new Date().toISOString().slice(0,10),
     amount: '',
     method: 'gcash',
+    bank_id: '',
     reference: '',
     notes: '',
   });
@@ -15012,6 +15018,7 @@ function SalesOrderLogPaymentModal({ so, profile, onClose, onSaved }){
   async function save(){
     const amt = Number(f.amount)||0;
     if(amt<=0){ setMsg('Enter the amount you collected.'); return; }
+    if(f.method==='bank_transfer' && !f.bank_id){ setMsg('Pick which bank the client deposited to.'); return; }
     setBusy(true); setMsg('');
     try {
       // Upload proof first (if provided). Keep path under sopay/SO/UUID.
@@ -15028,6 +15035,7 @@ function SalesOrderLogPaymentModal({ so, profile, onClose, onSaved }){
       const { error } = await sb.from('sales_order_payments').insert({
         sales_order_id: so.id, date: f.date, amount: amt,
         method: f.method, reference: f.reference||null, notes: f.notes||null,
+        bank_id: f.method==='bank_transfer' ? (f.bank_id||null) : null,
         attachment_url, attachment_path,
         status: 'pending', received_by: profile.id,
       });
@@ -15065,6 +15073,14 @@ function SalesOrderLogPaymentModal({ so, profile, onClose, onSaved }){
           </TpLbl>
           <TpLbl t="Reference #"><input className="input w-full" placeholder={f.method==='check'?'Check #':f.method==='gcash'?'GCash ref #':'Deposit slip / Ref #'} value={f.reference} onChange={e=>up('reference',e.target.value)} /></TpLbl>
         </div>
+        {f.method==='bank_transfer' && (
+          <TpLbl t="Deposited to which bank? *">
+            <select className="input w-full" value={f.bank_id} onChange={e=>up('bank_id',e.target.value)}>
+              <option value="">— Select bank —</option>
+              {(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}{b.account_number?` · ${b.account_number}`:''}</option>)}
+            </select>
+          </TpLbl>
+        )}
         <TpLbl t="Notes (optional)"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. partial DP, collected by Joy at client office" /></TpLbl>
         <div>
           <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1">Proof of payment (photo)</div>
@@ -22939,7 +22955,6 @@ function App(){
   const FINANCE_SALES = { group:'Finance', items:[
     ['sales-orders','Sales Orders','📜'],
     ['invoices','My Invoices','🧾'],
-    ['ledger','Customer Ledger','👥'],
     ['commissions','Commissions','💰'],
     ['budgets','Budget Requests','💰'],
   ] };
@@ -23203,7 +23218,7 @@ function App(){
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} soActivityCounts={soActivityCounts} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
-        {view==='ledger' && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
+        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
@@ -23239,7 +23254,7 @@ function App(){
       )}
       {showNew && <LeadForm profile={profile} profiles={profiles} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
       {liveDetail && !editLead && !activityLead && !sendGraphicLead && !sendPrintLead && (
-        <LeadDetail profile={profile} profiles={profiles} reload={loadAll} lead={liveDetail} clients={clients} activityCount={activityCounts[liveDetail.id]}
+        <LeadDetail profile={profile} profiles={profiles} reload={loadAll} lead={liveDetail} clients={clients} estimates={estimates} activityCount={activityCounts[liveDetail.id]}
           onEdit={()=>setEditLead(liveDetail)} onOpenActivity={()=>setActivityLead(liveDetail)}
           onSendProduction={()=>sendToProduction(liveDetail)} onSendGraphic={()=>setSendGraphicLead(liveDetail)}
           onSendSampling={()=>sendLeadToSampling(liveDetail)}
