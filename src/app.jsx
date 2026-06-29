@@ -23360,7 +23360,7 @@ function App(){
         <TransmittalViewModal trn={trnViewing} transmittalItems={transmittalItems} clients={clients} profiles={profiles} salesOrders={salesOrders} profile={profile} onClose={()=>setTrnViewing(null)} onSaved={()=>{ setTrnViewing(null); loadAll(); }} />
       )}
 
-      <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
+      {profile.role==='admin' && <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>}
     </div>
   );
 }
