@@ -22339,8 +22339,23 @@ function App(){
 
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session)); const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
 
+  const loadAllBusy = useRef(false);
+  const loadAllAgain = useRef(false);
+  const reloadTimer = useRef(null);
+  // Debounced reload for realtime events. A burst of notifications (e.g. one
+  // Closed-Won deal fanning PRs out to the whole purchasing team) used to make
+  // every recipient run a full ~50-table reload at once — a thundering herd
+  // that hammered Disk IO/CPU. This collapses a burst into a single refresh
+  // per user, ~2.5s after the last event.
+  function scheduleReload(){ if(reloadTimer.current) clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(()=>{ reloadTimer.current = null; loadAll(); }, 2500); }
   async function loadAll(){
-    if(!session) return; setLoadErr(''); const me=session.user.id;
+    if(!session) return;
+    // Coalesce: never run two full reloads concurrently. If one is already in
+    // flight, just flag it to run once more when the current one finishes.
+    if(loadAllBusy.current){ loadAllAgain.current = true; return; }
+    loadAllBusy.current = true;
+    try {
+    setLoadErr(''); const me=session.user.id;
     // PERF: render the app shell as soon as we know who the user is. Without
     // this, the app sits on "Loading your workspace…" until ALL ~50 queries
     // below resolve (several seconds), because profile is only set after the
@@ -22502,6 +22517,11 @@ function App(){
     setSalesCommissions(sccm && !sccm.error ? (sccm.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
+    } finally {
+      loadAllBusy.current = false;
+      // If something asked to reload while we were busy, run exactly once more.
+      if(loadAllAgain.current){ loadAllAgain.current = false; setTimeout(()=>loadAll(), 250); }
+    }
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
   useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
@@ -22638,7 +22658,7 @@ function App(){
       const snippet = (row.text||'').replace(/@\[[^\]]+\]\([^)]+\)/g,'@').slice(0,140);
       setToast({ title:'New @mention', body: snippet || 'You were tagged in a comment.' });
       if(!mutedRef.current) showSystemMention('Steeze OS — New @mention', snippet || 'You were tagged in a comment.', ()=>setView('inbox'));
-      loadAll();
+      scheduleReload();
     }
     const ch = sb.channel('mentions-'+me)
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'lead_activity' },         (p)=>maybeNotify(p.new))
@@ -22660,7 +22680,7 @@ function App(){
       if(!mutedRef.current) playApprovalPing();
       setToast({ title:'📬 New approval needed', body: `RFP ${row.number||''} · ${row.supplier_name||''} · ${peso(row.amount)}` });
       if(!mutedRef.current) showSystemMention('Steeze OS — Approval needed', `${row.number||'RFP'} · ${peso(row.amount)} · ${row.supplier_name||''}`, ()=>setView('approvals'));
-      loadAll();
+      scheduleReload();
     }
     const ch = sb.channel('approvals-admin')
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'rfps' }, (p)=>maybeNotifyApproval(p.new))
@@ -22674,7 +22694,7 @@ function App(){
         if(!mutedRef.current) playApprovalPing();
         setToast({ title:'📬 Budget request', body: `${r.department||'Dept'} · ${peso(r.amount)} · ${r.purpose||''}` });
         if(!mutedRef.current) showSystemMention('Steeze OS — Budget request', `${r.department||''} · ${peso(r.amount)}`, ()=>setView('approvals'));
-        loadAll();
+        scheduleReload();
       })
       // Vouchers — new ones route to Admin for sign-off. Skip vouchers that
       // are already approved on creation (rare) or that the admin created.
@@ -22686,7 +22706,7 @@ function App(){
         const typeLabel = v.type==='check' ? 'CV' : (v.type==='bank_transfer' ? 'BT' : 'Cash');
         setToast({ title:`📬 Voucher to approve`, body: `${typeLabel} ${v.number||''} · ${v.payee||''} · ${peso(v.amount)}` });
         if(!mutedRef.current) showSystemMention('Steeze OS — Voucher needs sign-off', `${typeLabel} ${v.number||''} · ${peso(v.amount)} · ${v.payee||''}`, ()=>setView('approvals'));
-        loadAll();
+        scheduleReload();
       })
       .subscribe();
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
@@ -22709,7 +22729,7 @@ function App(){
         const hint = lead ? `${lead.title||''}` : (r.justification||'').slice(0, 80);
         setToast({ title:`📝 New PR ${r.number||''}`, body: hint ? `Auto-created for ${hint}` : 'Auto-created from a Closed Won deal' });
         if(!mutedRef.current) showSystemMention('Steeze OS — New PR for review', `${r.number||''} · ${hint}`, ()=>setView('requests'));
-        loadAll();
+        scheduleReload();
       })
       .subscribe();
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
