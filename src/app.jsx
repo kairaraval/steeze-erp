@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 124 · Leads: Payment Terms field → auto-copies to Sales Order on Closed Won + auto-syncs to linked SO on lead edit";
+const BUILD = "Live build 125 · Speed + stability: lighter team-list query, coalesced/debounced reloads (no more thundering-herd crashes), bank picker on BT payments, read-only estimate view for sales, 15-day estimates, item descriptions → estimate, ledger hidden from sales roles, build pill admin-only";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
