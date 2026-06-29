@@ -14597,14 +14597,12 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
     reload && reload();
   }
 
-  if(!bankAccounts || bankAccounts.length===0){
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-2">📜 Sales Orders</h1>
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">Run <code className="bg-white px-1.5 py-0.5 rounded border">steeze-erp-finance-sprint-1.sql</code> in Supabase first.</div>
-      </div>
-    );
-  }
+  // NOTE: previously this page short-circuited to a "run the finance SQL"
+  // message whenever bankAccounts was empty. That misfired for sales managers
+  // and during the brief window before the full data batch loads (bankAccounts
+  // arrives a moment after the app shell renders), blocking the whole page.
+  // The finance tables exist in production, so we just render the orders;
+  // bankAccounts is only needed for the (admin/accounting-gated) payment tools.
 
   const counts = SO_STATUSES.reduce((a,s)=>{ a[s.key]=visibleSOs.filter(o=>o.status===s.key).length; return a; }, {});
   const rows = visibleSOs
@@ -22339,6 +22337,8 @@ function App(){
     sb.from('profiles').select('*').then(r=>{ if(r.data) setProfiles(r.data); }).catch(()=>{});
     sb.from('clients').select('*').order('company').then(r=>{ if(r.data) setClients(r.data); }).catch(()=>{});
     sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
+    sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
+    sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
       sb.from('profiles').select('*'),
