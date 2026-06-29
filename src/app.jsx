@@ -22350,14 +22350,20 @@ function App(){
     // Also stream the essentials the default Pipeline / Dashboard need so cards
     // show in well under a second instead of after the full Promise.all. These
     // are re-fetched (identically) in the batch below — harmless idempotent set.
-    sb.from('profiles').select('*').then(r=>{ if(r.data) setProfiles(r.data); }).catch(()=>{});
+    // PERF: the team list is read everywhere (name/role lookups), but the
+    // signature_data column holds base64 signature images (~130 KB/row, 2 MB
+    // total). Pulling it on this hot, constantly-refetched query made the
+    // gating load hit the 8s statement timeout — so every page "just loaded".
+    // Fetch only the small columns here; hydrate signatures once in the
+    // background so printed documents still render them.
+    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').then(r=>{ if(r.data){ setProfiles(r.data); if(!window.__steezeSig){ window.__steezeSig=1; sb.from('profiles').select('id,signature_data').then(s=>{ if(s&&!s.error&&s.data){ const m={}; s.data.forEach(x=>{ if(x.signature_data) m[x.id]=x.signature_data; }); setProfiles(ps=>(ps||[]).map(p=>m[p.id]!==undefined?{...p,signature_data:m[p.id]}:p)); } }).catch(()=>{}); } } }).catch(()=>{});
     sb.from('clients').select('*').order('company').then(r=>{ if(r.data) setClients(r.data); }).catch(()=>{});
     sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
     sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
     sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).single(),
-      sb.from('profiles').select('*'),
+      sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate'),
       sb.from('clients').select('*').order('company'),
       sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
@@ -22433,7 +22439,7 @@ function App(){
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
     setPendingInvites(pi && pi.data ? pi.data : []);
-    if(pf.data) setProfile(pf.data); setProfiles(pr.data||[]); setClients(cl.data||[]); setLeads(ld.data||[]);
+    if(pf.data) setProfile(pf.data); setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return (pr.data||[]).map(p=> sig[p.id]!==undefined?{...p,signature_data:sig[p.id]}:p); }); setClients(cl.data||[]); setLeads(ld.data||[]);
     const leadMentions=(lm.data||[]).map(r=>({ ...r, source:'lead' }));
     const deptMentions=(dm.data||[]).map(r=>({ ...r, source:r.job_type }));
     // Sales-order mentions: same shape, source='sales_order'. Graceful-fail
