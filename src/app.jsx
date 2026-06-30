@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 126 · Editable SO total → auto-recomputes unpaid commission (paid ones flagged, not rewritten); fixed squashed input boxes (Signature Page names, Qty, etc.); PO print preview; manager invoice/estimate read-only views; speed + stability fixes";
+const BUILD = "Live build 127 · Editable SO line items (qty/price auto-sum) → updates balance + auto-recomputes unpaid commission (paid flagged, not rewritten); invoice-exists warning; fixed squashed inputs; PO print; manager read-only invoice/estimate views";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14771,6 +14771,21 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // Editable SO line items (Accounting/Admin). The Order total auto-sums from
+  // these; editing a quantity here is what flows to the balance + commission.
+  const [lines,setLines]=useState(()=> Array.isArray(so.items) ? so.items.map(it=>({
+    itemType: it.itemType||it.description||it.category||'',
+    category: it.category||'',
+    quantity: String(it.quantity ?? it.qty ?? ''),
+    pricePerItem: String(it.pricePerItem ?? it.price ?? ''),
+    withVat: !!it.withVat,
+  })) : []);
+  const hasLines = lines.length>0;
+  const linesTotal = lines.reduce((s,l)=> s + (Number(l.quantity)||0)*(Number(l.pricePerItem)||0), 0);
+  const effTotal = hasLines ? linesTotal : (Number(f.total)||0);
+  function setLine(i,k,v){ setLines(ls=>ls.map((l,idx)=>idx===i?{...l,[k]:v}:l)); }
+  function addLine(){ setLines(ls=>[...ls,{itemType:'',category:'',quantity:'',pricePerItem:'',withVat:false}]); }
+  function removeLine(i){ setLines(ls=>ls.filter((_,idx)=>idx!==i)); }
   async function save(){
     setBusy(true); setMsg('');
     // PostgreSQL date columns reject empty strings — they need real NULL when
@@ -14786,10 +14801,14 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
     // amounts so the balance stays right; the DB trigger then updates this SO's
     // UNPAID commission rows to match the new total automatically.
     if(canInvoice){
-      const newTotal = Number(f.total)||0;
-      payload.total = newTotal;
-      payload.subtotal = newTotal;
-      payload.balance_due = Math.max(0, newTotal - (Number(so.amount_paid)||0));
+      if(hasLines){
+        payload.items = lines
+          .filter(l=> (l.itemType||'').trim() || (Number(l.quantity)||0)>0)
+          .map(l=>{ const q=Number(l.quantity)||0, p=Number(l.pricePerItem)||0; return { itemType:l.itemType||'', category:l.category||'', quantity:q, pricePerItem:p, withVat:!!l.withVat, lineTotal:q*p }; });
+      }
+      payload.total = effTotal;
+      payload.subtotal = effTotal;
+      payload.balance_due = Math.max(0, effTotal - (Number(so.amount_paid)||0));
     } else {
       delete payload.total;
     }
@@ -14840,25 +14859,57 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
           <div><div className="text-[10px] uppercase text-slate-400">Linked Lead</div><div className="text-xs">{lead?lead.title:'—'}</div></div>
         </div>
 
-        {/* Order amount — editable by Accounting/Admin. Correcting it here (e.g.
-            after a quantity change post Closed-Won) updates the balance AND
-            auto-recomputes the manager's unpaid commission via a DB trigger. */}
+        {/* Order amount + line items — editable by Accounting/Admin. Editing a
+            quantity/price re-sums the Order total, updates the balance, AND
+            auto-recomputes the rep's unpaid commission via a DB trigger. */}
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="flex items-end gap-3 flex-wrap">
-            <div>
-              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Order total (₱)</label>
-              {canInvoice
-                ? <input type="number" inputMode="decimal" className="input w-44" value={f.total} onChange={e=>up('total', e.target.value)} />
-                : <div className="text-lg font-bold">{peso(so.total)}</div>}
-            </div>
-            <div className="text-xs text-slate-500 pb-1">
-              Paid {peso(so.amount_paid)} · Balance {peso(Math.max(0,(Number(f.total)||0)-(Number(so.amount_paid)||0)))}
-            </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">Line items{hasLines?` (${lines.length})`:''}</div>
+            {canInvoice && <button type="button" onClick={addLine} className="text-xs text-indigo-600 hover:underline">+ Add line</button>}
           </div>
-          {canInvoice && <div className="text-[11px] text-slate-500 mt-1.5">Changing the total recomputes the rep's <strong>unpaid</strong> commission automatically. Already-paid commissions are left as-is.</div>}
-          {canInvoice && soInvoices.length>0 && Number(f.total)!==Number(so.total) && (
+
+          {canInvoice ? (
+            hasLines ? (
+              <div className="space-y-1">
+                <div className="grid grid-cols-12 gap-2 text-[10px] uppercase text-slate-400 font-semibold px-0.5">
+                  <div className="col-span-5">Item</div><div className="col-span-2 text-right">Qty</div><div className="col-span-2 text-right">Unit ₱</div><div className="col-span-2 text-right">Line ₱</div><div className="col-span-1"></div>
+                </div>
+                {lines.map((l,i)=>(
+                  <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                    <input className="input text-xs col-span-5" placeholder="Item" value={l.itemType} onChange={e=>setLine(i,'itemType',e.target.value)} />
+                    <input type="number" inputMode="numeric" className="input text-xs col-span-2 text-right" placeholder="0" value={l.quantity} onChange={e=>setLine(i,'quantity',e.target.value)} />
+                    <input type="number" inputMode="decimal" className="input text-xs col-span-2 text-right" placeholder="0" value={l.pricePerItem} onChange={e=>setLine(i,'pricePerItem',e.target.value)} />
+                    <div className="col-span-2 text-right text-xs font-semibold">{peso((Number(l.quantity)||0)*(Number(l.pricePerItem)||0))}</div>
+                    <button type="button" onClick={()=>removeLine(i)} className="col-span-1 text-rose-400 text-sm text-center" title="Remove line">✕</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400 py-1">No line items on this SO — set the order total directly below, or click “+ Add line”.</div>
+            )
+          ) : (
+            Array.isArray(so.items) && so.items.length>0 ? (
+              <table className="w-full text-xs">
+                <thead className="text-slate-500"><tr><th className="text-left py-1">Item</th><th className="text-right py-1">Qty</th><th className="text-right py-1">Unit ₱</th><th className="text-right py-1">Line ₱</th></tr></thead>
+                <tbody>{so.items.map((it,i)=>(<tr key={i} className="border-t"><td className="py-1.5">{it.itemType||it.description||'—'}{it.category?' · '+it.category:''}</td><td className="py-1.5 text-right">{it.quantity||it.qty||0}</td><td className="py-1.5 text-right">{peso(it.pricePerItem||0)}</td><td className="py-1.5 text-right">{peso(it.lineTotal||((Number(it.quantity)||0)*(Number(it.pricePerItem)||0)))}</td></tr>))}</tbody>
+              </table>
+            ) : <div className="text-xs text-slate-400 py-1">No line items.</div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t text-sm">
+            <span className="text-slate-500">Order total</span>
+            {hasLines
+              ? <span className="font-bold text-base">{peso(linesTotal)}</span>
+              : (canInvoice
+                  ? <input type="number" inputMode="decimal" className="input w-40 text-right" value={f.total} onChange={e=>up('total', e.target.value)} />
+                  : <span className="font-bold text-base">{peso(so.total)}</span>)}
+          </div>
+          <div className="text-xs text-slate-500 text-right mt-0.5">Paid {peso(so.amount_paid)} · Balance {peso(Math.max(0, effTotal - (Number(so.amount_paid)||0)))}</div>
+
+          {canInvoice && <div className="text-[11px] text-slate-500 mt-1.5">Editing quantities/prices re-sums the total and recomputes the rep's <strong>unpaid</strong> commission automatically. Already-paid commissions are left as-is.</div>}
+          {canInvoice && soInvoices.length>0 && effTotal!==Number(so.total) && (
             <div className="mt-2 text-[11px] bg-blue-50 border border-blue-200 text-blue-800 rounded px-2.5 py-1.5">
-              🧾 This SO already has {soInvoices.length} invoice{soInvoices.length===1?'':'s'}. Changing the total here will <strong>not</strong> update {soInvoices.length===1?'it':'them'} — reissue or adjust the invoice in the Invoices tab so the billed amount matches.
+              🧾 This SO already has {soInvoices.length} invoice{soInvoices.length===1?'':'s'}. Changing the amount here will <strong>not</strong> update {soInvoices.length===1?'it':'them'} — reissue or adjust the invoice in the Invoices tab so the billed amount matches.
             </div>
           )}
           {paidStale.length>0 && (
@@ -14883,17 +14934,6 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
         </div>
         <TpLbl t="Delivery address"><textarea className="input min-h-[50px]" value={f.delivery_address} onChange={e=>up('delivery_address',e.target.value)} placeholder="If different from billing address" /></TpLbl>
 
-        {/* Line items — read-only summary. Edit via the source lead. */}
-        {Array.isArray(so.items) && so.items.length>0 && (
-          <div className="bg-slate-50 border rounded-lg p-3">
-            <div className="text-xs font-semibold text-slate-700 mb-2">Line items ({so.items.length})</div>
-            <table className="w-full text-xs">
-              <thead className="text-slate-500"><tr><th className="text-left py-1">Description</th><th className="text-right py-1">Qty</th></tr></thead>
-              <tbody>{so.items.map((it,i)=>(<tr key={i} className="border-t"><td className="py-1.5">{it.itemType||it.description||'—'}{it.category?' · '+it.category:''}</td><td className="py-1.5 text-right">{it.quantity||it.qty||0}</td></tr>))}</tbody>
-            </table>
-            <div className="text-[10px] text-slate-400 mt-2">Line items + quantities mirror the source lead. Edit them on the lead and they'll sync here.</div>
-          </div>
-        )}
 
         {/* QuickBooks linkage */}
         <div className="border-2 border-indigo-200 bg-indigo-50/40 rounded-lg p-3">
