@@ -35,6 +35,13 @@
        (see package.json + tailwind.config.js). This replaces the ~400KB
        cdn.tailwindcss.com JIT engine that used to generate CSS in the browser
        on every load. A small static stylesheet styles the page instantly. -->
+  <!-- Base component styles MUST be defined BEFORE Tailwind's /styles.css so
+       utility classes (w-32, w-14, px-1, …) correctly override them. When
+       .input lived AFTER styles.css, its width:100% beat every width utility,
+       squashing date/qty/name boxes to zero width. -->
+  <style>
+    .input { width:100%; border:1px solid #cbd5e1; border-radius:0.5rem; padding:0.5rem 0.75rem; font-size:0.875rem; }
+  </style>
   <link rel="stylesheet" href="/styles.css" />
   <!-- defer = download in parallel but don't block the page from rendering the
        splash; they still execute in order BEFORE the deferred /app.js, so React
@@ -69,7 +76,8 @@
     });
   </script>
   <style>
-    .input { width:100%; border:1px solid #cbd5e1; border-radius:0.5rem; padding:0.5rem 0.75rem; font-size:0.875rem; }
+    /* .input moved above /styles.css (see note there) so Tailwind width
+       utilities override it. Do NOT redefine .input here. */
     .tp-page { width:11in; min-height:8.5in; background:#fff; margin:0 auto 1.25rem; padding:0.4in; box-shadow:0 1px 6px rgba(0,0,0,.12); display:flex; flex-direction:column; }
     /* Portrait Letter page — used for purchase docs (PR / PO). Same flex
        column structure as .tp-page so the existing layout logic carries over,

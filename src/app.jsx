@@ -10889,9 +10889,9 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               const signerName = signed ? (profiles||[]).find(p=>p.id===r.signedByUserId) : null;
               return (
                 <div key={i} className="flex gap-1 items-center">
-                  <input className="input text-xs flex-1" value={r.role} onChange={e=>editRowField(i,'role',e.target.value)} placeholder="Role" />
-                  <input className="input text-xs flex-1" placeholder="Name" value={r.name} onChange={e=>editRowField(i,'name',e.target.value)} disabled={signed} />
-                  <input type="date" className="input text-xs w-32" value={r.date} onChange={e=>editRowField(i,'date',e.target.value)} disabled={signed} />
+                  <input className="input text-xs" style={{flex:'1 1 0', minWidth:0}} value={r.role} onChange={e=>editRowField(i,'role',e.target.value)} placeholder="Role" />
+                  <input className="input text-xs" style={{flex:'1 1 0', minWidth:0}} placeholder="Name" value={r.name} onChange={e=>editRowField(i,'name',e.target.value)} disabled={signed} />
+                  <input type="date" className="input text-xs" style={{flex:'0 0 150px', width:'150px'}} value={r.date} onChange={e=>editRowField(i,'date',e.target.value)} disabled={signed} />
                   {signed ? (
                     <button onClick={()=>unsignRow(i)} className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 whitespace-nowrap" title={`Signed by ${signerName?.name||signerName?.email||'unknown'}`}>✓ Signed · Unsign</button>
                   ) : (
