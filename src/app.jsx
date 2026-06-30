@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 128 · Per-rep printable commission DRAFT (review before payout) on the Commissions page; editable SO line items → auto-recompute commission; fixed squashed inputs; PO print; manager read-only invoice/estimate views";
+const BUILD = "Live build 129 · SO line items now have the per-line VAT 12% checkbox (matches the pipeline) with Subtotal/VAT/Total breakdown; per-rep commission DRAFT; editable SO line items → auto-recompute commission; fixed squashed inputs; PO print";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14781,7 +14781,11 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
     withVat: !!it.withVat,
   })) : []);
   const hasLines = lines.length>0;
-  const linesTotal = lines.reduce((s,l)=> s + (Number(l.quantity)||0)*(Number(l.pricePerItem)||0), 0);
+  // Match the pipeline/estimate/invoice math exactly: line = qty×price, plus
+  // 12% VAT on lines flagged With VAT. Total = subtotal + VAT.
+  const linesSub = lines.reduce((s,l)=> s + (Number(l.quantity)||0)*(Number(l.pricePerItem)||0), 0);
+  const linesVat = lines.reduce((s,l)=>{ const sub=(Number(l.quantity)||0)*(Number(l.pricePerItem)||0); return s + (l.withVat?sub*INV_VAT_RATE:0); }, 0);
+  const linesTotal = linesSub + linesVat;
   const effTotal = hasLines ? linesTotal : (Number(f.total)||0);
   function setLine(i,k,v){ setLines(ls=>ls.map((l,idx)=>idx===i?{...l,[k]:v}:l)); }
   function addLine(){ setLines(ls=>[...ls,{itemType:'',category:'',quantity:'',pricePerItem:'',withVat:false}]); }
@@ -14804,7 +14808,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
       if(hasLines){
         payload.items = lines
           .filter(l=> (l.itemType||'').trim() || (Number(l.quantity)||0)>0)
-          .map(l=>{ const q=Number(l.quantity)||0, p=Number(l.pricePerItem)||0; return { itemType:l.itemType||'', category:l.category||'', quantity:q, pricePerItem:p, withVat:!!l.withVat, lineTotal:q*p }; });
+          .map(l=>{ const q=Number(l.quantity)||0, p=Number(l.pricePerItem)||0, sub=q*p, v=l.withVat?sub*INV_VAT_RATE:0; return { itemType:l.itemType||'', category:l.category||'', quantity:q, pricePerItem:p, withVat:!!l.withVat, lineTotal:sub+v }; });
       }
       payload.total = effTotal;
       payload.subtotal = effTotal;
@@ -14872,17 +14876,18 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
             hasLines ? (
               <div className="space-y-1">
                 <div className="grid grid-cols-12 gap-2 text-[10px] uppercase text-slate-400 font-semibold px-0.5">
-                  <div className="col-span-5">Item</div><div className="col-span-2 text-right">Qty</div><div className="col-span-2 text-right">Unit ₱</div><div className="col-span-2 text-right">Line ₱</div><div className="col-span-1"></div>
+                  <div className="col-span-4">Item</div><div className="col-span-2 text-right">Qty</div><div className="col-span-2 text-right">Unit ₱</div><div className="col-span-1 text-center">VAT</div><div className="col-span-2 text-right">Line ₱</div><div className="col-span-1"></div>
                 </div>
-                {lines.map((l,i)=>(
+                {lines.map((l,i)=>{ const sub=(Number(l.quantity)||0)*(Number(l.pricePerItem)||0); const lt=sub+(l.withVat?sub*INV_VAT_RATE:0); return (
                   <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                    <input className="input text-xs col-span-5" placeholder="Item" value={l.itemType} onChange={e=>setLine(i,'itemType',e.target.value)} />
+                    <input className="input text-xs col-span-4" placeholder="Item" value={l.itemType} onChange={e=>setLine(i,'itemType',e.target.value)} />
                     <input type="number" inputMode="numeric" className="input text-xs col-span-2 text-right" placeholder="0" value={l.quantity} onChange={e=>setLine(i,'quantity',e.target.value)} />
                     <input type="number" inputMode="decimal" className="input text-xs col-span-2 text-right" placeholder="0" value={l.pricePerItem} onChange={e=>setLine(i,'pricePerItem',e.target.value)} />
-                    <div className="col-span-2 text-right text-xs font-semibold">{peso((Number(l.quantity)||0)*(Number(l.pricePerItem)||0))}</div>
+                    <label className="col-span-1 flex items-center justify-center" title="Add 12% VAT to this line"><input type="checkbox" checked={!!l.withVat} onChange={e=>setLine(i,'withVat',e.target.checked)} /></label>
+                    <div className="col-span-2 text-right text-xs font-semibold">{peso(lt)}</div>
                     <button type="button" onClick={()=>removeLine(i)} className="col-span-1 text-rose-400 text-sm text-center" title="Remove line">✕</button>
                   </div>
-                ))}
+                ); })}
               </div>
             ) : (
               <div className="text-xs text-slate-400 py-1">No line items on this SO — set the order total directly below, or click “+ Add line”.</div>
@@ -14890,13 +14895,19 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
           ) : (
             Array.isArray(so.items) && so.items.length>0 ? (
               <table className="w-full text-xs">
-                <thead className="text-slate-500"><tr><th className="text-left py-1">Item</th><th className="text-right py-1">Qty</th><th className="text-right py-1">Unit ₱</th><th className="text-right py-1">Line ₱</th></tr></thead>
-                <tbody>{so.items.map((it,i)=>(<tr key={i} className="border-t"><td className="py-1.5">{it.itemType||it.description||'—'}{it.category?' · '+it.category:''}</td><td className="py-1.5 text-right">{it.quantity||it.qty||0}</td><td className="py-1.5 text-right">{peso(it.pricePerItem||0)}</td><td className="py-1.5 text-right">{peso(it.lineTotal||((Number(it.quantity)||0)*(Number(it.pricePerItem)||0)))}</td></tr>))}</tbody>
+                <thead className="text-slate-500"><tr><th className="text-left py-1">Item</th><th className="text-right py-1">Qty</th><th className="text-right py-1">Unit ₱</th><th className="text-center py-1">VAT</th><th className="text-right py-1">Line ₱</th></tr></thead>
+                <tbody>{so.items.map((it,i)=>(<tr key={i} className="border-t"><td className="py-1.5">{it.itemType||it.description||'—'}{it.category?' · '+it.category:''}</td><td className="py-1.5 text-right">{it.quantity||it.qty||0}</td><td className="py-1.5 text-right">{peso(it.pricePerItem||0)}</td><td className="py-1.5 text-center">{it.withVat?'✓':'—'}</td><td className="py-1.5 text-right">{peso(it.lineTotal||((Number(it.quantity)||0)*(Number(it.pricePerItem)||0)*(it.withVat?(1+INV_VAT_RATE):1)))}</td></tr>))}</tbody>
               </table>
             ) : <div className="text-xs text-slate-400 py-1">No line items.</div>
           )}
 
-          <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t text-sm">
+          {hasLines && linesVat>0 && (
+            <div className="mt-2 pt-2 border-t text-xs text-slate-500 flex flex-col items-end gap-0.5">
+              <div className="flex justify-between gap-6 w-48"><span>Subtotal</span><span className="font-medium text-slate-700">{peso(linesSub)}</span></div>
+              <div className="flex justify-between gap-6 w-48"><span>VAT (12%)</span><span className="font-medium text-slate-700">{peso(linesVat)}</span></div>
+            </div>
+          )}
+          <div className={`flex items-center justify-end gap-2 mt-2 ${hasLines&&linesVat>0?'':'pt-2 border-t'} text-sm`}>
             <span className="text-slate-500">Order total</span>
             {hasLines
               ? <span className="font-bold text-base">{peso(linesTotal)}</span>
