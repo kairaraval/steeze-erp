@@ -12479,8 +12479,8 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
   const finalizedBy = po.finalized_by ? (profiles||[]).find(p => p.id === po.finalized_by) : null;
   const paidBy = po.paid_by ? (profiles||[]).find(p => p.id === po.paid_by) : null;
   const methodLabel = (PO_PAYMENT_METHODS.find(m=>m.key===po.payment_method)||{}).label || '—';
-  return (
-    <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
+  return ReactDOM.createPortal(
+    <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
       <PortraitPagePrintStyle />
       <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
         <div className="min-w-0">
@@ -12494,7 +12494,7 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
       </div>
 
       <div className="tp-print py-6">
-        <div className="po-page" style={{fontSize:'10pt', color:'#222'}}>
+        <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
           <DocPrintHeader title="PURCHASE ORDER" rightBlocks={
             <>
               <div><span className="text-slate-500 uppercase text-[9px]">PO No.</span> <strong>{po.number||po.id.slice(0,6)}</strong></div>
@@ -12634,7 +12634,8 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -14093,8 +14094,8 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
               <div key={i} className="bg-white border rounded p-2">
                 <div className="grid grid-cols-12 gap-2 items-end">
                   <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Inventory item</label><select className="input mt-0.5 text-xs" value={l.item_id||''} disabled={locked} onChange={e=>{ const it2=items.find(x=>x.id===e.target.value); setLine(i,{ item_id:e.target.value||null, description: it2 ? (it2.name + (it2.color?` - ${it2.color}`:'')) : l.description, unit_cost:l.unit_cost||it2?.cost||0 }); }}><option value="">— optional —</option>{items.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(it2=><option key={it2.id} value={it2.id}>{it2.name}{it2.color?` — ${it2.color}`:''}{it2.sku?` · ${it2.sku}`:''}</option>)}</select></div>
-                  <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5 text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} /></div>
-                  <div className="col-span-1"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5 text-xs" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={locked} /></div>
+                  <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5 text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} disabled={locked} /></div>
+                  <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" inputMode="numeric" className="input mt-0.5 text-xs" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={locked} /></div>
                   <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Unit ₱</label><input type="number" className="input mt-0.5 text-xs" value={l.unit_cost} onChange={e=>setLine(i,{unit_cost:e.target.value})} disabled={locked} /></div>
                   <div className="col-span-1 text-right text-xs"><div className="text-[10px] uppercase text-slate-500">Total</div><div className="font-semibold">{peso(Number(l.qty||0)*Number(l.unit_cost||0))}</div></div>
                   <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
