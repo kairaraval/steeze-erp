@@ -14856,6 +14856,11 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
             </div>
           </div>
           {canInvoice && <div className="text-[11px] text-slate-500 mt-1.5">Changing the total recomputes the rep's <strong>unpaid</strong> commission automatically. Already-paid commissions are left as-is.</div>}
+          {canInvoice && soInvoices.length>0 && Number(f.total)!==Number(so.total) && (
+            <div className="mt-2 text-[11px] bg-blue-50 border border-blue-200 text-blue-800 rounded px-2.5 py-1.5">
+              🧾 This SO already has {soInvoices.length} invoice{soInvoices.length===1?'':'s'}. Changing the total here will <strong>not</strong> update {soInvoices.length===1?'it':'them'} — reissue or adjust the invoice in the Invoices tab so the billed amount matches.
+            </div>
+          )}
           {paidStale.length>0 && (
             <div className="mt-2 text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded px-2.5 py-1.5">
               ⚠ A commission for this SO was already paid out based on {peso(paidStale[0].base_amount)} (≈{peso(paidStale[0].amount)}). The order is now {peso(so.total)} — settle the difference manually with Accounting; it was not rewritten.
