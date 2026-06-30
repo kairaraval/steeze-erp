@@ -1594,7 +1594,9 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const canEdit = profile.role==='admin' || profile.role==='accounting';
   const [loading,setLoading]=useState(true);
   const [invoice,setInvoice]=useState(existing||null);
-  const [view,setView]=useState('edit');
+  // View-only roles (sales managers/assistants) open straight to the clean
+  // invoice PDF instead of the editing form — same behaviour as estimates.
+  const [view,setView]=useState(canEdit?'edit':'print');
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
   const [number,setNumber]=useState(existing?.number||'');
@@ -1680,7 +1682,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
-            <button onClick={()=>setView('edit')} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">← Back</button>
+            <button onClick={()=> canEdit ? setView('edit') : onClose()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">{canEdit?'← Back':'Close'}</button>
           </div>
         </div>
         <div className="tp-print py-6">
