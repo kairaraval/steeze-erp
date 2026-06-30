@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 127 · Editable SO line items (qty/price auto-sum) → updates balance + auto-recomputes unpaid commission (paid flagged, not rewritten); invoice-exists warning; fixed squashed inputs; PO print; manager read-only invoice/estimate views";
+const BUILD = "Live build 128 · Per-rep printable commission DRAFT (review before payout) on the Commissions page; editable SO line items → auto-recompute commission; fixed squashed inputs; PO print; manager read-only invoice/estimate views";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15496,6 +15496,90 @@ function SalesOrderPaymentsFeed({ profile, profiles, visibleSOs, soPayments, ban
 }
 
 
+// Printable, per-rep commission DRAFT — sent to the sales manager to review
+// and confirm BEFORE any voucher is generated. Clearly marked DRAFT / not a
+// payment. Portals to <body> like the other print views so it prints cleanly.
+function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
+  const soNum    = id => { const s=(salesOrders||[]).find(x=>x.id===id); return s?s.number:'—'; };
+  const soClient = id => { const s=(salesOrders||[]).find(x=>x.id===id); return s?(s.client_name||''):''; };
+  const sorted = (rows||[]).slice().sort((a,b)=>String(a.earned_at||'').localeCompare(String(b.earned_at||'')));
+  const dates = sorted.map(r=>String(r.earned_at||'').slice(0,10)).filter(Boolean);
+  const periodFrom = dates[0]||''; const periodTo = dates[dates.length-1]||'';
+  const repNm = rep ? (rep.name||rep.email) : 'Sales rep';
+  const today = new Date().toISOString().slice(0,10);
+  return ReactDOM.createPortal(
+    <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
+      <PortraitPagePrintStyle />
+      <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
+        <div className="min-w-0">
+          <div className="font-bold text-slate-900 truncate">📄 Commission draft — {repNm}</div>
+          <div className="text-xs text-slate-500">{sorted.length} item{sorted.length===1?'':'s'} · {peso(total)} · for review before payout</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+        </div>
+      </div>
+      <div className="tp-print py-6">
+        <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
+          <DocPrintHeader title="SALES COMMISSION — DRAFT" rightBlocks={
+            <div>
+              <div><strong>For:</strong> {repNm}</div>
+              <div><strong>Prepared:</strong> {fmtDate(today)}</div>
+              {periodFrom && <div><strong>Period:</strong> {fmtDate(periodFrom)} – {fmtDate(periodTo)}</div>}
+            </div>
+          } />
+          <div className="mt-2 mb-2 border border-amber-400 bg-amber-50 text-amber-800 text-[10px] px-2 py-1.5 rounded">
+            ⚠ DRAFT FOR REVIEW — this is not a payment and has not been approved. Please check each line and confirm so Accounting can process your voucher.
+          </div>
+          <table className="w-full border-collapse" style={{fontSize:'9.5pt'}}>
+            <thead>
+              <tr className="bg-slate-100">
+                <th className="border border-slate-900 px-2 py-1.5 text-center w-8">#</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-left">SO # · Client</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-center w-20">Earned</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-center w-20">Type</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-right w-24">SO total</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-right w-14">Rate</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-right w-24">Commission</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r,i)=>(
+                <tr key={r.id}>
+                  <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
+                  <td className="border border-slate-400 px-2 py-1.5"><div className="font-mono font-semibold">{soNum(r.sales_order_id)}</div><div style={{fontSize:'8.5pt'}} className="text-slate-500">{soClient(r.sales_order_id)}</div></td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-center">{fmtDate(String(r.earned_at||'').slice(0,10))}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-center">{r.kind==='booking'?'Booking (50%)':'Collection (50%)'}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(r.base_amount)}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right">{(Number(r.rate||0)*100).toFixed(2)}%</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(r.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-slate-100">
+                <td colSpan="6" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Total commission (this draft)</td>
+                <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          <div style={{fontSize:'8.5pt'}} className="text-slate-500 mt-1">Each sales order pays 50% on booking (deal won) and 50% on collection (fully paid). Amounts reflect the current SO total and may change if an order is revised.</div>
+          <div className="grid grid-cols-2 gap-4 mt-8">
+            <SignatureBox role={`Reviewed & confirmed — ${repNm}`} />
+            <SignatureBox role="Verified by — Accounting" />
+          </div>
+          <div className="flex justify-between text-[9px] text-slate-500 border-t pt-1 mt-4">
+            <span>© Steeze Corporation {new Date().getFullYear()} · Draft commission statement — not a payment.</span>
+            <span>{repNm} · {fmtDate(today)}</span>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 /* ─────────── SALES MANAGER COMMISSIONS ─────────── */
 // One screen for sales reps to see their own commission ledger, and for admin
 // to see everyone's + run monthly payouts.
@@ -15525,6 +15609,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   const [selectedBankId,setSelectedBankId] = useState(bankAccounts && bankAccounts[0]?.id || null);
   // Tracks which rep's payout breakdown is expanded in the green panel.
   const [expandedPayoutRep,setExpandedPayoutRep] = useState(null);
+  // Which rep's printable commission draft is open (review doc before payout).
+  const [draftRep,setDraftRep] = useState(null);
   // The active rep filter — applies only when scope=team. When scope=mine,
   // the user's own ID is always the filter.
   const activeRepId = scope === 'mine' ? profile.id : (repFilter || null);
@@ -15890,7 +15976,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                       <td className="px-3 py-2 text-right">{bookingRows.length} · {peso(bookingTotal)}</td>
                       <td className="px-3 py-2 text-right">{collectionRows.length} · {peso(collectionTotal)}</td>
                       <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}</td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button onClick={(e)=>{ e.stopPropagation(); setDraftRep(p); }} className="text-[10px] px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 mr-1" title="Printable draft to send to this rep for review before paying">📄 Draft</button>
                         <button disabled={generating || !selectedBankId} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
                       </td>
                     </tr>
@@ -15941,6 +16028,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
           {genMsg && <div className="mt-2 text-xs text-emerald-700 bg-white border border-emerald-200 rounded p-2">{genMsg}</div>}
         </div>
       )}
+
+      {draftRep && <CommissionDraftView rep={(profiles||[]).find(x=>x.id===draftRep.manager_id)} rows={draftRep.rows} total={draftRep.amount} salesOrders={salesOrders} onClose={()=>setDraftRep(null)} />}
 
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl p-3 mb-3">
