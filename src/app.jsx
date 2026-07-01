@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 132 · Accounting home 'Payments to verify' card + inbox/toast notification when a payment is logged; removed QuickBooks box from the SO; commission on ex-VAT base with Base/VAT columns; editable SO line items";
+const BUILD = "Live build 133 · 'Payments to verify' tile on the Finance Home (Accounting's actual landing page) + Dashboard; inbox/toast when a payment is logged; QuickBooks box removed; commission on ex-VAT base";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3235,7 +3235,7 @@ function ProductionSupervisorHomeView({ profile, profiles, prodJobs, sampleJobs,
    queue across RFPs, voucher disbursement, collections, bank reconciliation,
    and BIR filings — so the team doesn't have to remember the order to check
    every morning. */
-function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPayments, expenses, budgetRequests, bankAccounts, bankTransactions, orders, navTo }){
+function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPayments, expenses, budgetRequests, bankAccounts, bankTransactions, orders, navTo, onGoToPayments }){
   // ---- Action tile counts ----
   // 1. RFPs awaiting Finance review (the first approval step)
   const rfpsToApprove = (rfps||[]).filter(r => r.status==='pending_finance');
@@ -3247,6 +3247,8 @@ function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPay
   const todayStr = today.toISOString().slice(0,10);
   const openSOs = (salesOrders||[]).filter(s => s.status!=='paid' && s.status!=='cancelled' && Number(s.balance_due||0) > 0);
   const overdueSOs = openSOs.filter(s => s.expected_delivery && s.expected_delivery < todayStr);
+  // Payments logged by the team that still need Accounting's verification.
+  const pendingPayments = (soPayments||[]).filter(s => s.status==='pending');
   // 4. Unreconciled bank transactions (this month) — easy to fall behind on.
   const monthKey = todayStr.slice(0,7);
   const unreconciledThisMonth = (bankTransactions||[]).filter(t => !t.reconciled && (t.date||'').startsWith(monthKey));
@@ -3340,7 +3342,8 @@ function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPay
 
       {/* PRIMARY tiles — actionable items */}
       <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 mt-1">▸ Your action queue</div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+        <Tile icon="💰" label="Payments to verify" count={pendingPayments.length} sub={pendingPayments.length>0?'Team logged — verify now':'All verified'} color="amber" urgent={pendingPayments.length>0} onClick={onGoToPayments} />
         <Tile icon="📝" label="RFPs to approve" count={rfpsToApprove.length} sub={rfpsToApprove.length>0?'First-step approval':'All clear'} color="indigo" onClick={()=>navTo('rfps')} />
         <Tile icon="💰" label="Vouchers to issue" count={rfpsToPay.length} sub={rfpsToPay.length>0?'Approved — ready to pay':'No payouts queued'} color="emerald" onClick={()=>navTo('rfps')} urgent={rfpsToPay.length>0} />
         <Tile icon="📜" label="Overdue invoices" count={overdueSOs.length} sub={overdueSOs.length>0?`AR ${peso(totalAR)} open`:'No overdue'} color="rose" onClick={()=>navTo('ledger')} urgent={overdueSOs.length>0} />
@@ -23455,7 +23458,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} reload={loadAll} />}
-        {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} />}
+        {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
