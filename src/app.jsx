@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 131 · Commission is computed on the BASE (ex-VAT) amount, not the VAT-inclusive total; commission views + draft now show Base and VAT columns; Accounting has full commission tracking; SO line VAT checkbox; editable SO line items";
+const BUILD = "Live build 132 · Accounting home 'Payments to verify' card + inbox/toast notification when a payment is logged; removed QuickBooks box from the SO; commission on ex-VAT base with Base/VAT columns; editable SO line items";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8130,7 +8130,10 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
   );
 }
 
-function Dashboard({ profile, profiles, leads, clients, prodJobs }){
+function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, salesOrders, onGoToPayments }){
+  // Accounting/Admin: payments logged by the team that still need verifying.
+  const canVerify = canVerifySOPayment(profile);
+  const pendingPayments = canVerify ? (soPayments||[]).filter(p=>p.status==='pending') : [];
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const open=leads.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
@@ -8161,6 +8164,36 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs }){
     <div className="p-6">
       <h1 className="text-2xl font-bold text-slate-900 mb-1">Dashboard</h1>
       <p className="text-slate-500 text-sm mb-5">Welcome back, {firstName(profile)}. Here's the live picture.</p>
+
+      {/* Accounting/Admin: fast lane to payments awaiting verification. */}
+      {canVerify && (
+        <div className={`rounded-xl border p-4 mb-6 ${pendingPayments.length>0?'bg-amber-50 border-amber-300':'bg-white border-slate-200'}`}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className={`text-2xl font-bold ${pendingPayments.length>0?'text-amber-700':'text-slate-400'}`}>💰 {pendingPayments.length}</div>
+              <div>
+                <div className="font-semibold text-slate-900">Payments to verify</div>
+                <div className="text-xs text-slate-500">{pendingPayments.length>0 ? `${pendingPayments.length} payment${pendingPayments.length===1?'':'s'} logged by the team awaiting your verification` : 'All caught up — no payments waiting.'}</div>
+              </div>
+            </div>
+            <button onClick={onGoToPayments} className={`text-sm px-4 py-2 rounded-lg font-semibold ${pendingPayments.length>0?'bg-amber-500 text-white hover:bg-amber-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Review payments →</button>
+          </div>
+          {pendingPayments.length>0 && (
+            <div className="mt-3 divide-y border-t pt-2">
+              {pendingPayments.slice(0,5).map(p=>{ const so=(salesOrders||[]).find(s=>s.id===p.sales_order_id); return (
+                <button key={p.id} onClick={onGoToPayments} className="w-full flex items-center justify-between gap-3 py-1.5 text-left hover:bg-amber-100/40 rounded px-1">
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs font-bold">{so?.number||'—'}</span>
+                    <span className="text-xs text-slate-600 ml-2">{so?.client_name||''}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 whitespace-nowrap">{fmtDate(p.date)} · <span className="font-semibold text-emerald-700">{peso(p.amount)}</span> · {payMethodLabel(p.method)}</div>
+                </button>
+              ); })}
+              {pendingPayments.length>5 && <div className="text-[11px] text-slate-500 pt-1.5">+{pendingPayments.length-5} more…</div>}
+            </div>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">{tiles.map((t,i)=>(
         <div key={i} className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase tracking-wide text-slate-400">{t.label}</div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub}</div></div>
       ))}</div>
@@ -14518,7 +14551,7 @@ const SO_STATUSES = [
 ];
 function soMeta(k){ return SO_STATUSES.find(s=>s.key===k)||SO_STATUSES[0]; }
 
-function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices, bankAccounts, clients, leads, salesCommissions, soActivityCounts, reload, onCreateDR }){
+function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices, bankAccounts, clients, leads, salesCommissions, soActivityCounts, openPaymentsTab, onPaymentsTabOpened, reload, onCreateDR }){
   // Build DR pre-fill from an SO row. Lines come from the SO if items exist;
   // otherwise we start with one blank line so the user types what's actually
   // being delivered (partial delivery is the common case).
@@ -14542,7 +14575,10 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   // chronological feed of all sales_order_payments across visible SOs.
   // Admin + Accounting both get the Payments sub-view since they need it to
   // track collections; sales reps stay on Orders only.
-  const [subTab,setSubTab]=useState('orders');
+  const [subTab,setSubTab]=useState(openPaymentsTab ? 'payments' : 'orders');
+  // When arriving from the Dashboard "Payments to verify" card, jump to the
+  // Payments subtab and clear the flag so normal tab switching still works.
+  useEffect(()=>{ if(openPaymentsTab){ setSubTab('payments'); onPaymentsTabOpened && onPaymentsTabOpened(); } },[openPaymentsTab]);
   // Admin-only "My deals" toggle. Default OFF so admin lands on the full
   // list (most common case). Toggling ON filters to SOs whose underlying
   // lead is owned by the admin — useful when Kaira herself is the sales rep
@@ -14740,7 +14776,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
       )}
 
       {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
-      {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
   );
@@ -14828,7 +14864,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
     onSaved();
   }
   async function markDelivered(){
-    if(!confirm('Mark this SO as delivered? After this you can create the QB Sales Invoice and paste the QB invoice # back here.')) return;
+    if(!confirm('Mark this SO as delivered? You can then generate the Invoice from this order.')) return;
     const today = new Date().toISOString().slice(0,10);
     const { error } = await sb.from('sales_orders').update({ delivered_at: today }).eq('id', so.id);
     if(error){ alert(error.message); return; }
@@ -14953,20 +14989,6 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
         <TpLbl t="Delivery address"><textarea className="input min-h-[50px]" value={f.delivery_address} onChange={e=>up('delivery_address',e.target.value)} placeholder="If different from billing address" /></TpLbl>
 
 
-        {/* QuickBooks linkage */}
-        <div className="border-2 border-indigo-200 bg-indigo-50/40 rounded-lg p-3">
-          <div className="font-semibold text-indigo-700 text-sm mb-2">📄 QuickBooks documents</div>
-          <div className="text-[11px] text-slate-500 mb-3">Paste the QB document number + URL after you create each one. The Customer Ledger and Payment Calendar read from these fields.</div>
-          <div className="grid grid-cols-2 gap-2">
-            <TpLbl t="QB Estimate #"><input className="input" value={f.qb_estimate_number} onChange={e=>up('qb_estimate_number',e.target.value)} /></TpLbl>
-            <TpLbl t="QB Estimate URL"><input className="input" value={f.qb_estimate_url} onChange={e=>up('qb_estimate_url',e.target.value)} placeholder="https://qbo.intuit.com/…" /></TpLbl>
-            <TpLbl t="QB Sales Invoice #"><input className="input" value={f.qb_invoice_number} onChange={e=>up('qb_invoice_number',e.target.value)} /></TpLbl>
-            <TpLbl t="QB Sales Invoice URL"><input className="input" value={f.qb_invoice_url} onChange={e=>up('qb_invoice_url',e.target.value)} placeholder="https://qbo.intuit.com/…" /></TpLbl>
-            <TpLbl t="QB Delivery Receipt #"><input className="input" value={f.qb_dr_number} onChange={e=>up('qb_dr_number',e.target.value)} /></TpLbl>
-            <TpLbl t="QB DR URL"><input className="input" value={f.qb_dr_url} onChange={e=>up('qb_dr_url',e.target.value)} placeholder="https://qbo.intuit.com/…" /></TpLbl>
-          </div>
-          {!f.delivered_at && <div className="mt-2 text-[11px] text-amber-700">⚠ Tip: Mark as delivered first (above) → then create the QB Sales Invoice → paste the # + URL here.</div>}
-        </div>
 
         {/* Payment history — pending entries are highlighted amber for accounting
             to spot quickly. The Verify button only renders for accounting/admin. */}
@@ -15100,7 +15122,7 @@ function payStatusBadge(status){
 }
 
 // ─────────── LOG PAYMENT (Pending) — used by Sales + Accounting ───────────
-function SalesOrderLogPaymentModal({ so, profile, bankAccounts, onClose, onSaved }){
+function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClose, onSaved }){
   const [f,setF]=useState({
     date: new Date().toISOString().slice(0,10),
     amount: '',
@@ -15150,6 +15172,9 @@ function SalesOrderLogPaymentModal({ so, profile, bankAccounts, onClose, onSaved
       try {
         await sb.from('sales_order_activity').insert({
           sales_order_id: so.id, actor_id: profile.id, type:'system',
+          // Mention Accounting + Admin so a "payment to verify" lands in their
+          // Inbox and pings them in real time.
+          mentions: (profiles||[]).filter(p=>['accounting','admin'].includes(p.role) && p.id!==profile.id).map(p=>p.id),
           text: `📩 Logged a ${payMethodLabel(f.method)} payment of ${peso(amt)} (${f.reference?'ref '+f.reference:'no ref'}) — pending verification${f.notes?`. Note: ${f.notes}`:''}`,
         });
       } catch(_){}
@@ -22490,6 +22515,9 @@ function App(){
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
   const [inboxOpenSO,setInboxOpenSO]=useState(null);
+  // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
+  // straight on the Payments subtab.
+  const [jumpToPayments,setJumpToPayments]=useState(false);
   // Separate state for dept-board "Open lead" — opens a read-only LeadInfoModal
   // that ONLY shows the dept-job conversation (not the sales chat) and the
   // sent attachments. Holds { lead, job, jobType, canSendToPrinting } so the
@@ -23388,7 +23416,7 @@ function App(){
       {/* Main */}
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
-        {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} />}
+        {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
@@ -23445,7 +23473,7 @@ function App(){
         {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
-        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
