@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 130 · Accounting now has full commission tracking (payout panel, per-rep draft, generate payment, reconcile) same as Admin; SO line VAT 12% checkbox; per-rep commission DRAFT; editable SO line items → auto-recompute commission";
+const BUILD = "Live build 131 · Commission is computed on the BASE (ex-VAT) amount, not the VAT-inclusive total; commission views + draft now show Base and VAT columns; Accounting has full commission tracking; SO line VAT checkbox; editable SO line items";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12891,7 +12891,12 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     const number = `SO-${monthKey}-${seq}`;
     const client = (clients||[]).find(c=>c.id===lead.client_id);
     const items = lead.items || [];
-    const total = Number(lead.value)||0;
+    // Base (ex-VAT) = Σ qty×price; VAT = 12% on VAT-flagged lines. Commission is
+    // earned on the base, so store subtotal = base and total = base + VAT.
+    const base = items.reduce((s,it)=> s + (Number(it.quantity)||0)*(Number(it.pricePerItem)||0), 0);
+    const vat = items.reduce((s,it)=>{ const sub=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s + (it.withVat?sub*0.12:0); }, 0);
+    const total = base>0 ? (base + vat) : (Number(lead.value)||0);
+    const subtotal = base>0 ? base : total;
     const payload = {
       number,
       date: today,
@@ -12899,7 +12904,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       client_id: lead.client_id||null,
       client_name: client?.company||'',
       items,
-      subtotal: total,
+      subtotal,
       total,
       amount_paid: 0,
       balance_due: total,
@@ -14811,7 +14816,9 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
           .map(l=>{ const q=Number(l.quantity)||0, p=Number(l.pricePerItem)||0, sub=q*p, v=l.withVat?sub*INV_VAT_RATE:0; return { itemType:l.itemType||'', category:l.category||'', quantity:q, pricePerItem:p, withVat:!!l.withVat, lineTotal:sub+v }; });
       }
       payload.total = effTotal;
-      payload.subtotal = effTotal;
+      // subtotal = base (ex-VAT). Commission is computed on this, not the
+      // VAT-inclusive total. Falls back to effTotal when there are no lines.
+      payload.subtotal = hasLines ? linesSub : effTotal;
       payload.balance_due = Math.max(0, effTotal - (Number(so.amount_paid)||0));
     } else {
       delete payload.total;
@@ -15513,6 +15520,7 @@ function SalesOrderPaymentsFeed({ profile, profiles, visibleSOs, soPayments, ban
 function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
   const soNum    = id => { const s=(salesOrders||[]).find(x=>x.id===id); return s?s.number:'—'; };
   const soClient = id => { const s=(salesOrders||[]).find(x=>x.id===id); return s?(s.client_name||''):''; };
+  const soVat    = id => { const s=(salesOrders||[]).find(x=>x.id===id); return s?Math.max(0, Number(s.total||0)-Number(s.subtotal ?? s.total ?? 0)):0; };
   const sorted = (rows||[]).slice().sort((a,b)=>String(a.earned_at||'').localeCompare(String(b.earned_at||'')));
   const dates = sorted.map(r=>String(r.earned_at||'').slice(0,10)).filter(Boolean);
   const periodFrom = dates[0]||''; const periodTo = dates[dates.length-1]||'';
@@ -15550,7 +15558,8 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
                 <th className="border border-slate-900 px-2 py-1.5 text-left">SO # · Client</th>
                 <th className="border border-slate-900 px-2 py-1.5 text-center w-20">Earned</th>
                 <th className="border border-slate-900 px-2 py-1.5 text-center w-20">Type</th>
-                <th className="border border-slate-900 px-2 py-1.5 text-right w-24">SO total</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-right w-24">Base (ex-VAT)</th>
+                <th className="border border-slate-900 px-2 py-1.5 text-right w-20">VAT</th>
                 <th className="border border-slate-900 px-2 py-1.5 text-right w-14">Rate</th>
                 <th className="border border-slate-900 px-2 py-1.5 text-right w-24">Commission</th>
               </tr>
@@ -15563,6 +15572,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
                   <td className="border border-slate-400 px-2 py-1.5 text-center">{fmtDate(String(r.earned_at||'').slice(0,10))}</td>
                   <td className="border border-slate-400 px-2 py-1.5 text-center">{r.kind==='booking'?'Booking (50%)':'Collection (50%)'}</td>
                   <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(r.base_amount)}</td>
+                  <td className="border border-slate-400 px-2 py-1.5 text-right text-slate-500">{peso(soVat(r.sales_order_id))}</td>
                   <td className="border border-slate-400 px-2 py-1.5 text-right">{(Number(r.rate||0)*100).toFixed(2)}%</td>
                   <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(r.amount)}</td>
                 </tr>
@@ -15570,7 +15580,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
             </tbody>
             <tfoot>
               <tr className="bg-slate-100">
-                <td colSpan="6" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Total commission (this draft)</td>
+                <td colSpan="7" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Total commission (this draft)</td>
                 <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(total)}</td>
               </tr>
             </tfoot>
@@ -15688,6 +15698,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   function repName(id){ const p = (profiles||[]).find(x => x.id === id); return p ? (p.name || p.email) : '—'; }
   function soNumber(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? s.number : '—'; }
   function soClient(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? (s.client_name||'') : ''; }
+  // Base (ex-VAT) = SO subtotal (falls back to total for older SOs). VAT = total − base.
+  function soBase(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? Number(s.subtotal ?? s.total ?? 0) : 0; }
+  function soVat(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? Math.max(0, Number(s.total||0) - Number(s.subtotal ?? s.total ?? 0)) : 0; }
 
   // ──────────────────────────────────────────────────────────────────
   // RECONCILIATION — does every SO in the current range have its
@@ -15716,8 +15729,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     const mgrProfile = (profiles||[]).find(p => p.id === lead.manager_id);
     const rate = Number(mgrProfile?.commission_rate || 0);
     if(rate <= 0) return { coverage:'no_rate', label:`${mgrProfile?(mgrProfile.name||mgrProfile.email):'Rep'} has no commission % set`, mgr:lead.manager_id, rate:0 };
-    const total = Number(so.total||0);
-    if(total <= 0) return { coverage:'zero_total', label:'SO total is ₱0', mgr:lead.manager_id, rate };
+    const base = Number(so.subtotal ?? so.total ?? 0);
+    if(base <= 0) return { coverage:'zero_total', label:'SO base is ₱0', mgr:lead.manager_id, rate };
     const hasBooking    = (salesCommissions||[]).some(c => c.sales_order_id === so.id && c.manager_id === lead.manager_id && c.kind === 'booking');
     const hasCollection = (salesCommissions||[]).some(c => c.sales_order_id === so.id && c.manager_id === lead.manager_id && c.kind === 'collection');
     const needsCollection = so.status === 'paid';
@@ -15754,7 +15767,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     let created = 0, failed = 0;
     for(const item of coverage.missing){
       const so = item.so;
-      const total = Number(so.total||0);
+      const base = Number(so.subtotal ?? so.total ?? 0);
       for(const k of item.missing){
         const earnedAt = k === 'booking'
           ? (so.created_at || new Date().toISOString())
@@ -15764,8 +15777,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
           manager_id: item.mgr,
           kind: k,
           rate: item.rate,
-          base_amount: total,
-          amount: total * item.rate * 0.5,
+          base_amount: base,
+          amount: base * item.rate * 0.5,
           earned_at: earnedAt,
         });
         // 23505 = unique violation = already created elsewhere — treat as success.
@@ -16002,7 +16015,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                               <th className="text-left px-2 py-1.5">Earned</th>
                               <th className="text-left px-2 py-1.5">SO# · Client</th>
                               <th className="text-left px-2 py-1.5">Kind</th>
-                              <th className="text-right px-2 py-1.5">SO total</th>
+                              <th className="text-right px-2 py-1.5">Base (ex-VAT)</th>
+                              <th className="text-right px-2 py-1.5">VAT</th>
                               <th className="text-right px-2 py-1.5">Rate</th>
                               <th className="text-right px-2 py-1.5">Commission</th>
                             </tr></thead>
@@ -16018,12 +16032,13 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                                   </td>
                                   <td className="px-2 py-1.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${r.kind==='booking'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>{r.kind}</span></td>
                                   <td className="px-2 py-1.5 text-right">{peso(r.base_amount)}</td>
+                                  <td className="px-2 py-1.5 text-right text-slate-500">{peso(soVat(r.sales_order_id))}</td>
                                   <td className="px-2 py-1.5 text-right">{(Number(r.rate||0)*100).toFixed(2)}%</td>
                                   <td className="px-2 py-1.5 text-right font-bold text-emerald-700">{peso(r.amount)}</td>
                                 </tr>
                               ))}
                               <tr className="bg-slate-50 font-bold border-t-2">
-                                <td colSpan="5" className="px-2 py-1.5 text-right uppercase text-[9px] tracking-wider">Payout total</td>
+                                <td colSpan="6" className="px-2 py-1.5 text-right uppercase text-[9px] tracking-wider">Payout total</td>
                                 <td className="px-2 py-1.5 text-right text-emerald-700">{peso(p.amount)}</td>
                               </tr>
                             </tbody>
@@ -16064,14 +16079,15 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               {scope === 'team' && <th className="text-left px-3 py-2">Rep</th>}
               <th className="text-left px-3 py-2">SO# · Client</th>
               <th className="text-left px-3 py-2">Kind</th>
-              <th className="text-right px-3 py-2">Base</th>
+              <th className="text-right px-3 py-2">Base (ex-VAT)</th>
+              <th className="text-right px-3 py-2">VAT</th>
               <th className="text-right px-3 py-2">Rate</th>
               <th className="text-right px-3 py-2">Amount</th>
               <th className="text-left px-3 py-2">Status</th>
             </tr>
           </thead>
           <tbody>{allRows.length === 0 ? (
-            <tr><td colSpan={scope==='team'?8:7} className="text-center text-slate-400 py-10">{salesCommissions && salesCommissions.length === 0 ? 'No commissions yet. Once admin sets a commission % on a sales rep, new Sales Orders will start accruing here.' : 'No commissions match the current filters.'}</td></tr>
+            <tr><td colSpan={scope==='team'?9:8} className="text-center text-slate-400 py-10">{salesCommissions && salesCommissions.length === 0 ? 'No commissions yet. Once admin sets a commission % on a sales rep, new Sales Orders will start accruing here.' : 'No commissions match the current filters.'}</td></tr>
           ) : allRows.map(r => (
             <tr key={r.id} className={`border-t ${r.paid_at ? 'opacity-70' : ''}`}>
               <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(String(r.earned_at||'').slice(0,10))}</td>
@@ -16084,6 +16100,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                 <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${r.kind==='booking'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>{r.kind}</span>
               </td>
               <td className="px-3 py-2 text-right">{peso(r.base_amount)}</td>
+              <td className="px-3 py-2 text-right text-slate-500">{peso(soVat(r.sales_order_id))}</td>
               <td className="px-3 py-2 text-right text-xs">{(Number(r.rate||0) * 100).toFixed(2)}%</td>
               <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(r.amount)}</td>
               <td className="px-3 py-2">
