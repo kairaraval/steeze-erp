@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 129 · SO line items now have the per-line VAT 12% checkbox (matches the pipeline) with Subtotal/VAT/Total breakdown; per-rep commission DRAFT; editable SO line items → auto-recompute commission; fixed squashed inputs; PO print";
+const BUILD = "Live build 130 · Accounting now has full commission tracking (payout panel, per-rep draft, generate payment, reconcile) same as Admin; SO line VAT 12% checkbox; per-rep commission DRAFT; editable SO line items → auto-recompute commission";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15747,7 +15747,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // Skips no_rate / no_manager / no_lead / zero_total — those need admin to
   // fix the underlying record before commission can be assigned.
   async function syncCommissionsFromSOs(){
-    if(!isAdmin){ setSyncMsg('Admin only.'); return; }
+    if(!canSeeAll){ setSyncMsg('Admin/Accounting only.'); return; }
     if(coverage.missing.length === 0){ setSyncMsg('Nothing to sync — every eligible SO already has its commission rows.'); return; }
     if(!confirm(`Create ${coverage.missing.reduce((s,x)=>s+x.missing.length,0)} missing commission row${coverage.missing.length===1?'':'s'} across ${coverage.missing.length} SO${coverage.missing.length===1?'':'s'}?\n\nUses each rep's current commission %. Idempotent — safe to re-run.`)) return;
     setSyncing(true); setSyncMsg('');
@@ -15788,7 +15788,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // the per-rep button in the expanded payout panel). Otherwise every rep
   // in payoutByRep is processed.
   async function generatePayoutVouchers(targetManagerId){
-    if(!isAdmin){ setGenMsg('Admin only.'); return; }
+    if(!canSeeAll){ setGenMsg('Admin/Accounting only.'); return; }
     const targets = targetManagerId
       ? payoutByRep.filter(p => p.manager_id === targetManagerId)
       : payoutByRep;
@@ -15905,7 +15905,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
             </div>
             <div className="flex items-center gap-2">
               {gapCount > 0 && <button onClick={()=>setReconcileOpen(v=>!v)} className="text-xs px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-50">{reconcileOpen?'Hide details':'View details'}</button>}
-              {isAdmin && coverage.missing.length > 0 && <button disabled={syncing} onClick={syncCommissionsFromSOs} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{syncing?'Syncing…':`↻ Sync ${coverage.missing.length} SO${coverage.missing.length===1?'':'s'}`}</button>}
+              {canSeeAll && coverage.missing.length > 0 && <button disabled={syncing} onClick={syncCommissionsFromSOs} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{syncing?'Syncing…':`↻ Sync ${coverage.missing.length} SO${coverage.missing.length===1?'':'s'}`}</button>}
             </div>
           </div>
           {syncMsg && <div className="mt-2 text-xs text-slate-700 bg-white border border-slate-200 rounded p-2">{syncMsg}</div>}
@@ -15948,7 +15948,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
          commission. Each row is expandable to preview the breakdown BEFORE
          generating the voucher. Admin can pay one rep at a time (per-row
          button) or all at once (header button). */}
-      {isAdmin && scope === 'team' && payoutByRep.length > 0 && (
+      {canSeeAll && scope === 'team' && payoutByRep.length > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
             <div>
