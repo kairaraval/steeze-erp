@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 136 · Log Payment: paste a screenshot photo (Cmd/Ctrl+V) as proof, not just file/camera; fixed disappearing e-signatures on printouts; assistants can create+edit leads";
+const BUILD = "Live build 137 · Voucher approvals now have a Reject option (with reason) like RFPs — reverses any linked commission/RFP; Log Payment paste-a-photo; e-signature print fix";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16864,6 +16864,29 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
     if(error){ alert(error.message); return; }
     onSaved && onSaved();
   }
+  // Reject — mirrors the RFP reject. Records a reason, removes the voucher from
+  // the approval queue, and reverses any side-effects so nothing stays "paid"
+  // against a rejected voucher (commission payouts + RFP-linked vouchers).
+  async function rejectVoucher(){
+    const reason = prompt('Reason for rejecting this voucher?\n\nIt will be recorded and the voucher removed from the approval queue.');
+    if(reason===null) return; // cancelled
+    setApproving(true);
+    const now = new Date().toISOString();
+    try {
+      const { error } = await sb.from('vouchers').update({
+        void_at: now,
+        void_reason: `Rejected by ${profile?.name||profile?.email||'admin'}: ${reason||'(no reason given)'}`,
+        deleted_at: now, deleted_by: profile.id,
+      }).eq('id', v.id);
+      if(error) throw error;
+      // If this voucher paid out commissions, put those rows back to unpaid.
+      try { await sb.from('sales_commissions').update({ paid_at:null, voucher_id:null }).eq('voucher_id', v.id); } catch(_){}
+      // If it came from an RFP, send the RFP back to 'approved' so it can be re-issued.
+      if(v.rfp_id){ try { await sb.from('rfps').update({ status:'approved', voucher_id:null, paid_at:null }).eq('id', v.rfp_id); } catch(_){} }
+      setApproving(false);
+      onSaved && onSaved();
+    } catch(e){ setApproving(false); alert(e.message||String(e)); }
+  }
   const typeLabel = v.type==='check' ? 'CHECK VOUCHER'
                   : v.type==='bank_transfer' ? 'BANK TRANSFER VOUCHER'
                   : 'CASH VOUCHER';
@@ -16989,7 +17012,10 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
       {/* Action bar (hidden in print) */}
       <div className="no-print flex gap-2 mt-3 flex-wrap">
         {!v.approved_by && profile && (profile.role==='admin' || profile.role==='manager') && (
-          <button disabled={approving} onClick={approveAndSign} className="py-2 px-3 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">✍ Approve & Sign</button>
+          <>
+            <button disabled={approving} onClick={approveAndSign} className="py-2 px-3 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">✍ Approve & Sign</button>
+            <button disabled={approving} onClick={rejectVoucher} className="py-2 px-3 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700 disabled:opacity-50" title="Reject this voucher — it won't be paid and leaves the approval queue">✕ Reject</button>
+          </>
         )}
         {v.approved_by && approvedBy && (
           <div className="text-xs text-emerald-700 self-center px-3 py-2 bg-emerald-50 rounded-lg border border-emerald-200">✓ Approved by <strong>{approvedBy.name||approvedBy.email}</strong> on {fmtDate((v.signed_at||v.approved_at||'').slice(0,10))}</div>
