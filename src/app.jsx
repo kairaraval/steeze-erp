@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 135 · Fix disappearing e-signatures on techpack/DR/PO printouts (reloads no longer wipe signature_data off the team list); assistants can create+edit leads; Payments-to-verify on Finance Home";
+const BUILD = "Live build 136 · Log Payment: paste a screenshot photo (Cmd/Ctrl+V) as proof, not just file/camera; fixed disappearing e-signatures on printouts; assistants can create+edit leads";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15145,6 +15145,21 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
     reader.onload = e => setProofPreview(e.target.result);
     reader.readAsDataURL(file);
   }
+  // Allow pasting a screenshot / photo (Cmd/Ctrl+V) anywhere while the modal is
+  // open — grabs the first image off the clipboard as the proof of payment.
+  useEffect(()=>{
+    function onPaste(e){
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for(const it of items){
+        if(it.type && it.type.indexOf('image')===0){
+          const file = it.getAsFile();
+          if(file){ onProofChange(file); e.preventDefault(); break; }
+        }
+      }
+    }
+    document.addEventListener('paste', onPaste);
+    return ()=>document.removeEventListener('paste', onPaste);
+  }, []);
   async function save(){
     const amt = Number(f.amount)||0;
     if(amt<=0){ setMsg('Enter the amount you collected.'); return; }
@@ -15154,9 +15169,11 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
       // Upload proof first (if provided). Keep path under sopay/SO/UUID.
       let attachment_url = null, attachment_path = null;
       if(proofFile){
-        const ext = (proofFile.name||'').split('.').pop() || 'jpg';
+        // Pasted images often have no filename — fall back to the MIME subtype.
+        const nameExt = (proofFile.name||'').includes('.') ? (proofFile.name.split('.').pop()||'') : '';
+        const ext = (nameExt || (proofFile.type||'').split('/')[1] || 'png').toLowerCase();
         const key = `sopay/${so.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-        const { error: upErr } = await sb.storage.from(BUCKET).upload(key, proofFile, { upsert:false });
+        const { error: upErr } = await sb.storage.from(BUCKET).upload(key, proofFile, { upsert:false, contentType: proofFile.type||undefined });
         if(upErr) throw upErr;
         attachment_path = key;
         try { attachment_url = await signedUrl(key); } catch(_){}
@@ -15220,8 +15237,9 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
           {/* capture="environment" pops the phone camera directly on iOS/Android.
               No accept filter (per earlier macOS HEIC fix) — browser shows all images. */}
           <input type="file" accept="image/*" capture="environment" onChange={e=>onProofChange(e.target.files&&e.target.files[0])} className="text-xs w-full" />
-          {proofPreview && <img src={proofPreview} alt="proof" className="mt-2 max-h-40 rounded border" />}
-          <div className="text-[10px] text-slate-400 mt-1">Snap the GCash receipt / deposit slip / check photo. Optional but accounting can verify faster with it.</div>
+          <div className="text-[11px] text-indigo-600 mt-1">📋 …or just <strong>paste a screenshot</strong> — copy the receipt image and press <strong>{navigator.platform&&navigator.platform.indexOf('Mac')===0?'⌘V':'Ctrl+V'}</strong> here.</div>
+          {proofPreview && <div className="mt-2"><img src={proofPreview} alt="proof" className="max-h-40 rounded border" /><button type="button" onClick={()=>onProofChange(null)} className="block text-[10px] text-rose-500 hover:underline mt-1">Remove photo</button></div>}
+          <div className="text-[10px] text-slate-400 mt-1">Snap or paste the GCash receipt / deposit slip / check photo. Optional but accounting can verify faster with it.</div>
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-amber-500 text-white font-semibold disabled:opacity-50">{busy?'Logging…':'📩 Submit to Accounting'}</button>
