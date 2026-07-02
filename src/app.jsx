@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 134 · Sales assistants can now create AND edit pipeline leads (RLS + Edit button); Payments-to-verify tile on Finance Home; commission on ex-VAT base; editable SO line items";
+const BUILD = "Live build 135 · Fix disappearing e-signatures on techpack/DR/PO printouts (reloads no longer wipe signature_data off the team list); assistants can create+edit leads; Payments-to-verify on Finance Home";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22606,7 +22606,12 @@ function App(){
     // gating load hit the 8s statement timeout — so every page "just loaded".
     // Fetch only the small columns here; hydrate signatures once in the
     // background so printed documents still render them.
-    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').then(r=>{ if(r.data){ setProfiles(r.data); if(!window.__steezeSig){ window.__steezeSig=1; sb.from('profiles').select('id,signature_data').then(s=>{ if(s&&!s.error&&s.data){ const m={}; s.data.forEach(x=>{ if(x.signature_data) m[x.id]=x.signature_data; }); setProfiles(ps=>(ps||[]).map(p=>m[p.id]!==undefined?{...p,signature_data:m[p.id]}:p)); } }).catch(()=>{}); } } }).catch(()=>{});
+    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').then(r=>{ if(r.data){
+      // Merge-preserve any signatures already hydrated, so the constant reloads
+      // don't wipe signature_data off the team list (that made techpack/DR/PO
+      // printouts lose their e-signatures after the first reload).
+      setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return r.data.map(p=> sig[p.id]!==undefined ? {...p, signature_data:sig[p.id]} : p); });
+      if(!window.__steezeSig){ window.__steezeSig=1; sb.from('profiles').select('id,signature_data').then(s=>{ if(s&&!s.error&&s.data){ const m={}; s.data.forEach(x=>{ if(x.signature_data) m[x.id]=x.signature_data; }); setProfiles(ps=>(ps||[]).map(p=>m[p.id]!==undefined?{...p,signature_data:m[p.id]}:p)); } }).catch(()=>{}); } } }).catch(()=>{});
     sb.from('clients').select('*').order('company').then(r=>{ if(r.data) setClients(r.data); }).catch(()=>{});
     sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
     sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
