@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 133 · 'Payments to verify' tile on the Finance Home (Accounting's actual landing page) + Dashboard; inbox/toast when a payment is logged; QuickBooks box removed; commission on ex-VAT base";
+const BUILD = "Live build 134 · Sales assistants can now create AND edit pipeline leads (RLS + Edit button); Payments-to-verify tile on Finance Home; commission on ex-VAT base; editable SO line items";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2079,7 +2079,7 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
 }
 
 function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
-  const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||lead.manager_id===profile.id;
+  const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||profile.role==='assistant'||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
   const canEstimate = profile.role==='admin' || profile.role==='accounting';
