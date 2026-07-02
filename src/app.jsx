@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 137 · Voucher approvals now have a Reject option (with reason) like RFPs — reverses any linked commission/RFP; Log Payment paste-a-photo; e-signature print fix";
+const BUILD = "Live build 138 · Client view: assign an Account Manager that handles the client; voucher Reject option; Log Payment paste-a-photo; e-signature print fix";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8283,12 +8283,14 @@ function ClientsView({ profile, profiles, clients, leads, onOpen, reload }){
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-8">No clients yet. Click "+ New client" above to add one.</td></tr>}</tbody>
       </table></div></div>
-      {creating && <ClientEditForm profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
+      {creating && <ClientEditForm profile={profile} profiles={profiles} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
     </div>
   );
 }
-function ClientEditForm({ client, profile, onClose, onSaved }){
+function ClientEditForm({ client, profile, profiles, onClose, onSaved }){
   const isEdit=!!client;
+  const [managerId,setManagerId]=useState(client?.manager_id || profile?.id || null);
+  const salesPeople = (profiles||[]).filter(p=>['admin','manager'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   // Build initial contacts: existing array, or migrate legacy fields, or one empty row.
   const initialContacts = (()=>{
     if(client && Array.isArray(client.contacts) && client.contacts.length>0) return client.contacts.map((c,i)=>({...c, id:'c'+i}));
@@ -8315,14 +8317,14 @@ function ClientEditForm({ client, profile, onClose, onSaved }){
       industry: f.industry.trim(),
       address:  f.address.trim(),
       tags, notes:f.notes,
+      manager_id: managerId || null,
       contacts: cleanContacts,
     };
     if(isEdit){
       const {error}=await sb.from('clients').update(payload).eq('id',client.id);
       setBusy(false); if(error){ setMsg(error.message); return; } onSaved&&onSaved();
     } else {
-      const insertPayload = { ...payload, manager_id: profile?.id || null };
-      const {error}=await sb.from('clients').insert(insertPayload);
+      const {error}=await sb.from('clients').insert(payload);
       setBusy(false); if(error){ setMsg(error.message); return; } onSaved&&onSaved();
     }
   }
@@ -8332,6 +8334,16 @@ function ClientEditForm({ client, profile, onClose, onSaved }){
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Company *"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} placeholder="Acme Corp" /></TpLbl>
           <TpLbl t="Industry"><input className="input" value={f.industry} onChange={e=>up('industry',e.target.value)} /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Account manager (handles this client)">
+            <select className="input" value={managerId||''} onChange={e=>setManagerId(e.target.value||null)}>
+              <option value="">— Unassigned —</option>
+              {salesPeople.map(p=><option key={p.id} value={p.id}>{(p.name||p.email)}{p.id===profile.id?' (me)':''}</option>)}
+              {managerId && !salesPeople.some(p=>p.id===managerId) && <option value={managerId}>{(profiles||[]).find(p=>p.id===managerId)?.name||'Current'} (current)</option>}
+            </select>
+          </TpLbl>
+          <div></div>
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex items-center justify-between mb-2">
@@ -8426,7 +8438,7 @@ function ClientDetail({ client, profile, profiles, leads, reload, onBack, onOpen
         <div className="bg-white border rounded-xl p-5"><div className="text-sm whitespace-pre-wrap text-slate-700">{live.notes||<span className="text-slate-400">No notes yet. Use "Edit details" to add notes.</span>}</div></div>
       )}
 
-      {editing && <ClientEditForm client={live} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); reload&&reload(); }} />}
+      {editing && <ClientEditForm client={live} profile={profile} profiles={profiles} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); reload&&reload(); }} />}
     </div>
   );
 }
