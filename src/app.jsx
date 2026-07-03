@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 142 · A lead can now have TWO estimates — a Sample estimate and a Production estimate (separate numbers/status/PDF, labeled on the doc); Estimates list shows Type; SO still from lead value";
+const BUILD = "Live build 143 · Samples get paid: accepting a Sample estimate auto-creates a Sample Sales Order (kind=sample) that flows through payment logging/verify/invoice/AR/cash + earns commission; SO list shows a Sample badge";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1329,8 +1329,12 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         if(error) throw error; saved=data;
       }
       setEstimate(saved); setStatus(saved.status);
-      // NOTE: estimates never create or touch a Sales Order. The SO is created
-      // separately when the lead reaches Closed Won.
+      // Production estimates never touch a Sales Order (the SO is created at
+      // Closed Won). A SAMPLE estimate that's just been Accepted spins up a
+      // Sample Sales Order so the sample gets billed/collected like any order.
+      if(purpose==='sample' && (nextStatus||status)==='approved'){
+        try { await maybeCreateSampleSOFromEstimate(profile, lead, client, saved); } catch(_){}
+      }
       setMsg('Saved.');
       reload&&reload();
       setTimeout(()=>setMsg(''),2500);
@@ -12931,7 +12935,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     // We don't care about soft-deleted ones — the user actively trashed them
     // and the DB-level partial unique index also ignores them.
     const { data: existing, error: lookupErr } = await sb.from('sales_orders')
-      .select('id').eq('lead_id', lead.id).is('deleted_at', null).limit(1);
+      .select('id').eq('lead_id', lead.id).eq('kind','production').is('deleted_at', null).limit(1);
     if(lookupErr){ console.warn('SO auto-create lookup failed:', lookupErr.message); return null; }
     if(existing && existing.length > 0){
       // If we found one but the lead.sales_order_id wasn't set, fix the linkage
@@ -12955,6 +12959,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     const subtotal = base>0 ? base : total;
     const payload = {
       number,
+      kind: 'production',
       date: today,
       lead_id: lead.id,
       client_id: lead.client_id||null,
@@ -12982,7 +12987,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       // 23505 = partial UNIQUE violation. Another path / tab won the race and
       // already inserted the SO. Fetch the winner so the caller knows it exists.
       if(String(error.code||'').startsWith('23')){
-        const { data: winner } = await sb.from('sales_orders').select('*').eq('lead_id', lead.id).is('deleted_at', null).limit(1).maybeSingle();
+        const { data: winner } = await sb.from('sales_orders').select('*').eq('lead_id', lead.id).eq('kind','production').is('deleted_at', null).limit(1).maybeSingle();
         if(winner){ try { await sb.from('leads').update({ sales_order_id: winner.id }).eq('id', lead.id); } catch(_){} }
         return null;
       }
@@ -12997,6 +13002,40 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     console.warn('SO auto-create unexpected error:', e);
     return null;
   }
+}
+
+// When a SAMPLE estimate is accepted, spin up a Sample Sales Order so the
+// sample gets billed + collected through the same flow as production (log
+// payment, verify, invoice, AR, cash). One sample SO per lead; does NOT touch
+// lead.sales_order_id (that stays the production SO). Commission accrues via the
+// normal SO triggers on subtotal (ex-VAT base).
+async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
+  if(!lead || !profile || !estimate) return null;
+  try {
+    const { data: existing } = await sb.from('sales_orders')
+      .select('id').eq('lead_id', lead.id).eq('kind','sample').is('deleted_at', null).limit(1);
+    if(existing && existing.length>0) return existing[0];
+    const today = new Date().toISOString().slice(0,10);
+    const monthKey = today.slice(0,7);
+    const { data: monthRows } = await sb.from('sales_orders').select('id').like('number', `SO-${monthKey}-%`);
+    const number = `SO-${monthKey}-${String((monthRows?.length||0)+1).padStart(3,'0')}`;
+    const total = Number(estimate.total)||0;
+    const subtotal = Number(estimate.subtotal ?? total)||0; // ex-VAT base drives commission
+    const payload = {
+      number, kind:'sample', date: today,
+      lead_id: lead.id, client_id: lead.client_id||null,
+      client_name: client?.company || estimate.client_name || lead.client_name || '',
+      items: estimate.items || [],
+      subtotal, total, amount_paid: 0, balance_due: total, status: 'open',
+      expected_delivery: lead.delivery_date || lead.expected_close || null,
+      payment_terms: estimate.payment_terms || lead.payment_terms || null,
+      created_by: profile.id,
+    };
+    const { data, error } = await sb.from('sales_orders').insert(payload).select().single();
+    if(error){ if(String(error.code||'').startsWith('23')) return null; console.warn('Sample SO create failed:', error.message); return null; }
+    try { await sb.from('lead_activity').insert({ lead_id: lead.id, actor_id: profile.id, type:'system', text:`Sample estimate accepted → Sample Sales Order ${number} created for collection` }); } catch(_){}
+    return data;
+  } catch(e){ console.warn('Sample SO unexpected error:', e); return null; }
 }
 
 // Idempotent auto-create: Sampling job when a lead moves into the Sampling
@@ -14758,7 +14797,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
         </tr></thead>
         <tbody>{rows.map(o => { const meta=soMeta(o.status); const pendN = pendingCountFor(o.id); const ownerId = ownerOf(o); const owner = ownerId ? (profiles||[]).find(p=>p.id===ownerId) : null; return (
           <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(o)}>
-            <td className="px-3 py-2 font-mono text-xs">{o.number}</td>
+            <td className="px-3 py-2 font-mono text-xs">{o.number}{o.kind==='sample' && <span className="ml-1.5 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-sans">Sample</span>}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(o.date)}</td>
             <td className="px-3 py-2">{o.client_name||'—'}</td>
             {canSeeAllReps && <td className="px-3 py-2 text-xs">
