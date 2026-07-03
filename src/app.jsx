@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 143 · Samples get paid: accepting a Sample estimate auto-creates a Sample Sales Order (kind=sample) that flows through payment logging/verify/invoice/AR/cash + earns commission; SO list shows a Sample badge";
+const BUILD = "Live build 144 · Sales Orders: All / Production / Sample filter (one list); managers can view + filter their sample orders; sample-SO billing; two estimates per lead";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14638,6 +14638,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   // Admin + Accounting both get the Payments sub-view since they need it to
   // track collections; sales reps stay on Orders only.
   const [subTab,setSubTab]=useState(openPaymentsTab ? 'payments' : 'orders');
+  const [kindFilter,setKindFilter]=useState('all'); // 'all' | 'production' | 'sample'
   // When arriving from the Dashboard "Payments to verify" card, jump to the
   // Payments subtab and clear the flag so normal tab switching still works.
   useEffect(()=>{ if(openPaymentsTab){ setSubTab('payments'); onPaymentsTabOpened && onPaymentsTabOpened(); } },[openPaymentsTab]);
@@ -14717,6 +14718,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
 
   const counts = SO_STATUSES.reduce((a,s)=>{ a[s.key]=visibleSOs.filter(o=>o.status===s.key).length; return a; }, {});
   const rows = visibleSOs
+    .filter(o=>kindFilter==='all' || (o.kind||'production')===kindFilter)
     .filter(o=>!filter || o.status===filter)
     .filter(o=>!search || `${o.number} ${o.client_name} ${o.qb_invoice_number||''}`.toLowerCase().includes(search.toLowerCase()));
   const totalAR = visibleSOs.filter(o=>o.status!=='paid' && o.status!=='cancelled').reduce((s,o)=>s+Number(o.balance_due||0),0);
@@ -14755,6 +14757,12 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
                 {repsWithSOs.map(r => <option key={r.id} value={r.id}>{r.name||r.email} · {soCountFor(r.id)} SO{soCountFor(r.id)===1?'':'s'}</option>)}
               </select>
             )}
+            {/* Production vs Sample filter — one list, quickly narrowed. */}
+            <div className="flex items-center gap-1 bg-white border rounded-lg p-1 text-xs">
+              {[['all','All'],['production','Production'],['sample','Sample']].map(([k,label])=>(
+                <button key={k} onClick={()=>setKindFilter(k)} className={`px-3 py-1.5 rounded ${kindFilter===k?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
+              ))}
+            </div>
           </div>
         </div>
 
