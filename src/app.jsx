@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 139 · DR creation fixed: Sales Assistants (role typo fixed) + Accounting can now make Delivery Receipts, alongside Admin + Production Supervisor; client Account Manager; voucher Reject";
+const BUILD = "Live build 140 · Accounting now has the Production + Sampling boards (to create DRs from jobs); DR creation for assistants + accounting; client Account Manager; voucher Reject";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22857,7 +22857,7 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','embroidery','knitting','profile','subcon']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -23332,6 +23332,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'] ] },
       FINANCE_FULL,
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'], ['sampling','Sampling Board','🧵'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'], ['subcon','Subcon Monitoring','🧵'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       LOGISTICS_GROUP,
