@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 146 · Finance nav cleanup: removed Expenses (kept Expense Log); Accounting no longer shows Operations/Purchasing groups; Subcon Payroll moved into the Production module (accounting, purchasing, admin, prod-supervisor)";
+const BUILD = "Live build 147 · Fix: Accounting clicking Estimates/Invoices bounced to Finance Home (those views were missing from their allowed set) — now open correctly; finance nav cleanup; Subcon Payroll under Production";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22967,7 +22967,7 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','sales-orders','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
+      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
