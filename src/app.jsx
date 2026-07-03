@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 144 · Sales Orders: All / Production / Sample filter (one list); managers can view + filter their sample orders; sample-SO billing; two estimates per lead";
+const BUILD = "Live build 145 · Inventory: Stock In button — return excess materials (e.g. leftover fabric from production) into stock; logs an in-movement and raises on-hand qty. Plus SO Production/Sample filter; sample billing";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11567,7 +11567,59 @@ function bucketOf(item){
   return INV_BUCKET_KEYS.includes(b) ? b : 'other';
 }
 
-function InventoryView({ suppliers, items, departments, requests, reload }){
+// Stock In — return materials to inventory (e.g. excess fabric left over from a
+// production run). Mirrors Stock Out in reverse: logs a stock_movements row
+// (type='in') and increments items.qty.
+function StockInModal({ profile, items, onClose, onSaved }){
+  const [lines,setLines]=useState([{ id:'l0', item_id:'', qty:'', notes:'' }]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function setLine(i,k,v){ setLines(ls=>ls.map((l,idx)=>idx===i?{...l,[k]:v}:l)); }
+  function addLine(){ setLines(ls=>[...ls,{ id:'l'+Date.now(), item_id:'', qty:'', notes:'' }]); }
+  function removeLine(i){ setLines(ls=>ls.length===1?ls:ls.filter((_,idx)=>idx!==i)); }
+  const opts = (items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  async function save(){
+    const valid = lines.filter(l=>l.item_id && Number(l.qty)>0);
+    if(valid.length===0){ setMsg('Add at least one item with a quantity.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const date = new Date().toISOString().slice(0,10);
+      const movements = valid.map(l=>({ item_id:l.item_id, type:'in', qty:Number(l.qty), reason:'production return', ref_type:'manual', actor_id:profile?.id||null, notes:l.notes||'Excess from production', date }));
+      const { error: smErr } = await sb.from('stock_movements').insert(movements);
+      if(smErr){ const stripped=movements.map(({date,notes,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
+      for(const l of valid){ const it=(items||[]).find(x=>x.id===l.item_id); const newQty=Number(it?.qty||0)+Number(l.qty); await sb.from('items').update({ qty:newQty }).eq('id', l.item_id); }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg('Could not save: '+(e.message||e)); }
+  }
+  return (
+    <Modal title="📥 Stock In — return excess to inventory" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-emerald-50 border border-emerald-200 rounded p-2">Add fabrics/materials coming back into stock — e.g. excess left over from a production run. This <strong>increases on-hand quantity</strong> and logs a stock-in movement.</div>
+        <div className="space-y-2">{lines.map((l,i)=>{ const it=(items||[]).find(x=>x.id===l.item_id); return (
+          <div key={l.id} className="grid grid-cols-12 gap-2 items-end bg-slate-50 border rounded p-2">
+            <div className="col-span-6"><label className="text-[10px] uppercase text-slate-500">Item</label>
+              <select className="input mt-0.5 text-sm" value={l.item_id} onChange={e=>setLine(i,'item_id',e.target.value)}>
+                <option value="">— select —</option>
+                {opts.map(o=><option key={o.id} value={o.id}>{o.name}{o.color?` · ${o.color}`:''}{o.sku?` (${o.sku})`:''} — {Number(o.qty||0)} {o.unit||''} on hand</option>)}
+              </select>
+            </div>
+            <div className="col-span-2"><label className="text-[10px] uppercase text-slate-500">Qty in</label><input type="number" inputMode="decimal" className="input mt-0.5 text-sm text-right" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="0" /></div>
+            <div className="col-span-1 text-[11px] text-slate-500 pb-2">{it?.unit||''}</div>
+            <div className="col-span-2"><label className="text-[10px] uppercase text-slate-500">Note</label><input className="input mt-0.5 text-sm" value={l.notes} onChange={e=>setLine(i,'notes',e.target.value)} placeholder="e.g. SO-…" /></div>
+            <div className="col-span-1 text-right"><button onClick={()=>removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button></div>
+          </div>
+        ); })}</div>
+        <button onClick={addLine} className="text-xs text-indigo-600 hover:underline font-medium">+ Add another item</button>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'📥 Record stock in'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function InventoryView({ profile, suppliers, items, departments, requests, reload }){
   // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   const [tab,setTab]=useState(()=>{ try{ return localStorage.getItem('steeze.inv.tab')||'fabrics'; }catch(_){ return 'fabrics'; } });
@@ -11578,6 +11630,7 @@ function InventoryView({ suppliers, items, departments, requests, reload }){
   const [filterCat,setFilterCat]=useState('');
   const [showLow,setShowLow]=useState(false);
   const [importing,setImporting]=useState(false);
+  const [stockingIn,setStockingIn]=useState(false);
   // Precompute per-bucket stats so each tab header can show its own counts.
   const stats = INV_BUCKETS.reduce((acc,b)=>{ acc[b.key]={ count:0, value:0, low:0 }; return acc; },{});
   (items||[]).forEach(i=>{
@@ -11629,6 +11682,7 @@ function InventoryView({ suppliers, items, departments, requests, reload }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📦 Inventory</h1><p className="text-slate-500 text-sm">{items.length} items total · {peso(Object.values(stats).reduce((s,x)=>s+x.value,0))} total value · {Object.values(stats).reduce((s,x)=>s+x.low,0)} below reorder</p></div>
           <div className="flex items-center gap-2">
+            <button onClick={()=>setStockingIn(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Return excess materials (e.g. leftover fabric from production) into inventory">📥 Stock In</button>
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
             <button onClick={()=>setBulkAdding(true)} className="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-semibold hover:bg-indigo-50">+ Multi-color</button>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New item</button>
@@ -11753,6 +11807,7 @@ function InventoryView({ suppliers, items, departments, requests, reload }){
       {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
       {bulkAdding && <BulkColorItemForm defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>setBulkAdding(false)} onSaved={()=>{ setBulkAdding(false); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
+      {stockingIn && <StockInModal profile={profile} items={items} onClose={()=>setStockingIn(false)} onSaved={()=>{ setStockingIn(false); reload(); }} />}
     </div>
   );
 }
@@ -23559,7 +23614,7 @@ function App(){
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
-        {view==='inventory' && <InventoryView suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
+        {view==='inventory' && <InventoryView profile={profile} suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
