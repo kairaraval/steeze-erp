@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 138 · Client view: assign an Account Manager that handles the client; voucher Reject option; Log Payment paste-a-photo; e-signature print fix";
+const BUILD = "Live build 139 · DR creation fixed: Sales Assistants (role typo fixed) + Accounting can now make Delivery Receipts, alongside Admin + Production Supervisor; client Account Manager; voucher Reject";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19703,7 +19703,7 @@ function drTotalQty(items){ return (items||[]).reduce((s,it)=> s + Number(it.qua
 // Permission helper — who can create/edit DRs (in draft) at all.
 function canManageDR(profile){
   const r = profile?.role;
-  return r==='admin' || r==='sales_assistant' || r==='production_supervisor';
+  return r==='admin' || r==='assistant' || r==='production_supervisor' || r==='accounting';
 }
 // After Release only Admin can edit/void — DRs are official documents.
 function canEditReleasedDR(profile){ return profile?.role==='admin'; }
