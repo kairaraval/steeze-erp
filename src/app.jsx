@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 148 · DR: after making a DR from the production/sampling board it opens the print preview right away (print/save-PDF there, no need to open the DR list); added a Client PO # box prefilled from the sales lead, shown on the printed DR";
+const BUILD = "Live build 149 · RFP\u2192voucher (Pay from PO): added an Expense category selector so accounting can categorize the expense, same as the standalone Cash Voucher; DR print-after-save + Client PO #";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16573,6 +16573,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
     payee: rfp.supplier_name||supplier?.company||'',
     amount: rfp.amount,
     particulars: rfp.particulars||'',
+    expense_category: EXPENSE_CATEGORIES[0],
     // check_number doubles as the bank-transfer reference number — both
     // identify the disbursement in the bank statement.
     check_number: (rfp.payment_method==='check' || rfp.payment_method==='bank_transfer') ? (rfp.payment_method_detail||'') : '',
@@ -16611,7 +16612,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
       for(let attempt = 0; attempt < 5; attempt++){
         const res = await sb.from('vouchers').insert({
           number, type:f.type, date:f.date, rfp_id:rfp.id, po_id:rfp.po_id, supplier_id:rfp.supplier_id,
-          payee:f.payee, amount:Number(f.amount), particulars:f.particulars||null,
+          payee:f.payee, amount:Number(f.amount), particulars:f.particulars||null, expense_category:f.expense_category||null,
           // check_number doubles as the bank-transfer reference # since both
           // identify the disbursement in the bank statement.
           check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
@@ -16667,6 +16668,14 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
           <TpLbl t="Amount"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} /></TpLbl>
         </div>
         <TpLbl t="Payee"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Expense category">
+            <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
+              {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+            </select>
+          </TpLbl>
+          <div></div>
+        </div>
         <TpLbl t="Particulars"><textarea className="input min-h-[50px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="What this payment is for" /></TpLbl>
 
         {f.type==='check' && (
