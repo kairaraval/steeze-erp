@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 141 · Sampling board: removed the Qty column (it showed whole-production qty, misleading for samples); Accounting has Production+Sampling boards; DR access fixes";
+const BUILD = "Live build 142 · A lead can now have TWO estimates — a Sample estimate and a Production estimate (separate numbers/status/PDF, labeled on the doc); Estimates list shows Type; SO still from lead value";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1257,7 +1257,8 @@ function estLinesFromLead(lead){
   }));
 }
 
-function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdit=true }){
+function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdit=true, purpose='production' }){
+  const purposeLabel = purpose==='sample' ? 'Sample' : purpose==='production' ? 'Production' : (purpose||'').charAt(0).toUpperCase()+(purpose||'').slice(1);
   const [loading,setLoading]=useState(true);
   const [estimate,setEstimate]=useState(null);   // existing DB record, if any
   const [view,setView]=useState(canEdit?'edit':'print'); // view-only users open straight to the PDF
@@ -1275,7 +1276,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
 
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
-    const { data, error } = await sb.from('estimates').select('*').eq('lead_id', lead.id).order('created_at',{ ascending:false }).limit(1);
+    const { data, error } = await sb.from('estimates').select('*').eq('lead_id', lead.id).eq('purpose', purpose).order('created_at',{ ascending:false }).limit(1);
     if(!alive) return;
     if(error) setMsg('Load failed: '+(error.message||error));
     const ex = (data && data[0]) || null;
@@ -1290,7 +1291,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
       setNumber(await nextEstimateNumber());
     }
     setLoading(false);
-  })(); return ()=>{ alive=false; }; },[lead.id]);
+  })(); return ()=>{ alive=false; }; },[lead.id, purpose]);
 
   const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
   const vat = lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*EST_VAT_RATE:0); },0);
@@ -1305,7 +1306,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   function buildPayload(nextStatus){
     const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*EST_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
     return {
-      number, lead_id:lead.id, client_id:lead.client_id||null,
+      number, lead_id:lead.id, client_id:lead.client_id||null, purpose,
       client_name: client?.company || lead.client_name || '',
       title: lead.title||'', status: nextStatus||status,
       items, subtotal, discount:disc, discount_note:discountNote||null,
@@ -1353,7 +1354,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         <PortraitPagePrintStyle />
         <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
           <div className="min-w-0">
-            <div className="font-bold text-slate-900 truncate">🧾 {number} — estimate preview</div>
+            <div className="font-bold text-slate-900 truncate">🧾 {number} — {purposeLabel} estimate preview</div>
             <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'} · {peso(total)}</div>
           </div>
           <div className="flex items-center gap-2">
@@ -1363,7 +1364,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         </div>
         <div className="tp-print py-6">
           <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
-            <DocPrintHeader title="ESTIMATE / QUOTATION" rightBlocks={
+            <DocPrintHeader title={`${purposeLabel.toUpperCase()} ESTIMATE / QUOTATION`} rightBlocks={
               <div>
                 <div><strong>No.:</strong> {number}</div>
                 <div><strong>Date:</strong> {fmtDate(new Date().toISOString())}</div>
@@ -1441,7 +1442,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
 
   // ---------- EDIT VIEW ----------
   return (
-    <Modal title={`🧾 Estimate · ${lead.title||''}`} onClose={onClose} wide>
+    <Modal title={`🧾 ${purposeLabel} estimate · ${lead.title||''}`} onClose={onClose} wide>
       {loading ? <div className="py-10 text-center text-slate-400 text-sm">Loading estimate…</div> : (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -2008,9 +2009,11 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
   const preparerName = id => { const p=(profiles||[]).find(x=>x.id===id); return p? (p.name||p.email) : '—'; };
   const today = new Date().toISOString().slice(0,10);
 
+  const [openPurpose,setOpenPurpose]=useState('production');
   function openEstimate(e){
     const lead=(leads||[]).find(l=>l.id===e.lead_id);
     if(!lead){ alert('The lead for this estimate was not found — it may have been deleted.'); return; }
+    setOpenPurpose(e.purpose||'production');
     setOpenLead(lead);
   }
 
@@ -2050,6 +2053,7 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
               <th className="text-left px-3 py-2">Number</th>
               <th className="text-left px-3 py-2">Client</th>
               <th className="text-left px-3 py-2">Title</th>
+              <th className="text-left px-3 py-2">Type</th>
               <th className="text-right px-3 py-2">Total</th>
               <th className="text-center px-3 py-2">Status</th>
               <th className="text-left px-3 py-2">Valid until</th>
@@ -2062,18 +2066,19 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{e.number}</td>
                 <td className="px-3 py-2">{e.client_name||'—'}</td>
                 <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]">{e.title||'—'}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded ${(e.purpose||'production')==='sample'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>{(e.purpose||'production')==='sample'?'Sample':(e.purpose||'production')==='production'?'Production':(e.purpose||'—')}</span></td>
                 <td className="px-3 py-2 text-right font-semibold">{peso(e.total)}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[11px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span></td>
                 <td className="px-3 py-2 text-xs">{e.valid_until?fmtDate(e.valid_until):'—'}{expired && <span className="ml-1 text-[10px] text-rose-600 font-semibold">expired</span>}</td>
                 <td className="px-3 py-2 text-xs text-slate-500">{preparerName(e.prepared_by)}</td>
               </tr>
             ); })}
-            {rows.length===0 && <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-400 text-sm">No estimates yet. Create one from a lead in the Sales Pipeline.</td></tr>}
+            {rows.length===0 && <tr><td colSpan="8" className="px-3 py-8 text-center text-slate-400 text-sm">No estimates yet. Create one from a lead in the Sales Pipeline.</td></tr>}
           </tbody>
         </table>
       </div>
 
-      {openLead && <EstimateModal profile={profile} lead={openLead} client={(clients||[]).find(c=>c.id===openLead.client_id)} clients={clients} onClose={()=>setOpenLead(null)} reload={reload} />}
+      {openLead && <EstimateModal profile={profile} lead={openLead} client={(clients||[]).find(c=>c.id===openLead.client_id)} clients={clients} purpose={openPurpose} onClose={()=>setOpenLead(null)} reload={reload} />}
     </div>
   );
 }
@@ -2083,10 +2088,11 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdi
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
   const canEstimate = profile.role==='admin' || profile.role==='accounting';
-  const [showEstimate,setShowEstimate]=useState(false);
-  // Sales managers / assistants get a read-only view button once Accounting/Admin
-  // has sent the estimate (any non-draft estimate exists for this lead).
-  const sentEstimate = (estimates||[]).find(e=>e.lead_id===lead.id && (e.status||'draft')!=='draft');
+  // Holds which estimate purpose is open ('sample' | 'production'), or null.
+  const [showEstimate,setShowEstimate]=useState(null);
+  // A lead can carry a Sample estimate and a Production estimate. Look each up.
+  const EST_PURPOSES = [['sample','Sample'],['production','Production']];
+  const estFor = (pp)=> (estimates||[]).find(e=>e.lead_id===lead.id && (e.purpose||'production')===pp);
   // Inline notes editor — saves without opening the full Edit lead form
   const [notesDraft,setNotesDraft]=useState(lead.notes||'');
   const [notesBusy,setNotesBusy]=useState(false);
@@ -2143,8 +2149,12 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdi
           </div>
           <div className="flex gap-2 pt-2 border-t flex-wrap">
             {canEdit && <button onClick={onEdit} className="py-2 px-3 rounded-lg border text-sm hover:bg-slate-50">✎ Edit</button>}
-            {canEstimate && <button onClick={()=>setShowEstimate(true)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title="Create / edit a client estimate (Accounting & Admin only)">💰 Create estimate</button>}
-            {!canEstimate && sentEstimate && <button onClick={()=>setShowEstimate(true)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title="View the estimate PDF for this lead">📄 View estimate</button>}
+            {canEstimate && EST_PURPOSES.map(([pp,label])=>{ const ex=estFor(pp); const st=ex?(ex.status||'draft'):null; return (
+              <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`Create / edit the ${label} estimate (Accounting & Admin only)`}>💰 {label} estimate{st?(st==='draft'?' · draft':' ✓'):''}</button>
+            ); })}
+            {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const ex=estFor(pp); if(!ex || (ex.status||'draft')==='draft') return null; return (
+              <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate</button>
+            ); })}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
@@ -2161,7 +2171,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdi
           <ThreadBody profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id: lead.id }} scope={'activity/'+lead.id} titleText={lead.title} afterChange={reload} headerless embedded />
         </div>
       </div>
-      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} onClose={()=>setShowEstimate(false)} reload={reload} />}
+      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
     </Modal>
   );
 }
