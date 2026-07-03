@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 147 · Fix: Accounting clicking Estimates/Invoices bounced to Finance Home (those views were missing from their allowed set) — now open correctly; finance nav cleanup; Subcon Payroll under Production";
+const BUILD = "Live build 148 · DR: after making a DR from the production/sampling board it opens the print preview right away (print/save-PDF there, no need to open the DR list); added a Client PO # box prefilled from the sales lead, shown on the printed DR";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4307,6 +4307,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
       kind: 'production',
       client_id: lead?.client_id || null,
       sales_order_id: j.sales_order_id || null,
+      po_number: lead?.po_number || '',
       production_job_id: j.id,
       items: [{
         description: j.item || lead?.title || '',
@@ -4607,6 +4608,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
     return {
       kind: 'sample',
       client_id: lead?.client_id || null,
+      po_number: lead?.po_number || '',
       sampling_job_id: j.id,
       items: [{
         description: 'Sample · ' + (j.title || lead?.title || ''),
@@ -19860,6 +19862,7 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
   const [smId]=useState(existing?.sampling_job_id || ctx.sampling_job_id || null);
   const [releasedBy,setReleasedBy]=useState(existing?.released_by_name || (profile?.name||''));
   const [receivedBy,setReceivedBy]=useState(existing?.received_by_name || '');
+  const [poNumber,setPoNumber]=useState(existing?.po_number || ctx.po_number || '');
   const [vehicle,setVehicle]=useState(existing?.vehicle || '');
   const [notes,setNotes]=useState(existing?.notes || '');
   // Line items state. For edit, seeded from drItems prop. For create, from ctx.items.
@@ -19902,6 +19905,7 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
         sampling_job_id: smId || null,
         released_by_name: releasedBy || null,
         received_by_name: receivedBy || null,
+        po_number: poNumber || null,
         vehicle: vehicle || null,
         notes: notes || null,
         status: targetStatus || existing?.status || 'draft',
@@ -19953,7 +19957,10 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
       if(payload.status === 'released' && payload.sales_order_id){
         await syncSODeliveryStatus(payload.sales_order_id);
       }
-      setBusy(false); onSaved && onSaved(drId);
+      // Hand the fully-saved DR (+ its line items) back so the caller can open
+      // the print preview immediately — no need to hunt for it in the DR list.
+      const savedDR = { id: drId, number: isEdit ? existing.number : payload.number, ...payload, prepared_by: isEdit ? existing.prepared_by : profile.id, _items: liveLines };
+      setBusy(false); onSaved && onSaved(drId, savedDR);
     } catch(err){
       setBusy(false);
       // Surface the full error in the console so a missing FK / RLS denial
@@ -20000,6 +20007,10 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
           <div>
             <label className="text-xs font-semibold text-slate-500">Released by</label>
             <input value={releasedBy} onChange={e=>setReleasedBy(e.target.value)} disabled={locked} placeholder="Name" className="w-full border rounded px-2 py-1.5" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Client PO # <span className="font-normal text-slate-400">(from the sales lead)</span></label>
+            <input value={poNumber} onChange={e=>setPoNumber(e.target.value)} disabled={locked} placeholder="Client's PO number" className="w-full border rounded px-2 py-1.5" />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Vehicle / Courier</label>
@@ -20075,7 +20086,9 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
 
 // ─────────── DR VIEW / PRINT MODAL ───────────
 function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders, onClose }){
-  const items = (drItems||[]).filter(it=> it.dr_id === dr.id).sort((a,b)=>(a.position||0)-(b.position||0));
+  // Prefer items handed in from a just-saved DR (instant print preview); else
+  // read them from the global list by dr_id.
+  const items = ((dr._items && dr._items.length) ? dr._items : (drItems||[]).filter(it=> it.dr_id === dr.id)).slice().sort((a,b)=>(a.position||0)-(b.position||0));
   const client = (clients||[]).find(c=> c.id === dr.client_id);
   const so = (salesOrders||[]).find(s=> s.id === dr.sales_order_id);
   const preparedBy = (profiles||[]).find(p=> p.id === dr.prepared_by);
@@ -20099,6 +20112,7 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
           <div className="text-xl font-bold mt-1">{client?.company || '—'}</div>
           {client && <div className="text-xs text-slate-600 mt-0.5">{client.address||''}{client.contact?` · Attn: ${client.contact}`:''}</div>}
           {so && <div className="text-[10px] text-slate-500 mt-1">Sales Order: <span className="font-mono font-bold">{so.number}</span>{so.title?` · ${so.title}`:''}</div>}
+          {dr.po_number && <div className="text-[10px] text-slate-500 mt-0.5">Client PO #: <span className="font-mono font-bold">{dr.po_number}</span></div>}
         </div>
 
         {/* Items */}
@@ -23744,10 +23758,10 @@ function App(){
 
       {/* Delivery Receipt modals — create (drCreateCtx), edit (drEditing), view/print (drViewing). */}
       {drCreateCtx && canManageDR(profile) && (
-        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} drCtx={drCreateCtx} drItems={drItems} onClose={()=>setDrCreateCtx(null)} onSaved={()=>{ setDrCreateCtx(null); loadAll(); }} />
+        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} drCtx={drCreateCtx} drItems={drItems} onClose={()=>setDrCreateCtx(null)} onSaved={(id,savedDR)=>{ setDrCreateCtx(null); loadAll(); if(savedDR) setDrViewing(savedDR); }} />
       )}
       {drEditing && canManageDR(profile) && (
-        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} existing={drEditing} drItems={drItems} onClose={()=>setDrEditing(null)} onSaved={()=>{ setDrEditing(null); loadAll(); }} />
+        <DeliveryReceiptModal profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} prodJobs={prodJobs} sampleJobs={sampleJobs} existing={drEditing} drItems={drItems} onClose={()=>setDrEditing(null)} onSaved={(id,savedDR)=>{ setDrEditing(null); loadAll(); if(savedDR) setDrViewing(savedDR); }} />
       )}
       {drViewing && (
         <DeliveryReceiptViewModal dr={drViewing} drItems={drItems} clients={clients} profiles={profiles} salesOrders={salesOrders} onClose={()=>setDrViewing(null)} />
