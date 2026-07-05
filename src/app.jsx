@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 154 · Sampling Board: due date is now editable inline (date picker in the Deadline column) for admin, sales managers, sales assistants and production supervisors; overdue dates flagged in rose";
+const BUILD = "Live build 155 · Delivery Receipt print: removed the client address/contact line under DELIVER TO, and made 'Released by' a blank signature line (name written & signed by hand) — Prepared by still e-signs";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20211,7 +20211,6 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
         <div className="border-2 border-slate-800 p-3 mb-3">
           <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">DELIVER TO</div>
           <div className="text-xl font-bold mt-1">{client?.company || '—'}</div>
-          {client && <div className="text-xs text-slate-600 mt-0.5">{client.address||''}{client.contact?` · Attn: ${client.contact}`:''}</div>}
           {so && <div className="text-[10px] text-slate-500 mt-1">Sales Order: <span className="font-mono font-bold">{so.number}</span>{so.title?` · ${so.title}`:''}</div>}
           {dr.po_number && <div className="text-[10px] text-slate-500 mt-0.5">Client PO #: <span className="font-mono font-bold">{dr.po_number}</span></div>}
         </div>
@@ -20257,12 +20256,14 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
         )}
 
         {/* Signature block — Prepared by carries the creator's e-signature.
-           Released by uses the created_by user too (typically the same as the
-           Steeze person who released the goods). Received by is the client
-           side and stays a blank line for a wet signature. */}
+           Released by and Received by stay blank lines: the releaser writes
+           their name and signs by hand, and the client signs on receipt. */}
         <div className="grid grid-cols-3 gap-6 mt-10 text-xs">
           <ApprovedSignature signerProfile={preparedBy} signedAt={dr.date} role="Prepared by" />
-          <ApprovedSignature signerProfile={preparedBy} signedAt={dr.released_at||dr.date} role={`Released by · ${dr.released_by_name||''}`} />
+          <div className="text-center">
+            <div className="border-b border-slate-800 h-12 mb-1"></div>
+            <div className="font-semibold text-slate-700">Released by</div>
+          </div>
           <div className="text-center">
             <div className="border-b border-slate-800 h-12 mb-1">
               {dr.received_by_name && <div className="pt-7 text-sm font-medium">{dr.received_by_name}</div>}
