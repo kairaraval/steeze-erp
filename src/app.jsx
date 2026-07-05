@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 157 · My Tasks fix: task titles were truncated to 'm…' because the hover controls reserved width — switched them to display-toggle so titles use the full row and a due-date chip shows when set";
+const BUILD = "Live build 158 · My Tasks: due-date picker is now always visible on every task (was hover-only and hard to reach) so dates are easy to set; move/delete stay on hover";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4746,8 +4746,7 @@ function MyTasksView({ profile }){
         <button onClick={()=>toggle(t)} className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition text-xs ${t.done?'bg-emerald-500 border-emerald-500 text-white':'border-slate-300 hover:border-indigo-400'}`} title={t.done?'Mark not done':'Mark done'}>{t.done?'✓':''}</button>
         <button onClick={()=>cyclePriority(t)} className={`w-2.5 h-2.5 rounded-full shrink-0 ${prDot(t.priority)}`} title={prTitle(t.priority)}></button>
         <div className={`flex-1 min-w-0 text-sm truncate ${t.done?'line-through text-slate-400':'text-slate-700'}`} title={t.title}>{t.title}</div>
-        {t.due_date && !overdue && !t.done && <span className="text-[10px] text-slate-400 shrink-0 group-hover:hidden">{fmtDate(t.due_date)}</span>}
-        <input type="date" value={t.due_date||''} onChange={e=>patch(t,{due_date:e.target.value||null})} className={`text-[10px] px-1 py-0.5 rounded border bg-white shrink-0 ${overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-200 text-slate-500 hidden group-hover:block'}`} title="Due date" />
+        <input type="date" value={t.due_date||''} onChange={e=>patch(t,{due_date:e.target.value||null})} className={`text-[10px] px-1 py-0.5 rounded border bg-white shrink-0 ${overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-200 text-slate-500'}`} title="Set due date" />
         {!t.done && <select value={t.bucket} onChange={e=>patch(t,{bucket:e.target.value})} className="text-[10px] rounded border border-slate-200 bg-white text-slate-500 shrink-0 hidden group-hover:block" title="Move to…">{buckets.map(b=><option key={b.key} value={b.key}>{b.label}</option>)}</select>}
         <button onClick={()=>del(t.id)} className="text-slate-300 hover:text-rose-500 shrink-0 text-sm hidden group-hover:block" title="Delete">✕</button>
       </div>
