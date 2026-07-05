@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 153 · Forecast timeline (per project): no more typing 30 date fields — click a status bar where it starts then click where it ends to paint the schedule; ✕ clears a row";
+const BUILD = "Live build 154 · Sampling Board: due date is now editable inline (date picker in the Deadline column) for admin, sales managers, sales assistants and production supervisors; overdue dates flagged in rose";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4713,6 +4713,13 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   const canDelete=isAdmin || !isAssistant;
+  // Who may edit a sample's due date directly on the board.
+  const canEditDue=['admin','manager','assistant','production_supervisor'].includes(profile.role);
+  async function saveDue(j, val){
+    const { error } = await sb.from('sampling_jobs').update({ due_date: val||null }).eq('id', j.id);
+    if(error){ alert(error.message); return; }
+    reload();
+  }
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   // Sampling jobs don't carry their own sales_owner_id — derive it from the linked lead.
   const ownerIdFor=(j)=>{ const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return lead?lead.manager_id||null:null; };
@@ -4826,7 +4833,9 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
-            <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
+            <td className="px-3 py-2">{canEditDue
+              ? <input type="date" value={j.due_date||''} onChange={e=>saveDue(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border bg-white ${di.overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-300'}`} title="Edit sample due date" />
+              : <span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span>}</td>
             <td className="px-3 py-2">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
@@ -4877,7 +4886,9 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
                         <td className="px-3 py-2.5 font-mono text-xs">{j.number}</td>
                         <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
                         <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
-                        <td className="px-3 py-2.5"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
+                        <td className="px-3 py-2.5">{canEditDue
+                          ? <input type="date" value={j.due_date||''} onChange={e=>saveDue(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border bg-white ${di.overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-300'}`} title="Edit sample due date" />
+                          : <span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span>}</td>
                         <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
