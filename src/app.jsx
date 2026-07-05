@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 149 · RFP\u2192voucher (Pay from PO): added an Expense category selector so accounting can categorize the expense, same as the standalone Cash Voucher; DR print-after-save + Client PO #";
+const BUILD = "Live build 150 · Simpler Production PLAN: forecast steps per date/stage, then just tick each Done (no separate actual-output logging); header shows delivered status; per-stage progress from done steps";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3975,7 +3975,6 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [subconId,setSubconId]=useState('');
   const [qty,setQty]=useState('');
   const [notes,setNotes]=useState('');
-  const [entryType,setEntryType]=useState('actual'); // 'plan' = forecast, 'actual' = real output
   const [stageDue,setStageDue]=useState(()=> (job.stage_plan && typeof job.stage_plan==='object') ? {...job.stage_plan} : {});
   const [schedule,setSchedule]=useState(()=> (job.status_schedule && typeof job.status_schedule==='object') ? {...job.status_schedule} : {});
   const [showGantt,setShowGantt]=useState(false);
@@ -3993,11 +3992,13 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   }
   useEffect(()=>{ load(); },[job.id]);
 
-  const sumType = (k,t) => entries.filter(e=>e.stage===k && (e.entry_type||'actual')===t).reduce((s,e)=>s+(Number(e.quantity)||0),0);
-  const doneStage = (k) => sumType(k,'actual');   // real output produced so far
-  const plannedStage = (k) => sumType(k,'plan');  // forecast plotted (not produced yet)
-  const sewInhouse = entries.filter(e=>e.stage==='sewing'&&(e.entry_type||'actual')==='actual'&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
-  const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&(e.entry_type||'actual')==='actual'&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  // A step is "done" once its Done box is ticked (older 'actual' rows were
+  // migrated to done=true). Progress = done qty vs the target.
+  const isDone = (e) => e.done || (e.entry_type||'plan')==='actual';
+  const doneStage    = (k) => entries.filter(e=>e.stage===k && isDone(e)).reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const plannedStage = (k) => entries.filter(e=>e.stage===k).reduce((s,e)=>s+(Number(e.quantity)||0),0); // total plotted for the stage
+  const sewInhouse = entries.filter(e=>e.stage==='sewing'&&isDone(e)&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&isDone(e)&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
   async function saveStageDue(stKey, val){
     const next = {...stageDue}; if(val) next[stKey]=val; else delete next[stKey];
     setStageDue(next);
@@ -4031,19 +4032,25 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     setBusy(true); setMsg('');
     const payload = {
       production_job_id: job.id, date: date||new Date().toISOString().slice(0,10),
-      stage, quantity: q, notes: notes||null, created_by: profile.id, entry_type: entryType,
+      stage, quantity: q, notes: notes||null, created_by: profile.id, entry_type: 'plan', done: false,
       sewing_mode: stage==='sewing'?sewingMode:null,
       subcon_id: (stage==='sewing'&&sewingMode==='subcon'&&subconId)?subconId:null,
     };
     const { error } = await sb.from('production_plan_entries').insert(payload);
     setBusy(false);
     if(error){ setMsg('Save failed: '+(error.message||error)); return; }
-    setQty(''); setNotes(''); setMsg(entryType==='plan'?'Added to plan ✓':'Logged ✓');
+    setQty(''); setNotes(''); setMsg('Step added ✓');
     await load(); reload&&reload();
     setTimeout(()=>setMsg(''),1500);
   }
+  async function toggleDone(e){
+    const next = !isDone(e);
+    const { error } = await sb.from('production_plan_entries').update({ done: next, done_at: next ? new Date().toISOString() : null }).eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    await load(); reload&&reload();
+  }
   async function delEntry(id){
-    if(!confirm('Delete this output entry?')) return;
+    if(!confirm('Delete this step?')) return;
     const { error } = await sb.from('production_plan_entries').delete().eq('id', id);
     if(error){ alert(error.message); return; }
     await load(); reload&&reload();
@@ -4062,6 +4069,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           <div className="text-right text-sm shrink-0">
             <div><span className="text-[10px] uppercase text-slate-400">Target</span> <span className="font-bold ml-1">{total.toLocaleString()} pcs</span></div>
             <div className="text-xs text-slate-500">Due {job.due_date?fmtDate(job.due_date):'—'}</div>
+            {job.status && <div className="mt-1"><span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${/deliver/i.test(job.status)?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{/deliver/i.test(job.status)?'✓ ':''}{job.status}</span></div>}
           </div>
         </div>
 
@@ -4139,13 +4147,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
         {/* Log daily output */}
         {canEdit && (
           <div className="border rounded-lg p-3 bg-slate-50/60">
-            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-              <div className="text-[10px] uppercase text-slate-400 font-semibold">{entryType==='plan'?'Plot planned output (forecast)':'Log daily output (actual)'}</div>
-              <div className="inline-flex rounded-lg border bg-white p-0.5 text-[11px]">
-                <button onClick={()=>setEntryType('actual')} className={`px-2.5 py-1 rounded-md ${entryType==='actual'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>✓ Actual output</button>
-                <button onClick={()=>setEntryType('plan')} className={`px-2.5 py-1 rounded-md ${entryType==='plan'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🗓 Plan</button>
-              </div>
-            </div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Forecast a step — plot the plan (date · stage · qty), then tick it Done below when finished</div>
             <div className="flex flex-wrap gap-2 items-end">
               <div><label className="text-[10px] text-slate-500 block">Date</label><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></div>
               <div><label className="text-[10px] text-slate-500 block">Stage</label>
@@ -4163,7 +4165,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
               )}
               <div><label className="text-[10px] text-slate-500 block">Qty (pcs)</label><input type="number" className="input w-24 text-right" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0" /></div>
               <div className="flex-1 min-w-[140px]"><label className="text-[10px] text-slate-500 block">Notes</label><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="optional" /></div>
-              <button disabled={busy} onClick={addEntry} className={`py-2 px-4 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${entryType==='plan'?'bg-indigo-600 hover:bg-indigo-700':'bg-emerald-600 hover:bg-emerald-700'}`}>{busy?'Saving…':(entryType==='plan'?'+ Add to plan':'+ Log output')}</button>
+              <button disabled={busy} onClick={addEntry} className="py-2 px-4 rounded-lg text-white text-sm font-semibold disabled:opacity-50 bg-indigo-600 hover:bg-indigo-700">{busy?'Saving…':'+ Add step'}</button>
             </div>
             {msg && <div className={`text-xs mt-1.5 ${/fail|pick|enter/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
           </div>
@@ -4171,13 +4173,14 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
 
         {/* Output log */}
         <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Plan &amp; output log ({entries.length})</div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Forecast steps ({entries.filter(e=>isDone(e)).length}/{entries.length} done) — tick each one as it's finished</div>
           {loading ? <div className="py-6 text-center text-slate-400 text-sm">Loading…</div> : entries.length===0 ? (
-            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">Nothing yet — plot a plan or log actual output above.</div>
+            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">No steps yet — forecast a step above, then tick it Done when finished.</div>
           ) : (
             <div className="border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                  <th className="text-center px-3 py-2">Done</th>
                   <th className="text-left px-3 py-2">Date</th>
                   <th className="text-left px-3 py-2">Stage</th>
                   <th className="text-right px-3 py-2">Qty</th>
@@ -4185,14 +4188,15 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                   <th className="text-left px-3 py-2">By</th>
                   <th></th>
                 </tr></thead>
-                <tbody>{[...entries].reverse().map(e=>{ const sm=planStageMeta(e.stage); const isPlan=(e.entry_type||'actual')==='plan'; return (
-                  <tr key={e.id} className={`border-t ${isPlan?'bg-indigo-50/40':''}`}>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}{isPlan && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-indigo-100 text-indigo-700 font-bold">PLAN</span>}</td>
+                <tbody>{[...entries].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(e=>{ const sm=planStageMeta(e.stage); const done=isDone(e); return (
+                  <tr key={e.id} className={`border-t ${done?'bg-emerald-50/50':''}`}>
+                    <td className="px-3 py-2 text-center"><input type="checkbox" checked={done} onChange={()=>toggleDone(e)} title={done?'Done — click to un-mark':'Mark this step done'} className="w-4 h-4 cursor-pointer" /></td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
-                    <td className={`px-3 py-2 text-right font-semibold ${isPlan?'text-indigo-700':''}`}>{(Number(e.quantity)||0).toLocaleString()}</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
                     <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
-                    <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete entry">✕</button>}</td>
+                    <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete step">✕</button>}</td>
                   </tr>
                 ); })}</tbody>
               </table>
