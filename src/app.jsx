@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 151 · Production PLAN: removed the fixed per-stage deadlines; each forecast step now has its own Start date + Deadline, with overdue-not-done steps flagged in rose on the step and its stage card";
+const BUILD = "Live build 152 · Production Timeline: added a weekly capacity load strip — pieces in production per week vs an adjustable ceiling (green room / amber near-full / red over), with an at-a-glance 'room to take on more' banner";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4222,6 +4222,8 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
 function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reload }){
   const [planning,setPlanning]=useState(null);
   const [showDone,setShowDone]=useState(false);
+  const [capacity,setCapacity]=useState(()=>{ try{ return Number(localStorage.getItem('steeze_prod_capacity'))||5000; }catch(e){ return 5000; } });
+  function saveCapacity(v){ const n=Math.max(0,Number(v)||0); setCapacity(n); try{ localStorage.setItem('steeze_prod_capacity', String(n)); }catch(e){} }
   const todayISO = new Date().toISOString().slice(0,10);
   const clampPct = (n)=> Math.max(0, Math.min(100, n));
   const active = (jobs||[]).filter(j=> showDone ? true : !PRODUCTION_DONE.includes(j.status));
@@ -4239,6 +4241,20 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
   const rangeEnd   = ganttMax([...rows.map(r=>r.end), ganttAddDays(todayISO,14)]) || ganttAddDays(rangeStart,30);
   const totalDays  = Math.max(1, ganttDays(rangeStart, rangeEnd));
   const ticks = []; for(let d=0; d<=totalDays; d+=7){ ticks.push(ganttAddDays(rangeStart, d)); }
+  // Weekly capacity load: spread each project's pieces evenly across the weeks it is active,
+  // then sum per week so overlapping projects stack up. Answers "can we take on more?".
+  const weekBuckets = ticks.map(t=>({ start:t, end:ganttAddDays(t,6), load:0 }));
+  rows.forEach(r=>{
+    const qty = Number(r.job.quantity)||0; if(qty<=0) return;
+    const hit = weekBuckets.filter(w=> !(w.end < r.start || w.start > r.end));
+    if(hit.length===0) return;
+    const per = qty/hit.length;
+    hit.forEach(w=> w.load += per);
+  });
+  const peakLoad = Math.max(1, ...weekBuckets.map(w=>w.load));
+  const weeksOver = weekBuckets.filter(w=> capacity>0 && w.load>capacity).length;
+  const loadColor = (load)=>{ if(capacity<=0) return 'bg-indigo-500'; const r=load/capacity; if(r>1) return 'bg-rose-500'; if(r>=0.8) return 'bg-amber-500'; return 'bg-emerald-500'; };
+  const fmtLoad = (n)=> n>=1000 ? (n/1000).toFixed(n>=10000?0:1)+'k' : String(Math.round(n));
   function urgency(j){
     if(PRODUCTION_DONE.includes(j.status)) return 'bg-emerald-500';
     if(j.due_date && j.due_date<todayISO) return 'bg-rose-500';
@@ -4252,8 +4268,18 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
           <h1 className="text-2xl font-bold">🗓 Production Timeline</h1>
           <p className="text-slate-500 text-sm">{rows.length} {showDone?'':'active '}project{rows.length===1?'':'s'} · {fmtDate(rangeStart)} → {fmtDate(rangeEnd)}. Tap a project to open its plan.</p>
         </div>
-        <label className="text-xs flex items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} /> Show delivered</label>
+        <div className="flex items-center gap-4">
+          <label className="text-xs flex items-center gap-1.5">Weekly capacity <input type="number" min="0" step="500" value={capacity} onChange={e=>saveCapacity(e.target.value)} className="w-24 px-2 py-1 rounded border border-slate-300 text-right" /> <span className="text-slate-400">pcs</span></label>
+          <label className="text-xs flex items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} /> Show delivered</label>
+        </div>
       </div>
+      {rows.length>0 && (
+        <div className="mb-3 text-xs">{weeksOver>0
+          ? <span className="px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-semibold">⚠ {weeksOver} week{weeksOver===1?'':'s'} over capacity — limited room for new work</span>
+          : <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold">✓ Every week is within capacity — room to take on more</span>}
+          <span className="text-slate-400 ml-2">Busiest week ≈ {fmtLoad(peakLoad)} pcs of {fmtLoad(capacity)} capacity</span>
+        </div>
+      )}
       {rows.length===0 ? (
         <div className="text-center py-16 border rounded-2xl border-dashed bg-white text-slate-400">No active production projects.</div>
       ) : (
@@ -4264,6 +4290,21 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
               <div className="relative flex-1 h-7">
                 {ticks.map((t,i)=>(<span key={i} className="absolute top-1.5 text-[9px] text-slate-400 -translate-x-1/2" style={{left:clampPct(ganttDays(rangeStart,t)/totalDays*100)+'%'}}>{fmtDate(t)}</span>))}
                 <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}} title="Today"></div>
+              </div>
+            </div>
+            {/* Weekly capacity load strip — how many pieces are in production each week vs your ceiling. */}
+            <div className="flex items-stretch border-b bg-white">
+              <div className="w-60 shrink-0 px-3 py-2 text-[10px] uppercase text-slate-400 font-semibold flex items-end">Weekly load (pcs)</div>
+              <div className="relative flex-1 h-16">
+                {weekBuckets.map((w,i)=>{ if(w.load<=0) return null; const left=clampPct(ganttDays(rangeStart,w.start)/totalDays*100); const width=7/totalDays*100; const h=Math.max(6,Math.round(w.load/peakLoad*100)); return (
+                  <div key={i} className="absolute bottom-4 flex flex-col items-center justify-end" style={{left:left+'%', width:width+'%', top:0}} title={`Week of ${fmtDate(w.start)}: ${Math.round(w.load).toLocaleString()} pcs${capacity>0?` (${Math.round(w.load/capacity*100)}% of capacity)`:''}`}>
+                    <span className="text-[8px] text-slate-500 leading-none mb-0.5">{fmtLoad(w.load)}</span>
+                    <div className={`w-[68%] rounded-t ${loadColor(w.load)}`} style={{height:h+'%'}}></div>
+                  </div>
+                ); })}
+                {/* capacity ceiling reference line */}
+                {capacity>0 && capacity<peakLoad && <div className="absolute left-0 right-0 border-t border-dashed border-slate-400" style={{bottom:`calc(1rem + ${Math.round(capacity/peakLoad*100)}% )`}} title={`Capacity ${capacity.toLocaleString()} pcs/wk`}></div>}
+                <div className="absolute top-0 bottom-0 w-px bg-rose-400" style={{left:clampPct(ganttDays(rangeStart,todayISO)/totalDays*100)+'%'}}></div>
               </div>
             </div>
             {rows.map(({job:j,start,end,sched})=>{
@@ -4301,6 +4342,7 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
         <span className="font-semibold text-slate-600">Colored segments = scheduled status phases (hover any segment for the stage &amp; dates).</span>
         <span>Projects with nothing plotted yet show one bar: <span className="inline-block w-3 h-3 rounded bg-rose-500 align-middle mx-0.5"></span>overdue <span className="inline-block w-3 h-3 rounded bg-amber-500 align-middle mx-0.5"></span>due ≤7d <span className="inline-block w-3 h-3 rounded bg-indigo-500 align-middle mx-0.5"></span>on track</span>
         <span>Red line = today · grey bar = added→due span</span>
+        <span className="w-full">Weekly load strip = each project's pieces spread evenly across the weeks it's active, stacked. <span className="inline-block w-3 h-3 rounded bg-emerald-500 align-middle mx-0.5"></span>room <span className="inline-block w-3 h-3 rounded bg-amber-500 align-middle mx-0.5"></span>≥80% full <span className="inline-block w-3 h-3 rounded bg-rose-500 align-middle mx-0.5"></span>over capacity · dashed line = your weekly ceiling.</span>
       </div>
       {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
     </div>
