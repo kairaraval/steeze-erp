@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 155 · Delivery Receipt print: removed the client address/contact line under DELIVER TO, and made 'Released by' a blank signature line (name written & signed by hand) — Prepared by still e-signs";
+const BUILD = "Live build 156 · New My Tasks personal planner under Inbox (Today / This Week / Later buckets, quick-add, priority dots, due dates, completed drawer) — each person sees only their own; nav soft-launched to Kaira only for now";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4684,6 +4684,146 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
 }
 
 /* ----------------------- Sampling board ----------------------- */
+// ─────────── MY TASKS — personal daily/weekly planner ───────────
+// Self-contained: each person only ever sees their own rows (RLS on
+// personal_tasks scopes to auth.uid()). Three buckets — Today / This Week /
+// Later — with quick-add, priority dots, due dates and a completed drawer.
+function MyTasksView({ profile }){
+  const [tasks,setTasks]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [draft,setDraft]=useState({ today:'', week:'', later:'' });
+  const [busy,setBusy]=useState('');
+  const [showDone,setShowDone]=useState(false);
+  const todayISO=new Date().toISOString().slice(0,10);
+
+  async function load(){
+    setLoading(true);
+    const { data } = await sb.from('personal_tasks').select('*').eq('user_id', profile.id)
+      .order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
+    setTasks(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  async function add(bucket){
+    const title=(draft[bucket]||'').trim(); if(!title) return;
+    setBusy(bucket);
+    const { error }=await sb.from('personal_tasks').insert({ user_id:profile.id, title, bucket, position:Date.now() });
+    setBusy('');
+    if(error){ alert(error.message); return; }
+    setDraft(d=>({...d,[bucket]:''})); load();
+  }
+  async function patch(t, upd){
+    const { error }=await sb.from('personal_tasks').update(upd).eq('id',t.id);
+    if(error){ alert(error.message); return; }
+    load();
+  }
+  function toggle(t){ patch(t,{ done:!t.done, done_at: !t.done? new Date().toISOString(): null }); }
+  function cyclePriority(t){ const order=['normal','high','low']; const i=order.indexOf(t.priority||'normal'); patch(t,{ priority: order[(i+1)%order.length] }); }
+  async function del(id){ const { error }=await sb.from('personal_tasks').delete().eq('id',id); if(error){ alert(error.message); return; } load(); }
+  async function clearDone(){ const ids=tasks.filter(t=>t.done).map(t=>t.id); if(!ids.length) return; if(!confirm(`Clear ${ids.length} completed task${ids.length===1?'':'s'}?`)) return; await sb.from('personal_tasks').delete().in('id',ids); load(); }
+
+  const done=tasks.filter(t=>t.done);
+  const buckets=[
+    { key:'today', label:'Today',     emoji:'🔥', tint:'from-indigo-500 to-indigo-600' },
+    { key:'week',  label:'This Week', emoji:'🗓️', tint:'from-violet-500 to-violet-600' },
+    { key:'later', label:'Later',     emoji:'💭', tint:'from-slate-500 to-slate-600' },
+  ];
+  const prDot=(p)=> p==='high'?'bg-rose-500':p==='low'?'bg-slate-300':'bg-indigo-400';
+  const prTitle=(p)=> (p==='high'?'High':p==='low'?'Low':'Normal')+' priority — click to change';
+  const hour=new Date().getHours();
+  const greeting= hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
+  const first=(profile.name||'').split(' ')[0]||'there';
+  const niceDate=new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  const todayList=tasks.filter(t=>t.bucket==='today');
+  const todayDone=todayList.filter(t=>t.done).length;
+  const allTodayDone= todayList.length>0 && todayDone===todayList.length;
+  const pct= todayList.length? Math.round(todayDone/todayList.length*100):0;
+
+  const renderRow=(t)=>{
+    const overdue= t.due_date && !t.done && t.due_date<todayISO;
+    return (
+      <div key={t.id} className="group flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-slate-50">
+        <button onClick={()=>toggle(t)} className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition text-xs ${t.done?'bg-emerald-500 border-emerald-500 text-white':'border-slate-300 hover:border-indigo-400'}`} title={t.done?'Mark not done':'Mark done'}>{t.done?'✓':''}</button>
+        <button onClick={()=>cyclePriority(t)} className={`w-2.5 h-2.5 rounded-full shrink-0 ${prDot(t.priority)}`} title={prTitle(t.priority)}></button>
+        <div className={`flex-1 min-w-0 text-sm truncate ${t.done?'line-through text-slate-400':'text-slate-700'}`} title={t.title}>{t.title}</div>
+        <input type="date" value={t.due_date||''} onChange={e=>patch(t,{due_date:e.target.value||null})} className={`text-[10px] px-1 py-0.5 rounded border bg-white transition ${overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-200 text-slate-500 opacity-0 group-hover:opacity-100 focus:opacity-100'}`} title="Due date" />
+        {!t.done && <select value={t.bucket} onChange={e=>patch(t,{bucket:e.target.value})} className="text-[10px] rounded border border-slate-200 bg-white text-slate-500 opacity-0 group-hover:opacity-100 focus:opacity-100" title="Move to…">{buckets.map(b=><option key={b.key} value={b.key}>{b.label}</option>)}</select>}
+        <button onClick={()=>del(t.id)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 shrink-0 text-sm" title="Delete">✕</button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      {/* Hero */}
+      <div className="rounded-2xl p-5 mb-5 bg-gradient-to-br from-indigo-600 via-indigo-600 to-violet-600 text-white shadow-sm">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-xl font-extrabold flex items-center gap-2">✅ My Tasks</div>
+            <div className="text-white/80 text-sm mt-0.5">{greeting}, {first} · {niceDate}</div>
+          </div>
+          <div className="text-right">
+            {todayList.length>0
+              ? <div><div className="text-2xl font-extrabold leading-none">{todayDone}/{todayList.length}</div><div className="text-white/80 text-xs mt-0.5">today done</div></div>
+              : <div className="text-white/80 text-sm">Nothing for today yet — add one below 👇</div>}
+          </div>
+        </div>
+        {todayList.length>0 && (
+          <div className="mt-3">
+            <div className="h-2 rounded-full bg-white/25 overflow-hidden"><div className="h-full bg-white rounded-full transition-all duration-500" style={{width:pct+'%'}}></div></div>
+            {allTodayDone && <div className="mt-2 text-sm font-semibold">🎉 All of today's tasks are done — nice work!</div>}
+          </div>
+        )}
+      </div>
+
+      {loading ? <div className="text-center py-16 text-slate-400">Loading your tasks…</div> : (
+      <div className="grid md:grid-cols-3 gap-4">
+        {buckets.map(b=>{
+          const list=tasks.filter(t=>t.bucket===b.key && !t.done);
+          return (
+            <div key={b.key} className="bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col">
+              <div className={`px-4 py-3 bg-gradient-to-r ${b.tint} text-white flex items-center justify-between`}>
+                <div className="font-bold flex items-center gap-2">{b.emoji} {b.label}</div>
+                <div className="text-white/80 text-xs font-bold bg-white/20 rounded-full px-2 py-0.5">{list.length}</div>
+              </div>
+              <div className="p-1.5 flex-1 min-h-[70px]">
+                {list.length===0
+                  ? <div className="text-center text-slate-300 text-xs py-6">Nothing here yet ✨</div>
+                  : list.map(renderRow)}
+              </div>
+              <div className="p-2 border-t bg-slate-50/60">
+                <div className="flex gap-1.5">
+                  <input value={draft[b.key]} onChange={e=>setDraft(d=>({...d,[b.key]:e.target.value}))} onKeyDown={e=>{ if(e.key==='Enter') add(b.key); }} placeholder={`Add to ${b.label}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200 focus:border-indigo-400 outline-none bg-white" />
+                  <button onClick={()=>add(b.key)} disabled={busy===b.key || !(draft[b.key]||'').trim()} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none disabled:opacity-40 hover:bg-indigo-700">+</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      )}
+
+      {/* Completed drawer */}
+      {done.length>0 && (
+        <div className="mt-5 bg-white rounded-2xl border shadow-sm overflow-hidden">
+          <button onClick={()=>setShowDone(s=>!s)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+            <div className="font-semibold text-slate-600 flex items-center gap-2">✅ Completed <span className="text-xs bg-emerald-100 text-emerald-700 rounded-full px-2 py-0.5">{done.length}</span></div>
+            <span className="text-slate-400 text-xs">{showDone?'Hide':'Show'}</span>
+          </button>
+          {showDone && (
+            <div className="p-1.5 border-t">
+              {done.map(renderRow)}
+              <div className="px-2 py-1.5"><button onClick={clearDone} className="text-xs text-rose-500 hover:underline">Clear completed</button></div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-4 text-center text-[11px] text-slate-400">Tip: press Enter to add · click the coloured dot to set priority · hover a task for its due date &amp; move options.</div>
+    </div>
+  );
+}
+
 function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack, onCreateDR }){
   function buildDrCtxFromSample(j, lead){
     return {
@@ -23465,6 +23605,8 @@ function App(){
   const isSewingLead=profile.role==='sewing_lead';
   const isKnitEmbroLead=profile.role==='knit_embro_lead';
   const isProdSupervisor=profile.role==='production_supervisor';
+  // My Tasks — personal planner. Soft-launched to Kaira only for this build.
+  const isKaira = (profile.email||'').toLowerCase()==='kaira.raval@steeze.com.ph';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -23608,7 +23750,7 @@ function App(){
     // For Approval sits right under Dashboard with an amber badge showing
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
-      { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
+      { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ...(isKaira?[['my-tasks','My Tasks','✅']]:[]) ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -23712,6 +23854,7 @@ function App(){
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
+        {view==='my-tasks' && <MyTasksView profile={profile} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
