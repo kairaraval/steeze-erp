@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 152 · Production Timeline: added a weekly capacity load strip — pieces in production per week vs an adjustable ceiling (green room / amber near-full / red over), with an at-a-glance 'room to take on more' banner";
+const BUILD = "Live build 153 · Forecast timeline (per project): no more typing 30 date fields — click a status bar where it starts then click where it ends to paint the schedule; ✕ clears a row";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3979,6 +3979,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [stageDue,setStageDue]=useState(()=> (job.stage_plan && typeof job.stage_plan==='object') ? {...job.stage_plan} : {});
   const [schedule,setSchedule]=useState(()=> (job.status_schedule && typeof job.status_schedule==='object') ? {...job.status_schedule} : {});
   const [showGantt,setShowGantt]=useState(false);
+  const [paint,setPaint]=useState(null); // {key, startDay} — first click armed, waiting for the end click
 
   const total = Number(job.quantity)||0;
   const todayISO = new Date().toISOString().slice(0,10);
@@ -4013,6 +4014,30 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     setSchedule(next);
     try{ await sb.from('production_jobs').update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
     catch(e){ setMsg('Could not save schedule: '+(e.message||e)); }
+  }
+  async function saveScheduleRange(stKey, start, end){
+    const next = {...schedule};
+    if(!start && !end) delete next[stKey]; else next[stKey]={ start, end };
+    setSchedule(next);
+    try{ await sb.from('production_jobs').update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
+    catch(e){ setMsg('Could not save schedule: '+(e.message||e)); }
+  }
+  // Click-to-paint: figure out which day a click on a status track lands on.
+  function dayFromTrackClick(ev){
+    const rect = ev.currentTarget.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (ev.clientX-rect.left)/Math.max(1,rect.width)));
+    return ganttAddDays(ganttStart, Math.round(frac*ganttTotal));
+  }
+  function paintTrack(stKey, ev){
+    const d = dayFromTrackClick(ev);
+    if(paint && paint.key===stKey){
+      const s = paint.startDay <= d ? paint.startDay : d;
+      const e = paint.startDay <= d ? d : paint.startDay;
+      saveScheduleRange(stKey, s, e); setPaint(null);
+    } else {
+      setPaint({ key:stKey, startDay:d });
+      saveScheduleRange(stKey, d, d); // show a 1-day nub until the end click lands
+    }
   }
   // Gantt range across all plotted statuses (+ due date + today).
   const schedStarts = Object.values(schedule).map(v=>v&&v.start).filter(Boolean);
@@ -4126,21 +4151,26 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                   const left = has ? clampPct(ganttDays(ganttStart, v.start)/ganttTotal*100) : 0;
                   const width = has ? Math.max(1.5, (ganttDays(v.start, v.end)+1)/ganttTotal*100) : 0;
                   const isCurrent = job.status===st.key;
+                  const painting = paint && paint.key===st.key;
                   return (
-                    <div key={st.key} className={`flex items-center gap-2 py-0.5 ${isCurrent?'bg-amber-50 rounded':''}`}>
-                      <div className="w-44 shrink-0 text-[11px] truncate" title={st.label}>{isCurrent?'▶ ':''}{st.label}</div>
-                      <div className="w-[17rem] shrink-0 flex gap-1">
-                        <input type="date" value={v.start||''} onChange={e=>saveSchedule(st.key,'start',e.target.value)} className="text-[10px] px-1 py-0.5 rounded border border-slate-300 flex-1" />
-                        <input type="date" value={v.end||''} onChange={e=>saveSchedule(st.key,'end',e.target.value)} className="text-[10px] px-1 py-0.5 rounded border border-slate-300 flex-1" />
+                    <div key={st.key} className={`flex items-center gap-2 py-0.5 rounded ${isCurrent?'bg-amber-50':''} ${painting?'ring-1 ring-indigo-300':''}`}>
+                      <div className="w-40 shrink-0 text-[11px] truncate" title={st.label}>{isCurrent?'▶ ':''}{st.label}</div>
+                      <div className="w-36 shrink-0 flex items-center gap-1 text-[10px]">
+                        {has ? (<>
+                          <span className="text-slate-600 truncate">{fmtDate(v.start)}→{fmtDate(v.end)} · {ganttDays(v.start,v.end)+1}d</span>
+                          <button onClick={()=>{ setPaint(null); saveScheduleRange(st.key,null,null); }} className="text-slate-400 hover:text-rose-600 shrink-0" title="Clear this status">✕</button>
+                        </>) : (
+                          <span className={painting?'text-indigo-600 font-semibold':'text-slate-300'}>{painting?'now click the end →':'tap the bar to plot'}</span>
+                        )}
                       </div>
-                      <div className="relative flex-1 h-4 bg-slate-100 rounded">
-                        {has && <div className={`absolute top-0 h-4 rounded ${ganttBarColor(st.key)}`} style={{left:left+'%', width:width+'%'}} title={`${fmtDate(v.start)} → ${fmtDate(v.end)}`}></div>}
-                        <div className="absolute top-0 h-4 w-px bg-rose-400" style={{left:clampPct(ganttDays(ganttStart,todayISO)/ganttTotal*100)+'%'}} title="Today"></div>
+                      <div onClick={e=>paintTrack(st.key,e)} className="relative flex-1 h-6 bg-slate-100 rounded cursor-pointer hover:bg-slate-200/70" title="Click the start day, then click the end day">
+                        {has && <div className={`absolute top-1 h-4 rounded ${ganttBarColor(st.key)} ${painting?'opacity-70':''}`} style={{left:left+'%', width:width+'%'}}></div>}
+                        <div className="absolute top-0 h-full w-px bg-rose-400" style={{left:clampPct(ganttDays(ganttStart,todayISO)/ganttTotal*100)+'%'}} title="Today"></div>
                       </div>
                     </div>
                   );
                 })}
-                <div className="text-[10px] text-slate-400 mt-2">Red line = today. Plot start &amp; end per status; bars show how the plan fits before the due date.</div>
+                <div className="text-[10px] text-slate-400 mt-2">Red line = today. <b>Click a status bar where it starts, then click where it ends</b> — no typing. Click ✕ to clear a row. Bars show how the plan fits before the due date.</div>
               </div>
             </div>
           )}
