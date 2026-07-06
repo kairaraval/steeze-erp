@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 159 · My Tasks rolled out to Admin, Sales Managers, Sales Assistants, Accounting, Purchasing & Production Supervisor; added a welcome sticky note + first-open-of-the-day celebration (chord + confetti)";
+const BUILD = "Live build 160 · My Tasks: welcome sticky note + celebration now show only ONCE (first open ever), not every day";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4706,12 +4706,12 @@ function MyTasksView({ profile }){
     setTasks(data||[]); setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
-  // Celebrate the first open of the board each day — a triumphant chord + confetti.
+  // One-time welcome: on the very first open ever, play a triumphant chord +
+  // confetti and mark it seen so neither the note nor the sound return.
   useEffect(()=>{
-    const gk='steeze_mytasks_greeted_'+profile.id+'_'+todayISO;
-    let already=false;
-    try{ already=!!localStorage.getItem(gk); if(!already) localStorage.setItem(gk,'1'); }catch(e){}
-    if(already) return;
+    let seen=false;
+    try{ seen=!!localStorage.getItem(welcomeKey); if(!seen) localStorage.setItem(welcomeKey,'1'); }catch(e){}
+    if(seen) return;
     const t=setTimeout(()=>{ try{ playWonSound(); }catch(_){}; try{ fireWonConfetti(); }catch(_){}; }, 350);
     return ()=>clearTimeout(t);
   },[]);
