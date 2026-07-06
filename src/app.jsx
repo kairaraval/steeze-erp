@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 161 · My Tasks: due date is now a small 📅 icon (shows a short 'Jul 10' chip once set) instead of a wide date field, so task titles are no longer covered";
+const BUILD = "Live build 162 · HR: new Memo Board (company announcements, categories, pin) + Leave Tracker (log leaves with who's-out-today and next-4-weeks views). Performance Reviews unchanged";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7382,6 +7382,253 @@ function PerformanceReviewForm({ review, cycle, profile, profiles, employees, on
   );
 }
 
+
+/* ─────────── HR — Memo Board (company announcements) ─────────── */
+const MEMO_CATEGORIES = [
+  { key:'general',      label:'General',      color:'bg-slate-100 text-slate-700' },
+  { key:'announcement', label:'Announcement', color:'bg-indigo-100 text-indigo-700' },
+  { key:'policy',       label:'Policy',       color:'bg-violet-100 text-violet-700' },
+  { key:'reminder',     label:'Reminder',     color:'bg-amber-100 text-amber-700' },
+  { key:'urgent',       label:'Urgent',       color:'bg-rose-100 text-rose-700' },
+];
+function memoCatMeta(k){ return MEMO_CATEGORIES.find(c=>c.key===k) || MEMO_CATEGORIES[0]; }
+
+function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [cat,setCat]=useState('');
+  const [search,setSearch]=useState('');
+  const memos = (hrMemos||[])
+    .filter(m=> !cat || m.category===cat)
+    .filter(m=> !search || `${m.title} ${m.body||''}`.toLowerCase().includes(search.toLowerCase()));
+  const who=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  async function togglePin(m){ const { error }=await sb.from('hr_memos').update({ pinned:!m.pinned }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
+  async function del(m){ if(!confirm('Delete this memo?')) return; const { error }=await sb.from('hr_memos').update({ deleted_at:new Date().toISOString() }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📢 Memo Board</h1>
+            <p className="text-slate-500 text-sm">Company announcements, reminders &amp; policies — all in one place.</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New memo</button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search memos…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white" />
+          <button onClick={()=>setCat('')} className={`text-xs px-2.5 py-1 rounded-full font-medium ${cat===''?'bg-slate-800 text-white':'bg-white border text-slate-600'}`}>All</button>
+          {MEMO_CATEGORIES.map(c=><button key={c.key} onClick={()=>setCat(c.key)} className={`text-xs px-2.5 py-1 rounded-full font-medium ${cat===c.key?'ring-2 ring-offset-1 ring-indigo-400 '+c.color:c.color}`}>{c.label}</button>)}
+        </div>
+      </div>
+      {memos.length===0 ? (
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No memos {cat||search?'match your filter':'yet'}. Click "+ New memo" to post the first one.</div>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-3">
+          {memos.map(m=>{ const meta=memoCatMeta(m.category); return (
+            <div key={m.id} className={`bg-white border rounded-xl p-4 relative ${m.pinned?'border-amber-300 ring-1 ring-amber-200':''}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${meta.color}`}>{meta.label}</span>
+                {m.pinned && <span className="text-[10px] font-bold text-amber-600">📌 Pinned</span>}
+                <span className="text-[11px] text-slate-400 ml-auto">{fmtDate(m.memo_date)}</span>
+              </div>
+              <div className="font-bold text-slate-800">{m.title}</div>
+              {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{m.body}</div>}
+              <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400">
+                <span>Posted by {who(m.posted_by)}</span>
+                <div className="ml-auto flex gap-2">
+                  <button onClick={()=>togglePin(m)} className="hover:text-amber-600" title={m.pinned?'Unpin':'Pin to top'}>{m.pinned?'Unpin':'📌 Pin'}</button>
+                  <button onClick={()=>setEditing(m)} className="text-indigo-600 hover:underline">Edit</button>
+                  <button onClick={()=>del(m)} className="text-rose-500 hover:underline">Delete</button>
+                </div>
+              </div>
+            </div>
+          ); })}
+        </div>
+      )}
+      {(creating||editing) && <MemoForm memo={editing} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function MemoForm({ memo, profile, onClose, onSaved }){
+  const isEdit=!!memo;
+  const [f,setF]=useState(memo || { title:'', body:'', category:'general', pinned:false });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title?.trim()){ setMsg('Title required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ title:f.title.trim(), body:f.body||null, category:f.category||'general', pinned:!!f.pinned };
+    if(!isEdit) payload.posted_by=profile.id;
+    const { error } = isEdit ? await sb.from('hr_memos').update(payload).eq('id',memo.id) : await sb.from('hr_memos').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit memo':'New memo'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Office closed on July 12 (holiday)" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Category">
+            <select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{MEMO_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select>
+          </TpLbl>
+          <label className="flex items-end gap-2 text-sm pb-2 cursor-pointer"><input type="checkbox" checked={!!f.pinned} onChange={e=>up('pinned',e.target.checked)} /> Pin to top</label>
+        </div>
+        <TpLbl t="Message"><textarea className="input min-h-[120px]" value={f.body||''} onChange={e=>up('body',e.target.value)} placeholder="Write the announcement…" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save memo':'Post memo')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─────────── HR — Leave tracker (log + who's out) ─────────── */
+const LEAVE_TYPES = [
+  { key:'vacation',    label:'Vacation',            color:'bg-emerald-100 text-emerald-700' },
+  { key:'sick',        label:'Sick',                color:'bg-rose-100 text-rose-700' },
+  { key:'emergency',   label:'Emergency',           color:'bg-amber-100 text-amber-700' },
+  { key:'unpaid',      label:'Unpaid',              color:'bg-slate-200 text-slate-700' },
+  { key:'maternity',   label:'Maternity/Paternity', color:'bg-pink-100 text-pink-700' },
+  { key:'bereavement', label:'Bereavement',         color:'bg-indigo-100 text-indigo-700' },
+  { key:'other',       label:'Other',               color:'bg-slate-100 text-slate-600' },
+];
+function leaveTypeMeta(k){ return LEAVE_TYPES.find(t=>t.key===k) || LEAVE_TYPES[LEAVE_TYPES.length-1]; }
+
+function HRLeaveView({ profile, employees, hrLeaves, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const in28=new Date(Date.now()+28*86400000).toISOString().slice(0,10);
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
+  const dayCount=(a,b)=> Math.max(1, Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000)+1);
+  const leaves=(hrLeaves||[]);
+  const outToday=leaves.filter(l=> l.start_date<=todayISO && l.end_date>=todayISO).sort((a,b)=>String(a.end_date).localeCompare(b.end_date));
+  const upcoming=leaves.filter(l=> l.start_date>todayISO && l.start_date<=in28).sort((a,b)=>String(a.start_date).localeCompare(b.start_date));
+  const sortedAll=[...leaves].sort((a,b)=>String(b.start_date).localeCompare(a.start_date));
+  async function del(l){ if(!confirm('Delete this leave record?')) return; const { error }=await sb.from('hr_leaves').delete().eq('id',l.id); if(error){ alert(error.message); return; } reload(); }
+  const chip=(l)=>{ const m=leaveTypeMeta(l.leave_type); return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span>; };
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🌴 Leave Tracker</h1>
+            <p className="text-slate-500 text-sm">Who's out today and in the coming weeks.</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Log leave</button>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3 mb-4">
+        {/* Out today */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-gradient-to-r from-rose-500 to-rose-600 text-white font-bold flex items-center justify-between"><span>🚫 Out today</span><span className="text-white/80 text-sm">{outToday.length}</span></div>
+          <div className="p-2">
+            {outToday.length===0 ? <div className="text-center text-slate-400 text-sm py-6">Everyone's in today 🎉</div> :
+              outToday.map(l=> (
+                <div key={l.id} className="flex items-center gap-2 px-2 py-1.5">
+                  <div className="flex-1 min-w-0"><span className="text-sm font-medium">{empName(l.employee_id)}</span></div>
+                  {chip(l)}
+                  <span className="text-[11px] text-slate-400">back {fmtDate(new Date(new Date(l.end_date+'T00:00:00').getTime()+86400000).toISOString().slice(0,10))}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+        {/* Upcoming */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-violet-600 text-white font-bold flex items-center justify-between"><span>🗓️ Coming up · next 4 weeks</span><span className="text-white/80 text-sm">{upcoming.length}</span></div>
+          <div className="p-2">
+            {upcoming.length===0 ? <div className="text-center text-slate-400 text-sm py-6">No upcoming leaves.</div> :
+              upcoming.map(l=> (
+                <div key={l.id} className="flex items-center gap-2 px-2 py-1.5">
+                  <div className="flex-1 min-w-0"><span className="text-sm font-medium">{empName(l.employee_id)}</span></div>
+                  {chip(l)}
+                  <span className="text-[11px] text-slate-500">{fmtDate(l.start_date)} → {fmtDate(l.end_date)}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Full log */}
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 bg-slate-50 border-b text-sm font-bold">All leave records ({leaves.length})</div>
+        {leaves.length===0 ? <div className="px-4 py-8 text-center text-sm text-slate-400">No leave logged yet. Click "+ Log leave" to add one.</div> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Employee</th>
+                <th className="text-left px-3 py-2">Type</th>
+                <th className="text-left px-3 py-2">From</th>
+                <th className="text-left px-3 py-2">To</th>
+                <th className="text-center px-3 py-2">Days</th>
+                <th className="text-left px-3 py-2">Reason</th>
+                <th></th>
+              </tr></thead>
+              <tbody>{sortedAll.map(l=>{ const ongoing=l.start_date<=todayISO&&l.end_date>=todayISO; return (
+                <tr key={l.id} className={`border-t hover:bg-slate-50 ${ongoing?'bg-rose-50/40':''}`}>
+                  <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
+                  <td className="px-3 py-2">{chip(l)}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(l.start_date)}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(l.end_date)}</td>
+                  <td className="px-3 py-2 text-center text-xs font-semibold">{dayCount(l.start_date,l.end_date)}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[220px]" title={l.reason||''}>{l.reason||'—'}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button onClick={()=>setEditing(l)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                    <button onClick={()=>del(l)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                  </td>
+                </tr>
+              ); })}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {(creating||editing) && <LeaveForm leave={editing} employees={employees} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function LeaveForm({ leave, employees, profile, onClose, onSaved }){
+  const isEdit=!!leave;
+  const [f,setF]=useState(leave || { employee_id:'', leave_type:'vacation', start_date:'', end_date:'', reason:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    if(!f.start_date || !f.end_date){ setMsg('Set the from and to dates.'); return; }
+    if(f.end_date<f.start_date){ setMsg('End date can\'t be before start date.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ employee_id:f.employee_id, leave_type:f.leave_type, start_date:f.start_date, end_date:f.end_date, reason:f.reason||null };
+    if(!isEdit) payload.created_by=profile.id;
+    const { error } = isEdit ? await sb.from('hr_leaves').update(payload).eq('id',leave.id) : await sb.from('hr_leaves').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit leave':'Log leave'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Employee *">
+          <select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}>
+            <option value="">— pick an employee —</option>
+            {activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+          </select>
+        </TpLbl>
+        <TpLbl t="Leave type">
+          <select className="input" value={f.leave_type} onChange={e=>up('leave_type',e.target.value)}>{LEAVE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+        </TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="From *"><input type="date" className="input" value={f.start_date||''} onChange={e=>up('start_date',e.target.value)} /></TpLbl>
+          <TpLbl t="To *"><input type="date" className="input" value={f.end_date||''} onChange={e=>up('end_date',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Reason / notes"><textarea className="input min-h-[70px]" value={f.reason||''} onChange={e=>up('reason',e.target.value)} placeholder="Optional" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Log leave')}</button>
+      </div>
+    </Modal>
+  );
+}
 
 /* ─────────── HR TIER 3 — Recruitment / ATS ─────────── */
 const APPLICANT_STAGES = [
@@ -22955,6 +23202,7 @@ function App(){
   // HR Tier 3: performance review cycles + reviews, job postings + applicants
   const [hrReviewCycles,setHrReviewCycles]=useState([]); const [hrReviews,setHrReviews]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
+  const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
@@ -23173,6 +23421,9 @@ function App(){
     setEmployeeMemos(emem && !emem.error ? (emem.data||[]) : []);
     setEmployeeNotes(enotes && !enotes.error ? (enotes.data||[]) : []);
     setHrTemplates(htpl && !htpl.error ? (htpl.data||[]) : []);
+    // HR memo board + leave log — separate fetches, graceful empty if SQL not run.
+    try { const hm = await sb.from('hr_memos').select('*').is('deleted_at',null).order('pinned',{ascending:false}).order('memo_date',{ascending:false}); setHrMemos(hm && !hm.error ? (hm.data||[]) : []); } catch(_){ setHrMemos([]); }
+    try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
     setHrReviewCycles(hcyc && !hcyc.error ? (hcyc.data||[]) : []);
@@ -23791,7 +24042,7 @@ function App(){
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       PERSONAL_GROUP,
     ];
@@ -23883,6 +24134,8 @@ function App(){
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} reload={loadAll} />}
+        {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
+        {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
