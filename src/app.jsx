@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 160 · My Tasks: welcome sticky note + celebration now show only ONCE (first open ever), not every day";
+const BUILD = "Live build 161 · My Tasks: due date is now a small 📅 icon (shows a short 'Jul 10' chip once set) instead of a wide date field, so task titles are no longer covered";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4754,12 +4754,16 @@ function MyTasksView({ profile }){
 
   const renderRow=(t)=>{
     const overdue= t.due_date && !t.done && t.due_date<todayISO;
+    const shortDue= t.due_date ? new Date(t.due_date+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '';
     return (
       <div key={t.id} className="group flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-slate-50">
         <button onClick={()=>toggle(t)} className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition text-xs ${t.done?'bg-emerald-500 border-emerald-500 text-white':'border-slate-300 hover:border-indigo-400'}`} title={t.done?'Mark not done':'Mark done'}>{t.done?'✓':''}</button>
         <button onClick={()=>cyclePriority(t)} className={`w-2.5 h-2.5 rounded-full shrink-0 ${prDot(t.priority)}`} title={prTitle(t.priority)}></button>
         <div className={`flex-1 min-w-0 text-sm truncate ${t.done?'line-through text-slate-400':'text-slate-700'}`} title={t.title}>{t.title}</div>
-        <input type="date" value={t.due_date||''} onChange={e=>patch(t,{due_date:e.target.value||null})} className={`text-[10px] px-1 py-0.5 rounded border bg-white shrink-0 ${overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-200 text-slate-500'}`} title="Set due date" />
+        <span className="relative inline-flex items-center shrink-0">
+          <span className={`text-[11px] leading-none px-1.5 py-1 rounded border ${t.due_date?(overdue?'border-rose-300 text-rose-700 bg-rose-50 font-semibold':'border-slate-200 text-slate-500'):'border-transparent text-slate-400'}`} title={t.due_date?('Due '+shortDue+' — click to change'):'Set due date'}>{t.due_date? shortDue : '📅'}</span>
+          <input type="date" value={t.due_date||''} onChange={e=>patch(t,{due_date:e.target.value||null})} onClick={e=>{ try{ e.currentTarget.showPicker&&e.currentTarget.showPicker(); }catch(_){} }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="Set due date" />
+        </span>
         {!t.done && <select value={t.bucket} onChange={e=>patch(t,{bucket:e.target.value})} className="text-[10px] rounded border border-slate-200 bg-white text-slate-500 shrink-0 hidden group-hover:block" title="Move to…">{buckets.map(b=><option key={b.key} value={b.key}>{b.label}</option>)}</select>}
         <button onClick={()=>del(t.id)} className="text-slate-300 hover:text-rose-500 shrink-0 text-sm hidden group-hover:block" title="Delete">✕</button>
       </div>
