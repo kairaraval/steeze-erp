@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 162 · HR: new Memo Board (company announcements, categories, pin) + Leave Tracker (log leaves with who's-out-today and next-4-weeks views). Performance Reviews unchanged";
+const BUILD = "Live build 163 · New HR Department role: own Inbox + My Tasks + HR Dashboard + whole HR module + Sewing Payroll + Budget Requests + profile (signature). Added role to pickers, badges, RLS (payroll/memos/leaves)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7383,6 +7383,82 @@ function PerformanceReviewForm({ review, cycle, profile, profiles, employees, on
 }
 
 
+/* ─────────── HR — Dashboard (home) ─────────── */
+function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, hrMemos, hrJobs, setView }){
+  const todayISO=new Date().toISOString().slice(0,10);
+  const in28=new Date(Date.now()+28*86400000).toISOString().slice(0,10);
+  const first=(profile.name||'').split(' ')[0]||'there';
+  const hour=new Date().getHours();
+  const greeting= hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  const outToday=(hrLeaves||[]).filter(l=> l.start_date<=todayISO && l.end_date>=todayISO);
+  const upcoming=(hrLeaves||[]).filter(l=> l.start_date>todayISO && l.start_date<=in28);
+  const openCycles=(hrReviewCycles||[]).filter(c=>c.status==='active'||c.status==='planning');
+  const openJobs=(hrJobs||[]).filter(j=>j.status==='open'||j.status==='active'||!j.status);
+  const recentMemos=(hrMemos||[]).slice(0,4);
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
+  // Department headcount
+  const byDept={}; activeEmps.forEach(e=>{ const d=e.department||'Unassigned'; byDept[d]=(byDept[d]||0)+1; });
+  const deptRows=Object.entries(byDept).sort((a,b)=>b[1]-a[1]);
+  const go=(v)=> setView && setView(v);
+  const card=(emoji,label,value,sub,v,tint)=>(
+    <button onClick={()=>go(v)} className="text-left bg-white border rounded-xl p-4 hover:border-indigo-300 transition">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400">{emoji} {label}</div>
+      <div className={`text-3xl font-extrabold mt-1 ${tint||'text-slate-800'}`}>{value}</div>
+      <div className="text-xs text-slate-500 mt-0.5">{sub}</div>
+    </button>
+  );
+  return (
+    <div className="p-6">
+      <div className="rounded-2xl p-5 mb-5 bg-gradient-to-br from-fuchsia-600 via-indigo-600 to-violet-600 text-white shadow-sm">
+        <div className="text-xl font-extrabold flex items-center gap-2">🧑‍💼 HR Dashboard</div>
+        <div className="text-white/80 text-sm mt-0.5">{greeting}, {first}. Here's your team at a glance.</div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        {card('👥','Active employees',activeEmps.length,'in the roster','employees')}
+        {card('🚫','Out today',outToday.length, outToday.length? outToday.map(l=>empName(l.employee_id)).slice(0,2).join(', ')+(outToday.length>2?` +${outToday.length-2}`:'') : 'everyone in','hr-leave', outToday.length?'text-rose-600':'text-slate-800')}
+        {card('🗓️','Upcoming leaves',upcoming.length,'next 4 weeks','hr-leave')}
+        {card('📊','Open review cycles',openCycles.length,'performance reviews','hr-reviews')}
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        {/* Out today / upcoming */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-bold text-sm flex items-center justify-between"><span>🌴 Who's out</span><button onClick={()=>go('hr-leave')} className="text-xs text-indigo-600 hover:underline">Open →</button></div>
+          <div className="p-2">
+            {outToday.length===0 && upcoming.length===0 ? <div className="text-center text-slate-400 text-sm py-6">No one on leave.</div> : (<>
+              {outToday.map(l=>(<div key={l.id} className="flex items-center gap-2 px-2 py-1.5 text-sm"><span className="w-2 h-2 rounded-full bg-rose-500"></span><span className="flex-1 font-medium truncate">{empName(l.employee_id)}</span><span className="text-[11px] text-slate-400">today</span></div>))}
+              {upcoming.slice(0,5).map(l=>(<div key={l.id} className="flex items-center gap-2 px-2 py-1.5 text-sm"><span className="w-2 h-2 rounded-full bg-indigo-400"></span><span className="flex-1 truncate">{empName(l.employee_id)}</span><span className="text-[11px] text-slate-400">{fmtDate(l.start_date)}</span></div>))}
+            </>)}
+          </div>
+        </div>
+        {/* Latest memos */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-bold text-sm flex items-center justify-between"><span>📢 Latest memos</span><button onClick={()=>go('hr-memos')} className="text-xs text-indigo-600 hover:underline">Open →</button></div>
+          <div className="p-2">
+            {recentMemos.length===0 ? <div className="text-center text-slate-400 text-sm py-6">No memos yet.</div> :
+              recentMemos.map(m=>{ const meta=memoCatMeta(m.category); return (
+                <div key={m.id} className="px-2 py-1.5">
+                  <div className="flex items-center gap-2"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${meta.color}`}>{meta.label}</span><span className="text-[11px] text-slate-400 ml-auto">{fmtDate(m.memo_date)}</span></div>
+                  <div className="text-sm font-medium truncate">{m.title}</div>
+                </div>
+              ); })}
+          </div>
+        </div>
+        {/* Headcount by department */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-bold text-sm flex items-center justify-between"><span>🏢 Headcount</span><button onClick={()=>go('employees')} className="text-xs text-indigo-600 hover:underline">Open →</button></div>
+          <div className="p-2">
+            {deptRows.length===0 ? <div className="text-center text-slate-400 text-sm py-6">No employees yet.</div> :
+              deptRows.map(([d,n])=>(<div key={d} className="flex items-center gap-2 px-2 py-1.5 text-sm"><span className="flex-1 truncate">{d}</span><span className="font-bold text-slate-700">{n}</span></div>))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────── HR — Memo Board (company announcements) ─────────── */
 const MEMO_CATEGORIES = [
   { key:'general',      label:'General',      color:'bg-slate-100 text-slate-700' },
@@ -9322,6 +9398,7 @@ function roleLabel(r){
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
          r==='knit_embro_lead'        ? 'Knit / Embro Team Lead' :
+         r==='hr'                     ? 'HR Department' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
@@ -9336,6 +9413,7 @@ function RoleBadge({ role }){
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
     role==='knit_embro_lead'        ? 'bg-orange-100 text-orange-700' :
+    role==='hr'                     ? 'bg-fuchsia-100 text-fuchsia-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -9542,10 +9620,11 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'accounting',  label:'Accounting',    count:profiles.filter(p=>p.role==='accounting').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
+    { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead','knit_embro_lead'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead','knit_embro_lead','hr'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -9589,6 +9668,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="accounting">Accounting Team</option>
               <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
+              <option value="hr">HR Department</option>
             </select>
           </div>
           <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
@@ -9682,6 +9762,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="accounting">Accounting Team</option>
                   <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
+                  <option value="hr">HR Department</option>
                 </select>
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
@@ -23521,6 +23602,11 @@ function App(){
       // owns the Knitting + Embroidery boards. Plus inbox + profile (signature).
       allowed = new Set(['inbox','prod','sampling','embroidery','knitting','profile']);
       fallback = 'knitting';
+    } else if(profile.role==='hr'){
+      // HR Department — own inbox + HR dashboard + whole HR module + Sewing
+      // Payroll + Budget Requests + their profile (signature).
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-memos','hr-leave','hr-recruit','hr-templates','payroll','budgets','profile']);
+      fallback = 'hr-home';
     } else {
       return; // admin / manager — no restrictions
     }
@@ -23890,6 +23976,7 @@ function App(){
   const isSewingLead=profile.role==='sewing_lead';
   const isKnitEmbroLead=profile.role==='knit_embro_lead';
   const isProdSupervisor=profile.role==='production_supervisor';
+  const isHR=profile.role==='hr';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -23943,7 +24030,17 @@ function App(){
   const PERSONAL_GROUP = { group:'Personal', items:[
     ['profile','My Profile','⭐'],
   ] };
-  if(isProdSupervisor){
+  if(isHR){
+    // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
+    // Payroll + Budget Requests + their profile (for their e-signature).
+    NAV = [
+      { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      FINANCE_DEPT_ONLY,
+      PERSONAL_GROUP,
+    ];
+  } else if(isProdSupervisor){
     // Production Supervisor — Home dashboard + all production boards + Sales Techpacks + Logistics + Payroll.
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
@@ -24134,6 +24231,7 @@ function App(){
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} reload={loadAll} />}
+        {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
