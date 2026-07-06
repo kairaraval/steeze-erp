@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 158 · My Tasks: due-date picker is now always visible on every task (was hover-only and hard to reach) so dates are easy to set; move/delete stay on hover";
+const BUILD = "Live build 159 · My Tasks rolled out to Admin, Sales Managers, Sales Assistants, Accounting, Purchasing & Production Supervisor; added a welcome sticky note + first-open-of-the-day celebration (chord + confetti)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4695,6 +4695,9 @@ function MyTasksView({ profile }){
   const [busy,setBusy]=useState('');
   const [showDone,setShowDone]=useState(false);
   const todayISO=new Date().toISOString().slice(0,10);
+  const welcomeKey='steeze_mytasks_welcome_'+profile.id;
+  const [showWelcome,setShowWelcome]=useState(()=>{ try{ return localStorage.getItem(welcomeKey)!=='1'; }catch(e){ return true; } });
+  function dismissWelcome(){ setShowWelcome(false); try{ localStorage.setItem(welcomeKey,'1'); }catch(e){} }
 
   async function load(){
     setLoading(true);
@@ -4703,6 +4706,15 @@ function MyTasksView({ profile }){
     setTasks(data||[]); setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
+  // Celebrate the first open of the board each day — a triumphant chord + confetti.
+  useEffect(()=>{
+    const gk='steeze_mytasks_greeted_'+profile.id+'_'+todayISO;
+    let already=false;
+    try{ already=!!localStorage.getItem(gk); if(!already) localStorage.setItem(gk,'1'); }catch(e){}
+    if(already) return;
+    const t=setTimeout(()=>{ try{ playWonSound(); }catch(_){}; try{ fireWonConfetti(); }catch(_){}; }, 350);
+    return ()=>clearTimeout(t);
+  },[]);
 
   async function add(bucket){
     const title=(draft[bucket]||'').trim(); if(!title) return;
@@ -4734,6 +4746,7 @@ function MyTasksView({ profile }){
   const greeting= hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
   const first=(profile.name||'').split(' ')[0]||'there';
   const niceDate=new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  const weekday=new Date().toLocaleDateString(undefined,{weekday:'long'});
   const todayList=tasks.filter(t=>t.bucket==='today');
   const todayDone=todayList.filter(t=>t.done).length;
   const allTodayDone= todayList.length>0 && todayDone===todayList.length;
@@ -4755,6 +4768,23 @@ function MyTasksView({ profile }){
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
+      {/* Welcome sticky note */}
+      {showWelcome && (
+        <div className="mb-5 flex justify-center">
+          <div className="relative bg-gradient-to-br from-amber-100 to-yellow-200 border border-amber-300/60 rounded-xl shadow-lg px-6 py-5 max-w-2xl w-full -rotate-1" style={{animation:'pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)'}}>
+            <style>{`@keyframes pop-in { 0% { transform: scale(0.5) rotate(-5deg); opacity:0; } 50% { transform: scale(1.1) rotate(2deg); opacity:1; } 100% { transform: scale(1) rotate(0); opacity:1; } }`}</style>
+            {/* tape */}
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-24 h-6 bg-white/50 border border-white/70 rotate-2 rounded-sm shadow-sm backdrop-blur-sm"></div>
+            <button onClick={dismissWelcome} className="absolute top-2 right-3 text-amber-700/60 hover:text-amber-900 text-lg leading-none" title="Dismiss">✕</button>
+            <div className="text-amber-900">
+              <div className="text-lg font-extrabold flex items-center gap-2">👋 Hi {first}, welcome to your task board!</div>
+              <div className="text-sm mt-1 text-amber-800/90 leading-relaxed">Use this for your daily and weekly reminders — a spot to keep your work and thoughts organized. Jot down anything you don't want to forget, tick it off as you go, and start each day with a clear head.</div>
+              <div className="mt-2 font-bold text-amber-900">Happy {weekday}, team! 🎉</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hero */}
       <div className="rounded-2xl p-5 mb-5 bg-gradient-to-br from-indigo-600 via-indigo-600 to-violet-600 text-white shadow-sm">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -23197,10 +23227,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
@@ -23208,7 +23238,7 @@ function App(){
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','prod-home','prod','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
       fallback = 'prod-home';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
@@ -23219,11 +23249,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -23605,8 +23635,6 @@ function App(){
   const isSewingLead=profile.role==='sewing_lead';
   const isKnitEmbroLead=profile.role==='knit_embro_lead';
   const isProdSupervisor=profile.role==='production_supervisor';
-  // My Tasks — personal planner. Soft-launched to Kaira only for this build.
-  const isKaira = (profile.email||'').toLowerCase()==='kaira.raval@steeze.com.ph';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -23664,7 +23692,7 @@ function App(){
     // Production Supervisor — Home dashboard + all production boards + Sales Techpacks + Logistics + Payroll.
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
-      { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'] ] },
+      { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
@@ -23685,7 +23713,7 @@ function App(){
   } else if(isPurchasing){
     // Purchasing team — Production + Operations + Purchasing + Logistics + RFP visibility + inbox.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
@@ -23696,7 +23724,7 @@ function App(){
   } else if(isAccounting){
     // Accounting/Finance team — full Finance module + Sales visibility + Operations + Purchasing + Logistics + Payroll + inbox.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       FINANCE_FULL,
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'] ] },
@@ -23728,7 +23756,7 @@ function App(){
   } else if(isAssistant){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
-      { items: [ ['inbox','Inbox','📥'] ] },
+      { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
@@ -23738,7 +23766,7 @@ function App(){
   } else if(isManager){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
@@ -23750,7 +23778,7 @@ function App(){
     // For Approval sits right under Dashboard with an amber badge showing
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
-      { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ...(isKaira?[['my-tasks','My Tasks','✅']]:[]) ] },
+      { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
