@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 168 · Sidebar tidy: My Profile now sits right under Inbox/My Tasks for every role that has it (Logistics still has none); Admin's Settings group moved to after Reports";
+const BUILD = "Live build 169 · HR: Employee Relations (case log, active/closed) + Employee Engagements (monthly calendar with events/trainings/birthdays); employees gain Inactive status + Old rate compensation box";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6053,6 +6053,7 @@ const EMP_STATUSES = [
   { key:'regular',       label:'Regular',       color:'bg-emerald-100 text-emerald-700' },
   { key:'contractual',   label:'Contractual',   color:'bg-blue-100 text-blue-700' },
   { key:'consultant',    label:'Consultant',    color:'bg-violet-100 text-violet-700' },
+  { key:'inactive',      label:'Inactive',      color:'bg-slate-200 text-slate-500' },
   { key:'resigned',      label:'Resigned',      color:'bg-slate-200 text-slate-600' },
   { key:'terminated',    label:'Terminated',    color:'bg-rose-100 text-rose-700' },
 ];
@@ -6349,10 +6350,12 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             {/* Compensation */}
             <div className="bg-white border rounded-lg p-3 md:col-span-2 bg-amber-50/40 border-amber-200">
               <div className="text-xs uppercase font-bold text-amber-700 mb-2">💰 Compensation (reference only — Sprout has the live numbers)</div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <Field label="Basic salary" value={e.basic_salary?peso(e.basic_salary):null} />
+                <Field label="Old rate" value={e.old_rate?peso(e.old_rate):null} />
                 <Field label="Allowances" value={e.allowances?peso(e.allowances):null} />
               </div>
+              {e.old_rate && e.basic_salary && <div className="mt-1 text-[11px] text-emerald-700 font-medium">Change: {peso(e.old_rate)} → {peso(e.basic_salary)} ({e.basic_salary>=e.old_rate?'+':''}{peso(e.basic_salary-e.old_rate)})</div>}
               {e.salary_notes && <div className="mt-2 text-xs text-slate-600">{e.salary_notes}</div>}
             </div>
             {/* Sprout link */}
@@ -6581,6 +6584,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
       regularization_date: f.regularization_date||null,
       resignation_date: f.resignation_date||null,
       basic_salary: Number(f.basic_salary)||null,
+      old_rate: Number(f.old_rate)||null,
       allowances: Number(f.allowances)||0,
     };
     if(!isEdit) payload.created_by = profile.id;
@@ -6684,8 +6688,9 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
         {/* COMPENSATION */}
         <div className="border rounded-lg p-3 bg-amber-50/40 border-amber-200">
           <div className="text-xs font-bold uppercase text-amber-700 mb-2">💰 Compensation (reference only — Sprout is authoritative)</div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <TpLbl t="Basic salary (PHP)"><input type="number" className="input" value={f.basic_salary||''} onChange={e=>up('basic_salary',e.target.value)} /></TpLbl>
+            <TpLbl t="Old rate (PHP)"><input type="number" className="input" value={f.old_rate||''} onChange={e=>up('old_rate',e.target.value)} placeholder="Previous rate" /></TpLbl>
             <TpLbl t="Allowances (PHP)"><input type="number" className="input" value={f.allowances||0} onChange={e=>up('allowances',e.target.value)} /></TpLbl>
             <TpLbl t="Notes"><input className="input" value={f.salary_notes||''} onChange={e=>up('salary_notes',e.target.value)} placeholder="COLA, transport, last raise, etc." /></TpLbl>
           </div>
@@ -7765,6 +7770,278 @@ function LeaveForm({ leave, employees, profile, onClose, onSaved }){
         <TpLbl t="Reason / notes"><textarea className="input min-h-[70px]" value={f.reason||''} onChange={e=>up('reason',e.target.value)} placeholder="Optional" /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Log leave')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─────────── HR — Employee Relations (cases) ─────────── */
+const CASE_TYPES = [
+  { key:'disciplinary',  label:'Disciplinary',  color:'bg-rose-100 text-rose-700' },
+  { key:'grievance',     label:'Grievance',     color:'bg-amber-100 text-amber-700' },
+  { key:'complaint',     label:'Complaint',     color:'bg-orange-100 text-orange-700' },
+  { key:'investigation', label:'Investigation', color:'bg-violet-100 text-violet-700' },
+  { key:'dispute',       label:'Dispute',       color:'bg-blue-100 text-blue-700' },
+  { key:'other',         label:'Other',         color:'bg-slate-100 text-slate-600' },
+];
+function caseTypeMeta(k){ return CASE_TYPES.find(t=>t.key===k) || CASE_TYPES[CASE_TYPES.length-1]; }
+const CASE_SEVERITY = { low:'bg-slate-100 text-slate-600', medium:'bg-amber-100 text-amber-700', high:'bg-rose-100 text-rose-700' };
+
+function HRRelationsView({ profile, employees, hrCases, reload }){
+  const [tab,setTab]=useState('active');
+  const [search,setSearch]=useState('');
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
+  const all=(hrCases||[]);
+  const active=all.filter(c=>c.status!=='closed');
+  const closed=all.filter(c=>c.status==='closed');
+  const shown=(tab==='active'?active:tab==='closed'?closed:all)
+    .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.case_type}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
+  async function toggleClose(c){
+    const closing=c.status!=='closed';
+    const { error }=await sb.from('hr_cases').update({ status: closing?'closed':'active', closed_date: closing? new Date().toISOString().slice(0,10): null }).eq('id',c.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function del(c){ if(!confirm('Delete this case record?')) return; const { error }=await sb.from('hr_cases').delete().eq('id',c.id); if(error){ alert(error.message); return; } reload(); }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">⚖️ Employee Relations</h1>
+            <p className="text-slate-500 text-sm">Case log per employee — {active.length} active · {closed.length} closed.</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New case</button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+            <button onClick={()=>setTab('active')} className={`px-3 py-1.5 rounded-md ${tab==='active'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Active ({active.length})</button>
+            <button onClick={()=>setTab('closed')} className={`px-3 py-1.5 rounded-md ${tab==='closed'?'bg-white shadow-sm font-semibold text-slate-700':'text-slate-600'}`}>Closed ({closed.length})</button>
+            <button onClick={()=>setTab('all')} className={`px-3 py-1.5 rounded-md ${tab==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({all.length})</button>
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee / case…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white" />
+        </div>
+      </div>
+      {shown.length===0 ? (
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No {tab==='all'?'':tab} cases. Click "+ New case" to log one.</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Employee</th>
+                <th className="text-left px-3 py-2">Case</th>
+                <th className="text-left px-3 py-2">Title</th>
+                <th className="text-center px-3 py-2">Severity</th>
+                <th className="text-left px-3 py-2">Opened</th>
+                <th className="text-center px-3 py-2">Status</th>
+                <th></th>
+              </tr></thead>
+              <tbody>{shown.map(c=>{ const ct=caseTypeMeta(c.case_type); const isClosed=c.status==='closed'; return (
+                <tr key={c.id} className={`border-t hover:bg-slate-50 ${isClosed?'opacity-70':''}`}>
+                  <td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td>
+                  <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ct.color}`}>{ct.label}</span></td>
+                  <td className="px-3 py-2 text-slate-600 truncate max-w-[240px]" title={c.title}>{c.title}</td>
+                  <td className="px-3 py-2 text-center">{c.severity ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${CASE_SEVERITY[c.severity]||'bg-slate-100 text-slate-600'}`}>{c.severity}</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(c.opened_date)}</td>
+                  <td className="px-3 py-2 text-center">{isClosed ? <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">Closed</span> : <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Active</span>}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button onClick={()=>setEditing(c)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
+                    <button onClick={()=>toggleClose(c)} className="text-xs text-amber-700 hover:underline mr-2">{isClosed?'Reopen':'Close'}</button>
+                    <button onClick={()=>del(c)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                  </td>
+                </tr>
+              ); })}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {(creating||editing) && <CaseFormModal caseRow={editing} employees={employees} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function CaseFormModal({ caseRow, employees, profile, onClose, onSaved }){
+  const isEdit=!!caseRow;
+  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', severity:'medium', status:'active', opened_date:new Date().toISOString().slice(0,10), description:'', resolution:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    if(!f.title?.trim()){ setMsg('Add a short title.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), severity:f.severity||null, status:f.status||'active', opened_date:f.opened_date||null, closed_date: f.status==='closed' ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, resolution:f.resolution||null };
+    if(!isEdit) payload.created_by=profile.id;
+    const { error } = isEdit ? await sb.from('hr_cases').update(payload).eq('id',caseRow.id) : await sb.from('hr_cases').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Case details':'New case'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Employee *">
+            <select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}>
+              <option value="">— pick an employee —</option>
+              {activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Case type"><select className="input" value={f.case_type} onChange={e=>up('case_type',e.target.value)}>{CASE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Tardiness — 3rd offense" /></TpLbl>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Severity"><select className="input" value={f.severity||''} onChange={e=>up('severity',e.target.value)}><option value="">—</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}><option value="active">Active</option><option value="closed">Closed</option></select></TpLbl>
+          <TpLbl t="Opened"><input type="date" className="input" value={f.opened_date||''} onChange={e=>up('opened_date',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Details"><textarea className="input min-h-[90px]" value={f.description||''} onChange={e=>up('description',e.target.value)} placeholder="What happened, dates, people involved, actions taken…" /></TpLbl>
+        {f.status==='closed' && <TpLbl t="Resolution"><textarea className="input min-h-[60px]" value={f.resolution||''} onChange={e=>up('resolution',e.target.value)} placeholder="How it was resolved" /></TpLbl>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save case':'Log case')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─────────── HR — Employee Engagements (calendar) ─────────── */
+const ENGAGEMENT_TYPES = [
+  { key:'event',    label:'Event',    color:'bg-indigo-100 text-indigo-700',   dot:'bg-indigo-500' },
+  { key:'training', label:'Training', color:'bg-emerald-100 text-emerald-700', dot:'bg-emerald-500' },
+  { key:'holiday',  label:'Holiday',  color:'bg-rose-100 text-rose-700',       dot:'bg-rose-500' },
+  { key:'other',    label:'Other',    color:'bg-slate-100 text-slate-600',     dot:'bg-slate-400' },
+];
+function engTypeMeta(k){ return ENGAGEMENT_TYPES.find(t=>t.key===k) || ENGAGEMENT_TYPES[ENGAGEMENT_TYPES.length-1]; }
+
+function HREngagementsView({ profile, employees, hrEngagements, reload }){
+  const now=new Date();
+  const [cursor,setCursor]=useState({ y:now.getFullYear(), m:now.getMonth() });
+  const [creating,setCreating]=useState(null); // date string to prefill, or true
+  const [editing,setEditing]=useState(null);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const first=new Date(cursor.y,cursor.m,1);
+  const startWeekday=first.getDay();
+  const daysInMonth=new Date(cursor.y,cursor.m+1,0).getDate();
+  const monthLabel=first.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  const mm=String(cursor.m+1).padStart(2,'0');
+  const prevMonth=()=>setCursor(c=>{ const d=new Date(c.y,c.m-1,1); return {y:d.getFullYear(),m:d.getMonth()}; });
+  const nextMonth=()=>setCursor(c=>{ const d=new Date(c.y,c.m+1,1); return {y:d.getFullYear(),m:d.getMonth()}; });
+  const thisMonthAgain=()=>setCursor({ y:now.getFullYear(), m:now.getMonth() });
+  const liveEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  function itemsOn(day){
+    const iso=`${cursor.y}-${mm}-${String(day).padStart(2,'0')}`;
+    const evs=(hrEngagements||[]).filter(g=> String(g.event_date)<=iso && String(g.end_date||g.event_date)>=iso);
+    const bdays=liveEmps.filter(e=> e.date_of_birth && String(e.date_of_birth).slice(5)===`${mm}-${String(day).padStart(2,'0')}`);
+    return { iso, evs, bdays };
+  }
+  // Upcoming list (next 60 days) — engagements + birthdays
+  const upcoming=[];
+  (hrEngagements||[]).forEach(g=>{ if(String(g.event_date)>=todayISO) upcoming.push({ kind:'eng', date:g.event_date, g }); });
+  upcoming.sort((a,b)=>String(a.date).localeCompare(b.date));
+  const cells=[]; for(let i=0;i<startWeekday;i++) cells.push(null); for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  async function del(g){ if(!confirm('Delete this engagement?')) return; const { error }=await sb.from('hr_engagements').delete().eq('id',g.id); if(error){ alert(error.message); return; } reload(); }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🎉 Employee Engagements</h1>
+            <p className="text-slate-500 text-sm">Events, trainings &amp; birthdays across the month.</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add engagement</button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-3">
+        <button onClick={prevMonth} className="w-8 h-8 rounded-lg border bg-white hover:bg-slate-50">‹</button>
+        <div className="font-bold text-lg min-w-[180px] text-center">{monthLabel}</div>
+        <button onClick={nextMonth} className="w-8 h-8 rounded-lg border bg-white hover:bg-slate-50">›</button>
+        <button onClick={thisMonthAgain} className="text-xs px-2.5 py-1 rounded-lg border bg-white hover:bg-slate-50">Today</button>
+        <div className="ml-auto flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
+          {ENGAGEMENT_TYPES.map(t=><span key={t.key} className="flex items-center gap-1"><span className={`w-2.5 h-2.5 rounded-full ${t.dot}`}></span>{t.label}</span>)}
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-pink-500"></span>Birthday</span>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="grid grid-cols-7 bg-slate-50 border-b text-[10px] uppercase font-bold text-slate-400">
+          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div key={d} className="px-2 py-1.5 text-center">{d}</div>)}
+        </div>
+        <div className="grid grid-cols-7">
+          {cells.map((day,i)=>{
+            if(day===null) return <div key={'b'+i} className="min-h-[92px] border-b border-r bg-slate-50/40"></div>;
+            const { iso, evs, bdays }=itemsOn(day);
+            const isToday=iso===todayISO;
+            return (
+              <div key={i} className="min-h-[92px] border-b border-r p-1 align-top hover:bg-indigo-50/30 cursor-pointer" onClick={()=>setCreating(iso)}>
+                <div className={`text-[11px] font-semibold mb-0.5 ${isToday?'bg-indigo-600 text-white rounded-full w-5 h-5 flex items-center justify-center':'text-slate-500'}`}>{day}</div>
+                <div className="space-y-0.5">
+                  {bdays.map(e=>(<div key={'bd'+e.id} className="text-[9px] px-1 py-0.5 rounded bg-pink-100 text-pink-700 truncate" title={`🎂 ${fullName(e)}`}>🎂 {e.nickname||e.first_name}</div>))}
+                  {evs.slice(0,3).map(g=>{ const m=engTypeMeta(g.engagement_type); return (<div key={g.id} onClick={(ev)=>{ ev.stopPropagation(); setEditing(g); }} className={`text-[9px] px-1 py-0.5 rounded truncate ${m.color}`} title={g.title}>{g.title}</div>); })}
+                  {evs.length>3 && <div className="text-[9px] text-slate-400">+{evs.length-3} more</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Upcoming list */}
+      <div className="mt-4 bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 bg-slate-50 border-b text-sm font-bold">📌 Upcoming events &amp; trainings</div>
+        <div className="p-2">
+          {upcoming.length===0 ? <div className="text-center text-slate-400 text-sm py-6">Nothing scheduled ahead.</div> :
+            upcoming.slice(0,12).map(({g})=>{ const m=engTypeMeta(g.engagement_type); return (
+              <div key={g.id} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${m.dot}`}></span>
+                <span className="text-sm font-medium flex-1 truncate">{g.title}</span>
+                <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span>
+                <span className="text-[11px] text-slate-500 w-40 text-right">{fmtDate(g.event_date)}{g.end_date&&g.end_date!==g.event_date?` → ${fmtDate(g.end_date)}`:''}</span>
+                <button onClick={()=>setEditing(g)} className="text-xs text-indigo-600 hover:underline">Edit</button>
+              </div>
+            ); })}
+        </div>
+      </div>
+
+      {(creating||editing) && <EngagementFormModal engagement={editing} prefillDate={typeof creating==='string'?creating:''} profile={profile} onClose={()=>{ setCreating(null); setEditing(null); }} onSaved={()=>{ setCreating(null); setEditing(null); reload(); }} onDelete={editing?()=>{ del(editing); setEditing(null); }:null} />}
+    </div>
+  );
+}
+
+function EngagementFormModal({ engagement, prefillDate, profile, onClose, onSaved, onDelete }){
+  const isEdit=!!engagement;
+  const [f,setF]=useState(engagement || { title:'', engagement_type:'event', event_date:prefillDate||new Date().toISOString().slice(0,10), end_date:'', location:'', description:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title?.trim()){ setMsg('Add a title.'); return; }
+    if(!f.event_date){ setMsg('Pick a date.'); return; }
+    if(f.end_date && f.end_date<f.event_date){ setMsg('End date can\'t be before the start.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ title:f.title.trim(), engagement_type:f.engagement_type, event_date:f.event_date, end_date:f.end_date||null, location:f.location||null, description:f.description||null };
+    if(!isEdit) payload.created_by=profile.id;
+    const { error } = isEdit ? await sb.from('hr_engagements').update(payload).eq('id',engagement.id) : await sb.from('hr_engagements').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit engagement':'New engagement'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Fire safety training / Team outing" /></TpLbl>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Type"><select className="input" value={f.engagement_type} onChange={e=>up('engagement_type',e.target.value)}>{ENGAGEMENT_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
+          <TpLbl t="Date *"><input type="date" className="input" value={f.event_date||''} onChange={e=>up('event_date',e.target.value)} /></TpLbl>
+          <TpLbl t="End date"><input type="date" className="input" value={f.end_date||''} onChange={e=>up('end_date',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Location"><input className="input" value={f.location||''} onChange={e=>up('location',e.target.value)} placeholder="Optional" /></TpLbl>
+        <TpLbl t="Details"><textarea className="input min-h-[70px]" value={f.description||''} onChange={e=>up('description',e.target.value)} placeholder="Optional" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          {isEdit && onDelete && <button onClick={onDelete} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>}
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Add engagement')}</button>
+        </div>
       </div>
     </Modal>
   );
@@ -23356,6 +23633,7 @@ function App(){
   const [hrReviewCycles,setHrReviewCycles]=useState([]); const [hrReviews,setHrReviews]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
+  const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
@@ -23577,6 +23855,8 @@ function App(){
     // HR memo board + leave log — separate fetches, graceful empty if SQL not run.
     try { const hm = await sb.from('hr_memos').select('*').is('deleted_at',null).order('pinned',{ascending:false}).order('memo_date',{ascending:false}); setHrMemos(hm && !hm.error ? (hm.data||[]) : []); } catch(_){ setHrMemos([]); }
     try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
+    try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
+    try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
     setHrReviewCycles(hcyc && !hcyc.error ? (hcyc.data||[]) : []);
@@ -23677,7 +23957,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-memos','hr-leave','hr-recruit','hr-templates','payroll','budgets','profile']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-recruit','hr-templates','payroll','budgets','profile']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — only the Daily Schedule.
@@ -24117,7 +24397,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
@@ -24220,7 +24500,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -24326,6 +24606,8 @@ function App(){
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
+        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} reload={loadAll} />}
+        {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
