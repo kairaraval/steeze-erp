@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 172 · Fix: editing an employee (name, status, etc.) now shows the change immediately — the 201 detail panel reads the live record by id instead of a stale copy captured when it was opened";
+const BUILD = "Live build 173 · Memo Board: memos are now viewable/printable as a signed MEMORANDUM (HR prepared-by + Management approved-by e-signatures) with a Draft → Send for approval → Management signs workflow; pending memos ping Admin and appear in For Approval";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7586,18 +7586,86 @@ const MEMO_CATEGORIES = [
   { key:'urgent',       label:'Urgent',       color:'bg-rose-100 text-rose-700' },
 ];
 function memoCatMeta(k){ return MEMO_CATEGORIES.find(c=>c.key===k) || MEMO_CATEGORIES[0]; }
+const MEMO_STATUS = {
+  draft:    { label:'Draft',            color:'bg-slate-200 text-slate-600' },
+  pending:  { label:'Pending approval', color:'bg-amber-100 text-amber-700' },
+  approved: { label:'Approved',         color:'bg-emerald-100 text-emerald-700' },
+};
+function memoStatusMeta(s){ return MEMO_STATUS[s] || MEMO_STATUS.draft; }
+
+// Printable / signable memo document. Prepared-by carries the HR supervisor's
+// e-signature; Approved-by shows Management's signature once signed off.
+function MemoViewModal({ memo, profiles, onClose }){
+  const preparedBy = (profiles||[]).find(p=>p.id===memo.posted_by);
+  const approvedBy = memo.approved_by ? (profiles||[]).find(p=>p.id===memo.approved_by) : null;
+  const meta = memoCatMeta(memo.category);
+  const stat = memoStatusMeta(memo.status);
+  return ReactDOM.createPortal(
+    <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
+      <PortraitPagePrintStyle />
+      <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
+        <div className="min-w-0">
+          <div className="font-bold text-slate-900 truncate">📢 Memo — {memo.title}</div>
+          <div className="text-xs text-slate-500">{stat.label}{approvedBy?` · signed by ${approvedBy.name||approvedBy.email}`:''}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          {memo.status!=='approved' && <span className="text-[11px] px-2 py-1 rounded bg-amber-100 text-amber-700 font-semibold">Not yet approved — post after Management signs</span>}
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+        </div>
+      </div>
+      <div className="tp-print py-6">
+        <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.3in', fontSize:'11pt', color:'#222'}}>
+          <SteezeLetterhead docTitle="MEMORANDUM" />
+          <div className="grid grid-cols-3 gap-3 mt-3 mb-3 text-[11px]">
+            <div><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Date</div><div className="font-medium">{fmtDate(memo.memo_date)}</div></div>
+            <div><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Category</div><div className="font-medium">{meta.label}</div></div>
+            <div><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Ref</div><div className="font-mono font-medium">MEMO-{String(memo.id).slice(0,8).toUpperCase()}</div></div>
+          </div>
+          <div className="border-y-2 border-slate-800 py-2 mb-4">
+            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Subject</div>
+            <div className="text-lg font-bold">{memo.title}</div>
+          </div>
+          <div className="text-sm whitespace-pre-wrap leading-relaxed" style={{minHeight:'3in'}}>{memo.body||''}</div>
+          <div className="grid grid-cols-2 gap-8 mt-12">
+            <ApprovedSignature signerProfile={preparedBy} signedAt={memo.memo_date} role="Prepared by — HR" />
+            {approvedBy
+              ? <ApprovedSignature signerProfile={approvedBy} signedAt={memo.approved_at} role="Approved by — Management" />
+              : <div className="text-center"><div className="h-12 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Approved by — Management</div></div>}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
+  const [viewing,setViewing]=useState(null);
   const [cat,setCat]=useState('');
   const [search,setSearch]=useState('');
+  const isAdmin = profile.role==='admin';
   const memos = (hrMemos||[])
     .filter(m=> !cat || m.category===cat)
     .filter(m=> !search || `${m.title} ${m.body||''}`.toLowerCase().includes(search.toLowerCase()));
   const who=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   async function togglePin(m){ const { error }=await sb.from('hr_memos').update({ pinned:!m.pinned }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
   async function del(m){ if(!confirm('Delete this memo?')) return; const { error }=await sb.from('hr_memos').update({ deleted_at:new Date().toISOString() }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
+  async function sendForApproval(m){
+    const { error }=await sb.from('hr_memos').update({ status:'pending' }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function approveSign(m){
+    if(!profile.signature_data){ alert('Set up your e-signature first (My Profile → signature) before you can sign & approve.'); return; }
+    const { error }=await sb.from('hr_memos').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function reopen(m){
+    const { error }=await sb.from('hr_memos').update({ status:'draft', approved_by:null, approved_at:null }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload();
+  }
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -7618,20 +7686,27 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
         <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No memos {cat||search?'match your filter':'yet'}. Click "+ New memo" to post the first one.</div>
       ) : (
         <div className="grid md:grid-cols-2 gap-3">
-          {memos.map(m=>{ const meta=memoCatMeta(m.category); return (
+          {memos.map(m=>{ const meta=memoCatMeta(m.category); const st=memoStatusMeta(m.status); const mine=m.posted_by===profile.id; return (
             <div key={m.id} className={`bg-white border rounded-xl p-4 relative ${m.pinned?'border-amber-300 ring-1 ring-amber-200':''}`}>
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${meta.color}`}>{meta.label}</span>
+                <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${st.color}`}>{st.label}</span>
                 {m.pinned && <span className="text-[10px] font-bold text-amber-600">📌 Pinned</span>}
                 <span className="text-[11px] text-slate-400 ml-auto">{fmtDate(m.memo_date)}</span>
               </div>
               <div className="font-bold text-slate-800">{m.title}</div>
-              {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{m.body}</div>}
-              <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400">
-                <span>Posted by {who(m.posted_by)}</span>
-                <div className="ml-auto flex gap-2">
-                  <button onClick={()=>togglePin(m)} className="hover:text-amber-600" title={m.pinned?'Unpin':'Pin to top'}>{m.pinned?'Unpin':'📌 Pin'}</button>
-                  <button onClick={()=>setEditing(m)} className="text-indigo-600 hover:underline">Edit</button>
+              {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap line-clamp-4">{m.body}</div>}
+              {m.status==='approved' && m.approved_by && <div className="text-[11px] text-emerald-700 font-medium mt-2">✓ Approved &amp; signed by {who(m.approved_by)}</div>}
+              <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400 flex-wrap">
+                <span>Prepared by {who(m.posted_by)}</span>
+                <div className="ml-auto flex gap-2 items-center flex-wrap">
+                  <button onClick={()=>setViewing(m)} className="text-slate-700 font-semibold hover:underline">👁 View / Print</button>
+                  {m.status==='draft' && <button onClick={()=>sendForApproval(m)} className="text-indigo-600 hover:underline" title="Send to Management for sign-off">📤 Send for approval</button>}
+                  {m.status==='pending' && isAdmin && <button onClick={()=>approveSign(m)} className="text-emerald-700 font-semibold hover:underline" title="Sign & approve for posting">✍️ Approve &amp; sign</button>}
+                  {m.status==='pending' && !isAdmin && <span className="text-amber-600">⏳ Awaiting Management</span>}
+                  {m.status==='approved' && isAdmin && <button onClick={()=>reopen(m)} className="text-slate-400 hover:underline" title="Revert to draft">Reopen</button>}
+                  <button onClick={()=>togglePin(m)} className="hover:text-amber-600" title={m.pinned?'Unpin':'Pin to top'}>{m.pinned?'Unpin':'📌'}</button>
+                  {m.status!=='approved' && <button onClick={()=>setEditing(m)} className="text-indigo-600 hover:underline">Edit</button>}
                   <button onClick={()=>del(m)} className="text-rose-500 hover:underline">Delete</button>
                 </div>
               </div>
@@ -7640,6 +7715,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
         </div>
       )}
       {(creating||editing) && <MemoForm memo={editing} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {viewing && <MemoViewModal memo={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
     </div>
   );
 }
@@ -18253,11 +18329,20 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
-function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, reload }){
+function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
+  const [openMemo,setOpenMemo]=useState(null);
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment to verify (accounting/admin)
+  const pendingMemos = (hrMemos||[]).filter(m => m.status==='pending');
+  async function approveMemo(m){
+    if(!profile?.signature_data){ if(!confirm("You don't have an e-signature on file yet. Approve without one? Set one up via My Profile to sign.")) return; }
+    const now=new Date().toISOString();
+    const { error }=await sb.from('hr_memos').update({ status:'approved', approved_by:profile.id, approved_at:now }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
   // Pending SO payments — only accounting + admin can verify these; rendered
   // only for them. Sales agents who logged the payment see the status on the SO.
@@ -18269,7 +18354,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
   // (approved_at IS NULL). Cash / Check / Bank-Transfer all route here so
   // every disbursement goes through Admin sign-off.
   const pendingVouchers = (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at);
-  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length;
+  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length;
   // One-click approve + sign — same logic as the VoucherViewModal's button.
   async function approveVoucher(v){
     if(!profile?.signature_data){
@@ -18293,6 +18378,29 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
           {total===0 && <div className="text-emerald-700 text-sm font-semibold">✨ All caught up — nothing waiting on you.</div>}
         </div>
       </div>
+
+      {/* HR Memos awaiting sign-off — HR prepares, Management signs before posting */}
+      {pendingMemos.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-fuchsia-50 border-b border-fuchsia-200 flex items-center justify-between">
+            <div className="font-semibold text-fuchsia-900">📢 HR Memos <span className="text-fuchsia-600 font-normal text-xs ml-1">· {pendingMemos.length} pending</span></div>
+            <div className="text-xs text-fuchsia-600">Sign to approve for posting.</div>
+          </div>
+          <div className="divide-y">
+            {pendingMemos.map(m=>{ const cm=memoCatMeta(m.category); return (
+              <div key={m.id} className="px-4 py-2.5 flex items-center gap-3 flex-wrap hover:bg-fuchsia-50/40">
+                <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cm.color}`}>{cm.label}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{m.title}</div>
+                  <div className="text-[11px] text-slate-500">Prepared by {memoWho(m.posted_by)} · {fmtDate(m.memo_date)}</div>
+                </div>
+                <button onClick={()=>setOpenMemo(m)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold">👁 View</button>
+                <button onClick={()=>approveMemo(m)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✍️ Approve &amp; sign</button>
+              </div>
+            ); })}
+          </div>
+        </div>
+      )}
 
       {/* RFPs section — payment approvals from Finance */}
       <div className="bg-white border rounded-xl overflow-hidden mb-4">
@@ -18513,6 +18621,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
       {/* Voucher review — uses the same view modal as the Vouchers list,
          giving Admin access to the Approve & Sign button + Print there too. */}
       {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
+      {openMemo && <MemoViewModal memo={openMemo} profiles={profiles} onClose={()=>setOpenMemo(null)} />}
       {/* Payment verify modal — flips Pending → Verified, posts to bank, handles bank charges. */}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
@@ -24146,6 +24255,15 @@ function App(){
         if(!mutedRef.current) showSystemMention('Steeze OS — Voucher needs sign-off', `${typeLabel} ${v.number||''} · ${peso(v.amount)} · ${v.payee||''}`, ()=>setView('approvals'));
         scheduleReload();
       })
+      // HR memos sent for approval → Management signs before posting.
+      .on('postgres_changes', { event:'UPDATE', schema:'public', table:'hr_memos' }, (p)=>{
+        const m=p.new; if(!m || m.status!=='pending') return;
+        if(p.old && p.old.status==='pending') return;
+        if(!mutedRef.current) playApprovalPing();
+        setToast({ title:'📬 Memo to approve', body: m.title||'HR memo' });
+        if(!mutedRef.current) showSystemMention('Steeze OS — Memo needs sign-off', m.title||'HR memo', ()=>setView('hr-memos'));
+        scheduleReload();
+      })
       .subscribe();
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
   },[profile && profile.id, profile && profile.role]);
@@ -24305,7 +24423,8 @@ function App(){
   // admin sign-off. Vouchers route here so every disbursement is signed off.
   const pendingApprovals = (rfps||[]).filter(r=>r.status==='pending_admin').length
     + (budgetRequests||[]).filter(b=>b.status==='pending').length
-    + (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at).length;
+    + (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at).length
+    + (hrMemos||[]).filter(m => m.status==='pending').length;
 
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
@@ -24691,7 +24810,7 @@ function App(){
         {view==='payroll' && <SewingPayroll profile={profile} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
