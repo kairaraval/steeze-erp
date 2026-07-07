@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 173 · Memo Board: memos are now viewable/printable as a signed MEMORANDUM (HR prepared-by + Management approved-by e-signatures) with a Draft → Send for approval → Management signs workflow; pending memos ping Admin and appear in For Approval";
+const BUILD = "Live build 174 · Employees: added a Rank field (form + 201 file) and imported ranks; normalized Gender/Civil status to lowercase so the dropdowns populate (they now save/display correctly); moved rank out of notes";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6308,8 +6308,8 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             {/* Personal */}
             <div className="bg-white border rounded-lg p-3">
               <div className="text-xs uppercase font-bold text-slate-500 mb-2">Personal</div>
-              <Field label="Gender" value={e.gender} />
-              <Field label="Civil status" value={e.civil_status} />
+              <Field label="Gender" value={e.gender ? e.gender.charAt(0).toUpperCase()+e.gender.slice(1) : null} />
+              <Field label="Civil status" value={e.civil_status ? e.civil_status.charAt(0).toUpperCase()+e.civil_status.slice(1) : null} />
               <Field label="Date of birth" value={e.date_of_birth?fmtDate(e.date_of_birth):null} />
             </div>
             {/* Contact */}
@@ -6332,6 +6332,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
               <div className="text-xs uppercase font-bold text-slate-500 mb-2">Employment</div>
               <Field label="Hire date" value={e.hire_date?fmtDate(e.hire_date):null} />
               <Field label="Actual first day" value={e.first_day?fmtDate(e.first_day):null} />
+              <Field label="Rank" value={e.rank} />
               <Field label="Status" value={meta.label} />
               <Field label="Manager" value={manager?fullName(manager):null} />
               <Field label="Resignation date" value={e.resignation_date?fmtDate(e.resignation_date):null} />
@@ -6561,7 +6562,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
     gender:'', civil_status:'', date_of_birth:'', photo_url:'',
     phone:'', personal_email:'', work_email:'', address:'',
     emergency_contact_name:'', emergency_contact_relationship:'', emergency_contact_phone:'',
-    position:'', department:'', hire_date:'', status:'probationary',
+    position:'', rank:'', department:'', hire_date:'', status:'probationary',
     regularization_date:null, resignation_date:null, manager_id:null,
     sss:'', philhealth:'', pagibig:'', tin:'',
     bank_name:'', bank_account_name:'', bank_account_number:'',
@@ -6601,6 +6602,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
       date_of_birth: f.date_of_birth||null,
       manager_id: f.manager_id||null,
       profile_id: f.profile_id||null,
+      rank: f.rank||null,
       hire_date: f.hire_date||null,
       regularization_date: f.regularization_date||null,
       resignation_date: f.resignation_date||null,
@@ -6673,6 +6675,13 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
           <div className="text-xs font-bold uppercase text-emerald-700 mb-2">Employment</div>
           <div className="grid grid-cols-3 gap-2">
             <TpLbl t="Position"><input className="input" value={f.position||''} onChange={e=>up('position',e.target.value)} placeholder="Sewing Operator / Sales Rep / Designer" /></TpLbl>
+            <TpLbl t="Rank"><select className="input" value={f.rank||''} onChange={e=>up('rank',e.target.value||null)}>
+              <option value="">—</option>
+              <option value="RANK AND FILE">Rank and File</option>
+              <option value="SUPERVISOR">Supervisor</option>
+              <option value="MANAGER">Manager</option>
+              {f.rank && !['RANK AND FILE','SUPERVISOR','MANAGER'].includes(f.rank) && <option value={f.rank}>{f.rank}</option>}
+            </select></TpLbl>
             <TpLbl t="Department"><input className="input" value={f.department||''} onChange={e=>up('department',e.target.value)} placeholder="Production / Sales / Admin / etc." /></TpLbl>
             <TpLbl t="Status">
               <select className="input" value={f.status||'probationary'} onChange={e=>up('status',e.target.value)}>
