@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 164 · New Logistics Team role: sees ONLY the Daily Schedule (no inbox, no profile). Added to role pickers/badges + profiles_role_check (also fixed missing hr/knit_embro_lead earlier)";
+const BUILD = "Live build 165 · Estimates: added a Delete button (admin + accounting) in the estimate editor; editing was already available. Blocks delete if linked to a Sales Order";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1264,6 +1264,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const [view,setView]=useState(canEdit?'edit':'print'); // view-only users open straight to the PDF
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
+  // Admin + Accounting may edit and delete estimates (also enforced by RLS).
+  const canDelete = profile.role==='admin' || profile.role==='accounting';
   // editable fields
   const [number,setNumber]=useState('');
   const [status,setStatus]=useState('draft');
@@ -1340,6 +1342,18 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
       setTimeout(()=>setMsg(''),2500);
     }catch(e){ setMsg('Save failed: '+(e.message||e)); }
     finally{ setBusy(false); }
+  }
+
+  async function del(){
+    if(!estimate) return;
+    if(estimate.sales_order_id){ setMsg('This estimate is linked to a Sales Order — delete/unlink that order first.'); return; }
+    if(!confirm(`Delete estimate ${number}? This can't be undone.`)) return;
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('estimates').delete().eq('id', estimate.id);
+    setBusy(false);
+    if(error){ setMsg('Delete failed: '+(error.message||error)); return; }
+    reload&&reload();
+    onClose();
   }
 
   const sm = estStatusMeta(status);
@@ -1538,6 +1552,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
           {canEdit && <button disabled={busy} onClick={()=>save('rejected')} className="py-2 px-3 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50" title="Client declined this quote">✕ Mark declined</button>}
           <button disabled={!hasValidLine} onClick={()=>setView('print')} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50">🖨 Preview / Print</button>
           <div className="flex-1"></div>
+          {canDelete && estimate && <button disabled={busy} onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50" title="Delete this estimate">🗑 Delete</button>}
           <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
