@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 178 · New Pattern department: worklist (production 'For Pattern' + newly-endorsed samples, auto-pulled, plus ad-hoc tasks), a pattern-code library with sizes per pattern, and a Size Charts reference tab";
+const BUILD = "Live build 179 · Pattern worklist: added a 📋 Techpack view button on each board item so the pattern maker can open the techpack right from the worklist";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4932,7 +4932,7 @@ async function nextPatternCode(){
 function sizesToText(a){ return Array.isArray(a)? a.join(', ') : (a||''); }
 function textToSizes(t){ return String(t||'').split(',').map(s=>s.trim()).filter(Boolean); }
 
-function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, leads, sizeCharts, reload }){
+function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const [search,setSearch]=useState('');
   const [editing,setEditing]=useState(null);   // pattern being edited/created
@@ -4954,15 +4954,16 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
   function logFromJob(job, source){ setPrefill({ name: job.item||'', item_type: job.item||'', source_job_id: job.id, source_type: source, lead_id: job.lead_id||null, sizes: [] }); setEditing({}); }
 
   const worklistCount = prodNeeds.filter(j=>!hasPattern(j.id)).length + sampleNeeds.filter(j=>!hasPattern(j.id)).length + openTasks.length;
-  const boardRow=(job,source)=>{ const p=patternFor(job.id); return (
+  const boardRow=(job,source)=>{ const p=patternFor(job.id); const lead=job.lead_id?(leads||[]).find(l=>l.id===job.lead_id):null; return (
     <div key={job.id} className="flex items-center gap-2 px-3 py-2 border-t hover:bg-slate-50">
       <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${source==='sampling'?'bg-purple-100 text-purple-700':'bg-emerald-100 text-emerald-700'}`}>{source==='sampling'?'Sample':'Production'}</span>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium truncate">{job.item||'—'}</div>
         <div className="text-[11px] text-slate-500 truncate">{job.client_name||'—'}{job.number?` · ${job.number}`:''}{job.quantity?` · ${Number(job.quantity).toLocaleString()} pcs`:''}</div>
       </div>
-      {p ? <span className="text-xs text-emerald-700 font-semibold">✓ {p.pattern_code||'Pattern logged'}</span>
-         : <button onClick={()=>logFromJob(job,source)} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
+      {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
+      {p ? <span className="text-xs text-emerald-700 font-semibold shrink-0">✓ {p.pattern_code||'Pattern logged'}</span>
+         : <button onClick={()=>logFromJob(job,source)} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 shrink-0">＋ Log pattern</button>}
     </div>
   ); };
 
@@ -25137,7 +25138,7 @@ function App(){
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
-        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternTasks={patternTasks} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} reload={loadAll} />}
+        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternTasks={patternTasks} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
