@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 163 · New HR Department role: own Inbox + My Tasks + HR Dashboard + whole HR module + Sewing Payroll + Budget Requests + profile (signature). Added role to pickers, badges, RLS (payroll/memos/leaves)";
+const BUILD = "Live build 164 · New Logistics Team role: sees ONLY the Daily Schedule (no inbox, no profile). Added to role pickers/badges + profiles_role_check (also fixed missing hr/knit_embro_lead earlier)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9399,6 +9399,7 @@ function roleLabel(r){
          r==='sewing_lead'            ? 'Sewing Line Lead' :
          r==='knit_embro_lead'        ? 'Knit / Embro Team Lead' :
          r==='hr'                     ? 'HR Department' :
+         r==='logistics'              ? 'Logistics Team' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
@@ -9414,6 +9415,7 @@ function RoleBadge({ role }){
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
     role==='knit_embro_lead'        ? 'bg-orange-100 text-orange-700' :
     role==='hr'                     ? 'bg-fuchsia-100 text-fuchsia-700' :
+    role==='logistics'              ? 'bg-cyan-100 text-cyan-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -9621,10 +9623,11 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
+    { key:'logistics',        label:'Logistics',       count:profiles.filter(p=>p.role==='logistics').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead','knit_embro_lead','hr'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -9669,6 +9672,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
               <option value="hr">HR Department</option>
+              <option value="logistics">Logistics Team</option>
             </select>
           </div>
           <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
@@ -9763,6 +9767,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
                   <option value="hr">HR Department</option>
+                  <option value="logistics">Logistics Team</option>
                 </select>
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
@@ -23607,6 +23612,10 @@ function App(){
       // Payroll + Budget Requests + their profile (signature).
       allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-memos','hr-leave','hr-recruit','hr-templates','payroll','budgets','profile']);
       fallback = 'hr-home';
+    } else if(profile.role==='logistics'){
+      // Logistics Team — only the Daily Schedule.
+      allowed = new Set(['logistics']);
+      fallback = 'logistics';
     } else {
       return; // admin / manager — no restrictions
     }
@@ -23977,6 +23986,7 @@ function App(){
   const isKnitEmbroLead=profile.role==='knit_embro_lead';
   const isProdSupervisor=profile.role==='production_supervisor';
   const isHR=profile.role==='hr';
+  const isLogistics=profile.role==='logistics';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -24030,7 +24040,12 @@ function App(){
   const PERSONAL_GROUP = { group:'Personal', items:[
     ['profile','My Profile','⭐'],
   ] };
-  if(isHR){
+  if(isLogistics){
+    // Logistics Team — only the Daily Schedule. No inbox, no profile.
+    NAV = [
+      { items:[ ['logistics','Daily Schedule','🚚'] ] },
+    ];
+  } else if(isHR){
     // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
