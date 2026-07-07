@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 167 · Fix duplicate-number errors: estimate/invoice/SO numbers now use highest-existing+1 (not row count) so deletions don't collide; estimate & invoice save auto-retries with a fresh number on conflict";
+const BUILD = "Live build 168 · Sidebar tidy: My Profile now sits right under Inbox/My Tasks for every role that has it (Logistics still has none); Admin's Settings group moved to after Reports";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24220,11 +24220,21 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
+      { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
     ];
+  }
+  // Relocate "My Profile" from the bottom Personal group to sit right under
+  // Inbox / My Tasks (the first, ungrouped items block) for every role that has
+  // a profile view. Roles without a profile (e.g. Logistics) are untouched.
+  if(Array.isArray(NAV)){
+    const hadPersonal = NAV.some(g=> g.group==='Personal');
+    NAV = NAV.filter(g=> g.group!=='Personal');
+    if(hadPersonal && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='profile')){
+      NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['profile','My Profile','⭐']] };
+    }
   }
   function NavBtn([k,lbl,icon]){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
