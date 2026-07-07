@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 176 · Employees: added an Active (in office) flag — checkbox in the form, an ● In / ○ Out quick-toggle in the roster, and an Active/Out-of-office badge on the 201 file (for on-call staff)";
+const BUILD = "Live build 177 · Performance Reviews: configurable scorecard — define scoring criteria (company-wide / per department / per position), rate each 1–5 on the review, and the overall rating auto-computes as the weighted average";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7276,12 +7276,23 @@ const REVIEW_STATUSES = [
   { key:'acknowledged', label:'Acknowledged',         color:'bg-amber-100 text-amber-700' },
   { key:'final',        label:'Final',                color:'bg-emerald-100 text-emerald-700' },
 ];
+// Which scorecard criteria apply to a given employee: company-wide (all) plus
+// any scoped to their department or position. Sorted by sort_order.
+function applicableCriteria(criteria, emp){
+  const eqi=(a,b)=> (a||'').trim().toLowerCase()===(b||'').trim().toLowerCase();
+  return (criteria||[]).filter(c=> c.active!==false).filter(c=>{
+    if(c.scope_type==='department') return emp && eqi(emp.department, c.scope_value);
+    if(c.scope_type==='position')   return emp && eqi(emp.position, c.scope_value);
+    return true;
+  }).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
+}
 
-function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, reload }){
+function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, hrReviewCriteria, reload }){
   const [creatingCycle,setCreatingCycle]=useState(false);
   const [editingCycle,setEditingCycle]=useState(null);
   const [openCycleId,setOpenCycleId]=useState(null);
   const [editingReview,setEditingReview]=useState(null);
+  const [managingCriteria,setManagingCriteria]=useState(false);
 
   const activeCycles = (hrReviewCycles||[]).filter(c => c.status==='active' || c.status==='planning');
   const allCycles = hrReviewCycles||[];
@@ -7307,11 +7318,15 @@ function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h1 className="text-2xl font-bold">📊 Performance Reviews</h1>
-              <p className="text-slate-500 text-sm">{allCycles.length} cycle{allCycles.length===1?'':'s'} · {(hrReviews||[]).length} total reviews</p>
+              <p className="text-slate-500 text-sm">{allCycles.length} cycle{allCycles.length===1?'':'s'} · {(hrReviews||[]).length} total reviews · {(hrReviewCriteria||[]).filter(c=>c.active).length} scoring criteria</p>
             </div>
-            <button onClick={()=>setCreatingCycle(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New review cycle</button>
+            <div className="flex items-center gap-2">
+              <button onClick={()=>setManagingCriteria(true)} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⚙ Scorecard criteria</button>
+              <button onClick={()=>setCreatingCycle(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New review cycle</button>
+            </div>
           </div>
         </div>
+        {managingCriteria && <CriteriaManagerModal criteria={hrReviewCriteria} employees={employees} profile={profile} onClose={()=>setManagingCriteria(false)} onSaved={()=>reload()} />}
 
         <div className="space-y-3">
           {allCycles.map(c => {
@@ -7392,7 +7407,7 @@ function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews
                   <td className="px-3 py-2 font-medium">{emp ? fullName(emp) : '(deleted employee)'}</td>
                   <td className="px-3 py-2 text-xs">{emp?.position||'—'}</td>
                   <td className="px-3 py-2 text-xs">{reviewer ? (reviewer.name||reviewer.email) : '—'}</td>
-                  <td className="px-3 py-2 text-center">{ratingMeta ? <span className={`text-xs px-2 py-1 rounded font-bold ${ratingMeta.color}`}>{r.overall_rating}/5</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2 text-center">{(r.avg_score!=null||ratingMeta) ? <span className={`text-xs px-2 py-1 rounded font-bold ${(ratingMeta||{}).color||'bg-slate-100 text-slate-600'}`}>{r.avg_score!=null?Number(r.avg_score).toFixed(1):r.overall_rating}/5</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2"><span className={`text-[10px] px-2 py-1 rounded font-medium ${statusMeta.color}`}>{statusMeta.label}</span></td>
                   <td className="px-3 py-2 text-center">{r.pip ? <span className="text-[10px] font-bold uppercase bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">PIP</span> : '—'}</td>
                   <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setEditingReview(r);}} className="text-xs text-indigo-600 hover:underline">Open</button></td>
@@ -7417,7 +7432,7 @@ function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews
         </div>
       )}
 
-      {editingReview && <PerformanceReviewForm review={editingReview} cycle={cycle} profile={profile} profiles={profiles} employees={employees} onClose={()=>setEditingReview(null)} onSaved={()=>{ setEditingReview(null); reload(); }} />}
+      {editingReview && <PerformanceReviewForm review={editingReview} cycle={cycle} profile={profile} profiles={profiles} employees={employees} criteria={hrReviewCriteria} onClose={()=>setEditingReview(null)} onSaved={()=>{ setEditingReview(null); reload(); }} />}
     </div>
   );
 }
@@ -7460,15 +7475,34 @@ function ReviewCycleForm({ cycle, profile, onClose, onSaved }){
   );
 }
 
-function PerformanceReviewForm({ review, cycle, profile, profiles, employees, onClose, onSaved }){
+function PerformanceReviewForm({ review, cycle, profile, profiles, employees, criteria, onClose, onSaved }){
   const isEdit = !!review.id;
   const [f,setF]=useState(review || {});
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   const emp = (employees||[]).find(e => e.id===f.employee_id);
+  const applicable = applicableCriteria(criteria, emp);
+  // Per-criterion scores, keyed by criteria id. Seed from the saved review.
+  const [scores,setScores]=useState(()=>{
+    const init={}; const existing=Array.isArray(review?.scores)?review.scores:[];
+    applicable.forEach(c=>{ const prev=existing.find(s=>s.criteria_id===c.id || s.label===c.label); init[c.id]= prev && prev.score!=null ? Number(prev.score) : null; });
+    return init;
+  });
+  function setScore(cid,val){ setScores(s=>({...s,[cid]:val})); }
+  const scoredItems = applicable.map(c=>({ criteria_id:c.id, label:c.label, weight:Number(c.weight)||1, score: scores[c.id]!=null?Number(scores[c.id]):null }));
+  const rated = scoredItems.filter(s=>s.score!=null);
+  const wSum = rated.reduce((a,s)=>a+s.weight,0);
+  const avg = wSum>0 ? rated.reduce((a,s)=>a+s.score*s.weight,0)/wSum : null;
   async function save(){
     setBusy(true); setMsg('');
-    const payload = { ...f, overall_rating: f.overall_rating?Number(f.overall_rating):null, review_date: f.review_date||null, pip: !!f.pip };
+    const payload = { ...f, review_date: f.review_date||null, pip: !!f.pip };
+    if(applicable.length>0){
+      payload.scores = scoredItems;
+      payload.avg_score = avg;
+      payload.overall_rating = avg!=null ? Math.round(avg) : null;
+    } else {
+      payload.overall_rating = f.overall_rating?Number(f.overall_rating):null;
+    }
     if(!isEdit && !payload.reviewer_id) payload.reviewer_id = profile.id;
     const { error } = isEdit ? await sb.from('hr_reviews').update(payload).eq('id', review.id) : await sb.from('hr_reviews').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -7499,11 +7533,32 @@ function PerformanceReviewForm({ review, cycle, profile, profiles, employees, on
             </select>
           </TpLbl>
         </div>
-        <TpLbl t="Overall rating">
-          <div className="flex gap-2 flex-wrap">{REVIEW_RATINGS.map(r=>(
-            <button key={r.v} type="button" onClick={()=>up('overall_rating', r.v===f.overall_rating?null:r.v)} className={`px-3 py-2 rounded border-2 text-xs font-medium ${r.v===f.overall_rating?r.color+' border-current':'border-slate-200 hover:border-slate-400 bg-white text-slate-600'}`}>{r.label}</button>
-          ))}</div>
-        </TpLbl>
+        {applicable.length>0 ? (
+          <div className="border rounded-lg p-3 bg-indigo-50/30 border-indigo-200">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div className="text-[10px] uppercase text-slate-500 font-semibold">Scorecard — rate each 1 (poor) → 5 (excellent){emp?.department||emp?.position?<span className="text-slate-400 normal-case font-normal"> · for {emp?.position||emp?.department}</span>:null}</div>
+              <div className="text-sm">Overall (avg): <span className="font-bold text-indigo-700 text-base">{avg!=null?avg.toFixed(2):'—'}</span> <span className="text-slate-400">/ 5</span></div>
+            </div>
+            <div className="space-y-1.5">
+              {scoredItems.map(s=>(
+                <div key={s.criteria_id} className="flex items-center gap-2">
+                  <div className="flex-1 text-sm min-w-0 truncate" title={s.label}>{s.label}{s.weight!==1 && <span className="text-[10px] text-slate-400"> · ×{s.weight}</span>}</div>
+                  <div className="flex gap-1 shrink-0">{[1,2,3,4,5].map(n=>(
+                    <button key={n} type="button" onClick={()=>setScore(s.criteria_id, scores[s.criteria_id]===n?null:n)} className={`w-8 h-8 rounded border text-xs font-bold ${scores[s.criteria_id]===n?'bg-indigo-600 text-white border-indigo-600':'bg-white border-slate-300 hover:border-indigo-400 text-slate-600'}`}>{n}</button>
+                  ))}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-2">Overall rating is the weighted average of these scores ({rated.length}/{scoredItems.length} rated). Manage the item list via ⚙ Scorecard criteria.</div>
+          </div>
+        ) : (
+          <TpLbl t="Overall rating">
+            <div className="flex gap-2 flex-wrap">{REVIEW_RATINGS.map(r=>(
+              <button key={r.v} type="button" onClick={()=>up('overall_rating', r.v===f.overall_rating?null:r.v)} className={`px-3 py-2 rounded border-2 text-xs font-medium ${r.v===f.overall_rating?r.color+' border-current':'border-slate-200 hover:border-slate-400 bg-white text-slate-600'}`}>{r.label}</button>
+            ))}</div>
+            <div className="text-[10px] text-slate-400 mt-1">No scorecard criteria apply to this employee — add some via ⚙ Scorecard criteria to score by item.</div>
+          </TpLbl>
+        )}
         <TpLbl t="Strengths"><textarea className="input min-h-[80px]" value={f.strengths||''} onChange={e=>up('strengths',e.target.value)} placeholder="What's working well — quality, attendance, attitude, technical skill, etc." /></TpLbl>
         <TpLbl t="Areas to improve"><textarea className="input min-h-[80px]" value={f.improvements||''} onChange={e=>up('improvements',e.target.value)} placeholder="Specific areas, with examples" /></TpLbl>
         <TpLbl t="Goals for next period"><textarea className="input min-h-[80px]" value={f.goals||''} onChange={e=>up('goals',e.target.value)} placeholder="SMART goals, training to complete, KPIs to hit" /></TpLbl>
@@ -7523,6 +7578,64 @@ function PerformanceReviewForm({ review, cycle, profile, profiles, employees, on
   );
 }
 
+
+// Manage the scorecard criteria (the items reviewers score on each evaluation).
+function CriteriaManagerModal({ criteria, employees, profile, onClose, onSaved }){
+  const [label,setLabel]=useState(''); const [scopeType,setScopeType]=useState('all');
+  const [scopeVal,setScopeVal]=useState(''); const [weight,setWeight]=useState('1');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const depts=Array.from(new Set((employees||[]).map(e=>e.department).filter(Boolean))).sort();
+  const positions=Array.from(new Set((employees||[]).map(e=>e.position).filter(Boolean))).sort();
+  const scopeRank={ all:0, department:1, position:2 };
+  const list=[...(criteria||[])].sort((a,b)=>{ const s=(scopeRank[a.scope_type]||0)-(scopeRank[b.scope_type]||0); if(s)return s; return (a.sort_order||0)-(b.sort_order||0); });
+  const scopeLabel=(c)=> c.scope_type==='department'?`Dept: ${c.scope_value}`:c.scope_type==='position'?`Position: ${c.scope_value}`:'All employees';
+  async function add(){
+    if(!label.trim()){ setMsg('Enter a criterion label.'); return; }
+    if(scopeType!=='all' && !scopeVal.trim()){ setMsg('Pick the '+scopeType+'.'); return; }
+    setBusy(true); setMsg('');
+    const maxOrder=Math.max(0,...(criteria||[]).map(c=>c.sort_order||0));
+    const { error }=await sb.from('hr_review_criteria').insert({ label:label.trim(), scope_type:scopeType, scope_value: scopeType==='all'?null:scopeVal.trim(), weight:Number(weight)||1, sort_order:maxOrder+1, created_by:profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    setLabel(''); setScopeVal(''); setWeight('1'); onSaved();
+  }
+  async function toggle(c){ const { error }=await sb.from('hr_review_criteria').update({ active: c.active===false }).eq('id',c.id); if(error){alert(error.message);return;} onSaved(); }
+  async function del(c){ if(!confirm('Delete criterion "'+c.label+'"?')) return; const { error }=await sb.from('hr_review_criteria').delete().eq('id',c.id); if(error){alert(error.message);return;} onSaved(); }
+  return (
+    <Modal title="⚙ Scorecard criteria" onClose={onClose} wide>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-500">These are the items reviewers score (1–5) on each evaluation. <b>All-employees</b> items apply to everyone; <b>department</b> / <b>position</b> items only appear for matching employees. The overall rating is the weighted average of the scores.</p>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Criterion</th><th className="text-left px-3 py-2">Applies to</th><th className="text-center px-3 py-2">Weight</th><th className="text-center px-3 py-2">Active</th><th></th></tr></thead>
+            <tbody>{list.map(c=>(
+              <tr key={c.id} className={`border-t ${c.active===false?'opacity-50':''}`}>
+                <td className="px-3 py-2 font-medium">{c.label}</td>
+                <td className="px-3 py-2 text-xs">{scopeLabel(c)}</td>
+                <td className="px-3 py-2 text-center text-xs">{c.weight||1}</td>
+                <td className="px-3 py-2 text-center"><button onClick={()=>toggle(c)} className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${c.active===false?'bg-slate-200 text-slate-500':'bg-emerald-100 text-emerald-700'}`}>{c.active===false?'Off':'On'}</button></td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>del(c)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+              </tr>
+            ))}{list.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-4 text-sm">No criteria yet — add some below.</td></tr>}</tbody>
+          </table>
+        </div>
+        <div className="border rounded-lg p-3 bg-slate-50/60">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Add criterion</div>
+          <div className="grid md:grid-cols-12 gap-2 items-end">
+            <div className="md:col-span-4"><label className="text-[10px] text-slate-500">Label</label><input className="input" value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Machine speed & accuracy" /></div>
+            <div className="md:col-span-3"><label className="text-[10px] text-slate-500">Applies to</label><select className="input" value={scopeType} onChange={e=>{ setScopeType(e.target.value); setScopeVal(''); }}><option value="all">All employees</option><option value="department">A department</option><option value="position">A position</option></select></div>
+            {scopeType!=='all' && <div className="md:col-span-3"><label className="text-[10px] text-slate-500">{scopeType==='department'?'Department':'Position'}</label>
+              <input className="input" list="scope-opts" value={scopeVal} onChange={e=>setScopeVal(e.target.value)} placeholder={scopeType==='department'?'Production':'Sewer'} />
+              <datalist id="scope-opts">{(scopeType==='department'?depts:positions).map(x=><option key={x} value={x} />)}</datalist>
+            </div>}
+            <div className="md:col-span-1"><label className="text-[10px] text-slate-500">Weight</label><input type="number" className="input text-center" value={weight} onChange={e=>setWeight(e.target.value)} /></div>
+            <div className="md:col-span-1"><button disabled={busy} onClick={add} className="w-full py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">Add</button></div>
+          </div>
+          {msg && <div className="text-xs text-rose-600 mt-1">{msg}</div>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 /* ─────────── HR — Dashboard (home) ─────────── */
 function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, hrMemos, hrJobs, setView }){
@@ -23836,6 +23949,7 @@ function App(){
   const [hrTrainings,setHrTrainings]=useState([]);
   // HR Tier 3: performance review cycles + reviews, job postings + applicants
   const [hrReviewCycles,setHrReviewCycles]=useState([]); const [hrReviews,setHrReviews]=useState([]);
+  const [hrReviewCriteria,setHrReviewCriteria]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
@@ -24061,6 +24175,7 @@ function App(){
     try { const hm = await sb.from('hr_memos').select('*').is('deleted_at',null).order('pinned',{ascending:false}).order('memo_date',{ascending:false}); setHrMemos(hm && !hm.error ? (hm.data||[]) : []); } catch(_){ setHrMemos([]); }
     try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
     try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
+    try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
@@ -24817,7 +24932,7 @@ function App(){
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
-        {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} reload={loadAll} />}
+        {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} reload={loadAll} />}
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
