@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 170 · Employee records: added Current rate, Actual first day of work, Company benefits (Holiday / Leave credits / HMO) and Assets issued (Asset 1–3) — editable in the form and shown on the 201 file";
+const BUILD = "Live build 171 · Imported the full 201-file roster (100 employees) into HR; added Project-Based / Management / Extra On-call statuses; Leave credits is now free text (e.g. '10 VL / 5 SL')";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6052,6 +6052,9 @@ const EMP_STATUSES = [
   { key:'probationary',  label:'Probationary',  color:'bg-amber-100 text-amber-700' },
   { key:'regular',       label:'Regular',       color:'bg-emerald-100 text-emerald-700' },
   { key:'contractual',   label:'Contractual',   color:'bg-blue-100 text-blue-700' },
+  { key:'project_based', label:'Project-Based', color:'bg-cyan-100 text-cyan-700' },
+  { key:'management',    label:'Management',    color:'bg-indigo-100 text-indigo-700' },
+  { key:'extra_oncall',  label:'Extra On-call', color:'bg-orange-100 text-orange-700' },
   { key:'consultant',    label:'Consultant',    color:'bg-violet-100 text-violet-700' },
   { key:'inactive',      label:'Inactive',      color:'bg-slate-200 text-slate-500' },
   { key:'resigned',      label:'Resigned',      color:'bg-slate-200 text-slate-600' },
@@ -6364,7 +6367,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             <div className="bg-white border rounded-lg p-3 bg-sky-50/40 border-sky-200">
               <div className="text-xs uppercase font-bold text-sky-700 mb-2">🎁 Company benefits</div>
               <Field label="Holiday" value={e.benefit_holiday} />
-              <Field label="Leave credits" value={e.leave_credits!=null&&e.leave_credits!==''?`${e.leave_credits} days`:null} />
+              <Field label="Leave credits" value={e.leave_credits||null} />
               <Field label="HMO" value={e.hmo} />
             </div>
             {/* Assets issued */}
@@ -6606,7 +6609,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
       old_rate: Number(f.old_rate)||null,
       allowances: Number(f.allowances)||0,
       first_day: f.first_day||null,
-      leave_credits: Number(f.leave_credits)||null,
+      leave_credits: f.leave_credits||null,
       benefit_holiday: f.benefit_holiday||null,
       hmo: f.hmo||null,
       asset_1: f.asset_1||null, asset_2: f.asset_2||null, asset_3: f.asset_3||null,
@@ -6727,7 +6730,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
           <div className="text-xs font-bold uppercase text-sky-700 mb-2">🎁 Company benefits</div>
           <div className="grid grid-cols-3 gap-2">
             <TpLbl t="Holiday"><input className="input" value={f.benefit_holiday||''} onChange={e=>up('benefit_holiday',e.target.value)} placeholder="e.g. Regular + Special / entitled" /></TpLbl>
-            <TpLbl t="Leave credits (days)"><input type="number" className="input" value={f.leave_credits||''} onChange={e=>up('leave_credits',e.target.value)} placeholder="e.g. 15" /></TpLbl>
+            <TpLbl t="Leave credits"><input className="input" value={f.leave_credits||''} onChange={e=>up('leave_credits',e.target.value)} placeholder="e.g. 10 VL / 5 SL" /></TpLbl>
             <TpLbl t="HMO"><input className="input" value={f.hmo||''} onChange={e=>up('hmo',e.target.value)} placeholder="Provider / plan" /></TpLbl>
           </div>
         </div>
