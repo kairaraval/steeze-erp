@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 175 · Memo Board: added 'Memo for' audience (whole office / a department / specific people) — shown on each memo card and as the TO line on the printed MEMORANDUM";
+const BUILD = "Live build 176 · Employees: added an Active (in office) flag — checkbox in the form, an ● In / ○ Out quick-toggle in the roster, and an Active/Out-of-office badge on the 201 file (for on-call staff)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6116,6 +6116,11 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
     && (!filterStatus || e.status===filterStatus)
     && (!filterAccess || (filterAccess==='has' ? !!e.profile_id : !e.profile_id))
   );
+  async function toggleActive(e){
+    const next = e.is_active===false; // out → in, in → out
+    const { error } = await sb.from('employees').update({ is_active: next }).eq('id', e.id);
+    if(error){ alert(error.message); return; } reload();
+  }
 
   // Counts for tiles
   const totalCount = (employees||[]).length;
@@ -6212,7 +6217,9 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
               </td>
               <td className="px-3 py-2 text-xs">{e.position||'—'}</td>
               <td className="px-3 py-2 text-xs">{e.department||'—'}</td>
-              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2 whitespace-nowrap"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
+                <button onClick={(ev)=>{ev.stopPropagation(); toggleActive(e);}} className={`ml-1 text-[10px] px-1.5 py-0.5 rounded font-semibold ${e.is_active===false?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`} title="Toggle in-office / out">{e.is_active===false?'○ Out':'● In'}</button>
+              </td>
               <td className="px-3 py-2 text-xs">{e.hire_date?fmtDate(e.hire_date):'—'}</td>
               <td className="px-3 py-2 text-center">
                 {e.profile_id ? <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">✓ Steeze</span> : <span className="text-[10px] text-slate-400">—</span>}
@@ -6272,6 +6279,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             <div className="text-sm text-slate-700 mt-1">{e.position||'—'} · <strong>{e.department||'—'}</strong></div>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
+              <span className={`text-xs px-2 py-1 rounded font-semibold ${e.is_active===false?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{e.is_active===false?'○ Out of office':'● Active'}</span>
               {e.employee_number && <span className="text-xs text-slate-500">#{e.employee_number}</span>}
               {linkedProfile && <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">✓ Steeze user · {linkedProfile.role}</span>}
               {e.hire_date && <span className="text-xs text-slate-500">Hired {fmtDate(e.hire_date)}</span>}
@@ -6562,7 +6570,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
     gender:'', civil_status:'', date_of_birth:'', photo_url:'',
     phone:'', personal_email:'', work_email:'', address:'',
     emergency_contact_name:'', emergency_contact_relationship:'', emergency_contact_phone:'',
-    position:'', rank:'', department:'', hire_date:'', status:'probationary',
+    position:'', rank:'', department:'', hire_date:'', status:'probationary', is_active:true,
     regularization_date:null, resignation_date:null, manager_id:null,
     sss:'', philhealth:'', pagibig:'', tin:'',
     bank_name:'', bank_account_name:'', bank_account_number:'',
@@ -6603,6 +6611,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
       manager_id: f.manager_id||null,
       profile_id: f.profile_id||null,
       rank: f.rank||null,
+      is_active: f.is_active!==false,
       hire_date: f.hire_date||null,
       regularization_date: f.regularization_date||null,
       resignation_date: f.resignation_date||null,
@@ -6699,6 +6708,11 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
               </select>
             </TpLbl>
           </div>
+          <label className="flex items-center gap-2 mt-2 text-sm cursor-pointer bg-white border rounded-lg px-3 py-2 w-fit">
+            <input type="checkbox" checked={f.is_active!==false} onChange={e=>up('is_active',e.target.checked)} />
+            <span className="font-medium">Currently active (in office)</span>
+            <span className="text-xs text-slate-400">— uncheck for on-call staff who are out</span>
+          </label>
         </div>
 
         {/* GOVERNMENT IDs */}
