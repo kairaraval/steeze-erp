@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 169 · HR: Employee Relations (case log, active/closed) + Employee Engagements (monthly calendar with events/trainings/birthdays); employees gain Inactive status + Old rate compensation box";
+const BUILD = "Live build 170 · Employee records: added Current rate, Actual first day of work, Company benefits (Holiday / Leave credits / HMO) and Assets issued (Asset 1–3) — editable in the form and shown on the 201 file";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6328,6 +6328,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             <div className="bg-white border rounded-lg p-3">
               <div className="text-xs uppercase font-bold text-slate-500 mb-2">Employment</div>
               <Field label="Hire date" value={e.hire_date?fmtDate(e.hire_date):null} />
+              <Field label="Actual first day" value={e.first_day?fmtDate(e.first_day):null} />
               <Field label="Status" value={meta.label} />
               <Field label="Manager" value={manager?fullName(manager):null} />
               <Field label="Resignation date" value={e.resignation_date?fmtDate(e.resignation_date):null} />
@@ -6350,13 +6351,28 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             {/* Compensation */}
             <div className="bg-white border rounded-lg p-3 md:col-span-2 bg-amber-50/40 border-amber-200">
               <div className="text-xs uppercase font-bold text-amber-700 mb-2">💰 Compensation (reference only — Sprout has the live numbers)</div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
+                <Field label="Current rate" value={e.current_rate?peso(e.current_rate):null} />
                 <Field label="Basic salary" value={e.basic_salary?peso(e.basic_salary):null} />
                 <Field label="Old rate" value={e.old_rate?peso(e.old_rate):null} />
                 <Field label="Allowances" value={e.allowances?peso(e.allowances):null} />
               </div>
-              {e.old_rate && e.basic_salary && <div className="mt-1 text-[11px] text-emerald-700 font-medium">Change: {peso(e.old_rate)} → {peso(e.basic_salary)} ({e.basic_salary>=e.old_rate?'+':''}{peso(e.basic_salary-e.old_rate)})</div>}
+              {e.old_rate && e.current_rate && <div className="mt-1 text-[11px] text-emerald-700 font-medium">Change: {peso(e.old_rate)} → {peso(e.current_rate)} ({e.current_rate>=e.old_rate?'+':''}{peso(e.current_rate-e.old_rate)})</div>}
               {e.salary_notes && <div className="mt-2 text-xs text-slate-600">{e.salary_notes}</div>}
+            </div>
+            {/* Company benefits */}
+            <div className="bg-white border rounded-lg p-3 bg-sky-50/40 border-sky-200">
+              <div className="text-xs uppercase font-bold text-sky-700 mb-2">🎁 Company benefits</div>
+              <Field label="Holiday" value={e.benefit_holiday} />
+              <Field label="Leave credits" value={e.leave_credits!=null&&e.leave_credits!==''?`${e.leave_credits} days`:null} />
+              <Field label="HMO" value={e.hmo} />
+            </div>
+            {/* Assets issued */}
+            <div className="bg-white border rounded-lg p-3 bg-violet-50/40 border-violet-200">
+              <div className="text-xs uppercase font-bold text-violet-700 mb-2">💼 Assets issued</div>
+              <Field label="Asset 1" value={e.asset_1} />
+              <Field label="Asset 2" value={e.asset_2} />
+              <Field label="Asset 3" value={e.asset_3} />
             </div>
             {/* Sprout link */}
             {(e.sprout_employee_id || e.sprout_url) && (
@@ -6546,7 +6562,9 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
     regularization_date:null, resignation_date:null, manager_id:null,
     sss:'', philhealth:'', pagibig:'', tin:'',
     bank_name:'', bank_account_name:'', bank_account_number:'',
-    basic_salary:0, allowances:0, salary_notes:'',
+    basic_salary:0, current_rate:'', old_rate:'', allowances:0, salary_notes:'',
+    first_day:'', benefit_holiday:'', leave_credits:'', hmo:'',
+    asset_1:'', asset_2:'', asset_3:'',
     sprout_employee_id:'', sprout_url:'',
     profile_id:null, notes:'',
   });
@@ -6584,8 +6602,14 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
       regularization_date: f.regularization_date||null,
       resignation_date: f.resignation_date||null,
       basic_salary: Number(f.basic_salary)||null,
+      current_rate: Number(f.current_rate)||null,
       old_rate: Number(f.old_rate)||null,
       allowances: Number(f.allowances)||0,
+      first_day: f.first_day||null,
+      leave_credits: Number(f.leave_credits)||null,
+      benefit_holiday: f.benefit_holiday||null,
+      hmo: f.hmo||null,
+      asset_1: f.asset_1||null, asset_2: f.asset_2||null, asset_3: f.asset_3||null,
     };
     if(!isEdit) payload.created_by = profile.id;
     const { data, error } = isEdit
@@ -6653,6 +6677,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
               </select>
             </TpLbl>
             <TpLbl t="Hire date"><input type="date" className="input" value={f.hire_date||''} onChange={e=>up('hire_date',e.target.value||null)} /></TpLbl>
+            <TpLbl t="Actual first day of work"><input type="date" className="input" value={f.first_day||''} onChange={e=>up('first_day',e.target.value||null)} /></TpLbl>
             <TpLbl t="Regularization date"><input type="date" className="input" value={f.regularization_date||''} onChange={e=>up('regularization_date',e.target.value||null)} placeholder="Auto = hire+6mo" /></TpLbl>
             <TpLbl t="Resignation date"><input type="date" className="input" value={f.resignation_date||''} onChange={e=>up('resignation_date',e.target.value||null)} /></TpLbl>
             <TpLbl t="Manager">
@@ -6689,10 +6714,31 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
         <div className="border rounded-lg p-3 bg-amber-50/40 border-amber-200">
           <div className="text-xs font-bold uppercase text-amber-700 mb-2">💰 Compensation (reference only — Sprout is authoritative)</div>
           <div className="grid grid-cols-4 gap-2">
+            <TpLbl t="Current rate (PHP)"><input type="number" className="input" value={f.current_rate||''} onChange={e=>up('current_rate',e.target.value)} placeholder="Current rate" /></TpLbl>
             <TpLbl t="Basic salary (PHP)"><input type="number" className="input" value={f.basic_salary||''} onChange={e=>up('basic_salary',e.target.value)} /></TpLbl>
             <TpLbl t="Old rate (PHP)"><input type="number" className="input" value={f.old_rate||''} onChange={e=>up('old_rate',e.target.value)} placeholder="Previous rate" /></TpLbl>
             <TpLbl t="Allowances (PHP)"><input type="number" className="input" value={f.allowances||0} onChange={e=>up('allowances',e.target.value)} /></TpLbl>
             <TpLbl t="Notes"><input className="input" value={f.salary_notes||''} onChange={e=>up('salary_notes',e.target.value)} placeholder="COLA, transport, last raise, etc." /></TpLbl>
+          </div>
+        </div>
+
+        {/* COMPANY BENEFITS */}
+        <div className="border rounded-lg p-3 bg-sky-50/50 border-sky-200">
+          <div className="text-xs font-bold uppercase text-sky-700 mb-2">🎁 Company benefits</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Holiday"><input className="input" value={f.benefit_holiday||''} onChange={e=>up('benefit_holiday',e.target.value)} placeholder="e.g. Regular + Special / entitled" /></TpLbl>
+            <TpLbl t="Leave credits (days)"><input type="number" className="input" value={f.leave_credits||''} onChange={e=>up('leave_credits',e.target.value)} placeholder="e.g. 15" /></TpLbl>
+            <TpLbl t="HMO"><input className="input" value={f.hmo||''} onChange={e=>up('hmo',e.target.value)} placeholder="Provider / plan" /></TpLbl>
+          </div>
+        </div>
+
+        {/* ASSETS ISSUED */}
+        <div className="border rounded-lg p-3 bg-violet-50/50 border-violet-200">
+          <div className="text-xs font-bold uppercase text-violet-700 mb-2">💼 Assets issued</div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Asset 1"><input className="input" value={f.asset_1||''} onChange={e=>up('asset_1',e.target.value)} placeholder="e.g. Laptop — Dell #123" /></TpLbl>
+            <TpLbl t="Asset 2"><input className="input" value={f.asset_2||''} onChange={e=>up('asset_2',e.target.value)} placeholder="e.g. Phone / SIM" /></TpLbl>
+            <TpLbl t="Asset 3"><input className="input" value={f.asset_3||''} onChange={e=>up('asset_3',e.target.value)} placeholder="e.g. ID / uniform" /></TpLbl>
           </div>
         </div>
 
