@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 177 · Performance Reviews: configurable scorecard — define scoring criteria (company-wide / per department / per position), rate each 1–5 on the review, and the overall rating auto-computes as the weighted average";
+const BUILD = "Live build 178 · New Pattern department: worklist (production 'For Pattern' + newly-endorsed samples, auto-pulled, plus ad-hoc tasks), a pattern-code library with sizes per pattern, and a Size Charts reference tab";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4919,6 +4919,189 @@ function MyTasksView({ profile }){
 
       <div className="mt-4 text-center text-[11px] text-slate-400">Tip: press Enter to add · click the coloured dot to set priority · hover a task for its due date &amp; move options.</div>
     </div>
+  );
+}
+
+/* ─────────── PATTERN DEPARTMENT ─────────── */
+async function nextPatternCode(){
+  const yr = new Date().getFullYear();
+  const { data } = await sb.from('patterns').select('pattern_code').like('pattern_code', `PTN-${yr}-%`);
+  let max=0; (data||[]).forEach(r=>{ const m=String(r.pattern_code||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+  return `PTN-${yr}-${String(max+1).padStart(3,'0')}`;
+}
+function sizesToText(a){ return Array.isArray(a)? a.join(', ') : (a||''); }
+function textToSizes(t){ return String(t||'').split(',').map(s=>s.trim()).filter(Boolean); }
+
+function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, leads, sizeCharts, reload }){
+  const [tab,setTab]=useState('worklist');
+  const [search,setSearch]=useState('');
+  const [editing,setEditing]=useState(null);   // pattern being edited/created
+  const [prefill,setPrefill]=useState(null);    // prefill from a job
+  const [newTask,setNewTask]=useState('');
+  const todayISO=new Date().toISOString().slice(0,10);
+  const hasPattern=(jobId)=> (patterns||[]).some(p=>p.source_job_id===jobId);
+  const patternFor=(jobId)=> (patterns||[]).find(p=>p.source_job_id===jobId);
+  const prodNeeds=(prodJobs||[]).filter(j=> j.status==='for pattern');
+  const sampleNeeds=(sampleJobs||[]).filter(j=> j.status==='endorsed');
+  const openTasks=(patternTasks||[]).filter(t=>t.status!=='done');
+  const doneTasks=(patternTasks||[]).filter(t=>t.status==='done');
+  const lib=(patterns||[]).filter(p=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase()));
+
+  async function addTask(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_tasks').insert({ title:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
+  async function toggleTask(t){ const done=t.status!=='done'; const { error }=await sb.from('pattern_tasks').update({ status: done?'done':'todo', done_at: done?new Date().toISOString():null }).eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
+  async function delTask(t){ const { error }=await sb.from('pattern_tasks').delete().eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
+  async function delPattern(p){ if(!confirm(`Delete pattern ${p.pattern_code||''}?`)) return; const { error }=await sb.from('patterns').update({ deleted_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload(); }
+  function logFromJob(job, source){ setPrefill({ name: job.item||'', item_type: job.item||'', source_job_id: job.id, source_type: source, lead_id: job.lead_id||null, sizes: [] }); setEditing({}); }
+
+  const worklistCount = prodNeeds.filter(j=>!hasPattern(j.id)).length + sampleNeeds.filter(j=>!hasPattern(j.id)).length + openTasks.length;
+  const boardRow=(job,source)=>{ const p=patternFor(job.id); return (
+    <div key={job.id} className="flex items-center gap-2 px-3 py-2 border-t hover:bg-slate-50">
+      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${source==='sampling'?'bg-purple-100 text-purple-700':'bg-emerald-100 text-emerald-700'}`}>{source==='sampling'?'Sample':'Production'}</span>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium truncate">{job.item||'—'}</div>
+        <div className="text-[11px] text-slate-500 truncate">{job.client_name||'—'}{job.number?` · ${job.number}`:''}{job.quantity?` · ${Number(job.quantity).toLocaleString()} pcs`:''}</div>
+      </div>
+      {p ? <span className="text-xs text-emerald-700 font-semibold">✓ {p.pattern_code||'Pattern logged'}</span>
+         : <button onClick={()=>logFromJob(job,source)} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
+    </div>
+  ); };
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">✂ Pattern</h1>
+            <p className="text-slate-500 text-sm">{worklistCount} to work on · {(patterns||[]).length} patterns in library</p>
+          </div>
+          <button onClick={()=>{ setPrefill(null); setEditing({}); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New pattern</button>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({worklistCount})</button>
+          <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({(patterns||[]).length})</button>
+          <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
+        </div>
+      </div>
+
+      {tab==='worklist' && (
+        <div className="space-y-4">
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🧵 Needs a pattern — from the boards</div>
+            {prodNeeds.length===0 && sampleNeeds.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing at the "For Pattern" (production) or newly-endorsed (sample) stage right now.</div> : (<>
+              {prodNeeds.map(j=>boardRow(j,'production'))}
+              {sampleNeeds.map(j=>boardRow(j,'sampling'))}
+            </>)}
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>📝 Ad-hoc tasks</span></div>
+            <div className="p-2">
+              <div className="flex gap-1.5 mb-1">
+                <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addTask(); }} placeholder="Add a pattern to-do…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+                <button onClick={addTask} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+              </div>
+              {openTasks.length===0 && <div className="text-center text-slate-300 text-xs py-3">No ad-hoc tasks.</div>}
+              {openTasks.map(t=>(
+                <div key={t.id} className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50">
+                  <button onClick={()=>toggleTask(t)} className="w-5 h-5 rounded-md border-2 border-slate-300 hover:border-indigo-400 shrink-0"></button>
+                  <span className="flex-1 text-sm truncate">{t.title}</span>
+                  <button onClick={()=>delTask(t)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 text-sm">✕</button>
+                </div>
+              ))}
+              {doneTasks.length>0 && <div className="mt-1 pt-1 border-t">{doneTasks.slice(0,8).map(t=>(
+                <div key={t.id} className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 opacity-60">
+                  <button onClick={()=>toggleTask(t)} className="w-5 h-5 rounded-md border-2 bg-emerald-500 border-emerald-500 text-white text-xs flex items-center justify-center shrink-0">✓</button>
+                  <span className="flex-1 text-sm line-through truncate">{t.title}</span>
+                  <button onClick={()=>delTask(t)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 text-sm">✕</button>
+                </div>
+              ))}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==='library' && (
+        <div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by pattern code / name / item…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-80 mb-3" />
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Sizes</th><th className="text-left px-3 py-2">Notes</th><th></th>
+              </tr></thead>
+              <tbody>{lib.map(p=>(
+                <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>{ setPrefill(null); setEditing(p); }}>
+                  <td className="px-3 py-2 font-mono text-xs font-semibold">{p.pattern_code||'—'}</td>
+                  <td className="px-3 py-2">{p.name||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{p.item_type||'—'}</td>
+                  <td className="px-3 py-2"><div className="flex gap-1 flex-wrap">{(Array.isArray(p.sizes)?p.sizes:[]).map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{s}</span>)}</div></td>
+                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]">{p.notes||''}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); delPattern(p);}} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+                </tr>
+              ))}{lib.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No patterns {search?'match':'yet'}. Log one from the Worklist or click "+ New pattern".</td></tr>}</tbody>
+            </table></div>
+          </div>
+        </div>
+      )}
+
+      {tab==='sizes' && (
+        <div>
+          <p className="text-xs text-slate-500 mb-3">Reference size charts (from the techpack library) — use these to check standard measurements per item before starting a new pattern.</p>
+          {(sizeCharts||[]).length===0 ? <div className="bg-white border rounded-xl p-8 text-center text-slate-400">No size charts yet. They're created in the techpack builder.</div> : (
+            <div className="grid md:grid-cols-3 gap-3">
+              {(sizeCharts||[]).map(c=>(
+                <div key={c.id} className="bg-white border rounded-xl overflow-hidden">
+                  <div className="px-3 py-2 border-b"><div className="font-semibold text-sm truncate">{c.name}</div><div className="text-[11px] text-slate-500">{c.garment_type||'—'}</div></div>
+                  {c.chart_image ? <img src={c.chart_image} alt={c.name} className="w-full object-contain max-h-56 bg-slate-50" /> : <div className="p-6 text-center text-slate-300 text-xs">No chart image</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {editing && <PatternFormModal pattern={editing.id?editing:null} prefill={editing.id?null:prefill} profile={profile} sizeCharts={sizeCharts} onClose={()=>{ setEditing(null); setPrefill(null); }} onSaved={()=>{ setEditing(null); setPrefill(null); reload(); }} />}
+    </div>
+  );
+}
+
+function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSaved }){
+  const isEdit=!!pattern;
+  const [f,setF]=useState(pattern || { pattern_code:'', name: prefill?.name||'', item_type: prefill?.item_type||'', sizes: prefill?.sizes||[], size_chart_id:'', notes:'', source_job_id: prefill?.source_job_id||null, source_type: prefill?.source_type||'manual', lead_id: prefill?.lead_id||null });
+  const [sizesText,setSizesText]=useState(sizesToText(pattern?.sizes||prefill?.sizes||[]));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!(f.name||'').trim() && !(f.pattern_code||'').trim()){ setMsg('Give the pattern a code or a name.'); return; }
+    setBusy(true); setMsg('');
+    let code=(f.pattern_code||'').trim();
+    if(!code){ try{ code=await nextPatternCode(); }catch(_){ code=''; } }
+    const payload={ pattern_code:code||null, name:(f.name||'').trim()||null, item_type:(f.item_type||'').trim()||null,
+      sizes:textToSizes(sizesText), size_chart_id: f.size_chart_id||null, notes:f.notes||null,
+      source_job_id: f.source_job_id||null, source_type: f.source_type||'manual', lead_id: f.lead_id||null };
+    if(!isEdit) payload.created_by=profile.id;
+    const { error } = isEdit ? await sb.from('patterns').update(payload).eq('id',pattern.id) : await sb.from('patterns').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?`Pattern ${pattern.pattern_code||''}`:'New pattern'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Pattern code"><input className="input" value={f.pattern_code||''} onChange={e=>up('pattern_code',e.target.value)} placeholder="Leave blank to auto-generate" /></TpLbl>
+          <TpLbl t="Item type"><input className="input" value={f.item_type||''} onChange={e=>up('item_type',e.target.value)} placeholder="e.g. Polo Shirt / Jacket" /></TpLbl>
+        </div>
+        <TpLbl t="Name / description"><input className="input" value={f.name||''} onChange={e=>up('name',e.target.value)} placeholder="e.g. ICA Batch Jacket — front panel" /></TpLbl>
+        <TpLbl t="Sizes (comma-separated)"><input className="input" value={sizesText} onChange={e=>setSizesText(e.target.value)} placeholder="XS, S, M, L, XL, XXL" /></TpLbl>
+        <TpLbl t="Link a size chart (optional)">
+          <select className="input" value={f.size_chart_id||''} onChange={e=>up('size_chart_id',e.target.value||null)}>
+            <option value="">— none —</option>
+            {(sizeCharts||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.garment_type?` · ${c.garment_type}`:''}</option>)}
+          </select>
+        </TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[70px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Measurements, fabric, allowances, revisions…" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save pattern':'Add to library')}</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -23894,6 +24077,7 @@ function App(){
   // Embroidery + Knitting boards. Same shape as printing jobs.
   const [embroideryJobs,setEmbroideryJobs]=useState([]); const [knittingJobs,setKnittingJobs]=useState([]);
   const [sizeCharts,setSizeCharts]=useState([]); const [garmentMockups,setGarmentMockups]=useState([]);
+  const [patterns,setPatterns]=useState([]); const [patternTasks,setPatternTasks]=useState([]);
   const [styles,setStyles]=useState([]);
   const [items,setItems]=useState([]); const [suppliers,setSuppliers]=useState([]); const [departments,setDepartments]=useState([]);
   const [requests,setRequests]=useState([]); const [orders,setOrders]=useState([]);
@@ -24176,6 +24360,8 @@ function App(){
     try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
     try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
+    try { const pat = await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPatterns(pat && !pat.error ? (pat.data||[]) : []); } catch(_){ setPatterns([]); }
+    try { const pts = await sb.from('pattern_tasks').select('*').order('created_at',{ascending:false}); setPatternTasks(pts && !pts.error ? (pts.data||[]) : []); } catch(_){ setPatternTasks([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
@@ -24235,44 +24421,44 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
       fallback = 'prod-home';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod','pattern','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','sampling','embroidery','knitting','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','sampling','embroidery','knitting','profile','subcon']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
       // (read-only — they don't own status changes, but need to see what's
       // coming down to the floor).
-      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','sampling','profile']);
+      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','sampling','profile']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
       // Knit / Embro Team Lead — sees Production + Sampling boards for context,
       // owns the Knitting + Embroidery boards. Plus inbox + profile (signature).
-      allowed = new Set(['inbox','prod','sampling','embroidery','knitting','profile']);
+      allowed = new Set(['inbox','prod','pattern','sampling','embroidery','knitting','profile']);
       fallback = 'knitting';
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
@@ -24737,7 +24923,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -24749,7 +24935,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -24758,7 +24944,7 @@ function App(){
     // Purchasing team — Production + Operations + Purchasing + Logistics + RFP visibility + inbox.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_PURCHASING,
@@ -24771,7 +24957,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       FINANCE_FULL,
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       PERSONAL_GROUP,
@@ -24782,7 +24968,7 @@ function App(){
     // coming down to the floor.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -24794,7 +24980,7 @@ function App(){
     // (for setting up their signature on techpack rows and other docs).
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isAssistant){
@@ -24802,7 +24988,7 @@ function App(){
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -24812,7 +24998,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -24824,7 +25010,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['buy-list','Buy List','📋'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
       FINANCE_FULL,
@@ -24951,6 +25137,7 @@ function App(){
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
+        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternTasks={patternTasks} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
