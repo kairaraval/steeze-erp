@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 174 · Employees: added a Rank field (form + 201 file) and imported ranks; normalized Gender/Civil status to lowercase so the dropdowns populate (they now save/display correctly); moved rank out of notes";
+const BUILD = "Live build 175 · Memo Board: added 'Memo for' audience (whole office / a department / specific people) — shown on each memo card and as the TO line on the printed MEMORANDUM";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7601,6 +7601,12 @@ const MEMO_STATUS = {
   approved: { label:'Approved',         color:'bg-emerald-100 text-emerald-700' },
 };
 function memoStatusMeta(s){ return MEMO_STATUS[s] || MEMO_STATUS.draft; }
+function memoAudienceLabel(m){
+  const t=m&&m.audience_type; const d=(m&&m.audience_detail||'').trim();
+  if(t==='department') return d || 'A department';
+  if(t==='specific')   return d || 'Selected employees';
+  return 'All employees';
+}
 
 // Printable / signable memo document. Prepared-by carries the HR supervisor's
 // e-signature; Approved-by shows Management's signature once signed off.
@@ -7631,9 +7637,10 @@ function MemoViewModal({ memo, profiles, onClose }){
             <div><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Category</div><div className="font-medium">{meta.label}</div></div>
             <div><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Ref</div><div className="font-mono font-medium">MEMO-{String(memo.id).slice(0,8).toUpperCase()}</div></div>
           </div>
-          <div className="border-y-2 border-slate-800 py-2 mb-4">
-            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Subject</div>
-            <div className="text-lg font-bold">{memo.title}</div>
+          <div className="border-y-2 border-slate-800 py-2 mb-4 space-y-1">
+            <div className="flex gap-2"><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider w-14 shrink-0 pt-0.5">To</div><div className="text-sm font-semibold">{memoAudienceLabel(memo)}</div></div>
+            <div className="flex gap-2"><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider w-14 shrink-0 pt-0.5">From</div><div className="text-sm">{preparedBy?(preparedBy.name||preparedBy.email):'HR Department'}</div></div>
+            <div className="flex gap-2"><div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider w-14 shrink-0 pt-0.5">Subject</div><div className="text-base font-bold">{memo.title}</div></div>
           </div>
           <div className="text-sm whitespace-pre-wrap leading-relaxed" style={{minHeight:'3in'}}>{memo.body||''}</div>
           <div className="grid grid-cols-2 gap-8 mt-12">
@@ -7704,6 +7711,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
                 <span className="text-[11px] text-slate-400 ml-auto">{fmtDate(m.memo_date)}</span>
               </div>
               <div className="font-bold text-slate-800">{m.title}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">👥 For: <span className="font-medium">{memoAudienceLabel(m)}</span></div>
               {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap line-clamp-4">{m.body}</div>}
               {m.status==='approved' && m.approved_by && <div className="text-[11px] text-emerald-700 font-medium mt-2">✓ Approved &amp; signed by {who(m.approved_by)}</div>}
               <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400 flex-wrap">
@@ -7731,13 +7739,15 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
 
 function MemoForm({ memo, profile, onClose, onSaved }){
   const isEdit=!!memo;
-  const [f,setF]=useState(memo || { title:'', body:'', category:'general', pinned:false });
+  const [f,setF]=useState(memo || { title:'', body:'', category:'general', pinned:false, audience_type:'all', audience_detail:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
     if(!f.title?.trim()){ setMsg('Title required.'); return; }
+    if(f.audience_type!=='all' && !(f.audience_detail||'').trim()){ setMsg(f.audience_type==='department'?'Enter which department.':'Enter who the memo is for.'); return; }
     setBusy(true); setMsg('');
-    const payload={ title:f.title.trim(), body:f.body||null, category:f.category||'general', pinned:!!f.pinned };
+    const payload={ title:f.title.trim(), body:f.body||null, category:f.category||'general', pinned:!!f.pinned,
+      audience_type: f.audience_type||'all', audience_detail: f.audience_type==='all'?null:((f.audience_detail||'').trim()||null) };
     if(!isEdit) payload.posted_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_memos').update(payload).eq('id',memo.id) : await sb.from('hr_memos').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -7752,6 +7762,20 @@ function MemoForm({ memo, profile, onClose, onSaved }){
             <select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{MEMO_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select>
           </TpLbl>
           <label className="flex items-end gap-2 text-sm pb-2 cursor-pointer"><input type="checkbox" checked={!!f.pinned} onChange={e=>up('pinned',e.target.checked)} /> Pin to top</label>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Memo for">
+            <select className="input" value={f.audience_type||'all'} onChange={e=>up('audience_type',e.target.value)}>
+              <option value="all">Whole office (all employees)</option>
+              <option value="department">A department</option>
+              <option value="specific">Specific people</option>
+            </select>
+          </TpLbl>
+          {f.audience_type && f.audience_type!=='all' && (
+            <TpLbl t={f.audience_type==='department'?'Which department':'Who (names)'}>
+              <input className="input" value={f.audience_detail||''} onChange={e=>up('audience_detail',e.target.value)} placeholder={f.audience_type==='department'?'e.g. Production / Sales / Accounting':'e.g. Clara P., Miko R., Ralph D.'} />
+            </TpLbl>
+          )}
         </div>
         <TpLbl t="Message"><textarea className="input min-h-[120px]" value={f.body||''} onChange={e=>up('body',e.target.value)} placeholder="Write the announcement…" /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
