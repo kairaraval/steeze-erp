@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 166 · When admin/accounting prepare an estimate or invoice, the lead's sales owner now gets an inbox ping ('ready for viewing') — same mechanism as payment notifications";
+const BUILD = "Live build 167 · Fix duplicate-number errors: estimate/invoice/SO numbers now use highest-existing+1 (not row count) so deletions don't collide; estimate & invoice save auto-retries with a fresh number on conflict";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1239,8 +1239,12 @@ const ESTIMATE_TERMS = {
 // Sales-Order numbering scheme).
 async function nextEstimateNumber(){
   const monthKey = new Date().toISOString().slice(0,7); // YYYY-MM
-  const { data } = await sb.from('estimates').select('id,number').like('number', `EST-${monthKey}-%`);
-  const seq = String((data?.length||0) + 1).padStart(3,'0');
+  const { data } = await sb.from('estimates').select('number').like('number', `EST-${monthKey}-%`);
+  // Use the HIGHEST existing sequence + 1 (not the row count) so deleting an
+  // estimate never makes us reuse a number that still exists → duplicate key.
+  let maxSeq = 0;
+  (data||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+  const seq = String(maxSeq + 1).padStart(3,'0');
   return `EST-${monthKey}-${seq}`;
 }
 
@@ -1328,8 +1332,15 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         const { data, error } = await sb.from('estimates').update(payload).eq('id', estimate.id).select().single();
         if(error) throw error; saved=data;
       } else {
-        const { data, error } = await sb.from('estimates').insert(payload).select().single();
-        if(error) throw error; saved=data;
+        // Insert; if the number collided with an existing one, regenerate a
+        // fresh number and retry once so the user never has to reopen.
+        let ins = await sb.from('estimates').insert(payload).select().single();
+        if(ins.error && /number_key|duplicate key/i.test(ins.error.message||'')){
+          const fresh = await nextEstimateNumber();
+          setNumber(fresh);
+          ins = await sb.from('estimates').insert({ ...payload, number: fresh }).select().single();
+        }
+        if(ins.error) throw ins.error; saved=ins.data;
       }
       setEstimate(saved); setStatus(saved.status);
       // Production estimates never touch a Sales Order (the SO is created at
@@ -1608,8 +1619,11 @@ const tileNumColor = (c) => TILE_NUM_COLORS[c] || TILE_NUM_COLORS.slate;
 
 async function nextInvoiceNumber(){
   const monthKey = new Date().toISOString().slice(0,7);
-  const { data } = await sb.from('invoices').select('id,number').like('number', `INV-${monthKey}-%`);
-  const seq = String((data?.length||0) + 1).padStart(3,'0');
+  const { data } = await sb.from('invoices').select('number').like('number', `INV-${monthKey}-%`);
+  // Highest existing sequence + 1 (not row count) so deletions never collide.
+  let maxSeq = 0;
+  (data||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+  const seq = String(maxSeq + 1).padStart(3,'0');
   return `INV-${monthKey}-${seq}`;
 }
 // Seed invoice lines from an SO's items (tolerant of older item shapes).
@@ -1695,7 +1709,14 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
       const wasNew = !invoice; // new invoice vs. edit of an existing one
       const payload=buildPayload(nextStatus); let saved;
       if(invoice){ const {data,error}=await sb.from('invoices').update(payload).eq('id',invoice.id).select().single(); if(error)throw error; saved=data; }
-      else { const {data,error}=await sb.from('invoices').insert(payload).select().single(); if(error)throw error; saved=data; }
+      else {
+        let ins = await sb.from('invoices').insert(payload).select().single();
+        if(ins.error && /number_key|duplicate key/i.test(ins.error.message||'')){
+          const fresh = await nextInvoiceNumber(); setNumber(fresh);
+          ins = await sb.from('invoices').insert({ ...payload, number: fresh }).select().single();
+        }
+        if(ins.error) throw ins.error; saved=ins.data;
+      }
       // Keep the SO's QB invoice link in sync if accounting recorded it here.
       if(so?.id && (qbNum||qbUrl)){ try{ await sb.from('sales_orders').update({ qb_invoice_number:qbNum||null, qb_invoice_url:qbUrl||null }).eq('id',so.id); }catch(_){} }
       // Ping the sales owner that their invoice is ready to view — on first
@@ -13645,8 +13666,9 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     // Pull next SO number: SO-YYYY-MM-NNN (count within month)
     const today = new Date().toISOString().slice(0,10);
     const monthKey = today.slice(0,7); // YYYY-MM
-    const { data: monthRows } = await sb.from('sales_orders').select('id,number').like('number', `SO-${monthKey}-%`);
-    const seq = String((monthRows?.length||0) + 1).padStart(3,'0');
+    const { data: monthRows } = await sb.from('sales_orders').select('number').like('number', `SO-${monthKey}-%`);
+    let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+    const seq = String(maxSeq + 1).padStart(3,'0');
     const number = `SO-${monthKey}-${seq}`;
     const client = (clients||[]).find(c=>c.id===lead.client_id);
     const items = lead.items || [];
@@ -13716,8 +13738,9 @@ async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
     if(existing && existing.length>0) return existing[0];
     const today = new Date().toISOString().slice(0,10);
     const monthKey = today.slice(0,7);
-    const { data: monthRows } = await sb.from('sales_orders').select('id').like('number', `SO-${monthKey}-%`);
-    const number = `SO-${monthKey}-${String((monthRows?.length||0)+1).padStart(3,'0')}`;
+    const { data: monthRows } = await sb.from('sales_orders').select('number').like('number', `SO-${monthKey}-%`);
+    let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+    const number = `SO-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
     const total = Number(estimate.total)||0;
     const subtotal = Number(estimate.subtotal ?? total)||0; // ex-VAT base drives commission
     const payload = {
@@ -13753,8 +13776,9 @@ async function maybeAutoCreateSamplingJobForLead(profile, lead, clients){
     // Date-based sampling number: SMP-YYYY-MM-NNN (sequential within month).
     const today = new Date().toISOString().slice(0,10);
     const monthKey = today.slice(0,7);
-    const { data: monthRows } = await sb.from('sampling_jobs').select('id,number').like('number', `SMP-${monthKey}-%`);
-    const seq = String((monthRows?.length||0) + 1).padStart(3,'0');
+    const { data: monthRows } = await sb.from('sampling_jobs').select('number').like('number', `SMP-${monthKey}-%`);
+    let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+    const seq = String(maxSeq + 1).padStart(3,'0');
     const number = `SMP-${monthKey}-${seq}`;
     const client = (clients||[]).find(c=>c.id===lead.client_id);
     const items = (lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
