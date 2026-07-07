@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 171 · Imported the full 201-file roster (100 employees) into HR; added Project-Based / Management / Extra On-call statuses; Leave credits is now free text (e.g. '10 VL / 5 SL')";
+const BUILD = "Live build 172 · Fix: editing an employee (name, status, etc.) now shows the change immediately — the 201 detail panel reads the live record by id instead of a stale copy captured when it was opened";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6223,7 +6223,7 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
         })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No employees match the filters. {totalCount===0 && 'Click "+ New employee" to add the first one.'}</td></tr>}</tbody>
       </table></div></div>
 
-      {opening && <EmployeeDetailModal employee={opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} checklists={(hrChecklists||[]).filter(c=>c.employee_id===opening.id)} trainings={(hrTrainings||[]).filter(t=>t.employee_id===opening.id)} hrTemplates={hrTemplates} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
+      {opening && <EmployeeDetailModal employee={(employees||[]).find(x=>x.id===opening.id)||opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} checklists={(hrChecklists||[]).filter(c=>c.employee_id===opening.id)} trainings={(hrTrainings||[]).filter(t=>t.employee_id===opening.id)} hrTemplates={hrTemplates} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
       {creating && <EmployeeFormModal employee={null} profiles={profiles} profile={profile} allEmployees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
     </div>
   );
