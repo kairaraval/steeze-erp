@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 165 · Estimates: added a Delete button (admin + accounting) in the estimate editor; editing was already available. Blocks delete if linked to a Sales Order";
+const BUILD = "Live build 166 · When admin/accounting prepare an estimate or invoice, the lead's sales owner now gets an inbox ping ('ready for viewing') — same mechanism as payment notifications";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1321,6 +1321,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     if(!hasValidLine){ setMsg('Add at least one item with a quantity before saving.'); return; }
     setBusy(true); setMsg('');
     try{
+      const wasNew = !estimate; // brand-new estimate vs. an edit of an existing one
       const payload = buildPayload(nextStatus);
       let saved;
       if(estimate){
@@ -1337,6 +1338,19 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
       if(purpose==='sample' && (nextStatus||status)==='approved'){
         try { await maybeCreateSampleSOFromEstimate(profile, lead, client, saved); } catch(_){}
       }
+      // Ping the sales owner that their estimate is ready to view — on first
+      // creation or when it's marked Sent. Mentions = [owner] → their inbox + sound.
+      try {
+        const ownerId = lead.manager_id;
+        const becameSent = (nextStatus||status)==='sent';
+        if(ownerId && ownerId!==profile.id && (wasNew || becameSent)){
+          await sb.from('lead_activity').insert({
+            lead_id: lead.id, actor_id: profile.id, type:'system',
+            text: `🧾 ${purposeLabel} estimate ${saved.number} is ready for viewing — total ${peso(saved.total)}.`,
+            mentions: [ownerId],
+          });
+        }
+      } catch(_){}
       setMsg('Saved.');
       reload&&reload();
       setTimeout(()=>setMsg(''),2500);
@@ -1678,11 +1692,25 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
     if(!hasLine){ setMsg('Add at least one line before saving.'); return; }
     setBusy(true); setMsg('');
     try{
+      const wasNew = !invoice; // new invoice vs. edit of an existing one
       const payload=buildPayload(nextStatus); let saved;
       if(invoice){ const {data,error}=await sb.from('invoices').update(payload).eq('id',invoice.id).select().single(); if(error)throw error; saved=data; }
       else { const {data,error}=await sb.from('invoices').insert(payload).select().single(); if(error)throw error; saved=data; }
       // Keep the SO's QB invoice link in sync if accounting recorded it here.
       if(so?.id && (qbNum||qbUrl)){ try{ await sb.from('sales_orders').update({ qb_invoice_number:qbNum||null, qb_invoice_url:qbUrl||null }).eq('id',so.id); }catch(_){} }
+      // Ping the sales owner that their invoice is ready to view — on first
+      // creation or when it's marked Issued. Mentions = [owner] → inbox + sound.
+      try {
+        const ownerId = lead?.manager_id || null;
+        const becameIssued = (nextStatus||status)==='issued';
+        if(lead && ownerId && ownerId!==profile.id && (wasNew || becameIssued)){
+          await sb.from('lead_activity').insert({
+            lead_id: lead.id, actor_id: profile.id, type:'system',
+            text: `🧾 Invoice ${number} is ready for viewing — amount due ${peso(amountDue)}.`,
+            mentions: [ownerId],
+          });
+        }
+      } catch(_){}
       setInvoice(saved); setStatus(saved.status); setMsg('Saved.'); reload&&reload(); setTimeout(()=>setMsg(''),2500);
     }catch(e){ setMsg('Save failed: '+(e.message||e)); } finally{ setBusy(false); }
   }
