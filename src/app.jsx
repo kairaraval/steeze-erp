@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 185 · Subcon payroll: Edit / Reopen / Void now available to Production Supervisor as well as Admin (permanent delete stays admin-only)";
+const BUILD = "Live build 186 · Subcon payroll: Generate now shows a draft breakdown per subcon (line items + grand total) to double-check before creating; new Weekly Summary tab consolidates a week's payrolls for accounting to review + mark paid";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23550,20 +23550,38 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
             </thead>
             <tbody>{preview.length === 0 ? (
               <tr><td colSpan="4" className="px-3 py-6 text-center text-slate-400">No garments returned in this week for any subcon.</td></tr>
-            ) : preview.map(p => {
+            ) : preview.flatMap(p => {
               const rowCls = p.action === 'refresh' ? 'bg-indigo-50/40'
                 : p.action === 'supplementary' ? 'bg-amber-50/40'
                 : p.action === 'skip-uptodate' ? 'bg-slate-50/60 opacity-60'
                 : '';
-              return (
+              const rows = [
                 <tr key={p.subcon.id} className={`border-t ${rowCls}`}>
                   <td className="px-3 py-2 font-semibold">{p.subcon.name}</td>
                   <td className="px-3 py-2 text-right">{p.totalGarments}</td>
                   <td className="px-3 py-2 text-right font-bold">{peso(p.totalAmount)}</td>
                   <td className="px-3 py-2">{statusCell(p)}</td>
                 </tr>
-              );
-            })}</tbody>
+              ];
+              // Draft breakdown — show each garment line so it can be double-checked before generating.
+              (p.lineItems||[]).forEach((li,i)=> rows.push(
+                <tr key={p.subcon.id+'-li-'+i} className="border-t border-slate-100 bg-slate-50/30 text-slate-500">
+                  <td className="pl-7 pr-3 py-1 text-[11px]">↳ {li.garment||'—'}</td>
+                  <td className="px-3 py-1 text-right text-[11px]">{li.garments_paid}</td>
+                  <td className="px-3 py-1 text-right text-[11px]">{peso(li.line_total)} <span className="text-slate-400">@{peso(li.rate_per_garment)}</span></td>
+                  <td></td>
+                </tr>
+              ));
+              return rows;
+            })}
+            {actionable.length>0 && (
+              <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold">
+                <td className="px-3 py-2 uppercase text-[10px] tracking-wider">Total to process ({actionable.length})</td>
+                <td className="px-3 py-2 text-right">{actionable.reduce((s,p)=>s+p.totalGarments,0)}</td>
+                <td className="px-3 py-2 text-right text-emerald-700">{peso(actionable.reduce((s,p)=>s+p.totalAmount,0))}</td>
+                <td></td>
+              </tr>
+            )}</tbody>
           </table>
         </div>
         {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
@@ -23837,6 +23855,8 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   const [creatingProject,setCreatingProject]=useState(false);
   const [editingProject,setEditingProject]=useState(null);
   const [viewingProject,setViewingProject]=useState(null);
+  const [summaryWeek,setSummaryWeek]=useState('');
+  const canEditPayrollRow = profile.role==='admin' || profile.role==='production_supervisor';
 
   const sendRows = (subconSends||[])
     .filter(s => !search || (`${s.number} ${s.garment} ${s.client_name||''} ${(subcons||[]).find(x=>x.id===s.subcon_id)?.name||''}`).toLowerCase().includes(search.toLowerCase()))
@@ -23893,6 +23913,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
             <button onClick={()=>setTab('completed')} className={`px-3 py-1.5 rounded-md ${tab==='completed'?'bg-slate-700 text-white font-semibold':'text-slate-600'}`}>Completed</button>
             <button onClick={()=>setTab('subcons')} className={`px-3 py-1.5 rounded-md ${tab==='subcons'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>Subcons</button>
             <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>Weekly payroll</button>
+            <button onClick={()=>setTab('summary')} className={`px-3 py-1.5 rounded-md ${tab==='summary'?'bg-emerald-700 text-white font-semibold':'text-slate-600'}`}>Weekly Summary</button>
           </div>
           {tab!=='subcons' && tab!=='payroll' && (
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SCS # / subcon / garment / client / project…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
@@ -24073,8 +24094,8 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View / Print</button>
-                    {profile.role==='admin' && <button onClick={()=>setEditingPayroll(p)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 mr-1">Edit</button>}
-                    {profile.role==='admin' && <button onClick={async()=>{
+                    {canEditPayrollRow && <button onClick={()=>setEditingPayroll(p)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 mr-1">Edit</button>}
+                    {canEditPayrollRow && <button onClick={async()=>{
                       if(!confirm(`Void payroll ${p.number}? Soft delete — recoverable from Supabase.`)) return;
                       const { error } = await sb.from('subcon_payrolls').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, status:'cancelled' }).eq('id', p.id);
                       if(error){ alert(error.message); return; }
@@ -24087,6 +24108,60 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
           </table>
         </div>
       )}
+
+      {tab==='summary' && (()=>{
+        const weeks = Array.from(new Set((subconPayrolls||[]).filter(p=>!p.deleted_at).map(p=>p.week_ending).filter(Boolean))).sort().reverse();
+        const activeWeek = (summaryWeek && weeks.includes(summaryWeek)) ? summaryWeek : (weeks[0]||'');
+        const rows = (subconPayrolls||[]).filter(p=>!p.deleted_at && p.week_ending===activeWeek)
+          .map(p=>({ p, subcon:(subcons||[]).find(x=>x.id===p.subcon_id) }))
+          .sort((a,b)=>String(a.subcon?.name||'').localeCompare(String(b.subcon?.name||'')));
+        const totGarments = rows.reduce((s,r)=>s+Number(r.p.total_garments||0),0);
+        const totAmount = rows.reduce((s,r)=>s+Number(r.p.total_amount||0),0);
+        const paidAmt = rows.filter(r=>r.p.status==='paid').reduce((s,r)=>s+Number(r.p.total_amount||0),0);
+        const unpaid = rows.filter(r=>r.p.status!=='paid' && r.p.status!=='cancelled');
+        async function markPaid(p){ if(!confirm(`Mark ${p.number} as PAID?`)) return; const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload && reload(); }
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="text-sm font-semibold text-slate-600">Week ending</label>
+              <select value={activeWeek} onChange={e=>setSummaryWeek(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+                {weeks.length===0 && <option value="">— no payrolls —</option>}
+                {weeks.map(w=><option key={w} value={w}>{fmtDate(w)}</option>)}
+              </select>
+              <div className="ml-auto text-sm text-slate-500">{rows.length} subcon{rows.length===1?'':'s'} · <strong className="text-slate-800">{peso(totAmount)}</strong> total · <span className="text-emerald-700">{peso(paidAmt)} paid</span> · <span className="text-amber-700">{unpaid.length} to pay</span></div>
+            </div>
+            <div className="bg-white rounded-xl border overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-600 text-xs uppercase"><tr>
+                  <th className="text-left px-3 py-2">Subcon</th>
+                  <th className="text-left px-3 py-2">Payroll #</th>
+                  <th className="text-right px-3 py-2">Garments</th>
+                  <th className="text-right px-3 py-2">Amount</th>
+                  <th className="text-left px-3 py-2">Status</th>
+                  <th className="text-right px-3 py-2">Actions</th>
+                </tr></thead>
+                <tbody>{rows.length===0 ? (
+                  <tr><td colSpan="6" className="px-3 py-10 text-center text-slate-400">No payrolls for this week. Generate them from the Weekly payroll tab.</td></tr>
+                ) : rows.map(({p,subcon})=>{ const statusCls = p.status==='paid'?'bg-emerald-100 text-emerald-700':p.status==='finalized'?'bg-indigo-100 text-indigo-700':p.status==='cancelled'?'bg-rose-100 text-rose-700':'bg-slate-100 text-slate-600'; return (
+                  <tr key={p.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-semibold">{subcon?.name||'—'}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{p.number}</td>
+                    <td className="px-3 py-2 text-right">{p.total_garments}</td>
+                    <td className="px-3 py-2 text-right font-bold">{peso(p.total_amount)}</td>
+                    <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View</button>
+                      {p.status==='finalized' && canRunSubconPayroll(profile) && <button onClick={()=>markPaid(p)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💰 Mark paid</button>}
+                    </td>
+                  </tr>
+                ); })}</tbody>
+                {rows.length>0 && <tfoot><tr className="border-t-2 border-slate-300 bg-slate-50 font-bold"><td colSpan="2" className="px-3 py-2 uppercase text-[10px] tracking-wider">Week total</td><td className="px-3 py-2 text-right">{totGarments}</td><td className="px-3 py-2 text-right text-emerald-700">{peso(totAmount)}</td><td colSpan="2"></td></tr></tfoot>}
+              </table>
+            </div>
+            <div className="text-xs text-slate-500">Accounting can review this single tab for the week — every subcon's payroll for the selected week, with the grand total. Mark each finalized payroll paid once disbursed.</div>
+          </div>
+        );
+      })()}
 
       {/* Modals */}
       {creatingSubcon && <SubconFormModal profile={profile} onClose={()=>setCreatingSubcon(false)} onSaved={()=>{ setCreatingSubcon(false); reload && reload(); }} />}
