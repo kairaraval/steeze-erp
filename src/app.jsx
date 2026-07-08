@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 179 · Pattern worklist: added a 📋 Techpack view button on each board item so the pattern maker can open the techpack right from the worklist";
+const BUILD = "Live build 180 · Pattern Size Charts: fixed images not loading — chart images are storage paths, now rendered via the signed-URL image loader (TImg) like the techpack";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5051,7 +5051,7 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
               {(sizeCharts||[]).map(c=>(
                 <div key={c.id} className="bg-white border rounded-xl overflow-hidden">
                   <div className="px-3 py-2 border-b"><div className="font-semibold text-sm truncate">{c.name}</div><div className="text-[11px] text-slate-500">{c.garment_type||'—'}</div></div>
-                  {c.chart_image ? <img src={c.chart_image} alt={c.name} className="w-full object-contain max-h-56 bg-slate-50" /> : <div className="p-6 text-center text-slate-300 text-xs">No chart image</div>}
+                  {c.chart_image ? <div className="bg-slate-50 flex items-center justify-center p-2" style={{maxHeight:'15rem', overflow:'hidden'}}><TImg path={c.chart_image} maxH="14rem" /></div> : <div className="p-6 text-center text-slate-300 text-xs">No chart image</div>}
                 </div>
               ))}
             </div>
