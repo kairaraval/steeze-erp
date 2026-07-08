@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 184 · Pattern module: persistent worklist (survives status change) with start date, per-item note box, Done → Done Patterns tab (with finish date/time); Sampling 'For Pattern' status feeds the worklist; separate Sample Pattern Library; sizes split Male/Female";
+const BUILD = "Live build 185 · Subcon payroll: Edit / Reopen / Void now available to Production Supervisor as well as Admin (permanent delete stays admin-only)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23702,6 +23702,8 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
   const subcon = (subcons||[]).find(s => s.id === payroll.subcon_id);
   const items = (payrollItems||[]).filter(it => it.payroll_id === payroll.id).sort((a,b)=>(a.position||0)-(b.position||0));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Admin + Production Supervisor may edit / reopen / void payroll logs.
+  const canEditPayroll = profile.role==='admin' || profile.role==='production_supervisor';
   async function finalize(){
     if(!confirm('Finalize this payroll? Once finalized, it locks the line items and is ready for payment.')) return;
     setBusy(true);
@@ -23807,9 +23809,9 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
         {payroll.status==='finalized' && canRunSubconPayroll(profile) && <button disabled={busy} onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💰 Mark paid</button>}
         {/* Admin escape hatches — Edit (any status), Reopen (finalized/paid → draft),
             Void (soft delete, recoverable), Delete (hard delete, permanent). */}
-        {profile.role==='admin' && onEdit && <button disabled={busy} onClick={onEdit} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">✎ Edit line items</button>}
-        {profile.role==='admin' && (payroll.status==='finalized' || payroll.status==='paid') && <button disabled={busy} onClick={reopen} className="px-3 py-2 rounded-lg bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-700/10">↺ Reopen as draft</button>}
-        {profile.role==='admin' && <button disabled={busy} onClick={voidIt} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200">🗑 Void</button>}
+        {canEditPayroll && onEdit && <button disabled={busy} onClick={onEdit} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">✎ Edit line items</button>}
+        {canEditPayroll && (payroll.status==='finalized' || payroll.status==='paid') && <button disabled={busy} onClick={reopen} className="px-3 py-2 rounded-lg bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-700/10">↺ Reopen as draft</button>}
+        {canEditPayroll && <button disabled={busy} onClick={voidIt} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200">🗑 Void</button>}
         {profile.role==='admin' && <button disabled={busy} onClick={hardDelete} className="px-3 py-2 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700">⚠ Delete permanently</button>}
         <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print payslip</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
