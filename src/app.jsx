@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 183 · Pattern library: reordered fields to Pattern Code · Item · Name · Notes · Sizes (table + form) and imported the full 407-pattern library";
+const BUILD = "Live build 184 · Pattern module: persistent worklist (survives status change) with start date, per-item note box, Done → Done Patterns tab (with finish date/time); Sampling 'For Pattern' status feeds the worklist; separate Sample Pattern Library; sizes split Male/Female";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -109,6 +109,7 @@ const PRODUCTION_DONE = ['delivered'];
 
 const SAMPLING_STATUSES = [
   { key:'endorsed',         label:'Endorsed',         color:'bg-slate-200 text-slate-700' },
+  { key:'for pattern',      label:'For Pattern',      color:'bg-violet-100 text-violet-700' },
   { key:'material request', label:'Material Request', color:'bg-amber-100 text-amber-700' },
   { key:'on going',         label:'On Going',         color:'bg-blue-100 text-blue-700' },
   { key:'for delivery',     label:'For Delivery',     color:'bg-purple-100 text-purple-700' },
@@ -4932,40 +4933,92 @@ async function nextPatternCode(){
 function sizesToText(a){ return Array.isArray(a)? a.join(', ') : (a||''); }
 function textToSizes(t){ return String(t||'').split(',').map(s=>s.trim()).filter(Boolean); }
 
-function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
+function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const [search,setSearch]=useState('');
   const [editing,setEditing]=useState(null);   // pattern being edited/created
-  const [prefill,setPrefill]=useState(null);    // prefill from a job
+  const [prefill,setPrefill]=useState(null);    // prefill from a worklist item
   const [newTask,setNewTask]=useState('');
-  const todayISO=new Date().toISOString().slice(0,10);
-  const hasPattern=(jobId)=> (patterns||[]).some(p=>p.source_job_id===jobId);
-  const patternFor=(jobId)=> (patterns||[]).find(p=>p.source_job_id===jobId);
-  const prodNeeds=(prodJobs||[]).filter(j=> j.status==='for pattern');
-  const sampleNeeds=(sampleJobs||[]).filter(j=> j.status==='endorsed');
-  const openTasks=(patternTasks||[]).filter(t=>t.status!=='done');
-  const doneTasks=(patternTasks||[]).filter(t=>t.status==='done');
-  const lib=(patterns||[]).filter(p=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase()));
+  const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+  const patternFor=(pid)=> pid?(patterns||[]).find(p=>p.id===pid):null;
 
-  async function addTask(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_tasks').insert({ title:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
-  async function toggleTask(t){ const done=t.status!=='done'; const { error }=await sb.from('pattern_tasks').update({ status: done?'done':'todo', done_at: done?new Date().toISOString():null }).eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
-  async function delTask(t){ const { error }=await sb.from('pattern_tasks').delete().eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
+  // Auto-seed a worklist row for any job sitting at "For Pattern" (production +
+  // sampling) that doesn't have one yet. Rows persist even after the job moves
+  // past For Pattern — they only leave the Worklist when marked Done.
+  useEffect(()=>{ (async()=>{
+    const existing=new Set((patternWorklist||[]).map(w=>w.source_job_id).filter(Boolean));
+    const add=[];
+    (prodJobs||[]).filter(j=>j.status==='for pattern').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'production', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
+    (sampleJobs||[]).filter(j=>j.status==='for pattern').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'sampling', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
+    if(add.length){ const { error }=await sb.from('pattern_worklist').insert(add); if(!error) reload(); }
+  })(); },[prodJobs, sampleJobs, patternWorklist]);
+
+  const open=(patternWorklist||[]).filter(w=>w.status!=='done');
+  const done=(patternWorklist||[]).filter(w=>w.status==='done');
+  const matchLib=(p)=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase());
+  const prodLib=(patterns||[]).filter(p=> (p.library||'production')==='production').filter(matchLib);
+  const sampleLib=(patterns||[]).filter(p=> p.library==='sample').filter(matchLib);
+  const prodCount=(patterns||[]).filter(p=>(p.library||'production')==='production').length;
+  const sampleCount=(patterns||[]).filter(p=>p.library==='sample').length;
+
+  async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('pattern_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function markDone(w){ const { error }=await sb.from('pattern_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function reopenItem(w){ const { error }=await sb.from('pattern_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function delItem(w){ if(!confirm('Remove this from the worklist?')) return; const { error }=await sb.from('pattern_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   async function delPattern(p){ if(!confirm(`Delete pattern ${p.pattern_code||''}?`)) return; const { error }=await sb.from('patterns').update({ deleted_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload(); }
-  function logFromJob(job, source){ setPrefill({ name: job.item||'', item_type: job.item||'', source_job_id: job.id, source_type: source, lead_id: job.lead_id||null, sizes: [] }); setEditing({}); }
+  function logFromWorklist(w){ setPrefill({ worklist_id:w.id, name: w.item||w.title||'', item_type: w.item||'', source_job_id: w.source_job_id||null, source_type: w.source_type||'manual', lead_id: w.lead_id||null, library: w.source_type==='sampling'?'sample':'production' }); setEditing({}); }
+  const srcBadge=(src)=> src==='sampling'?['Sample','bg-purple-100 text-purple-700']:src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
 
-  const worklistCount = prodNeeds.filter(j=>!hasPattern(j.id)).length + sampleNeeds.filter(j=>!hasPattern(j.id)).length + openTasks.length;
-  const boardRow=(job,source)=>{ const p=patternFor(job.id); const lead=job.lead_id?(leads||[]).find(l=>l.id===job.lead_id):null; return (
-    <div key={job.id} className="flex items-center gap-2 px-3 py-2 border-t hover:bg-slate-50">
-      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${source==='sampling'?'bg-purple-100 text-purple-700':'bg-emerald-100 text-emerald-700'}`}>{source==='sampling'?'Sample':'Production'}</span>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{job.item||'—'}</div>
-        <div className="text-[11px] text-slate-500 truncate">{job.client_name||'—'}{job.number?` · ${job.number}`:''}{job.quantity?` · ${Number(job.quantity).toLocaleString()} pcs`:''}</div>
+  const worklistRow=(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
+    <div key={w.id} className="border-t px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.start_date?`${w.client_name?' · ':''}started ${fmtDate(w.start_date)}`:''}</div>
+        </div>
+        {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
+        {p ? <span className="text-xs text-emerald-700 font-semibold shrink-0">✓ {p.pattern_code||'logged'}</span>
+           : <button onClick={()=>logFromWorklist(w)} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 shrink-0">＋ Log pattern</button>}
+        <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>
+        <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
       </div>
-      {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
-      {p ? <span className="text-xs text-emerald-700 font-semibold shrink-0">✓ {p.pattern_code||'Pattern logged'}</span>
-         : <button onClick={()=>logFromJob(job,source)} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 shrink-0">＋ Log pattern</button>}
+      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-slate-200 bg-slate-50/50" />
     </div>
   ); };
+
+  const doneRow=(w)=>{ const p=patternFor(w.pattern_id); const [bl,bc]=srcBadge(w.source_type); return (
+    <div key={w.id} className="border-t px-3 py-2 flex items-center gap-2 flex-wrap">
+      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
+      <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{p?` · ${p.pattern_code||''}`:''}{w.notes?` · ${w.notes}`:''}</div></div>
+      <div className="text-[11px] text-slate-500 text-right shrink-0">{w.start_date?fmtDate(w.start_date):'—'} → <span className="font-semibold text-emerald-700">{w.done_at?fmtTime(w.done_at):'done'}</span></div>
+      <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>
+      <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0">✕</button>
+    </div>
+  ); };
+
+  const libTable=(rows)=>(
+    <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+      <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+        <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Notes</th><th className="text-left px-3 py-2">Sizes</th><th></th>
+      </tr></thead>
+      <tbody>{rows.map(p=>{ const male=Array.isArray(p.sizes_male)?p.sizes_male:[]; const female=Array.isArray(p.sizes_female)?p.sizes_female:[]; return (
+        <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>{ setPrefill(null); setEditing(p); }}>
+          <td className="px-3 py-2 font-mono text-xs font-semibold">{p.pattern_code||'—'}</td>
+          <td className="px-3 py-2 text-xs">{p.item_type||'—'}</td>
+          <td className="px-3 py-2">{p.name||'—'}</td>
+          <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]">{p.notes||''}</td>
+          <td className="px-3 py-2"><div className="flex flex-col gap-0.5">
+            {male.length>0 && <div className="flex gap-1 flex-wrap items-center"><span className="text-[9px] font-bold text-blue-600 w-3">M</span>{male.map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">{s}</span>)}</div>}
+            {female.length>0 && <div className="flex gap-1 flex-wrap items-center"><span className="text-[9px] font-bold text-pink-600 w-3">F</span>{female.map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-pink-50 text-pink-700 font-medium">{s}</span>)}</div>}
+            {male.length===0 && female.length===0 && <span className="text-slate-300 text-xs">—</span>}
+          </div></td>
+          <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); delPattern(p);}} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+        </tr>
+      ); })}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No patterns {search?'match':'here yet'}.</td></tr>}</tbody>
+    </table></div></div>
+  );
 
   return (
     <div className="p-6">
@@ -4973,13 +5026,15 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">✂ Pattern</h1>
-            <p className="text-slate-500 text-sm">{worklistCount} to work on · {(patterns||[]).length} patterns in library</p>
+            <p className="text-slate-500 text-sm">{open.length} on the worklist · {prodCount} production + {sampleCount} sample patterns</p>
           </div>
           <button onClick={()=>{ setPrefill(null); setEditing({}); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New pattern</button>
         </div>
-        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({worklistCount})</button>
-          <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({(patterns||[]).length})</button>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
+          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Patterns ({done.length})</button>
+          <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({prodCount})</button>
+          <button onClick={()=>setTab('sample')} className={`px-3 py-1.5 rounded-md ${tab==='sample'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sample Patterns ({sampleCount})</button>
           <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
         </div>
       </div>
@@ -4987,59 +5042,30 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
       {tab==='worklist' && (
         <div className="space-y-4">
           <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🧵 Needs a pattern — from the boards</div>
-            {prodNeeds.length===0 && sampleNeeds.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing at the "For Pattern" (production) or newly-endorsed (sample) stage right now.</div> : (<>
-              {prodNeeds.map(j=>boardRow(j,'production'))}
-              {sampleNeeds.map(j=>boardRow(j,'sampling'))}
-            </>)}
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🧵 To work on</div>
+            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing on the worklist. Items appear here when a Production or Sample job hits the "For Pattern" stage.</div> : open.map(worklistRow)}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>📝 Ad-hoc tasks</span></div>
-            <div className="p-2">
-              <div className="flex gap-1.5 mb-1">
-                <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addTask(); }} placeholder="Add a pattern to-do…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-                <button onClick={addTask} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
-              </div>
-              {openTasks.length===0 && <div className="text-center text-slate-300 text-xs py-3">No ad-hoc tasks.</div>}
-              {openTasks.map(t=>(
-                <div key={t.id} className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50">
-                  <button onClick={()=>toggleTask(t)} className="w-5 h-5 rounded-md border-2 border-slate-300 hover:border-indigo-400 shrink-0"></button>
-                  <span className="flex-1 text-sm truncate">{t.title}</span>
-                  <button onClick={()=>delTask(t)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 text-sm">✕</button>
-                </div>
-              ))}
-              {doneTasks.length>0 && <div className="mt-1 pt-1 border-t">{doneTasks.slice(0,8).map(t=>(
-                <div key={t.id} className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 opacity-60">
-                  <button onClick={()=>toggleTask(t)} className="w-5 h-5 rounded-md border-2 bg-emerald-500 border-emerald-500 text-white text-xs flex items-center justify-center shrink-0">✓</button>
-                  <span className="flex-1 text-sm line-through truncate">{t.title}</span>
-                  <button onClick={()=>delTask(t)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 text-sm">✕</button>
-                </div>
-              ))}</div>}
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
+            <div className="p-2 flex gap-1.5">
+              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add a pattern to work on…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
             </div>
           </div>
         </div>
       )}
 
-      {tab==='library' && (
+      {tab==='done' && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done Patterns — finished (start → finished date/time)</div>
+          {done.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">Nothing finished yet. Click "✓ Done" on a worklist item to move it here.</div> : done.map(doneRow)}
+        </div>
+      )}
+
+      {(tab==='library' || tab==='sample') && (
         <div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by pattern code / name / item…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-80 mb-3" />
-          <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
-                <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Notes</th><th className="text-left px-3 py-2">Sizes</th><th></th>
-              </tr></thead>
-              <tbody>{lib.map(p=>(
-                <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>{ setPrefill(null); setEditing(p); }}>
-                  <td className="px-3 py-2 font-mono text-xs font-semibold">{p.pattern_code||'—'}</td>
-                  <td className="px-3 py-2 text-xs">{p.item_type||'—'}</td>
-                  <td className="px-3 py-2">{p.name||'—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[220px]">{p.notes||''}</td>
-                  <td className="px-3 py-2"><div className="flex gap-1 flex-wrap">{(Array.isArray(p.sizes)?p.sizes:[]).map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{s}</span>)}</div></td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); delPattern(p);}} className="text-xs text-rose-500 hover:underline">Delete</button></td>
-                </tr>
-              ))}{lib.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No patterns {search?'match':'yet'}. Log one from the Worklist or click "+ New pattern".</td></tr>}</tbody>
-            </table></div>
-          </div>
+          {tab==='library' ? libTable(prodLib) : libTable(sampleLib)}
         </div>
       )}
 
@@ -5066,8 +5092,9 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
 
 function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSaved }){
   const isEdit=!!pattern;
-  const [f,setF]=useState(pattern || { pattern_code:'', name: prefill?.name||'', item_type: prefill?.item_type||'', sizes: prefill?.sizes||[], size_chart_id:'', notes:'', source_job_id: prefill?.source_job_id||null, source_type: prefill?.source_type||'manual', lead_id: prefill?.lead_id||null });
-  const [sizesText,setSizesText]=useState(sizesToText(pattern?.sizes||prefill?.sizes||[]));
+  const [f,setF]=useState(pattern || { pattern_code:'', name: prefill?.name||'', item_type: prefill?.item_type||'', size_chart_id:'', notes:'', source_job_id: prefill?.source_job_id||null, source_type: prefill?.source_type||'manual', lead_id: prefill?.lead_id||null, library: prefill?.library||'production' });
+  const [maleText,setMaleText]=useState(sizesToText(pattern?.sizes_male||[]));
+  const [femaleText,setFemaleText]=useState(sizesToText(pattern?.sizes_female||[]));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
@@ -5076,15 +5103,19 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
     let code=(f.pattern_code||'').trim();
     if(!code){ try{ code=await nextPatternCode(); }catch(_){ code=''; } }
     const payload={ pattern_code:code||null, name:(f.name||'').trim()||null, item_type:(f.item_type||'').trim()||null,
-      sizes:textToSizes(sizesText), size_chart_id: f.size_chart_id||null, notes:f.notes||null,
+      sizes_male:textToSizes(maleText), sizes_female:textToSizes(femaleText),
+      size_chart_id: f.size_chart_id||null, notes:f.notes||null, library: f.library||'production',
       source_job_id: f.source_job_id||null, source_type: f.source_type||'manual', lead_id: f.lead_id||null };
     if(!isEdit) payload.created_by=profile.id;
-    const { error } = isEdit ? await sb.from('patterns').update(payload).eq('id',pattern.id) : await sb.from('patterns').insert(payload);
-    setBusy(false); if(error){ setMsg(error.message); return; }
-    onSaved();
+    let savedId=pattern?.id;
+    if(isEdit){ const { error }=await sb.from('patterns').update(payload).eq('id',pattern.id); if(error){ setBusy(false); setMsg(error.message); return; } }
+    else { const { data, error }=await sb.from('patterns').insert(payload).select('id').single(); if(error){ setBusy(false); setMsg(error.message); return; } savedId=data?.id; }
+    // link the worklist item to the pattern so it shows as logged
+    if(prefill?.worklist_id && savedId){ try{ await sb.from('pattern_worklist').update({ pattern_id:savedId }).eq('id',prefill.worklist_id); }catch(_){} }
+    setBusy(false); onSaved();
   }
   return (
-    <Modal title={isEdit?`Pattern ${pattern.pattern_code||''}`:'New pattern'} onClose={onClose}>
+    <Modal title={isEdit?`Pattern ${pattern.pattern_code||''}`:(f.library==='sample'?'New sample pattern':'New pattern')} onClose={onClose}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Pattern code"><input className="input" value={f.pattern_code||''} onChange={e=>up('pattern_code',e.target.value)} placeholder="Leave blank to auto-generate" /></TpLbl>
@@ -5092,7 +5123,16 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
         </div>
         <TpLbl t="Name / description"><input className="input" value={f.name||''} onChange={e=>up('name',e.target.value)} placeholder="e.g. ICA Batch Jacket — front panel" /></TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[70px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Measurements, fabric, allowances, revisions…" /></TpLbl>
-        <TpLbl t="Sizes (comma-separated)"><input className="input" value={sizesText} onChange={e=>setSizesText(e.target.value)} placeholder="XS, S, M, L, XL, XXL" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Male sizes"><input className="input" value={maleText} onChange={e=>setMaleText(e.target.value)} placeholder="S, M, L, XL, XXL" /></TpLbl>
+          <TpLbl t="Female sizes"><input className="input" value={femaleText} onChange={e=>setFemaleText(e.target.value)} placeholder="XS, S, M, L, XL" /></TpLbl>
+        </div>
+        <TpLbl t="Library">
+          <select className="input" value={f.library||'production'} onChange={e=>up('library',e.target.value)}>
+            <option value="production">Production Pattern Library</option>
+            <option value="sample">Sample Pattern Library</option>
+          </select>
+        </TpLbl>
         <TpLbl t="Link a size chart (optional)">
           <select className="input" value={f.size_chart_id||''} onChange={e=>up('size_chart_id',e.target.value||null)}>
             <option value="">— none —</option>
@@ -24079,6 +24119,7 @@ function App(){
   const [embroideryJobs,setEmbroideryJobs]=useState([]); const [knittingJobs,setKnittingJobs]=useState([]);
   const [sizeCharts,setSizeCharts]=useState([]); const [garmentMockups,setGarmentMockups]=useState([]);
   const [patterns,setPatterns]=useState([]); const [patternTasks,setPatternTasks]=useState([]);
+  const [patternWorklist,setPatternWorklist]=useState([]);
   const [styles,setStyles]=useState([]);
   const [items,setItems]=useState([]); const [suppliers,setSuppliers]=useState([]); const [departments,setDepartments]=useState([]);
   const [requests,setRequests]=useState([]); const [orders,setOrders]=useState([]);
@@ -24363,6 +24404,7 @@ function App(){
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
     try { const pat = await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPatterns(pat && !pat.error ? (pat.data||[]) : []); } catch(_){ setPatterns([]); }
     try { const pts = await sb.from('pattern_tasks').select('*').order('created_at',{ascending:false}); setPatternTasks(pts && !pts.error ? (pts.data||[]) : []); } catch(_){ setPatternTasks([]); }
+    try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
@@ -25138,7 +25180,7 @@ function App(){
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
-        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternTasks={patternTasks} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
