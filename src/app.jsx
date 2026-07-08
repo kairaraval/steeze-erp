@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 182 · Reverted: editing any voucher again voids its approval so it must be re-approved (as before). That's why an edited voucher returns to the For-Approval queue — by design";
+const BUILD = "Live build 183 · Pattern library: reordered fields to Pattern Code · Item · Name · Notes · Sizes (table + form) and imported the full 407-pattern library";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5026,15 +5026,15 @@ function PatternView({ profile, patterns, patternTasks, sampleJobs, prodJobs, le
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
-                <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Sizes</th><th className="text-left px-3 py-2">Notes</th><th></th>
+                <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Notes</th><th className="text-left px-3 py-2">Sizes</th><th></th>
               </tr></thead>
               <tbody>{lib.map(p=>(
                 <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>{ setPrefill(null); setEditing(p); }}>
                   <td className="px-3 py-2 font-mono text-xs font-semibold">{p.pattern_code||'—'}</td>
-                  <td className="px-3 py-2">{p.name||'—'}</td>
                   <td className="px-3 py-2 text-xs">{p.item_type||'—'}</td>
+                  <td className="px-3 py-2">{p.name||'—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[220px]">{p.notes||''}</td>
                   <td className="px-3 py-2"><div className="flex gap-1 flex-wrap">{(Array.isArray(p.sizes)?p.sizes:[]).map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{s}</span>)}</div></td>
-                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]">{p.notes||''}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); delPattern(p);}} className="text-xs text-rose-500 hover:underline">Delete</button></td>
                 </tr>
               ))}{lib.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No patterns {search?'match':'yet'}. Log one from the Worklist or click "+ New pattern".</td></tr>}</tbody>
@@ -5091,6 +5091,7 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
           <TpLbl t="Item type"><input className="input" value={f.item_type||''} onChange={e=>up('item_type',e.target.value)} placeholder="e.g. Polo Shirt / Jacket" /></TpLbl>
         </div>
         <TpLbl t="Name / description"><input className="input" value={f.name||''} onChange={e=>up('name',e.target.value)} placeholder="e.g. ICA Batch Jacket — front panel" /></TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[70px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Measurements, fabric, allowances, revisions…" /></TpLbl>
         <TpLbl t="Sizes (comma-separated)"><input className="input" value={sizesText} onChange={e=>setSizesText(e.target.value)} placeholder="XS, S, M, L, XL, XXL" /></TpLbl>
         <TpLbl t="Link a size chart (optional)">
           <select className="input" value={f.size_chart_id||''} onChange={e=>up('size_chart_id',e.target.value||null)}>
@@ -5098,7 +5099,6 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
             {(sizeCharts||[]).map(c=><option key={c.id} value={c.id}>{c.name}{c.garment_type?` · ${c.garment_type}`:''}</option>)}
           </select>
         </TpLbl>
-        <TpLbl t="Notes"><textarea className="input min-h-[70px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Measurements, fabric, allowances, revisions…" /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save pattern':'Add to library')}</button>
       </div>
