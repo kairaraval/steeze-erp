@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 180 · Pattern Size Charts: fixed images not loading — chart images are storage paths, now rendered via the signed-URL image loader (TImg) like the techpack";
+const BUILD = "Live build 181 · Vouchers: editing an approved voucher no longer wipes its approval for cosmetic changes (check #, notes, date) — only material changes (amount, payee, supplier, bank, type) require re-approval. Fixes approved vouchers reappearing in For-Approval";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18210,10 +18210,21 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
         notes: f.notes || null,
       };
       if(isEdit){
-        // EDIT MODE: update the voucher + reconcile the linked bank_transaction
-        // (amount/bank/date/payee/particulars/reference may have changed).
-        // Also auto-void any signature so the edited doc must be re-approved.
-        const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, signed_at: null, approved_by: null, approved_at: null }).eq('id', existing.id);
+        // EDIT MODE: update the voucher + reconcile the linked bank_transaction.
+        // Only void an existing approval when a MATERIAL field changed (amount,
+        // payee, supplier, bank, or type) — that genuinely needs a re-sign.
+        // Cosmetic edits (adding the check number, a note, particulars, fixing
+        // the date) keep the approval so a signed voucher doesn't bounce back
+        // into the For-Approval queue "the next day".
+        const materialChanged = (
+          Number(existing.amount) !== Number(f.amount) ||
+          (existing.payee||'') !== (f.payee.trim()) ||
+          (existing.supplier_id||null) !== (f.supplier_id||null) ||
+          (existing.bank_id||null) !== (f.bank_id||null) ||
+          (existing.type||'') !== (f.type||'')
+        );
+        const voidPatch = (existing.approved_at && materialChanged) ? { signed_at: null, approved_by: null, approved_at: null } : {};
+        const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, ...voidPatch }).eq('id', existing.id);
         if(vErr) throw vErr;
         if(existing.bank_transaction_id){
           // Update the existing linked bank transaction. If the user moved the
