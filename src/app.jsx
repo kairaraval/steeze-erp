@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 190 · Pattern worklist note box is now yellow to match In House Cutting";
+const BUILD = "Live build 191 · Sampling Board now sits at the top of the Production nav group";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25360,6 +25360,14 @@ function App(){
     if(hadPersonal && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='profile')){
       NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['profile','My Profile','⭐']] };
     }
+    // Sampling Board sits at the top of the Production group.
+    NAV = NAV.map(g=>{
+      if(g.group==='Production' && Array.isArray(g.items)){
+        const s=g.items.find(it=>it[0]==='sampling');
+        if(s) return { ...g, items:[s, ...g.items.filter(it=>it[0]!=='sampling')] };
+      }
+      return g;
+    });
   }
   function NavBtn([k,lbl,icon]){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
