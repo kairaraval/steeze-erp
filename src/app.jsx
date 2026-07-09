@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 188 · Renamed Cutting → In House Cutting; worklist now only auto-fed from the 'Cutting - In House' stage (subcon cutting excluded)";
+const BUILD = "Live build 189 · In House Cutting: items are clickable → detail modal with pattern number, per-size consumption breakdown (fill from pattern) + overall project consumption; worklist note box is now yellow";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5151,6 +5151,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   const [tab,setTab]=useState('worklist');
   const [search,setSearch]=useState('');
   const [newTask,setNewTask]=useState('');
+  const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
 
   // Auto-seed a worklist row for any production job at a Cutting stage that
@@ -5173,26 +5174,27 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
 
-  const worklistRow=(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
+  const worklistRow=(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (
     <div key={w.id} className="border-t px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div>
-          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.start_date?`${w.client_name?' · ':''}started ${fmtDate(w.start_date)}`:''}</div>
-        </div>
+        <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
+          <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.pattern_number?` · Pattern ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
+        </button>
+        <button onClick={()=>setDetail(w)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold shrink-0">Open ▸</button>
         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
         <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>
         <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
       </div>
-      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-slate-200 bg-slate-50/50" />
+      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-amber-300 bg-yellow-100 text-amber-900 placeholder-amber-500" />
     </div>
   ); };
 
   const doneRow=(w)=>{ const [bl,bc]=srcBadge(w.source_type); return (
     <div key={w.id} className="border-t px-3 py-2 flex items-center gap-2 flex-wrap">
       <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
-      <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.notes?` · ${w.notes}`:''}</div></div>
+      <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group"><div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.pattern_number?` · Pattern ${w.pattern_number}`:''}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}{w.notes?` · ${w.notes}`:''}</div></button>
       <div className="text-[11px] text-slate-500 text-right shrink-0">{w.start_date?fmtDate(w.start_date):'—'} → <span className="font-semibold text-emerald-700">{w.done_at?fmtTime(w.done_at):'done'}</span></div>
       <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>
       <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0">✕</button>
@@ -5259,7 +5261,95 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
           </table></div></div>
         </div>
       )}
+
+      {detail && <CuttingItemModal item={detail} patterns={patterns} lead={leadFor(detail.lead_id)} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
     </div>
+  );
+}
+
+// Detail modal for a cutting worklist item — pattern number + per-size consumption + overall.
+function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved }){
+  const w=item;
+  const [patternNumber,setPatternNumber]=useState(w.pattern_number||'');
+  const [rows,setRows]=useState(Array.isArray(w.size_consumption)&&w.size_consumption.length ? w.size_consumption.map(r=>({ size:r.size||'', qty:r.qty??'', consumption:r.consumption??'' })) : []);
+  const [total,setTotal]=useState(w.total_consumption??'');
+  const [notes,setNotes]=useState(w.notes||'');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const matchedPattern=(patterns||[]).find(p=> (p.pattern_code||'').trim().toLowerCase()===(patternNumber||'').trim().toLowerCase() && !p.deleted_at);
+  const sumConsumption=rows.reduce((s,r)=>s+(Number(r.consumption)||0),0);
+  function setRow(i,k,v){ setRows(rs=>rs.map((r,idx)=>idx===i?{...r,[k]:v}:r)); }
+  function addRow(){ setRows(rs=>[...rs,{size:'',qty:'',consumption:''}]); }
+  function delRow(i){ setRows(rs=>rs.filter((_,idx)=>idx!==i)); }
+  function fillFromPattern(){
+    if(!matchedPattern){ setMsg('No pattern found with that number — type an exact pattern code first.'); return; }
+    const male=Array.isArray(matchedPattern.sizes_male)?matchedPattern.sizes_male:[];
+    const female=Array.isArray(matchedPattern.sizes_female)?matchedPattern.sizes_female:[];
+    const add=[];
+    male.forEach(s=> add.push({ size:`${s} (M)`, qty:'', consumption:'' }));
+    female.forEach(s=> add.push({ size:`${s} (F)`, qty:'', consumption:'' }));
+    if(add.length===0){ setMsg('That pattern has no male/female sizes recorded yet.'); return; }
+    const existing=new Set(rows.map(r=>r.size));
+    setRows(rs=>[...rs, ...add.filter(a=>!existing.has(a.size))]); setMsg('');
+  }
+  async function save(){
+    setBusy(true); setMsg('');
+    const clean=rows.filter(r=> (r.size||'').trim() || r.qty!=='' || r.consumption!=='').map(r=>({ size:(r.size||'').trim(), qty:r.qty===''?null:Number(r.qty), consumption:r.consumption===''?null:Number(r.consumption) }));
+    const { error }=await sb.from('cutting_worklist').update({ pattern_number: patternNumber.trim()||null, size_consumption: clean, total_consumption: total===''?null:Number(total), notes: notes||null }).eq('id', w.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={`✂ ${w.item||w.title||'Cutting'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded-lg p-2 text-xs flex items-center gap-2 flex-wrap">
+          <span className="font-semibold">{w.item||w.title||'—'}</span>
+          {w.client_name && <span className="text-slate-500">· {w.client_name}</span>}
+          {w.start_date && <span className="text-slate-400">· started {fmtDate(w.start_date)}</span>}
+          {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="ml-auto text-teal-700 hover:underline">📋 Techpack</button>}
+        </div>
+
+        <TpLbl t="Pattern number to use">
+          <div className="flex gap-2">
+            <input className="input" value={patternNumber} onChange={e=>setPatternNumber(e.target.value)} placeholder="e.g. 195" />
+            <button type="button" onClick={fillFromPattern} className="px-3 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50 whitespace-nowrap">Fill sizes from pattern</button>
+          </div>
+          {patternNumber.trim() && (matchedPattern ? <div className="text-[11px] text-emerald-700 mt-1">✓ {matchedPattern.item_type||''} — {matchedPattern.name||''}</div> : <div className="text-[11px] text-amber-600 mt-1">No matching pattern code in the library (that's OK — it's saved as-is).</div>)}
+        </TpLbl>
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold">Size breakdown — consumption per size</div>
+            <button type="button" onClick={addRow} className="text-xs px-2 py-1 rounded border hover:bg-slate-50">+ Add size</button>
+          </div>
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                <th className="text-left px-2 py-1.5">Size</th><th className="text-right px-2 py-1.5 w-28">Qty (pcs)</th><th className="text-right px-2 py-1.5 w-36">Consumption</th><th className="w-8"></th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r,i)=>(
+                  <tr key={i} className="border-t">
+                    <td className="px-2 py-1"><input className="input !py-1" value={r.size} onChange={e=>setRow(i,'size',e.target.value)} placeholder="e.g. M / L / XL" /></td>
+                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={r.qty} onChange={e=>setRow(i,'qty',e.target.value)} placeholder="0" /></td>
+                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={r.consumption} onChange={e=>setRow(i,'consumption',e.target.value)} placeholder="0" /></td>
+                    <td className="px-2 py-1 text-center"><button onClick={()=>delRow(i)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
+                  </tr>
+                ))}
+                {rows.length===0 && <tr><td colSpan="4" className="px-2 py-3 text-center text-slate-400 text-xs">No sizes yet — add rows, or "Fill sizes from pattern".</td></tr>}
+              </tbody>
+              {rows.length>0 && <tfoot><tr className="bg-slate-50 font-semibold border-t"><td className="px-2 py-1.5 text-right uppercase text-[10px] tracking-wider" colSpan="2">Sum of per-size consumption</td><td className="px-2 py-1.5 text-right">{sumConsumption||0}</td><td></td></tr></tfoot>}
+            </table>
+          </div>
+        </div>
+
+        <TpLbl t="Overall consumption for the project"><input type="number" className="input" value={total} onChange={e=>setTotal(e.target.value)} placeholder="e.g. total meters / yards of fabric used" /></TpLbl>
+
+        <TpLbl t="Notes"><textarea className="input min-h-[60px] bg-yellow-50 border-amber-300" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any cutting notes…" /></TpLbl>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>
+      </div>
+    </Modal>
   );
 }
 
