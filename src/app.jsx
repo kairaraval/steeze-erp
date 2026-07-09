@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 189 · In House Cutting: items are clickable → detail modal with pattern number, per-size consumption breakdown (fill from pattern) + overall project consumption; worklist note box is now yellow";
+const BUILD = "Live build 190 · Pattern worklist note box is now yellow to match In House Cutting";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4984,7 +4984,7 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
         <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>
         <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
       </div>
-      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-slate-200 bg-slate-50/50" />
+      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-amber-300 bg-yellow-100 text-amber-900 placeholder-amber-500" />
     </div>
   ); };
 
