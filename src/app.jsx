@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 194 · Subcon payroll: production supervisor can now open + view the weekly payroll draft (per-subcon breakdown), but only Admin & Accounting can Process the run and Mark paid";
+const BUILD = "Live build 195 · Subcon send batches + projects: optional per-size breakdown (add a row per size); total auto-sums from the sizes. Lists still show totals only; the per-size detail shows in the batch/project detail view";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23056,6 +23056,44 @@ function subconProjectTotals(project, allSends, allReturns){
 }
 
 // ─────────── PROJECT FORM MODAL ───────────
+// Sum quantities across a size-breakdown array [{size, qty}].
+function sizeRowsTotal(rows){ return (rows||[]).reduce((s,r)=> s + (Number(r.qty)||0), 0); }
+// Keep only meaningful rows (a size label or a qty) when saving.
+function cleanSizeRows(rows){ return (rows||[]).filter(r => (r.size && String(r.size).trim()) || Number(r.qty) > 0).map(r => ({ size:String(r.size||'').trim(), qty:Number(r.qty)||0 })); }
+// Compact one-line summary of a size breakdown, e.g. "S·10  M·20  L·15".
+function sizeSummary(rows){ const c = cleanSizeRows(rows); return c.length ? c.map(r => `${r.size||'?'}·${r.qty}`).join('  ') : ''; }
+
+// Reusable inline editor: add/remove size rows with a quantity each.
+// The parent uses sizeRowsTotal() to drive the batch/project total.
+function SizeQtyEditor({ rows, onChange, label }){
+  const list = rows||[];
+  const COMMON=['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  function set(i,k,v){ onChange(list.map((r,idx)=> idx===i ? { ...r, [k]:v } : r)); }
+  function add(){ onChange([...list, { size:'', qty:0 }]); }
+  function del(i){ onChange(list.filter((_,idx)=> idx!==i)); }
+  const total = sizeRowsTotal(list);
+  return (
+    <div className="border rounded-lg p-2 bg-amber-50/60 border-amber-200">
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs font-semibold text-slate-600">{label||'Size breakdown (optional — track qty per size)'}</label>
+        {list.length>0 && <div className="text-xs text-slate-600">Total: <span className="font-bold text-slate-900">{total}</span></div>}
+      </div>
+      {list.length>0 && <div className="space-y-1.5 mb-1.5">
+        {list.map((r,i)=>(
+          <div key={i} className="flex items-center gap-2">
+            <input value={r.size} onChange={e=>set(i,'size',e.target.value)} list="steeze-size-options" className="border rounded px-2 py-1 text-sm w-32" placeholder="Size (e.g. M)" />
+            <input type="number" value={r.qty} onChange={e=>set(i,'qty',e.target.value)} className="border rounded px-2 py-1 text-sm w-28" placeholder="Qty" />
+            <button type="button" onClick={()=>del(i)} className="text-rose-500 hover:text-rose-700 text-sm px-1" title="Remove size">✕</button>
+          </div>
+        ))}
+      </div>}
+      <datalist id="steeze-size-options">{COMMON.map(s=><option key={s} value={s} />)}</datalist>
+      <button type="button" onClick={add} className="text-xs px-2 py-1 rounded bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100">+ Add size</button>
+      {list.length>0 && <div className="text-[10px] text-slate-500 mt-1">Total auto-fills the quantity above. Remove all sizes to type the total manually.</div>}
+    </div>
+  );
+}
+
 function SubconProjectFormModal({ profile, clients, leads, prodJobs, existing, onClose, onSaved }){
   const isEdit = !!existing;
   const [f,setF]=useState({
@@ -23067,17 +23105,22 @@ function SubconProjectFormModal({ profile, clients, leads, prodJobs, existing, o
     production_job_id: existing?.production_job_id||'',
     status: existing?.status||'open',
     notes: existing?.notes||'',
+    size_breakdown: Array.isArray(existing?.size_breakdown) ? existing.size_breakdown : [],
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const hasSizes = (f.size_breakdown||[]).length > 0;
+  const sizeTotal = sizeRowsTotal(f.size_breakdown);
   async function save(){
     if(!f.name.trim()){ setMsg('Project name is required.'); return; }
     setBusy(true); setMsg('');
     try {
+      const sizes = cleanSizeRows(f.size_breakdown);
       const payload = {
         name: f.name.trim(),
         garment: f.garment||null,
-        target_qty: Number(f.target_qty)||0,
+        target_qty: sizes.length ? sizeRowsTotal(sizes) : (Number(f.target_qty)||0),
+        size_breakdown: sizes.length ? sizes : null,
         client_id: f.client_id||null,
         lead_id: f.lead_id||null,
         production_job_id: f.production_job_id||null,
@@ -23117,12 +23160,15 @@ function SubconProjectFormModal({ profile, clients, leads, prodJobs, existing, o
             <input value={f.name} onChange={e=>up('name',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "BUCKET HAT BLUE — Lacoste"' />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500">Target quantity</label>
-            <input type="number" value={f.target_qty} onChange={e=>up('target_qty',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="7000" />
+            <label className="text-xs font-semibold text-slate-500">Target quantity{hasSizes && <span className="text-[10px] text-amber-700"> (from sizes)</span>}</label>
+            <input type="number" value={hasSizes ? sizeTotal : f.target_qty} onChange={e=>up('target_qty',e.target.value)} readOnly={hasSizes} className={`w-full border rounded px-2 py-1.5 ${hasSizes?'bg-slate-100 text-slate-500':''}`} placeholder="7000" />
           </div>
           <div className="col-span-2">
             <label className="text-xs font-semibold text-slate-500">Garment</label>
             <input value={f.garment} onChange={e=>up('garment',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Bucket hat"' />
+          </div>
+          <div className="col-span-3">
+            <SizeQtyEditor rows={f.size_breakdown} onChange={rows=>up('size_breakdown',rows)} label="Size breakdown (optional — add a row per size to track qty per size)" />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Status</label>
@@ -23187,6 +23233,16 @@ function SubconProjectDetailModal({ project, subcons, subconSends, subconReturns
             </div>
           )}
         </div>
+        {Array.isArray(project.size_breakdown) && project.size_breakdown.length > 0 && (
+          <div className="border rounded-lg p-2 bg-amber-50/60 border-amber-200">
+            <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1.5">Target size breakdown</div>
+            <div className="flex flex-wrap gap-1.5">
+              {cleanSizeRows(project.size_breakdown).map((r,i)=>(
+                <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white border border-amber-300 px-2 py-0.5 text-xs"><span className="font-semibold">{r.size||'?'}</span><span className="text-slate-500">{r.qty}</span></span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <div className="text-xs font-semibold text-slate-700 uppercase">Send batches in this project ({sends.length})</div>
           <div className="flex gap-2">
@@ -23266,9 +23322,12 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
     rate_per_garment: existing?.rate_per_garment || 0,
     expected_return_date: existing?.expected_return_date || '',
     notes: existing?.notes || '',
+    size_breakdown: Array.isArray(existing?.size_breakdown) ? existing.size_breakdown : [],
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const hasSizes = (f.size_breakdown||[]).length > 0;
+  const sizeTotal = sizeRowsTotal(f.size_breakdown);
   // When subcon changes, default the rate to that subcon's default_rate.
   useEffect(()=>{
     if(isEdit) return;
@@ -23307,7 +23366,9 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
   async function save(){
     if(!f.subcon_id){ setMsg('Pick a subcon.'); return; }
     if(!f.garment.trim()){ setMsg('Garment description is required.'); return; }
-    if(Number(f.quantity_sent) <= 0){ setMsg('Quantity sent must be > 0.'); return; }
+    const sizes = cleanSizeRows(f.size_breakdown);
+    const qty = sizes.length ? sizeRowsTotal(sizes) : Number(f.quantity_sent);
+    if(qty <= 0){ setMsg(sizes.length ? 'Enter a quantity for at least one size.' : 'Quantity sent must be > 0.'); return; }
     setBusy(true); setMsg('');
     try {
       const payload = {
@@ -23318,7 +23379,8 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
         production_job_id: f.production_job_id || null,
         client_name: f.client_name || null,
         garment: f.garment.trim(),
-        quantity_sent: Number(f.quantity_sent),
+        quantity_sent: qty,
+        size_breakdown: sizes.length ? sizes : null,
         rate_per_garment: Number(f.rate_per_garment)||0,
         expected_return_date: f.expected_return_date || null,
         notes: f.notes || null,
@@ -23365,8 +23427,8 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500">Quantity sent *</label>
-            <input type="number" value={f.quantity_sent} onChange={e=>up('quantity_sent',e.target.value)} className="w-full border rounded px-2 py-1.5" />
+            <label className="text-xs font-semibold text-slate-500">Quantity sent *{hasSizes && <span className="text-[10px] text-amber-700"> (from sizes)</span>}</label>
+            <input type="number" value={hasSizes ? sizeTotal : f.quantity_sent} onChange={e=>up('quantity_sent',e.target.value)} readOnly={hasSizes} className={`w-full border rounded px-2 py-1.5 ${hasSizes?'bg-slate-100 text-slate-500':''}`} />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Rate per garment (₱) *</label>
@@ -23379,6 +23441,9 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
           <div className="col-span-3">
             <label className="text-xs font-semibold text-slate-500">Garment / item description *</label>
             <input value={f.garment} onChange={e=>up('garment',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Polo shirt — Lacoste navy" or "T-shirt with print"' />
+          </div>
+          <div className="col-span-3">
+            <SizeQtyEditor rows={f.size_breakdown} onChange={rows=>up('size_breakdown',rows)} label="Size breakdown (optional — add a row per size, e.g. JTI polo: S·40, M·80, L·60)" />
           </div>
           <div className="col-span-3">
             <label className="text-xs font-semibold text-slate-500">Project (groups multiple batches together — track release vs target)</label>
@@ -23569,6 +23634,16 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
           <div className="border rounded p-2"><div className="text-slate-500 uppercase font-semibold">Variance</div><div className="text-lg font-bold text-amber-700">{totals.variance}</div></div>
           <div className="border rounded p-2"><div className="text-slate-500 uppercase font-semibold">Outstanding</div><div className={`text-lg font-bold ${totals.outstanding>0?'text-rose-700':'text-slate-400'}`}>{totals.outstanding}</div></div>
         </div>
+        {Array.isArray(send.size_breakdown) && send.size_breakdown.length > 0 && (
+          <div className="border rounded-lg p-2 bg-amber-50/60 border-amber-200">
+            <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1.5">Size breakdown</div>
+            <div className="flex flex-wrap gap-1.5">
+              {cleanSizeRows(send.size_breakdown).map((r,i)=>(
+                <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white border border-amber-300 px-2 py-0.5 text-xs"><span className="font-semibold">{r.size||'?'}</span><span className="text-slate-500">{r.qty}</span></span>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-semibold text-slate-700 uppercase">Return history</div>
