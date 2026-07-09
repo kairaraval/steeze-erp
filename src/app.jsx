@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 191 · Sampling Board now sits at the top of the Production nav group";
+const BUILD = "Live build 192 · Removed the primary contact line from the Estimate and Invoice 'Bill to' (DR already had it removed); company + address only";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1419,7 +1419,6 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
               <div className="border border-slate-400 p-2">
                 <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-0.5">Bill to</div>
                 <div className="font-semibold">{client?.company||lead.client_name||'—'}</div>
-                {client?.contact && <div>{client.contact}</div>}
                 {client?.address && <div className="text-slate-600">{client.address}</div>}
               </div>
               <div className="border border-slate-400 p-2">
@@ -1769,7 +1768,6 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
               <div className="border border-slate-400 p-2">
                 <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-0.5">Bill to</div>
                 <div className="font-semibold">{client?.company||so?.client_name||'—'}</div>
-                {client?.contact && <div>{client.contact}</div>}
                 {client?.address && <div className="text-slate-600">{client.address}</div>}
               </div>
               <div className="border border-slate-400 p-2">
