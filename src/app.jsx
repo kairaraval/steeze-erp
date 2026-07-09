@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 193 · Subcon payroll: production supervisor can now delete a send batch in Active batches and edit/delete individual return logs in a batch's return history";
+const BUILD = "Live build 194 · Subcon payroll: production supervisor can now open + view the weekly payroll draft (per-subcon breakdown), but only Admin & Accounting can Process the run and Mark paid";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23757,7 +23757,9 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
           </div>
           <div className="text-xs text-slate-500">Week range: {fmtDate(weekStart)} → {fmtDate(weekEnding)}</div>
           <div className="flex-1"></div>
-          <button disabled={busy || actionable.length===0} onClick={generate} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">Process {actionable.length} subcon{actionable.length===1?'':'s'}</button>
+          {canRunSubconPayroll(profile)
+            ? <button disabled={busy || actionable.length===0} onClick={generate} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">Process {actionable.length} subcon{actionable.length===1?'':'s'}</button>
+            : <span className="text-xs text-slate-500 italic px-2 py-2">View only — only Admin &amp; Accounting can process payroll.</span>}
         </div>
         <div className="text-xs text-slate-500">
           Only good-condition returns count. Variance is excluded. <strong>If returns were added after a payroll was finalized/paid</strong>, a supplementary payroll is created for the new work — the original isn't overwritten. <strong>Draft payrolls get refreshed in place.</strong>
@@ -24134,7 +24136,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
             {canManageSubcon(profile) && tab==='projects' && <button onClick={()=>setCreatingProject(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New project</button>}
             {canManageSubcon(profile) && tab==='active' && <button onClick={()=>{ setSendPrefillProjectId(null); setCreatingSend(true); }} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
             {canManageSubcon(profile) && tab==='subcons' && <button onClick={()=>setCreatingSubcon(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New subcon</button>}
-            {canRunSubconPayroll(profile) && tab==='payroll' && <button onClick={()=>setGeneratingPayroll(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ Generate weekly payroll</button>}
+            {(canRunSubconPayroll(profile) || profile.role==='production_supervisor') && tab==='payroll' && <button onClick={()=>setGeneratingPayroll(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ Generate weekly payroll</button>}
           </div>
         </div>
         <div className="flex gap-2 mt-3 flex-wrap">
