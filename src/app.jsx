@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 195 · Subcon send batches + projects: optional per-size breakdown (add a row per size); total auto-sums from the sizes. Lists still show totals only; the per-size detail shows in the batch/project detail view";
+const BUILD = "Live build 196 · RFP: pay several approved POs for one supplier with a single check — tick the approved RFPs, click 'Pay together as one check' → one consolidated voucher (particulars auto-lists each PO), one bank deduction, all POs+RFPs marked paid";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18064,9 +18064,21 @@ function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, reload }){
   const [editing,setEditing]=useState(null);
   const [paying,setPaying]=useState(null);   // RFP to disburse via voucher
+  const [batchPaying,setBatchPaying]=useState(null); // array of RFPs → one voucher
+  const [selected,setSelected]=useState({}); // { rfpId: true } for approved RFPs to batch-pay
   const [filter,setFilter]=useState('');
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
+  const canPay = isAdmin || isAccounting;
+  // The currently-selected approved RFPs (as objects).
+  const selectedRfps = (rfps||[]).filter(r => selected[r.id] && r.status==='approved');
+  // Batch pay requires all picked RFPs belong to the SAME supplier (one payee = one check).
+  const selSupplierKey = (r)=> r.supplier_id || `name:${(r.supplier_name||'').toLowerCase().trim()}`;
+  const selSuppliers = new Set(selectedRfps.map(selSupplierKey));
+  const sameSupplier = selSuppliers.size <= 1;
+  const selectedTotal = selectedRfps.reduce((s,r)=> s + Number(r.amount||0), 0);
+  function toggleSel(id){ setSelected(p => { const nx={...p}; if(nx[id]) delete nx[id]; else nx[id]=true; return nx; }); }
+  function clearSel(){ setSelected({}); }
   async function deleteRFP(r){
     const isPaid = r.status === 'paid';
     if(isPaid){
@@ -18099,10 +18111,17 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <div className="text-xl font-bold">{counts[s.key]||0}</div>
         </button>
       ))}</div>
+      {canPay && (counts.approved||0) > 0 && (
+        <div className="mb-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800 flex items-center justify-between gap-2 flex-wrap">
+          <div>💡 Paying a supplier with terms (e.g. every 15th &amp; 30th)? Tick the <strong>Approved</strong> RFPs for that supplier below, then <strong>Pay together as one check</strong>.</div>
+          <button onClick={()=>setFilter(filter==='approved'?'':'approved')} className={`px-2 py-1 rounded font-semibold ${filter==='approved'?'bg-blue-600 text-white':'bg-white border border-blue-300 text-blue-700'}`}>{filter==='approved'?'Showing approved':'Show approved only'}</button>
+        </div>
+      )}
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">RFP#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">PO</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
-        <tbody>{rows.map(r=>{ const meta=rfpMeta(r.status); const po=orders.find(o=>o.id===r.po_id); return (
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{canPay && <th className="px-2 py-2 w-8"></th>}<th className="text-left px-3 py-2">RFP#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">PO</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+        <tbody>{rows.map(r=>{ const meta=rfpMeta(r.status); const po=orders.find(o=>o.id===r.po_id); const selectable = r.status==='approved' && canPay; return (
           <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(r)}>
+            {canPay && <td className="px-2 py-2 text-center" onClick={(e)=>e.stopPropagation()}>{selectable ? <input type="checkbox" checked={!!selected[r.id]} onChange={()=>toggleSel(r.id)} /> : null}</td>}
             <td className="px-3 py-2 font-mono text-xs">{r.number}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
             <td className="px-3 py-2">{r.supplier_name||'—'}</td>
@@ -18110,15 +18129,26 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
             <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
             <td className="px-3 py-2 text-right">
-              {r.status==='approved' && (isAdmin||isAccounting) && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Pay</button>}
+              {r.status==='approved' && canPay && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Pay</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteRFP(r);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan={canPay?8:7} className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
       </table></div></div>
+      {selectedRfps.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-white shadow-2xl border-2 border-emerald-500 rounded-xl px-4 py-3 flex items-center gap-4 text-sm">
+          <div>
+            <div className="font-bold">{selectedRfps.length} RFP{selectedRfps.length===1?'':'s'} selected · {peso(selectedTotal)}</div>
+            <div className="text-xs text-slate-500">{sameSupplier ? (selectedRfps[0]?.supplier_name||'—') : <span className="text-rose-600 font-semibold">Pick RFPs from the same supplier only</span>}</div>
+          </div>
+          <button onClick={clearSel} className="text-xs text-slate-500 hover:underline">Clear</button>
+          <button disabled={!sameSupplier} onClick={()=>setBatchPaying(selectedRfps)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">💰 Pay together as one check</button>
+        </div>
+      )}
       {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
     </div>
   );
 }
@@ -18374,6 +18404,166 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
 
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─────────── BATCH VOUCHER (one check for many RFPs/POs, same supplier) ───────────
+   Consolidates multiple approved RFPs for a single supplier into ONE voucher +
+   ONE bank transaction. Each covered RFP + its PO is marked paid; the voucher
+   records every covered RFP id in `rfp_ids` so a void reverses them all. */
+function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, orders, onClose, onSaved }){
+  const list = rfps||[];
+  const first = list[0]||{};
+  const supplier = suppliers.find(s=>s.id===first.supplier_id);
+  const today = new Date().toISOString().slice(0,10);
+  const monthKey = ymdToMonthKey(today);
+  const total = list.reduce((s,r)=> s + Number(r.amount||0), 0);
+  const poNumberFor = (r)=> { const po=(orders||[]).find(o=>o.id===r.po_id); return po?po.number:(r.number||'—'); };
+  // Default particulars: one line per covered PO with its amount.
+  const defaultParticulars = 'Payment for:\n' + list.map(r => `• ${poNumberFor(r)} — ${peso(r.amount)}${r.particulars?` (${r.particulars})`:''}`).join('\n');
+  const [f,setF]=useState({
+    type: 'check',
+    date: today,
+    payee: first.supplier_name||supplier?.company||'',
+    particulars: defaultParticulars,
+    expense_category: EXPENSE_CATEGORIES[0],
+    check_number: '',
+    check_date: today,
+    bank_id: bankAccounts[0]?.id||null,
+    received_by: '',
+    notes: '',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if((f.type==='check'||f.type==='bank_transfer') && !f.bank_id){ setMsg('Pick the bank this draws from.'); return; }
+    if(f.type==='cash' && !f.received_by){ setMsg('Who is receiving the cash?'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const prefix = f.type==='check' ? 'CV' : (f.type==='bank_transfer' ? 'BT' : 'CASH');
+      let number = await nextFinanceNumberFromDb(prefix, monthKey);
+      const ids = list.map(r=>r.id);
+      // One bank transaction for the full total.
+      let bankTxId = null;
+      if(f.bank_id){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id: f.bank_id, date: f.date, direction: 'out', amount: Number(total),
+          description: `${number} — ${f.payee} — ${list.length} PO${list.length===1?'':'s'}`.slice(0,200),
+          ref_type: 'voucher', ref_id: null,
+          reference_number: f.check_number||number, created_by: profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr;
+        bankTxId = btx.id;
+      }
+      // Insert the consolidated voucher (retry on unique-violation).
+      let vdata = null, lastErr = null;
+      for(let attempt = 0; attempt < 5; attempt++){
+        const res = await sb.from('vouchers').insert({
+          number, type:f.type, date:f.date,
+          rfp_id: first.id, po_id: first.po_id||null, rfp_ids: ids, supplier_id: first.supplier_id,
+          payee:f.payee, amount:Number(total), particulars:f.particulars||null, expense_category:f.expense_category||null,
+          check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
+          check_date: f.type==='check' ? (f.check_date||null) : null,
+          bank_id: f.bank_id||null,
+          received_by: f.type==='cash' ? (f.received_by||null) : null,
+          bank_transaction_id: bankTxId,
+          prepared_by: profile.id, notes:f.notes||null, released_at: new Date().toISOString(),
+        }).select('id').single();
+        if(!res.error){ vdata = res.data; lastErr = null; break; }
+        if(String(res.error.code||'').startsWith('23')){ number = await nextFinanceNumberFromDb(prefix, monthKey); lastErr = res.error; continue; }
+        lastErr = res.error; break;
+      }
+      if(!vdata){
+        if(bankTxId){ try { await sb.from('bank_transactions').delete().eq('id', bankTxId); } catch(_){} }
+        throw lastErr || new Error('Voucher insert failed.');
+      }
+      if(bankTxId && vdata?.id){ await sb.from('bank_transactions').update({ ref_id: vdata.id }).eq('id', bankTxId); }
+      // Mark every covered RFP paid + link to this voucher.
+      const nowIso = new Date().toISOString();
+      const { error: rErr } = await sb.from('rfps').update({ status:'paid', voucher_id:vdata.id, paid_at:nowIso }).in('id', ids);
+      if(rErr) throw rErr;
+      // Mark every covered PO paid.
+      const poIds = list.map(r=>r.po_id).filter(Boolean);
+      for(const r of list){
+        if(r.po_id){ await sb.from('purchase_orders').update({ payment_status:'paid', paid_at:nowIso, paid_by:profile.id, amount_paid:Number(r.amount||0) }).eq('id', r.po_id); }
+      }
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const voucherTitle = f.type==='check' ? 'Check Voucher (CV)' : f.type==='bank_transfer' ? 'Bank Transfer (BT)' : 'Cash Voucher';
+  return (
+    <Modal title={`Consolidated ${voucherTitle} — ${list.length} PO${list.length===1?'':'s'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
+          One payment of <strong>{peso(total)}</strong> to <strong>{f.payee}</strong> covering <strong>{list.length}</strong> approved RFP{list.length===1?'':'s'}. This deducts once from the chosen bank and marks all {list.length} PO{list.length===1?'':'s'} + RFP{list.length===1?'':'s'} as paid.
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1.5">RFP#</th><th className="text-left px-2 py-1.5">PO</th><th className="text-right px-2 py-1.5">Amount</th></tr></thead>
+            <tbody>{list.map(r=>(
+              <tr key={r.id} className="border-t"><td className="px-2 py-1.5 font-mono">{r.number}</td><td className="px-2 py-1.5 font-mono">{poNumberFor(r)}</td><td className="px-2 py-1.5 text-right font-semibold">{peso(r.amount)}</td></tr>
+            ))}
+              <tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1.5" colSpan={2}>Total</td><td className="px-2 py-1.5 text-right">{peso(total)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Voucher type">
+            <select className="input" value={f.type} onChange={e=>up('type',e.target.value)}>
+              <option value="check">Check Voucher (CV)</option>
+              <option value="bank_transfer">Bank Transfer / Online</option>
+              <option value="cash">Cash Voucher</option>
+            </select>
+          </TpLbl>
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Total amount"><input type="number" className="input bg-slate-100 text-slate-500" value={total} readOnly /></TpLbl>
+        </div>
+        <TpLbl t="Payee"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} /></TpLbl>
+        <TpLbl t="Expense category">
+          <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
+            {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+          </select>
+        </TpLbl>
+        <TpLbl t="Particulars (auto-lists each PO — edit if needed)"><textarea className="input min-h-[90px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} /></TpLbl>
+        {f.type==='check' && (
+          <div className="grid grid-cols-3 gap-2 bg-blue-50 border border-blue-200 rounded p-2">
+            <TpLbl t="Check #"><input className="input" value={f.check_number} onChange={e=>up('check_number',e.target.value)} /></TpLbl>
+            <TpLbl t="Check date"><input type="date" className="input" value={f.check_date} onChange={e=>up('check_date',e.target.value)} /></TpLbl>
+            <TpLbl t="Drawn from bank *">
+              <select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}>
+                <option value="">—</option>
+                {bankAccounts.map(b=> <option key={b.id} value={b.id}>{b.bank_name} ({peso(bankBalance(b, []))})</option>)}
+              </select>
+            </TpLbl>
+          </div>
+        )}
+        {f.type==='bank_transfer' && (
+          <div className="grid grid-cols-2 gap-2 bg-violet-50 border border-violet-200 rounded p-2">
+            <TpLbl t="From bank *">
+              <select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}>
+                <option value="">—</option>
+                {bankAccounts.map(b=> <option key={b.id} value={b.id}>{b.bank_name} ({peso(bankBalance(b, []))})</option>)}
+              </select>
+            </TpLbl>
+            <TpLbl t="Reference # (Transaction ID)"><input className="input" value={f.check_number} onChange={e=>up('check_number',e.target.value)} placeholder="Bank confirmation / e-receipt #" /></TpLbl>
+          </div>
+        )}
+        {f.type==='cash' && (
+          <div className="grid grid-cols-2 gap-2 bg-amber-50 border border-amber-200 rounded p-2">
+            <TpLbl t="Received by *"><input className="input" value={f.received_by} onChange={e=>up('received_by',e.target.value)} placeholder="Who is picking up the cash" /></TpLbl>
+            <TpLbl t="Source bank (optional)">
+              <select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}>
+                <option value="">— Petty cash (no bank deduction) —</option>
+                {bankAccounts.map(b=> <option key={b.id} value={b.id}>{b.bank_name}</option>)}
+              </select>
+            </TpLbl>
+          </div>
+        )}
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':`💰 Issue one voucher for ${peso(total)} & mark ${list.length} paid`}</button>
       </div>
     </Modal>
   );
@@ -18671,8 +18861,10 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
       if(error) throw error;
       // If this voucher paid out commissions, put those rows back to unpaid.
       try { await sb.from('sales_commissions').update({ paid_at:null, voucher_id:null }).eq('voucher_id', v.id); } catch(_){}
-      // If it came from an RFP, send the RFP back to 'approved' so it can be re-issued.
-      if(v.rfp_id){ try { await sb.from('rfps').update({ status:'approved', voucher_id:null, paid_at:null }).eq('id', v.rfp_id); } catch(_){} }
+      // If it came from RFP(s), send them back to 'approved' so they can be re-issued.
+      // Batch (consolidated) vouchers cover many RFPs via rfp_ids; single ones use rfp_id.
+      const coveredRfpIds = Array.isArray(v.rfp_ids) && v.rfp_ids.length ? v.rfp_ids : (v.rfp_id ? [v.rfp_id] : []);
+      if(coveredRfpIds.length){ try { await sb.from('rfps').update({ status:'approved', voucher_id:null, paid_at:null }).in('id', coveredRfpIds); } catch(_){} }
       setApproving(false);
       onSaved && onSaved();
     } catch(e){ setApproving(false); alert(e.message||String(e)); }
