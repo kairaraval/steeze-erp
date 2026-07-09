@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 192 · Removed the primary contact line from the Estimate and Invoice 'Bill to' (DR already had it removed); company + address only";
+const BUILD = "Live build 193 · Subcon payroll: production supervisor can now delete a send batch in Active batches and edit/delete individual return logs in a batch's return history";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23421,11 +23421,24 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
 // ─────────── RETURN MODAL ───────────
 // Logs a single return event against a send batch. After save, the send's
 // status is re-derived (in_progress → partial_returned → fully_returned).
-function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSaved }){
+function SubconReturnModal({ profile, send, subcons, allReturns, existing, onClose, onSaved }){
+  const isEdit=!!existing;
   const today = new Date().toISOString().slice(0,10);
   const subcon = (subcons||[]).find(s=> s.id===send.subcon_id);
   const totals = subconSendTotals(send, allReturns);
-  const [f,setF]=useState({
+  // When editing, add this return's own qty back to the cap so it isn't double-counted.
+  const ownQty = existing ? (Number(existing.quantity_returned||0)+Number(existing.variance_qty||0)) : 0;
+  const cap = totals.outstanding + ownQty;
+  const [f,setF]=useState(existing ? {
+    date_returned: existing.date_returned||today,
+    dr_number: existing.dr_number||'',
+    quantity_returned: existing.quantity_returned||0,
+    variance_qty: existing.variance_qty||0,
+    variance_reason: existing.variance_reason||'',
+    variance_notes: existing.variance_notes||'',
+    received_by_name: existing.received_by_name||profile?.name||'',
+    notes: existing.notes||'',
+  } : {
     date_returned: today,
     dr_number: '',
     quantity_returned: 0,
@@ -23441,8 +23454,8 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
     const good = Number(f.quantity_returned)||0;
     const variance = Number(f.variance_qty)||0;
     if(good === 0 && variance === 0){ setMsg('Enter at least one — returned qty or variance qty.'); return; }
-    if(good + variance > totals.outstanding){
-      setMsg(`Only ${totals.outstanding} pieces outstanding. You're trying to log ${good+variance}.`);
+    if(good + variance > cap){
+      setMsg(`Only ${cap} pieces outstanding. You're trying to log ${good+variance}.`);
       return;
     }
     if(variance > 0 && !f.variance_reason){ setMsg('Pick a variance reason.'); return; }
@@ -23457,10 +23470,11 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
         variance_reason: variance > 0 ? f.variance_reason : null,
         variance_notes: variance > 0 ? (f.variance_notes||null) : null,
         received_by_name: f.received_by_name||null,
-        received_by_user: profile.id,
         notes: f.notes||null,
       };
-      const { error } = await sb.from('subcon_returns').insert(payload);
+      const { error } = isEdit
+        ? await sb.from('subcon_returns').update(payload).eq('id', existing.id)
+        : await sb.from('subcon_returns').insert({ ...payload, received_by_user: profile.id });
       if(error) throw error;
       // Re-derive status on the send (read fresh returns).
       const { data: fresh } = await sb.from('subcon_returns').select('*').eq('send_id', send.id);
@@ -23472,7 +23486,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title={`Log return — ${send.number}`} onClose={onClose} wide>
+    <Modal title={`${isEdit?'Edit return':'Log return'} — ${send.number}`} onClose={onClose} wide>
       <div className="space-y-3 text-sm">
         <div className="bg-slate-50 border rounded p-3 text-xs grid grid-cols-2 md:grid-cols-4 gap-3">
           <div><div className="text-slate-500 uppercase font-semibold">Subcon</div><div className="font-bold">{subcon?.name||'—'}</div></div>
@@ -23491,11 +23505,11 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Returned (good qty)</label>
-            <input type="number" min="0" max={totals.outstanding} value={f.quantity_returned} onChange={e=>up('quantity_returned',e.target.value)} className="w-full border rounded px-2 py-1.5 text-right" />
+            <input type="number" min="0" max={cap} value={f.quantity_returned} onChange={e=>up('quantity_returned',e.target.value)} className="w-full border rounded px-2 py-1.5 text-right" />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Variance qty</label>
-            <input type="number" min="0" max={totals.outstanding} value={f.variance_qty} onChange={e=>up('variance_qty',e.target.value)} className="w-full border rounded px-2 py-1.5 text-right" />
+            <input type="number" min="0" max={cap} value={f.variance_qty} onChange={e=>up('variance_qty',e.target.value)} className="w-full border rounded px-2 py-1.5 text-right" />
           </div>
           {Number(f.variance_qty) > 0 && (
             <>
@@ -23524,7 +23538,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
         {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="text-[10px] text-slate-500">Variance pieces (defect / lost / damaged / undelivered) do NOT count toward this subcon's weekly payroll — only good-condition returns pay.</div>
         <div className="flex gap-2 pt-2 border-t">
-          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">↩ Log return</button>
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{isEdit?'Save changes':'↩ Log return'}</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
         </div>
@@ -23534,7 +23548,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, onClose, onSave
 }
 
 // ─────────── SEND BATCH DETAIL (shows return history) ───────────
-function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, onAddReturn, onEdit, onDelete, profile }){
+function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, onAddReturn, onEditReturn, onDeleteReturn, onEdit, onDelete, profile }){
   const subcon = (subcons||[]).find(s => s.id === send.subcon_id);
   const totals = subconSendTotals(send, allReturns);
   return (
@@ -23575,6 +23589,7 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
                   <th className="text-left px-2 py-1.5">Reason</th>
                   <th className="text-left px-2 py-1.5">Received by</th>
                   <th className="text-left px-2 py-1.5">Notes</th>
+                  {canManageSubcon(profile) && <th className="text-right px-2 py-1.5">Edit</th>}
                 </tr>
               </thead>
               <tbody>{totals.returns.sort((a,b)=> String(a.date_returned||'').localeCompare(String(b.date_returned||''))).map(r => (
@@ -23586,6 +23601,10 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
                   <td className="px-2 py-1.5">{r.variance_qty>0 ? subconVarianceLabel(r.variance_reason) : '—'}{r.variance_notes?<div className="text-[10px] text-slate-500">{r.variance_notes}</div>:null}</td>
                   <td className="px-2 py-1.5">{r.received_by_name||'—'}</td>
                   <td className="px-2 py-1.5 text-slate-600">{r.notes||''}</td>
+                  {canManageSubcon(profile) && <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    {onEditReturn && <button onClick={()=>onEditReturn(r)} className="text-indigo-600 hover:underline mr-2">Edit</button>}
+                    {onDeleteReturn && <button onClick={()=>onDeleteReturn(r)} className="text-rose-500 hover:underline">Delete</button>}
+                  </td>}
                 </tr>
               ))}</tbody>
             </table>
@@ -23593,7 +23612,7 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
         </div>
         <div className="flex gap-2 pt-2 border-t">
           {canManageSubcon(profile) && <button onClick={onEdit} className="px-3 py-2 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 text-xs">✎ Edit batch</button>}
-          {profile.role==='admin' && <button onClick={onDelete} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200 text-xs">🗑 Delete batch</button>}
+          {(profile.role==='admin' || profile.role==='production_supervisor') && <button onClick={onDelete} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200 text-xs">🗑 Delete batch</button>}
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
         </div>
@@ -24054,6 +24073,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   const [editingSend,setEditingSend]=useState(null);
   const [viewingSend,setViewingSend]=useState(null);
   const [logReturnFor,setLogReturnFor]=useState(null);
+  const [editingReturn,setEditingReturn]=useState(null);
   const [generatingPayroll,setGeneratingPayroll]=useState(false);
   const [viewingPayroll,setViewingPayroll]=useState(null);
   const [editingPayroll,setEditingPayroll]=useState(null);
@@ -24076,6 +24096,12 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
     const { error } = await sb.from('subcon_sends').update({
       deleted_at: new Date().toISOString(), deleted_by: profile.id, status:'cancelled',
     }).eq('id', s.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
+  async function deleteReturn(r){
+    if(!confirm(`Delete this return log (${r.quantity_returned||0} good, ${r.variance_qty||0} variance)? This cannot be undone.`)) return;
+    const { error } = await sb.from('subcon_returns').delete().eq('id', r.id);
     if(error){ alert(error.message); return; }
     reload && reload();
   }
@@ -24376,8 +24402,9 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       {viewingProject && <SubconProjectDetailModal project={viewingProject} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} profile={profile} onClose={()=>setViewingProject(null)} onEdit={()=>{ setEditingProject(viewingProject); setViewingProject(null); }} onAddSend={()=>{ setSendPrefillProjectId(viewingProject.id); setViewingProject(null); setCreatingSend(true); }} onOpenSend={(s)=>{ setViewingSend(s); setViewingProject(null); }} onDelete={()=>{ deleteProject(viewingProject); setViewingProject(null); }} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={sendPrefillProjectId} onClose={()=>{ setCreatingSend(false); setSendPrefillProjectId(null); }} onSaved={()=>{ setCreatingSend(false); setSendPrefillProjectId(null); reload && reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload && reload(); }} />}
-      {viewingSend && <SubconSendDetailModal send={viewingSend} subcons={subcons} allReturns={subconReturns} profiles={profiles} profile={profile} onClose={()=>setViewingSend(null)} onAddReturn={()=>{ setLogReturnFor(viewingSend); setViewingSend(null); }} onEdit={()=>{ setEditingSend(viewingSend); setViewingSend(null); }} onDelete={()=>{ deleteSend(viewingSend); setViewingSend(null); }} />}
+      {viewingSend && <SubconSendDetailModal send={viewingSend} subcons={subcons} allReturns={subconReturns} profiles={profiles} profile={profile} onClose={()=>setViewingSend(null)} onAddReturn={()=>{ setLogReturnFor(viewingSend); setViewingSend(null); }} onEditReturn={(r)=>{ setEditingReturn(r); setViewingSend(null); }} onDeleteReturn={(r)=>{ deleteReturn(r); }} onEdit={()=>{ setEditingSend(viewingSend); setViewingSend(null); }} onDelete={()=>{ deleteSend(viewingSend); setViewingSend(null); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload && reload(); }} />}
+      {editingReturn && <SubconReturnModal profile={profile} send={(subconSends||[]).find(s=>s.id===editingReturn.send_id)} subcons={subcons} allReturns={subconReturns} existing={editingReturn} onClose={()=>setEditingReturn(null)} onSaved={()=>{ setEditingReturn(null); reload && reload(); }} />}
       {generatingPayroll && <SubconPayrollGenerateModal profile={profile} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} onClose={()=>setGeneratingPayroll(false)} onSaved={(summary)=>{ setGeneratingPayroll(false); reload && reload(); alert(summary); }} />}
       {viewingPayroll && <SubconPayrollViewModal payroll={viewingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setViewingPayroll(null)} onSaved={()=>{ setViewingPayroll(null); reload && reload(); }} onEdit={()=>{ setEditingPayroll(viewingPayroll); setViewingPayroll(null); }} />}
       {editingPayroll && <SubconPayrollEditModal payroll={editingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setEditingPayroll(null)} onSaved={()=>{ setEditingPayroll(null); reload && reload(); }} />}
