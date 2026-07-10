@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 208 · Commission payout: Accounting now picks the voucher type (Cash/Check/Bank Transfer) + expense category when generating. Accounting can also edit + void Check/Cash vouchers in the Vouchers page";
+const BUILD = "Live build 209 · Commission payout: choose which items to pay — a 'Pay up to month' cut-off (e.g. only June) plus per-row checkboxes in each rep's breakdown. Only the selected rows are paid + marked paid; July's deals stay outstanding";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18128,6 +18128,11 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // Voucher type + expense category chosen by Accounting when generating the payout.
   const [payoutType,setPayoutType] = useState('cash'); // 'cash' | 'check' | 'bank_transfer'
   const [payoutCategory,setPayoutCategory] = useState(EXPENSE_CATEGORIES.find(c=>/commission/i.test(c)) || EXPENSE_CATEGORIES[0]);
+  // Month cut-off + per-row selection so you can pay e.g. only June's commissions
+  // and leave July's deals for next month. payMonth '' = all months.
+  const [payMonth,setPayMonth] = useState('');
+  const [excludedComm,setExcludedComm] = useState(()=>new Set());
+  function toggleComm(id){ setExcludedComm(prev=>{ const n=new Set(prev); if(n.has(id)) n.delete(id); else n.add(id); return n; }); }
   // Tracks which rep's payout breakdown is expanded in the green panel.
   const [expandedPayoutRep,setExpandedPayoutRep] = useState(null);
   // Which rep's printable commission draft is open (review doc before payout).
@@ -18193,7 +18198,18 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     });
     return Array.from(map.values()).filter(x => x.amount > 0.005).sort((a,b) => b.amount - a.amount);
   })();
-  const payoutTotal = payoutByRep.reduce((s,x) => s + x.amount, 0);
+  // A commission row is INCLUDED in the payout if it's earned on/before the
+  // chosen month cut-off AND hasn't been manually unchecked.
+  const monthOfComm = (r)=> String(r.earned_at||'').slice(0,7);
+  const commEligible = (r)=> payMonth==='' || (monthOfComm(r) && monthOfComm(r) <= payMonth);
+  const commIncluded = (r)=> commEligible(r) && !excludedComm.has(r.id);
+  const includedRows = (p)=> p.rows.filter(commIncluded);
+  const includedAmount = (p)=> includedRows(p).reduce((s,r)=> s + Number(r.amount||0), 0);
+  // Months that still have unpaid commission — for the "pay up to" dropdown.
+  const outstandingMonths = Array.from(new Set((salesCommissions||[]).filter(r=>!r.paid_at && matchesRepFilter(r.manager_id)).map(monthOfComm).filter(Boolean))).sort().reverse();
+  // Reps that still have something to pay AFTER the month/selection filters.
+  const payableReps = payoutByRep.filter(p => includedAmount(p) > 0.005);
+  const payoutTotal = payableReps.reduce((s,x) => s + includedAmount(x), 0);
 
   function repName(id){ const p = (profiles||[]).find(x => x.id === id); return p ? (p.name || p.email) : '—'; }
   function soNumber(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? s.number : '—'; }
@@ -18302,15 +18318,19 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // in payoutByRep is processed.
   async function generatePayoutVouchers(targetManagerId){
     if(!canSeeAll){ setGenMsg('Admin/Accounting only.'); return; }
-    const targets = targetManagerId
+    // Only pay the rows that pass the month cut-off + manual selection.
+    const targets = (targetManagerId
       ? payoutByRep.filter(p => p.manager_id === targetManagerId)
-      : payoutByRep;
-    if(targets.length === 0){ setGenMsg('No outstanding commission to pay.'); return; }
+      : payoutByRep)
+      .map(p => ({ ...p, rows: includedRows(p), amount: includedAmount(p) }))
+      .filter(p => p.amount > 0.005);
+    if(targets.length === 0){ setGenMsg('Nothing selected to pay. Check at least one commission row.'); return; }
     if(!selectedBankId){ setGenMsg('Pick the bank/wallet that will fund the payouts.'); return; }
     const targetTotal = targets.reduce((s,x) => s + x.amount, 0);
+    const monthNote = payMonth ? ` (earned up to ${payMonth})` : '';
     const confirmMsg = targetManagerId
-      ? `Generate voucher for ${repName(targetManagerId)} (${peso(targetTotal)})?\n\nGoes through standard Admin approval before disbursement.`
-      : `Generate ${targets.length} Cash Voucher${targets.length===1?'':'s'} totalling ${peso(targetTotal)}?\n\nEach rep gets one voucher with their outstanding commission. Vouchers go through standard Admin approval flow before disbursement.`;
+      ? `Generate voucher for ${repName(targetManagerId)} — ${peso(targetTotal)}${monthNote}, ${targets[0].rows.length} item(s)?\n\nGoes through standard Admin approval before disbursement.`
+      : `Generate ${targets.length} voucher${targets.length===1?'':'s'} totalling ${peso(targetTotal)}${monthNote}?\n\nEach rep gets one voucher with their SELECTED commission rows. Vouchers go through standard Admin approval flow before disbursement.`;
     if(!confirm(confirmMsg)) return;
     setGenerating(true); setGenMsg('');
     try {
@@ -18467,9 +18487,14 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
           <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
             <div>
               <div className="font-bold text-emerald-900">📤 End-of-month payout{activeRepId && <span className="ml-2 text-xs font-normal text-emerald-700">· filtered to {repName(activeRepId)}</span>}</div>
-              <div className="text-xs text-emerald-700">{payoutByRep.length} rep{payoutByRep.length===1?'':'s'} have outstanding commission · Total: <strong>{peso(payoutTotal)}</strong></div>
+              <div className="text-xs text-emerald-700">{payableReps.length} of {payoutByRep.length} rep{payoutByRep.length===1?'':'s'} selected · Paying now: <strong>{peso(payoutTotal)}</strong></div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs text-slate-600">Pay up to</label>
+              <select value={payMonth} onChange={e=>setPayMonth(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white" title="Only pay commissions earned on or before this month">
+                <option value="">All months</option>
+                {outstandingMonths.map(m => <option key={m} value={m}>{new Date(m+'-01T00:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'})}</option>)}
+              </select>
               <label className="text-xs text-slate-600">Voucher type</label>
               <select value={payoutType} onChange={e=>setPayoutType(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
                 <option value="cash">Cash Voucher</option>
@@ -18484,7 +18509,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               <select value={selectedBankId||''} onChange={e=>setSelectedBankId(e.target.value||null)} className="text-xs border rounded px-2 py-1.5 bg-white">
                 {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
               </select>
-              <button disabled={generating || !selectedBankId} onClick={()=>generatePayoutVouchers()} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">{generating?'Generating…':`📤 Generate all ${payoutByRep.length} voucher${payoutByRep.length===1?'':'s'}`}</button>
+              <button disabled={generating || !selectedBankId || payableReps.length===0} onClick={()=>generatePayoutVouchers()} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">{generating?'Generating…':`📤 Generate ${payableReps.length} voucher${payableReps.length===1?'':'s'}`}</button>
             </div>
           </div>
           <div className="bg-white rounded border overflow-hidden">
@@ -18499,30 +18524,34 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               </tr></thead>
               <tbody>{payoutByRep.map(p => {
                 const isOpen = expandedPayoutRep === p.manager_id;
-                const bookingRows    = p.rows.filter(r => r.kind === 'booking');
-                const collectionRows = p.rows.filter(r => r.kind === 'collection');
+                const incRows = includedRows(p);
+                const inc = includedAmount(p);
+                const bookingRows    = incRows.filter(r => r.kind === 'booking');
+                const collectionRows = incRows.filter(r => r.kind === 'collection');
                 const bookingTotal   = bookingRows.reduce((s,r) => s + Number(r.amount||0), 0);
                 const collectionTotal= collectionRows.reduce((s,r) => s + Number(r.amount||0), 0);
+                const excludedCount  = p.rows.length - incRows.length;
                 return (
                   <React.Fragment key={p.manager_id}>
-                    <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setExpandedPayoutRep(isOpen ? null : p.manager_id)}>
+                    <tr className={`border-t hover:bg-slate-50 cursor-pointer ${inc<=0.005?'opacity-50':''}`} onClick={()=>setExpandedPayoutRep(isOpen ? null : p.manager_id)}>
                       <td className="px-3 py-2 text-slate-400">{isOpen?'▼':'▶'}</td>
                       <td className="px-3 py-2 font-semibold">{repName(p.manager_id)}</td>
                       <td className="px-3 py-2 text-right">{bookingRows.length} · {peso(bookingTotal)}</td>
                       <td className="px-3 py-2 text-right">{collectionRows.length} · {peso(collectionTotal)}</td>
-                      <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(inc)}{excludedCount>0 && <div className="text-[9px] font-normal text-slate-400">{excludedCount} item{excludedCount===1?'':'s'} held back</div>}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
-                        <button onClick={(e)=>{ e.stopPropagation(); setDraftRep(p); }} className="text-[10px] px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 mr-1" title="Printable draft to send to this rep for review before paying">📄 Draft</button>
-                        <button disabled={generating || !selectedBankId} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
+                        <button onClick={(e)=>{ e.stopPropagation(); setDraftRep({ ...p, rows: incRows, amount: inc }); }} className="text-[10px] px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 mr-1" title="Printable draft (selected rows only) to send to this rep for review before paying">📄 Draft</button>
+                        <button disabled={generating || !selectedBankId || inc<=0.005} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
                       </td>
                     </tr>
                     {isOpen && (
                       <tr className="bg-slate-50/60">
                         <td></td>
                         <td colSpan="5" className="px-3 py-3">
-                          <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Breakdown — {p.rows.length} commission row{p.rows.length===1?'':'s'} feed into this payout</div>
+                          <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Breakdown — tick the rows to pay ({incRows.length} of {p.rows.length} selected)</div>
                           <table className="w-full text-[11px] bg-white border rounded">
                             <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
+                              <th className="text-center px-2 py-1.5 w-6">Pay</th>
                               <th className="text-left px-2 py-1.5">Earned</th>
                               <th className="text-left px-2 py-1.5">SO# · Client</th>
                               <th className="text-left px-2 py-1.5">Kind</th>
@@ -18534,8 +18563,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                             <tbody>{p.rows
                               .slice()
                               .sort((a,b) => String(b.earned_at||'').localeCompare(String(a.earned_at||'')))
-                              .map(r => (
-                                <tr key={r.id} className="border-t">
+                              .map(r => { const eligible=commEligible(r); const included=commIncluded(r); return (
+                                <tr key={r.id} className={`border-t ${!included?'opacity-40 bg-slate-50':''}`}>
+                                  <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={included} disabled={!eligible} onChange={()=>toggleComm(r.id)} title={eligible?'':'Held back by the "Pay up to" month filter'} /></td>
                                   <td className="px-2 py-1.5 whitespace-nowrap">{fmtDate(String(r.earned_at||'').slice(0,10))}</td>
                                   <td className="px-2 py-1.5">
                                     <div className="font-mono font-bold">{soNumber(r.sales_order_id)}</div>
@@ -18547,10 +18577,10 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                                   <td className="px-2 py-1.5 text-right">{(Number(r.rate||0)*100).toFixed(2)}%</td>
                                   <td className="px-2 py-1.5 text-right font-bold text-emerald-700">{peso(r.amount)}</td>
                                 </tr>
-                              ))}
+                              ); })}
                               <tr className="bg-slate-50 font-bold border-t-2">
-                                <td colSpan="6" className="px-2 py-1.5 text-right uppercase text-[9px] tracking-wider">Payout total</td>
-                                <td className="px-2 py-1.5 text-right text-emerald-700">{peso(p.amount)}</td>
+                                <td colSpan="7" className="px-2 py-1.5 text-right uppercase text-[9px] tracking-wider">Selected total to pay</td>
+                                <td className="px-2 py-1.5 text-right text-emerald-700">{peso(inc)}</td>
                               </tr>
                             </tbody>
                           </table>
