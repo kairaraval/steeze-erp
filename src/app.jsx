@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 199 · Proof-of-payment 📷 now opens inline in a lightbox (click anywhere / × to close) instead of a new browser tab";
+const BUILD = "Live build 200 · Graphic Design: new Resources tab — a boards view for reusable design files + links (custom boards like Mockup templates/Logos/Fonts; upload images/PDFs or paste Canva/Drive/Figma links; images open inline)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2440,7 +2440,203 @@ function DeptJobForm({ profile, table, statuses, graphicTypes, existing, onClose
 }
 
 /* ----------------------- Dept board (Graphic / Printing) ----------------------- */
-function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, reload, openActivity, openTechpack, openLead }){
+// ─────────── DESIGN RESOURCES (boards of reusable files + links) ───────────
+// A Pinterest-style board for the Graphic team's reusable assets: mockup
+// templates, brand kits, fonts, reference links, etc. Custom boards + cards
+// that hold either an uploaded file (image/PDF) or a link (Canva/Drive/Figma).
+// Self-fetches its own data so it doesn't touch the app-wide loadAll.
+function DesignResourceForm({ profile, boards, existing, defaultBoardId, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({
+    title: existing?.title||'',
+    board_id: existing?.board_id||defaultBoardId||'',
+    url: existing?.url||'',
+    notes: existing?.notes||'',
+  });
+  const [file,setFile]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim() && !file && !f.url.trim() && !existing?.file_path){ setMsg('Add a title, a link, or a file.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      let file_path=existing?.file_path||null, file_name=existing?.file_name||null, file_type=existing?.file_type||null;
+      if(file){
+        const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
+        const key=`design-resources/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        file_path=key; file_name=file.name||key; file_type=file.type||'';
+      }
+      const payload={ title:f.title.trim()||file_name||f.url||'Untitled', board_id:f.board_id||null, url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
+      if(isEdit){ const { error }=await sb.from('design_resources').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('design_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit resource':'+ Add resource'} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Title</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Polo mockup template — front/back"' /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Board</label>
+          <select value={f.board_id} onChange={e=>up('board_id',e.target.value)} className="w-full border rounded px-2 py-1.5">
+            <option value="">— Unfiled —</option>
+            {boards.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Link (optional — Canva / Drive / Figma / Pinterest)</label><input value={f.url} onChange={e=>up('url',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="https://…" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">File (optional — image or PDF)</label>
+          <input type="file" onChange={e=>setFile(e.target.files?.[0]||null)} className="w-full text-xs" accept="image/*,application/pdf" />
+          {existing?.file_name && !file && <div className="text-[11px] text-slate-500 mt-1">Current file: {existing.file_name}</div>}
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add resource')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DesignResourceCard({ r, canEdit, onOpen, onEdit, onDelete }){
+  const isImg = (r.file_type||'').startsWith('image');
+  const isPdf = (r.file_type||'').includes('pdf');
+  const isLink = !r.file_path && !!r.url;
+  return (
+    <div className="bg-white border rounded-lg shadow-sm overflow-hidden relative group">
+      {canEdit && (
+        <div className="absolute top-1.5 right-1.5 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition">
+          <button onClick={(e)=>{ e.stopPropagation(); onEdit(r); }} title="Edit" className="w-6 h-6 rounded-full bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 text-[11px] flex items-center justify-center shadow-sm">✎</button>
+          <button onClick={(e)=>{ e.stopPropagation(); onDelete(r); }} title="Delete" className="w-6 h-6 rounded-full bg-white border border-slate-200 text-slate-400 hover:bg-rose-500 hover:text-white hover:border-rose-500 text-[11px] flex items-center justify-center shadow-sm">✕</button>
+        </div>
+      )}
+      <button onClick={()=>onOpen(r)} className="block w-full text-left">
+        <div className="w-full h-28 bg-slate-50 flex items-center justify-center overflow-hidden">
+          {isImg && r.file_path ? <TImg path={r.file_path} maxH="112px" />
+            : <div className="text-4xl text-slate-300">{isPdf?'📄':isLink?'🔗':'🗂'}</div>}
+        </div>
+        <div className="p-2">
+          <div className="font-semibold text-xs leading-tight line-clamp-2">{r.title||r.file_name||'Untitled'}</div>
+          {r.url && <div className="text-[10px] text-indigo-600 truncate mt-0.5">🔗 {r.url.replace(/^https?:\/\//,'')}</div>}
+          {r.notes && <div className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{r.notes}</div>}
+        </div>
+      </button>
+    </div>
+  );
+}
+
+function DesignResourcesBoard({ profile }){
+  const [boards,setBoards]=useState([]);
+  const [resources,setResources]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState('');
+  const [addingRes,setAddingRes]=useState(false);
+  const [addDefaultBoard,setAddDefaultBoard]=useState('');
+  const [editingRes,setEditingRes]=useState(null);
+  const [lightbox,setLightbox]=useState(null);
+  const canEdit = ['admin','manager','assistant','graphic'].includes(profile?.role);
+  async function load(){
+    setLoading(true);
+    const [b,r]=await Promise.all([
+      sb.from('design_resource_boards').select('*').is('deleted_at',null).order('position',{ascending:true}).order('created_at',{ascending:true}),
+      sb.from('design_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false}),
+    ]);
+    setBoards(b.data||[]); setResources(r.data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  async function newBoard(){
+    const name=prompt('Name this board (e.g. Mockup templates, Logos, Fonts, Client brand kits):');
+    if(!name||!name.trim()) return;
+    const { error }=await sb.from('design_resource_boards').insert({ name:name.trim(), position:boards.length, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    load();
+  }
+  async function renameBoard(bd){
+    const name=prompt('Rename board:', bd.name); if(name===null) return;
+    const { error }=await sb.from('design_resource_boards').update({ name:name.trim()||bd.name }).eq('id',bd.id);
+    if(error){ alert(error.message); return; } load();
+  }
+  async function delBoard(bd){
+    const count=resources.filter(r=>r.board_id===bd.id).length;
+    if(!confirm(`Delete board "${bd.name}"?${count?`\n\nIts ${count} resource${count===1?'':'s'} will move to Unfiled (not deleted).`:''}`)) return;
+    const { error }=await sb.from('design_resource_boards').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',bd.id);
+    if(error){ alert(error.message); return; } load();
+  }
+  async function delRes(r){
+    if(!confirm(`Delete "${r.title||r.file_name||'this resource'}"?`)) return;
+    const { error }=await sb.from('design_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
+    if(error){ alert(error.message); return; } load();
+  }
+  async function openRes(r){
+    if(r.file_path){
+      try {
+        const u=await signedUrl(r.file_path);
+        if((r.file_type||'').startsWith('image')) setLightbox(u);
+        else window.open(u,'_blank','noopener');
+      } catch(_){}
+      return;
+    }
+    if(r.url) window.open(r.url,'_blank','noopener');
+  }
+  const q=search.toLowerCase();
+  const match=(r)=> !q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''}`.toLowerCase().includes(q);
+  const filtered=resources.filter(match);
+  const byBoard=(id)=> filtered.filter(r=> (r.board_id||null)===id);
+  const unfiled=filtered.filter(r=> !r.board_id || !boards.find(b=>b.id===r.board_id));
+  // Column list = each board + an Unfiled column (only if it has cards).
+  const columns=[...boards.map(b=>({ id:b.id, name:b.name, board:b })), ...(unfiled.length?[{ id:null, name:'Unfiled', board:null }]:[])];
+  return (
+    <div>
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div className="text-sm text-slate-500">{resources.length} resource{resources.length===1?'':'s'} · {boards.length} board{boards.length===1?'':'s'}</div>
+        <div className="flex items-center gap-2">
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search resources…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
+          {canEdit && <button onClick={newBoard} className="px-3 py-1.5 rounded-lg bg-slate-100 border text-sm font-semibold hover:bg-slate-200">+ New board</button>}
+          {canEdit && <button onClick={()=>{ setAddDefaultBoard(boards[0]?.id||''); setAddingRes(true); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add resource</button>}
+        </div>
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading resources…</div>
+        : columns.length===0 ? (
+          <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+            No boards yet. {canEdit ? 'Click “+ New board” to create one (e.g. Mockup templates, Logos, Fonts), then add resources.' : 'Ask a graphic team member to add resources.'}
+          </div>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-210px)]">
+            {columns.map(col=>{ const cards=col.id===null?unfiled:byBoard(col.id); return (
+              <div key={col.id||'unfiled'} className="flex-shrink-0 w-64 flex flex-col h-full">
+                <div className="shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold bg-pink-100 text-pink-800 flex items-center justify-between">
+                  <span className="truncate">{col.name} <span className="opacity-70">({cards.length})</span></span>
+                  {canEdit && col.board && (
+                    <span className="flex gap-1 shrink-0">
+                      <button onClick={()=>renameBoard(col.board)} title="Rename board" className="hover:text-pink-600">✎</button>
+                      <button onClick={()=>delBoard(col.board)} title="Delete board" className="hover:text-rose-600">✕</button>
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
+                  {canEdit && col.id!==null && <button onClick={()=>{ setAddDefaultBoard(col.id); setAddingRes(true); }} className="w-full py-1.5 rounded-lg border border-dashed border-slate-300 text-slate-500 text-xs hover:bg-white hover:border-indigo-300">+ Add to this board</button>}
+                  {cards.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditingRes} onDelete={delRes} />)}
+                  {cards.length===0 && <div className="text-[10px] text-center py-3 text-slate-400">—</div>}
+                </div>
+              </div>
+            ); })}
+          </div>
+        )}
+      {(addingRes||editingRes) && <DesignResourceForm profile={profile} boards={boards} existing={editingRes} defaultBoardId={addDefaultBoard} onClose={()=>{ setAddingRes(false); setEditingRes(null); }} onSaved={()=>{ setAddingRes(false); setEditingRes(null); load(); }} />}
+      {lightbox && (
+        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
+          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
+          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   // Kanban drag-and-drop state for the Board layout — same pattern as the
@@ -2448,6 +2644,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   // highlights the drop column.
   const [draggedJobId,setDraggedJobId]=useState(null);
   const [dragOverStatus,setDragOverStatus]=useState(null);
+  const [mainTab,setMainTab]=useState('jobs'); // 'jobs' | 'resources' (resources only when showResources)
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   const canDelete = isAdmin || !isAssistant; // admin + managers
@@ -2498,14 +2695,24 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">{icon} {title}</h1><p className="text-slate-500 text-sm">{jobs.length} job{jobs.length===1?'':'s'} · live</p></div>
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('table')} className={`px-3 py-1.5 rounded-md ${layout==='table'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ Table</button></div>
-            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-48" />
-            <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New</button>
+            {mainTab==='jobs' && <>
+              <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('table')} className={`px-3 py-1.5 rounded-md ${layout==='table'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ Table</button></div>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-48" />
+              <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New</button>
+            </>}
           </div>
         </div>
+        {showResources && (
+          <div className="flex gap-1 mt-3">
+            <button onClick={()=>setMainTab('jobs')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='jobs'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎨 Jobs</button>
+            <button onClick={()=>setMainTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='resources'?'bg-pink-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📌 Resources</button>
+          </div>
+        )}
       </div>
 
-      {layout==='board' && (
+      {mainTab==='resources' && <DesignResourcesBoard profile={profile} />}
+
+      {mainTab==='jobs' && layout==='board' && (
         // Kanban pattern: each column body scrolls independently so the column
         // header stays put. Outer container takes the rest of the viewport
         // height below the page header (~150px) and is horizontally
@@ -2581,7 +2788,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
         </div>
       )}
 
-      {layout==='table' && (
+      {mainTab==='jobs' && layout==='table' && (
         <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th></th></tr></thead>
           <tbody>{filtered.map(j=>{ const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const meta=metaFrom(statuses,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; return (
@@ -25806,7 +26013,7 @@ function App(){
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
