@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 202 · Removed the Buy List view from the Purchasing module (nav item + home tile). Purchase Requests / Materials Queue / Purchase Orders are unchanged";
+const BUILD = "Live build 203 · Sales module: new Resources page with tabs — Pricelist (admin-edit only, sales can view), Size Charts, Sizers, Designs (admin + sales managers + assistants can add/edit). Upload files or paste links; images open inline";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2627,6 +2627,136 @@ function DesignResourcesBoard({ profile }){
           </div>
         )}
       {(addingRes||editingRes) && <DesignResourceForm profile={profile} boards={boards} existing={editingRes} defaultBoardId={addDefaultBoard} onClose={()=>{ setAddingRes(false); setEditingRes(null); }} onSaved={()=>{ setAddingRes(false); setEditingRes(null); load(); }} />}
+      {lightbox && (
+        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
+          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
+          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────── SALES RESOURCES (pricelist / size charts / sizers / designs) ───────────
+const SALES_RES_TABS = [
+  { key:'pricelist',   label:'Pricelist',   icon:'💲' },
+  { key:'size_charts', label:'Size Charts', icon:'📐' },
+  { key:'sizers',      label:'Sizers',      icon:'📏' },
+  { key:'designs',     label:'Designs',     icon:'🎨' },
+];
+// Pricelist: admin only can add/edit. The rest: admin + sales managers + sales assistants.
+function salesResCanEdit(category, profile){
+  const r = profile?.role;
+  if(category === 'pricelist') return r === 'admin';
+  return r === 'admin' || r === 'manager' || r === 'assistant';
+}
+
+function SalesResourceForm({ profile, category, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const catLabel = (SALES_RES_TABS.find(t=>t.key===category)||{}).label || category;
+  const [f,setF]=useState({ title: existing?.title||'', url: existing?.url||'', notes: existing?.notes||'' });
+  const [file,setFile]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim() && !file && !f.url.trim() && !existing?.file_path){ setMsg('Add a title, a link, or a file.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      let file_path=existing?.file_path||null, file_name=existing?.file_name||null, file_type=existing?.file_type||null;
+      if(file){
+        const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
+        const key=`sales-resources/${category}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        file_path=key; file_name=file.name||key; file_type=file.type||'';
+      }
+      const payload={ category, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
+      if(isEdit){ const { error }=await sb.from('sales_resources').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('sales_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`${isEdit?'Edit':'+ Add'} — ${catLabel}`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Title</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "2026 Wholesale Pricelist" or "Polo size chart"' /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Link (optional — Canva / Drive / Sheets)</label><input value={f.url} onChange={e=>up('url',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="https://…" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">File (optional — image or PDF)</label>
+          <input type="file" onChange={e=>setFile(e.target.files?.[0]||null)} className="w-full text-xs" accept="image/*,application/pdf" />
+          {existing?.file_name && !file && <div className="text-[11px] text-slate-500 mt-1">Current file: {existing.file_name}</div>}
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SalesResourcesView({ profile }){
+  const [tab,setTab]=useState('pricelist');
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState('');
+  const [adding,setAdding]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [lightbox,setLightbox]=useState(null);
+  async function load(){
+    setLoading(true);
+    const { data }=await sb.from('sales_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  const canEdit = salesResCanEdit(tab, profile);
+  async function delRes(r){
+    if(!confirm(`Delete "${r.title||r.file_name||'this item'}"?`)) return;
+    const { error }=await sb.from('sales_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
+    if(error){ alert(error.message); return; } load();
+  }
+  async function openRes(r){
+    if(r.file_path){
+      try { const u=await signedUrl(r.file_path); if((r.file_type||'').startsWith('image')) setLightbox(u); else window.open(u,'_blank','noopener'); } catch(_){}
+      return;
+    }
+    if(r.url) window.open(r.url,'_blank','noopener');
+  }
+  const q=search.toLowerCase();
+  const list = rows.filter(r=> r.category===tab && (!q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''}`.toLowerCase().includes(q)));
+  const countFor=(k)=> rows.filter(r=>r.category===k).length;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📚 Sales Resources</h1><p className="text-slate-500 text-sm">Shared pricelist, size charts, sizers &amp; design references</p></div>
+          <div className="flex items-center gap-2">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
+            {canEdit && <button onClick={()=>setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
+          </div>
+        </div>
+        <div className="flex gap-1 mt-3 flex-wrap">
+          {SALES_RES_TABS.map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab===t.key?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>{t.icon} {t.label} <span className="opacity-60">({countFor(t.key)})</span></button>
+          ))}
+        </div>
+      </div>
+      {tab==='pricelist' && !canEdit && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">🔒 View only — only Admin can add or edit the pricelist.</div>
+      )}
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+        : list.length===0 ? (
+          <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+            Nothing here yet.{canEdit ? ' Click “+ Add” to upload a file or paste a link.' : ''}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+            {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
+          </div>
+        )}
+      {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
       {lightbox && (
         <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
           <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
@@ -25286,10 +25416,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
@@ -25852,7 +25982,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -25862,7 +25992,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
@@ -25874,7 +26004,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
@@ -26014,6 +26144,7 @@ function App(){
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
