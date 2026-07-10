@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 197 · Fix proof-of-payment photos not showing on Verify payment (and the 📷 links) — stored signed URLs expire after 1h, so we now regenerate a fresh URL from the saved storage path every time";
+const BUILD = "Live build 198 · Delivery Receipts: Production Supervisor can now Edit and Void released DRs too (previously admin-only for released docs)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21726,8 +21726,10 @@ function canManageDR(profile){
   const r = profile?.role;
   return r==='admin' || r==='assistant' || r==='production_supervisor' || r==='accounting';
 }
-// After Release only Admin can edit/void — DRs are official documents.
-function canEditReleasedDR(profile){ return profile?.role==='admin'; }
+// After Release only Admin + Production Supervisor can edit/void — DRs are
+// official documents, so this stays tighter than canManageDR (which also lets
+// assistants/accounting create drafts).
+function canEditReleasedDR(profile){ const r=profile?.role; return r==='admin' || r==='production_supervisor'; }
 
 // Roll up delivered qty for an SO across all its non-void / non-draft DRs and
 // flip the SO status if fully covered. Called after DR insert/update/release.
@@ -22185,7 +22187,7 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
                     {canManageDR(profile) && (d.status==='draft' || canEditReleasedDR(profile)) && (
                       <button onClick={()=>onEdit(d)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">Edit</button>
                     )}
-                    {profile.role==='admin' && d.status!=='void' && (
+                    {canEditReleasedDR(profile) && d.status!=='void' && (
                       <button onClick={()=>voidDR(d)} className="text-xs px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Void</button>
                     )}
                   </div>
