@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 203 · Sales module: new Resources page with tabs — Pricelist (admin-edit only, sales can view), Size Charts, Sizers, Designs (admin + sales managers + assistants can add/edit). Upload files or paste links; images open inline";
+const BUILD = "Live build 204 · Sales Resources: drag & drop (or paste) images/PDFs straight onto a tab to add them — works on Size Charts, Sizers, Designs (and Pricelist for admin)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2705,6 +2705,8 @@ function SalesResourcesView({ profile }){
   const [adding,setAdding]=useState(false);
   const [editing,setEditing]=useState(null);
   const [lightbox,setLightbox]=useState(null);
+  const [dragOver,setDragOver]=useState(false);
+  const [uploading,setUploading]=useState('');
   async function load(){
     setLoading(true);
     const { data }=await sb.from('sales_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false});
@@ -2712,6 +2714,29 @@ function SalesResourcesView({ profile }){
   }
   useEffect(()=>{ load(); },[]);
   const canEdit = salesResCanEdit(tab, profile);
+  // Drag-and-drop / paste upload: drop image or PDF files straight onto the tab
+  // and each becomes a resource card in the current category. No modal needed.
+  async function uploadFiles(fileList){
+    const files = Array.from(fileList||[]).filter(f => (f.type||'').startsWith('image') || (f.type||'').includes('pdf'));
+    if(!files.length) return;
+    let done = 0;
+    for(const file of files){
+      done++; setUploading(`Uploading ${done}/${files.length}…`);
+      try {
+        const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
+        const key=`sales-resources/${tab}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        const { error }=await sb.from('sales_resources').insert({ category:tab, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
+        if(error) throw error;
+      } catch(e){ alert('Upload failed: '+(e.message||e)); }
+    }
+    setUploading(''); await load();
+  }
+  function onDrop(e){ e.preventDefault(); setDragOver(false); if(!canEdit) return; uploadFiles(e.dataTransfer?.files); }
+  function onDragOver(e){ if(!canEdit) return; e.preventDefault(); if(!dragOver) setDragOver(true); }
+  function onDragLeave(e){ if(e.currentTarget===e.target) setDragOver(false); }
+  function onPaste(e){ if(!canEdit) return; const imgs=Array.from(e.clipboardData?.items||[]).filter(i=>i.type.startsWith('image')).map(i=>i.getAsFile()).filter(Boolean); if(imgs.length){ e.preventDefault(); uploadFiles(imgs); } }
   async function delRes(r){
     if(!confirm(`Delete "${r.title||r.file_name||'this item'}"?`)) return;
     const { error }=await sb.from('sales_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
@@ -2746,16 +2771,26 @@ function SalesResourcesView({ profile }){
       {tab==='pricelist' && !canEdit && (
         <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">🔒 View only — only Admin can add or edit the pricelist.</div>
       )}
-      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
-        : list.length===0 ? (
-          <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
-            Nothing here yet.{canEdit ? ' Click “+ Add” to upload a file or paste a link.' : ''}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-            {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
+      {canEdit && <div className="mb-3 text-xs text-slate-400">Tip: drag &amp; drop images/PDFs anywhere below, or paste a screenshot with ⌘V, to add them here.</div>}
+      <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onPaste={onPaste} tabIndex={canEdit?0:undefined}
+           className={`relative rounded-xl transition ${dragOver?'ring-2 ring-indigo-400 bg-indigo-50/40':''} ${canEdit?'outline-none':''}`}>
+        {dragOver && canEdit && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-indigo-50/80 border-2 border-dashed border-indigo-400 pointer-events-none">
+            <div className="text-indigo-700 font-semibold text-sm">Drop to add to {(SALES_RES_TABS.find(t=>t.key===tab)||{}).label}</div>
           </div>
         )}
+        {uploading && <div className="mb-3 text-xs text-indigo-600 font-semibold">{uploading}</div>}
+        {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+          : list.length===0 ? (
+            <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+              Nothing here yet.{canEdit ? ' Drag & drop files here, or click “+ Add”.' : ''}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+              {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
+            </div>
+          )}
+      </div>
       {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
       {lightbox && (
         <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
