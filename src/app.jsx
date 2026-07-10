@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 204 · Sales Resources: drag & drop (or paste) images/PDFs straight onto a tab to add them — works on Size Charts, Sizers, Designs (and Pricelist for admin)";
+const BUILD = "Live build 205 · Sales Resources: Size Charts folders (Traditional / Sublimation / Internal RM) + Designs folders (3D / 2D); Pricelist is now a list of garment type · MOQ · unit price (admin-editable)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2650,11 +2650,54 @@ function salesResCanEdit(category, profile){
   if(category === 'pricelist') return r === 'admin';
   return r === 'admin' || r === 'manager' || r === 'assistant';
 }
+// Preset folders per tab (Size Charts + Designs). Others have no folders.
+const RES_FOLDERS = {
+  size_charts: ['TRADITIONAL','SUBLIMATION','INTERNAL (RM)'],
+  designs: ['3D DESIGNS','2D DESIGNS'],
+};
+function foldersFor(category){ return RES_FOLDERS[category] || []; }
 
-function SalesResourceForm({ profile, category, existing, onClose, onSaved }){
+// Pricelist rows are structured (garment type / MOQ / unit price), not files.
+function PricelistRowForm({ profile, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({ garment_type: existing?.garment_type||'', moq: existing?.moq??'', unit_price: existing?.unit_price??'', notes: existing?.notes||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.garment_type.trim()){ setMsg('Garment type is required.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload={ category:'pricelist', garment_type:f.garment_type.trim(), moq:f.moq===''?null:Number(f.moq), unit_price:f.unit_price===''?null:Number(f.unit_price), notes:f.notes||null, title:f.garment_type.trim() };
+      if(isEdit){ const { error }=await sb.from('sales_resources').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('sales_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`${isEdit?'Edit':'+ Add'} pricelist item`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Garment type *</label><input value={f.garment_type} onChange={e=>up('garment_type',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Polo shirt — embroidered"' /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">MOQ</label><input type="number" value={f.moq} onChange={e=>up('moq',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 50" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Unit price (₱)</label><input type="number" step="0.01" value={f.unit_price} onChange={e=>up('unit_price',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 350" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Tiers, inclusions, remarks…" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SalesResourceForm({ profile, category, existing, defaultFolder, onClose, onSaved }){
   const isEdit=!!existing;
   const catLabel = (SALES_RES_TABS.find(t=>t.key===category)||{}).label || category;
-  const [f,setF]=useState({ title: existing?.title||'', url: existing?.url||'', notes: existing?.notes||'' });
+  const folders = foldersFor(category);
+  const [f,setF]=useState({ title: existing?.title||'', url: existing?.url||'', notes: existing?.notes||'', folder: existing?.folder||defaultFolder||folders[0]||'' });
   const [file,setFile]=useState(null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
@@ -2670,7 +2713,7 @@ function SalesResourceForm({ profile, category, existing, onClose, onSaved }){
         if(upErr) throw upErr;
         file_path=key; file_name=file.name||key; file_type=file.type||'';
       }
-      const payload={ category, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
+      const payload={ category, folder: folders.length ? (f.folder||folders[0]) : null, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
       if(isEdit){ const { error }=await sb.from('sales_resources').update(payload).eq('id', existing.id); if(error) throw error; }
       else { const { error }=await sb.from('sales_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
       setBusy(false); onSaved && onSaved();
@@ -2679,7 +2722,11 @@ function SalesResourceForm({ profile, category, existing, onClose, onSaved }){
   return (
     <Modal title={`${isEdit?'Edit':'+ Add'} — ${catLabel}`} onClose={onClose}>
       <div className="space-y-3 text-sm">
-        <div><label className="text-xs font-semibold text-slate-500">Title</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "2026 Wholesale Pricelist" or "Polo size chart"' /></div>
+        {folders.length>0 && <div><label className="text-xs font-semibold text-slate-500">Folder</label>
+          <select value={f.folder} onChange={e=>up('folder',e.target.value)} className="w-full border rounded px-2 py-1.5">
+            {folders.map(fd=><option key={fd} value={fd}>{fd}</option>)}
+          </select></div>}
+        <div><label className="text-xs font-semibold text-slate-500">Title</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Polo size chart"' /></div>
         <div><label className="text-xs font-semibold text-slate-500">Link (optional — Canva / Drive / Sheets)</label><input value={f.url} onChange={e=>up('url',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="https://…" /></div>
         <div><label className="text-xs font-semibold text-slate-500">File (optional — image or PDF)</label>
           <input type="file" onChange={e=>setFile(e.target.files?.[0]||null)} className="w-full text-xs" accept="image/*,application/pdf" />
@@ -2699,23 +2746,30 @@ function SalesResourceForm({ profile, category, existing, onClose, onSaved }){
 
 function SalesResourcesView({ profile }){
   const [tab,setTab]=useState('pricelist');
+  const [folder,setFolder]=useState('');
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [search,setSearch]=useState('');
   const [adding,setAdding]=useState(false);
   const [editing,setEditing]=useState(null);
+  const [addingPrice,setAddingPrice]=useState(false);
+  const [editingPrice,setEditingPrice]=useState(null);
   const [lightbox,setLightbox]=useState(null);
   const [dragOver,setDragOver]=useState(false);
   const [uploading,setUploading]=useState('');
+  const folders = foldersFor(tab);
+  const isPricelist = tab==='pricelist';
+  const canEdit = salesResCanEdit(tab, profile);
+  // Reset the active folder when switching tabs.
+  useEffect(()=>{ setFolder(foldersFor(tab)[0]||''); }, [tab]);
   async function load(){
     setLoading(true);
     const { data }=await sb.from('sales_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false});
     setRows(data||[]); setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
-  const canEdit = salesResCanEdit(tab, profile);
   // Drag-and-drop / paste upload: drop image or PDF files straight onto the tab
-  // and each becomes a resource card in the current category. No modal needed.
+  // (into the active folder) and each becomes a resource card. No modal needed.
   async function uploadFiles(fileList){
     const files = Array.from(fileList||[]).filter(f => (f.type||'').startsWith('image') || (f.type||'').includes('pdf'));
     if(!files.length) return;
@@ -2727,18 +2781,18 @@ function SalesResourcesView({ profile }){
         const key=`sales-resources/${tab}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
         const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
         if(upErr) throw upErr;
-        const { error }=await sb.from('sales_resources').insert({ category:tab, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
+        const { error }=await sb.from('sales_resources').insert({ category:tab, folder: folders.length ? folder : null, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
         if(error) throw error;
       } catch(e){ alert('Upload failed: '+(e.message||e)); }
     }
     setUploading(''); await load();
   }
-  function onDrop(e){ e.preventDefault(); setDragOver(false); if(!canEdit) return; uploadFiles(e.dataTransfer?.files); }
-  function onDragOver(e){ if(!canEdit) return; e.preventDefault(); if(!dragOver) setDragOver(true); }
+  function onDrop(e){ e.preventDefault(); setDragOver(false); if(!canEdit || isPricelist) return; uploadFiles(e.dataTransfer?.files); }
+  function onDragOver(e){ if(!canEdit || isPricelist) return; e.preventDefault(); if(!dragOver) setDragOver(true); }
   function onDragLeave(e){ if(e.currentTarget===e.target) setDragOver(false); }
-  function onPaste(e){ if(!canEdit) return; const imgs=Array.from(e.clipboardData?.items||[]).filter(i=>i.type.startsWith('image')).map(i=>i.getAsFile()).filter(Boolean); if(imgs.length){ e.preventDefault(); uploadFiles(imgs); } }
+  function onPaste(e){ if(!canEdit || isPricelist) return; const imgs=Array.from(e.clipboardData?.items||[]).filter(i=>i.type.startsWith('image')).map(i=>i.getAsFile()).filter(Boolean); if(imgs.length){ e.preventDefault(); uploadFiles(imgs); } }
   async function delRes(r){
-    if(!confirm(`Delete "${r.title||r.file_name||'this item'}"?`)) return;
+    if(!confirm(`Delete "${r.title||r.garment_type||r.file_name||'this item'}"?`)) return;
     const { error }=await sb.from('sales_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
     if(error){ alert(error.message); return; } load();
   }
@@ -2750,8 +2804,13 @@ function SalesResourcesView({ profile }){
     if(r.url) window.open(r.url,'_blank','noopener');
   }
   const q=search.toLowerCase();
-  const list = rows.filter(r=> r.category===tab && (!q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''}`.toLowerCase().includes(q)));
+  const matchTxt=(r)=> !q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''} ${r.garment_type||''}`.toLowerCase().includes(q);
+  // Legacy items saved before folders existed (null folder) fall into the first folder.
+  const inFolder=(r)=> !folders.length || r.folder===folder || (!r.folder && folder===folders[0]);
+  const list = rows.filter(r=> r.category===tab && inFolder(r) && matchTxt(r));
+  const priceRows = rows.filter(r=> r.category==='pricelist' && matchTxt(r)).slice().sort((a,b)=> String(a.garment_type||'').localeCompare(String(b.garment_type||'')));
   const countFor=(k)=> rows.filter(r=>r.category===k).length;
+  const folderCount=(fd)=> rows.filter(r=>r.category===tab && (r.folder===fd || (!r.folder && fd===folders[0]))).length;
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -2759,7 +2818,7 @@ function SalesResourcesView({ profile }){
           <div><h1 className="text-2xl font-bold">📚 Sales Resources</h1><p className="text-slate-500 text-sm">Shared pricelist, size charts, sizers &amp; design references</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
-            {canEdit && <button onClick={()=>setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
+            {canEdit && <button onClick={()=> isPricelist ? setAddingPrice(true) : setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
           </div>
         </div>
         <div className="flex gap-1 mt-3 flex-wrap">
@@ -2767,31 +2826,74 @@ function SalesResourcesView({ profile }){
             <button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab===t.key?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>{t.icon} {t.label} <span className="opacity-60">({countFor(t.key)})</span></button>
           ))}
         </div>
-      </div>
-      {tab==='pricelist' && !canEdit && (
-        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">🔒 View only — only Admin can add or edit the pricelist.</div>
-      )}
-      {canEdit && <div className="mb-3 text-xs text-slate-400">Tip: drag &amp; drop images/PDFs anywhere below, or paste a screenshot with ⌘V, to add them here.</div>}
-      <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onPaste={onPaste} tabIndex={canEdit?0:undefined}
-           className={`relative rounded-xl transition ${dragOver?'ring-2 ring-indigo-400 bg-indigo-50/40':''} ${canEdit?'outline-none':''}`}>
-        {dragOver && canEdit && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-indigo-50/80 border-2 border-dashed border-indigo-400 pointer-events-none">
-            <div className="text-indigo-700 font-semibold text-sm">Drop to add to {(SALES_RES_TABS.find(t=>t.key===tab)||{}).label}</div>
+        {folders.length>0 && (
+          <div className="flex gap-1 mt-2 flex-wrap">
+            {folders.map(fd=>(
+              <button key={fd} onClick={()=>setFolder(fd)} className={`px-3 py-1 rounded-md text-xs font-semibold border ${folder===fd?'bg-pink-600 text-white border-pink-600':'bg-white text-slate-600 hover:bg-slate-50'}`}>📁 {fd} <span className="opacity-60">({folderCount(fd)})</span></button>
+            ))}
           </div>
         )}
-        {uploading && <div className="mb-3 text-xs text-indigo-600 font-semibold">{uploading}</div>}
-        {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
-          : list.length===0 ? (
-            <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
-              Nothing here yet.{canEdit ? ' Drag & drop files here, or click “+ Add”.' : ''}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
-            </div>
-          )}
       </div>
-      {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
+      {isPricelist && !canEdit && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">🔒 View only — only Admin can add or edit the pricelist.</div>
+      )}
+
+      {isPricelist ? (
+        loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+        : (
+          <div className="bg-white rounded-xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Garment type</th>
+                <th className="text-right px-3 py-2">MOQ</th>
+                <th className="text-right px-3 py-2">Unit price</th>
+                <th className="text-left px-3 py-2">Notes</th>
+                {canEdit && <th className="px-3 py-2"></th>}
+              </tr></thead>
+              <tbody>
+                {priceRows.map(r=>(
+                  <tr key={r.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{r.garment_type||'—'}</td>
+                    <td className="px-3 py-2 text-right">{r.moq!=null?Number(r.moq).toLocaleString('en-PH'):'—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{r.unit_price!=null?peso(r.unit_price):'—'}</td>
+                    <td className="px-3 py-2 text-slate-600 text-xs">{r.notes||''}</td>
+                    {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={()=>setEditingPrice(r)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                      <button onClick={()=>delRes(r)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                    </td>}
+                  </tr>
+                ))}
+                {priceRows.length===0 && <tr><td colSpan={canEdit?5:4} className="text-center text-slate-400 py-8">No pricelist items yet.{canEdit?' Click “+ Add” to create one.':''}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : (
+        <>
+          {canEdit && <div className="mb-3 text-xs text-slate-400">Tip: drag &amp; drop images/PDFs anywhere below, or paste a screenshot with ⌘V, to add them {folders.length?`to ${folder}`:'here'}.</div>}
+          <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onPaste={onPaste} tabIndex={canEdit?0:undefined}
+               className={`relative rounded-xl transition ${dragOver?'ring-2 ring-indigo-400 bg-indigo-50/40':''} ${canEdit?'outline-none':''}`}>
+            {dragOver && canEdit && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-indigo-50/80 border-2 border-dashed border-indigo-400 pointer-events-none">
+                <div className="text-indigo-700 font-semibold text-sm">Drop to add to {folders.length?folder:(SALES_RES_TABS.find(t=>t.key===tab)||{}).label}</div>
+              </div>
+            )}
+            {uploading && <div className="mb-3 text-xs text-indigo-600 font-semibold">{uploading}</div>}
+            {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+              : list.length===0 ? (
+                <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+                  Nothing here yet.{canEdit ? ' Drag & drop files here, or click “+ Add”.' : ''}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
+                </div>
+              )}
+          </div>
+        </>
+      )}
+      {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} defaultFolder={folder} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
+      {(addingPrice||editingPrice) && <PricelistRowForm profile={profile} existing={editingPrice} onClose={()=>{ setAddingPrice(false); setEditingPrice(null); }} onSaved={()=>{ setAddingPrice(false); setEditingPrice(null); load(); }} />}
       {lightbox && (
         <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
           <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
