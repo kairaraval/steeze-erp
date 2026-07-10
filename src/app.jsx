@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 198 · Delivery Receipts: Production Supervisor can now Edit and Void released DRs too (previously admin-only for released docs)";
+const BUILD = "Live build 199 · Proof-of-payment 📷 now opens inline in a lightbox (click anywhere / × to close) instead of a new browser tab";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11167,18 +11167,33 @@ function PreviewImg({ value, h }){
 
 function TImg({ path, maxH }){ const [u,setU]=useState(''); useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on)setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]); if(!u) return null; return <img src={u} style={{maxWidth:'100%', maxHeight:maxH||'100%', objectFit:'contain'}} />; }
 function TpHdrCell({ label, value, red }){ return <div className="border-r border-b border-slate-400 px-2 py-0.5 leading-tight"><span className="text-[8px] font-bold text-slate-500 uppercase">{label} </span><span className={`text-[10px] ${red?'text-red-600 font-bold':'text-slate-800'}`}>{value||''}</span></div>; }
-// Opens a proof-of-payment attachment. Stored attachment_url is a signed url
-// that expires after 1h, so we regenerate a fresh one from the durable path on
-// click (falling back to the stored url only if there's no path).
+// Opens a proof-of-payment attachment INLINE in a lightbox overlay (no new tab).
+// Stored attachment_url is a signed url that expires after 1h, so we regenerate
+// a fresh one from the durable path on click (falling back to the stored url
+// only if there's no path).
 function ProofLink({ path, url, className, title, children }){
-  async function open(e){
+  const [open,setOpen]=useState(false);
+  const [u,setU]=useState(url||'');
+  const [loading,setLoading]=useState(false);
+  async function show(e){
     e.preventDefault(); e.stopPropagation();
-    let u = url;
-    if(path){ try { u = await signedUrl(path); } catch(_){} }
-    if(u) window.open(u, '_blank', 'noopener');
+    setOpen(true);
+    if(path){ setLoading(true); try { const fresh = await signedUrl(path); setU(fresh); } catch(_){} setLoading(false); }
   }
   if(!path && !url) return null;
-  return <a href={url||'#'} onClick={open} target="_blank" rel="noreferrer" className={className} title={title||'Proof of payment'}>{children}</a>;
+  return (
+    <>
+      <a href="#" onClick={show} className={className} title={title||'Proof of payment'}>{children}</a>
+      {open && (
+        <div onClick={(e)=>{ e.stopPropagation(); setOpen(false); }} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
+          {loading && !u ? <div className="text-white text-sm">Loading…</div>
+            : u ? <img src={u} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="Proof of payment" />
+            : <div className="text-white text-sm">Couldn't load the image.</div>}
+          <button onClick={(e)=>{ e.stopPropagation(); setOpen(false); }} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
+        </div>
+      )}
+    </>
+  );
 }
 function TpPageFrame({ hdr, title, pageNo, children }){
   return (<div className="tp-page">
