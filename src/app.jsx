@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 200 · Graphic Design: new Resources tab — a boards view for reusable design files + links (custom boards like Mockup templates/Logos/Fonts; upload images/PDFs or paste Canva/Drive/Figma links; images open inline)";
+const BUILD = "Live build 201 · Activity comments: you can now only edit or delete your OWN comments — no one (not even admin) can change or delete someone else's. Enforced in the app + database (RLS + trigger)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -646,8 +646,9 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
     await load();
     afterChange && afterChange();
   }
-  // Anyone can edit/delete their own comment; admins can do it on anyone's.
-  function canModify(row){ return row.actor_id === profile.id || profile.role === 'admin'; }
+  // You can only edit/delete your OWN comments — nobody (not even admin) can
+  // edit or delete someone else's. Also enforced in the DB (RLS + trigger).
+  function canModify(row){ return row.actor_id === profile.id; }
   async function load(){
     let q = sb.from(table).select('*'); Object.entries(match).forEach(([k,v])=>{ q=q.eq(k,v); });
     const { data, error } = await q.order('created_at',{ ascending:true });
@@ -779,7 +780,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
                   </>
                 )}
               </div>
-              {/* Hover-reveal edit/delete buttons — only for the comment owner or admins */}
+              {/* Hover-reveal edit/delete buttons — only for the comment's own author */}
               {mine && !isEditing && (
                 <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                   <button onClick={()=>startEdit(a)} title="Edit" className="text-[11px] px-2 py-1 rounded bg-white border border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 text-slate-500">✎ Edit</button>
