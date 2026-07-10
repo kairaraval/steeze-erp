@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 207 · Subcon Weekly Summary: Record payout now covers all unpaid subcons for the week (draft or finalized), not just finalized ones — fixes the missing button";
+const BUILD = "Live build 208 · Commission payout: Accounting now picks the voucher type (Cash/Check/Bank Transfer) + expense category when generating. Accounting can also edit + void Check/Cash vouchers in the Vouchers page";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18125,6 +18125,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   const [generating,setGenerating] = useState(false);
   const [genMsg,setGenMsg] = useState('');
   const [selectedBankId,setSelectedBankId] = useState(bankAccounts && bankAccounts[0]?.id || null);
+  // Voucher type + expense category chosen by Accounting when generating the payout.
+  const [payoutType,setPayoutType] = useState('cash'); // 'cash' | 'check' | 'bank_transfer'
+  const [payoutCategory,setPayoutCategory] = useState(EXPENSE_CATEGORIES.find(c=>/commission/i.test(c)) || EXPENSE_CATEGORIES[0]);
   // Tracks which rep's payout breakdown is expanded in the green panel.
   const [expandedPayoutRep,setExpandedPayoutRep] = useState(null);
   // Which rep's printable commission draft is open (review doc before payout).
@@ -18312,7 +18315,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     setGenerating(true); setGenMsg('');
     try {
       const monthKey = new Date().toISOString().slice(0,7); // YYYY-MM
-      const prefix = 'CASH-';
+      const prefix = payoutType==='check' ? 'CV-' : payoutType==='bank_transfer' ? 'BT-' : 'CASH-';
       let created = 0, failed = 0;
       for(const payout of targets){
         const repProfile = (profiles||[]).find(x => x.id === payout.manager_id);
@@ -18323,9 +18326,10 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
         // Retry once on conflict (mirrors the existing voucher creation pattern).
         for(let attempt = 0; attempt < 5; attempt++){
           const res = await sb.from('vouchers').insert({
-            number, type:'cash', date: new Date().toISOString().slice(0,10),
+            number, type:payoutType, date: new Date().toISOString().slice(0,10),
             payee, amount: payout.amount,
             particulars: `Sales commission payout — ${payee}. ${rowsTxt}`,
+            expense_category: payoutCategory||null,
             bank_id: selectedBankId,
             prepared_by: profile.id,
             notes: 'Auto-generated from Commissions page.',
@@ -18465,7 +18469,17 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               <div className="font-bold text-emerald-900">📤 End-of-month payout{activeRepId && <span className="ml-2 text-xs font-normal text-emerald-700">· filtered to {repName(activeRepId)}</span>}</div>
               <div className="text-xs text-emerald-700">{payoutByRep.length} rep{payoutByRep.length===1?'':'s'} have outstanding commission · Total: <strong>{peso(payoutTotal)}</strong></div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs text-slate-600">Voucher type</label>
+              <select value={payoutType} onChange={e=>setPayoutType(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
+                <option value="cash">Cash Voucher</option>
+                <option value="check">Check Voucher</option>
+                <option value="bank_transfer">Bank Transfer</option>
+              </select>
+              <label className="text-xs text-slate-600">Category</label>
+              <select value={payoutCategory} onChange={e=>setPayoutCategory(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
+                {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
               <label className="text-xs text-slate-600">Fund from</label>
               <select value={selectedBankId||''} onChange={e=>setSelectedBankId(e.target.value||null)} className="text-xs border rounded px-2 py-1.5 bg-white">
                 {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
@@ -19689,8 +19703,10 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
   const [viewing,setViewing]=useState(null);   // voucher row being viewed/printed
   const [autoPrint,setAutoPrint]=useState(false);
   const isAdmin = profile.role==='admin';
-  // Admin-only soft-delete. Also hard-deletes the linked bank_transaction so
-  // the bank balance corrects (deleted vouchers shouldn't leak as expenses).
+  const isAccounting = profile.role==='accounting';
+  const canManageVouchers = isAdmin || isAccounting; // admin + accounting can edit/void
+  // Soft-delete (void). Also hard-deletes the linked bank_transaction so
+  // the bank balance corrects (voided vouchers shouldn't leak as expenses).
   async function deleteVoucher(v){
     const warning = `Delete voucher ${v.number}?\n\nThis will:\n• Soft-delete the voucher (recoverable from Trash later)\n• Reverse the linked bank transaction (${peso(v.amount)} restored to the bank balance)\n\nContinue?`;
     if(!confirm(warning)) return;
@@ -19742,8 +19758,8 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>{ setAutoPrint(false); setViewing(v); }} className="text-xs text-indigo-600 hover:underline font-medium mr-3">👁 View</button>
               <button onClick={()=>{ setAutoPrint(true); setViewing(v); }} className="text-xs text-slate-600 hover:underline font-medium mr-3">🖨 Print</button>
-              {isAdmin && <button onClick={()=>setEditing(v)} className="text-xs text-amber-600 hover:underline font-medium mr-3" title="Edit voucher (admin only)">✎ Edit</button>}
-              {isAdmin && <button onClick={()=>deleteVoucher(v)} className="text-xs text-rose-500 hover:underline font-medium" title="Delete voucher + reverse bank transaction (admin only)">🗑 Delete</button>}
+              {canManageVouchers && <button onClick={()=>setEditing(v)} className="text-xs text-amber-600 hover:underline font-medium mr-3" title="Edit voucher (admin + accounting)">✎ Edit</button>}
+              {canManageVouchers && <button onClick={()=>deleteVoucher(v)} className="text-xs text-rose-500 hover:underline font-medium" title="Void voucher + reverse bank transaction (admin + accounting)">🗑 Void</button>}
             </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No vouchers yet. Click <b>+ New Voucher</b> to create one, or pay an approved RFP.</td></tr>}</tbody>
