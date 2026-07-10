@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 205 · Sales Resources: Size Charts folders (Traditional / Sublimation / Internal RM) + Designs folders (3D / 2D); Pricelist is now a list of garment type · MOQ · unit price (admin-editable)";
+const BUILD = "Live build 206 · Batch payroll payouts: In-house Sewing Payout tab + Subcon Payroll Payout (Weekly Summary). Pays a whole week as ONE expense + one bank deduction (finance picks category + bank), with a printable payout sheet listing every name + signature — no more per-person expense logs";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11694,7 +11694,168 @@ function TpLbl({ t, children }){ return <div><div className="text-[10px] upperca
    payroll_entries / payroll_settings. RLS restricts access to admin /
    accounting / sewing_lead.
    ============================================================================ */
-function SewingPayroll({ profile }){
+/* ─────────── PAYROLL PAYOUT (batch: one expense for the whole run) ───────────
+   Used by both In-house Sewing Payroll and Subcon Payroll. Takes the list of
+   people + amounts for a period, and on confirm creates ONE expense entry +
+   ONE bank deduction for the batch total (so Finance logs the batch, not each
+   person), plus a printable payout sheet with a signature column. It also marks
+   the underlying rows paid via the caller-supplied onMarkPaid(payoutId). */
+function payoutCanRun(profile){ const r=profile?.role; return r==='admin' || r==='accounting'; }
+function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profile, onMarkPaid, onClose, onSaved }){
+  const title = kind==='sewing' ? 'In-house Sewing Payroll Payout' : 'Subcon Payroll Payout';
+  const peopleWord = kind==='sewing' ? 'sewers' : 'subcons';
+  const total = (lines||[]).reduce((s,l)=> s + Number(l.amount||0), 0);
+  const defaultCat = (EXPENSE_CATEGORIES.find(c=>/salar|wage|payroll|labou?r/i.test(c)) || EXPENSE_CATEGORIES[0]);
+  const [category,setCategory]=useState(defaultCat);
+  const [bankId,setBankId]=useState(bankAccounts[0]?.id||'');
+  const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function confirm(){
+    if(!(lines||[]).length){ setMsg('Nothing to pay in this period.'); return; }
+    if(!bankId){ setMsg('Pick the bank this batch is paid from.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const today = new Date().toISOString().slice(0,10);
+      const label = `${title} · ${fmtDate(periodStart)}–${fmtDate(periodEnd)}`;
+      const namesSummary = lines.map(l=>`${l.name} ${peso(l.amount)}`).join('; ');
+      const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        bank_id: bankId, date: today, direction:'out', amount: total,
+        description: `${label} — ${lines.length} ${peopleWord}`.slice(0,200),
+        ref_type:'expense', ref_id:null, created_by: profile.id,
+      }).select('id').single();
+      if(btErr) throw btErr;
+      const { data: exp, error: exErr } = await sb.from('expenses').insert({
+        date: today, category, vendor: kind==='sewing'?'In-house Sewing Payroll':'Subcon Payroll',
+        description: `${label} — ${lines.length} ${peopleWord}: ${namesSummary}`.slice(0,900),
+        amount: total, paid_via:'bank', bank_id: bankId, bank_transaction_id: btx.id, created_by: profile.id,
+      }).select('id').single();
+      if(exErr) throw exErr;
+      await sb.from('bank_transactions').update({ ref_id: exp.id }).eq('id', btx.id);
+      const { data: pay, error: pErr } = await sb.from('payroll_payouts').insert({
+        kind, period_start: periodStart, period_end: periodEnd, headcount: lines.length, total_amount: total,
+        lines, expense_category: category, bank_id: bankId, expense_id: exp.id, bank_transaction_id: btx.id,
+        notes: notes||null, created_by: profile.id,
+      }).select('id').single();
+      if(pErr) throw pErr;
+      if(onMarkPaid){ try { await onMarkPaid(pay.id); } catch(mp){ console.warn('mark-paid after payout failed:', mp?.message||mp); } }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={title} onClose={onClose} wide>
+      <style>{`@media print { body * { visibility:hidden !important; } .payout-sheet, .payout-sheet * { visibility:visible !important; } .payout-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
+      <div className="space-y-3 text-sm">
+        <div className="no-print bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
+          One payout of <strong>{peso(total)}</strong> for <strong>{lines.length}</strong> {peopleWord}. This creates <strong>one</strong> expense entry + one bank deduction for the whole batch (not per person).
+        </div>
+        <div className="no-print grid grid-cols-2 gap-2">
+          <div><label className="text-xs font-semibold text-slate-500">Expense category *</label>
+            <select value={category} onChange={e=>setCategory(e.target.value)} className="w-full border rounded px-2 py-1.5">{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
+          </div>
+          <div><label className="text-xs font-semibold text-slate-500">Paid from bank *</label>
+            <select value={bankId} onChange={e=>setBankId(e.target.value)} className="w-full border rounded px-2 py-1.5"><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
+          </div>
+        </div>
+        <div className="no-print"><label className="text-xs font-semibold text-slate-500">Notes (optional)</label><input value={notes} onChange={e=>setNotes(e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+
+        {/* Printable payout sheet with a signature column */}
+        <div className="payout-sheet bg-white border rounded p-4">
+          <SteezeLetterhead docTitle={title.toUpperCase()} />
+          <div className="flex justify-between text-xs text-slate-600 mb-2">
+            <div><strong>Period:</strong> {fmtDate(periodStart)} – {fmtDate(periodEnd)}</div>
+            <div><strong>Category:</strong> {category} · <strong>{lines.length}</strong> {peopleWord}</div>
+          </div>
+          <table className="w-full text-xs border">
+            <thead className="bg-slate-50 text-slate-600 uppercase"><tr>
+              <th className="text-left px-2 py-1.5 border">#</th>
+              <th className="text-left px-2 py-1.5 border">Name</th>
+              <th className="text-right px-2 py-1.5 border">Amount</th>
+              <th className="text-left px-2 py-1.5 border w-40">Signature</th>
+            </tr></thead>
+            <tbody>
+              {lines.map((l,i)=>(
+                <tr key={i} className="border-t"><td className="px-2 py-1.5 border">{i+1}</td><td className="px-2 py-1.5 border">{l.name}</td><td className="px-2 py-1.5 border text-right font-semibold">{peso(l.amount)}</td><td className="px-2 py-1.5 border"></td></tr>
+              ))}
+              <tr className="bg-slate-50 font-bold"><td className="px-2 py-1.5 border" colSpan={2}>TOTAL</td><td className="px-2 py-1.5 border text-right">{peso(total)}</td><td className="px-2 py-1.5 border"></td></tr>
+            </tbody>
+          </table>
+          <div className="text-[10px] text-slate-400 mt-2">Prepared by {profile?.name||profile?.email||''} · {fmtDate(new Date().toISOString().slice(0,10))}</div>
+        </div>
+
+        {msg && <div className="no-print text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="no-print flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={confirm} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Recording…':`💵 Record payout · ${peso(total)}`}</button>
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">🖨 Print sheet</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// In-house sewing payout tab: pay a week's worth of done, not-yet-paid entries
+// as a single batch. Excludes anything already paid so you can't double-pay.
+function PayrollPayout({ sewers, entries, money, entryEarnings, bankAccounts, profile, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate, reload }){
+  const [from,setFrom]=useState(getWeekStart(todayISOd()));
+  const [to,setTo]=useState(addDaysISO(getWeekStart(todayISOd()),6));
+  const [payouts,setPayouts]=useState([]);
+  const [modal,setModal]=useState(false);
+  function shiftWeek(dir){ setFrom(f=>addDaysISO(f,dir*7)); setTo(t=>addDaysISO(t,dir*7)); }
+  async function loadPayouts(){ const { data }=await sb.from('payroll_payouts').select('*').eq('kind','sewing').is('deleted_at',null).order('created_at',{ascending:false}).limit(30); setPayouts(data||[]); }
+  useEffect(()=>{ loadPayouts(); },[]);
+  const inRange=e=> e.date>=from && e.date<=to;
+  const perSewer = sewers.map(s=>{
+    const es = entries.filter(e=> e.sewer_id===s.id && inRange(e) && e.status==='done' && !e.paid_at);
+    return { sewer_id:s.id, name:s.name, amount: es.reduce((sum,e)=>sum+entryEarnings(e),0), entryIds: es.map(e=>e.id) };
+  }).filter(x=> x.amount>0).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const total = perSewer.reduce((s,x)=>s+x.amount,0);
+  const allEntryIds = perSewer.flatMap(x=>x.entryIds);
+  const paidInRange = entries.filter(e=> inRange(e) && e.status==='done' && e.paid_at).reduce((s,e)=>s+entryEarnings(e),0);
+  const pendingInRange = entries.filter(e=> inRange(e) && e.status==='pending');
+  async function markPaid(payoutId){ if(allEntryIds.length){ const { error }=await sb.from('payroll_entries').update({ paid_at:new Date().toISOString(), payout_id:payoutId }).in('id', allEntryIds); if(error) throw error; } }
+  const lines = perSewer.map(x=>({ name:x.name, amount:x.amount }));
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-4 flex flex-wrap gap-2 items-end">
+        <TpLbl t="Week from"><input type="date" className="input max-w-[10rem]" value={from} onChange={e=>setFrom(e.target.value)} /></TpLbl>
+        <TpLbl t="to"><input type="date" className="input max-w-[10rem]" value={to} onChange={e=>setTo(e.target.value)} /></TpLbl>
+        <button onClick={()=>shiftWeek(-1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">← Prev week</button>
+        <button onClick={()=>shiftWeek(1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">Next week →</button>
+        <div className="flex-1"></div>
+        <button disabled={!perSewer.length} onClick={()=>setModal(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-40">💵 Record payout · {money(total)}</button>
+      </div>
+      {pendingInRange.length>0 && <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">⚠ {pendingInRange.length} pending operations in this week are NOT included — mark them Done in Daily Entry first.</div>}
+      {paidInRange>0 && <div className="bg-slate-50 border text-slate-600 px-3 py-2 rounded text-xs">{money(paidInRange)} of this week was already paid in a previous payout (excluded below).</div>}
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Sewer</th><th className="text-right px-3 py-2">To pay (unpaid, done)</th></tr></thead>
+          <tbody>
+            {perSewer.map(x=>(<tr key={x.sewer_id} className="border-t"><td className="px-3 py-2 font-medium">{x.name}</td><td className="px-3 py-2 text-right font-semibold">{money(x.amount)}</td></tr>))}
+            {perSewer.length===0 && <tr><td colSpan={2} className="text-center text-slate-400 py-8">Nothing outstanding to pay for this week.</td></tr>}
+            {perSewer.length>0 && <tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">TOTAL · {perSewer.length} sewers</td><td className="px-3 py-2 text-right">{money(total)}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {payouts.length>0 && (
+        <div>
+          <div className="text-xs font-semibold uppercase text-slate-500 mb-2">Recent payouts</div>
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Recorded</th><th className="text-left px-3 py-2">Period</th><th className="text-left px-3 py-2">Category</th><th className="text-right px-3 py-2">Sewers</th><th className="text-right px-3 py-2">Total</th></tr></thead>
+              <tbody>{payouts.map(p=>(
+                <tr key={p.id} className="border-t"><td className="px-3 py-2">{fmtDate(String(p.created_at).slice(0,10))}</td><td className="px-3 py-2">{fmtDate(p.period_start)}–{fmtDate(p.period_end)}</td><td className="px-3 py-2">{p.expense_category||'—'}</td><td className="px-3 py-2 text-right">{p.headcount}</td><td className="px-3 py-2 text-right font-semibold">{peso(p.total_amount)}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {modal && <PayoutModal kind="sewing" periodStart={from} periodEnd={to} lines={lines} bankAccounts={bankAccounts} profile={profile} onMarkPaid={markPaid} onClose={()=>setModal(false)} onSaved={()=>{ setModal(false); loadPayouts(); reload && reload(); }} />}
+    </div>
+  );
+}
+
+function SewingPayroll({ profile, bankAccounts }){
   const [tab,setTab]=useState('dashboard');
   const [sewers,setSewers]=useState([]);
   const [garments,setGarments]=useState([]);
@@ -11779,6 +11940,7 @@ function SewingPayroll({ profile }){
     { key:'dashboard', label:'Dashboard',  icon:'📊' },
     { key:'entry',     label:'Daily Entry', icon:'✍️' },
     { key:'payroll',   label:'Payroll',    icon:'💰' },
+    ...(payoutCanRun(profile) ? [{ key:'payout', label:'Payout', icon:'💵' }] : []),
     { key:'sewers',    label:'Sewers',     icon:'👥' },
     { key:'garments',  label:'Garments',   icon:'👕' },
     { key:'settings',  label:'Settings',   icon:'⚙' },
@@ -11882,6 +12044,7 @@ function SewingPayroll({ profile }){
       {tab==='dashboard' && <PayrollDashboard sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} toggleEntryStatus={toggleEntryStatus} />}
       {tab==='entry' && <PayrollDailyEntry sewers={sewers} garments={garments} entries={entries} clients={clients} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} reload={loadAll} toggleEntryStatus={toggleEntryStatus} deleteEntry={deleteEntry} />}
       {tab==='payroll' && <PayrollPayslips sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} />}
+      {tab==='payout' && <PayrollPayout sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} bankAccounts={bankAccounts} profile={profile} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} reload={loadAll} />}
       {tab==='sewers' && <PayrollSewers sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} addSewer={addSewer} toggleSewerActive={toggleSewerActive} renameSewer={renameSewer} deleteSewer={deleteSewer} />}
       {tab==='garments' && <PayrollGarments garments={garments} money={money} addGarment={addGarment} updateGarmentOps={updateGarmentOps} renameGarment={renameGarment} deleteGarment={deleteGarment} />}
       {tab==='settings' && <PayrollSettings pSettings={pSettings} updateSettings={updateSettings} />}
@@ -24841,7 +25004,8 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
 }
 
 // ─────────── MAIN SUBCON MONITORING VIEW ───────────
-function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, subcons, subconSends, subconReturns, subconPayrolls, subconPayrollItems, subconProjects, reload }){
+function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, subcons, subconSends, subconReturns, subconPayrolls, subconPayrollItems, subconProjects, bankAccounts, reload }){
+  const [subconPayoutOpen,setSubconPayoutOpen]=useState(false);
   const [tab,setTab]=useState('projects');
   const [search,setSearch]=useState('');
   const [creatingSubcon,setCreatingSubcon]=useState(false);
@@ -25129,6 +25293,12 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
         const paidAmt = rows.filter(r=>r.p.status==='paid').reduce((s,r)=>s+Number(r.p.total_amount||0),0);
         const unpaid = rows.filter(r=>r.p.status!=='paid' && r.p.status!=='cancelled');
         async function markPaid(p){ if(!confirm(`Mark ${p.number} as PAID?`)) return; const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload && reload(); }
+        // Batch payout: pay every unpaid (finalized) subcon for the week as one
+        // expense + one bank deduction. Drafts are excluded (finalize them first).
+        const payoutRows = unpaid.filter(r=> r.p.status==='finalized');
+        const payoutLines = payoutRows.map(r=>({ name:r.subcon?.name||'Subcon', amount:Number(r.p.total_amount||0) }));
+        const periodStart = activeWeek ? (()=>{ const d=new Date(activeWeek+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })() : activeWeek;
+        async function markPayoutPaid(payoutId){ const ids=payoutRows.map(r=>r.p.id); if(ids.length){ const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString(), payout_id:payoutId }).in('id', ids); if(error) throw error; } }
         return (
           <div className="space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
@@ -25137,8 +25307,10 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                 {weeks.length===0 && <option value="">— no payrolls —</option>}
                 {weeks.map(w=><option key={w} value={w}>{fmtDate(w)}</option>)}
               </select>
+              {payoutCanRun(profile) && payoutRows.length>0 && <button onClick={()=>setSubconPayoutOpen(true)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">💵 Record payout ({payoutRows.length})</button>}
               <div className="ml-auto text-sm text-slate-500">{rows.length} subcon{rows.length===1?'':'s'} · <strong className="text-slate-800">{peso(totAmount)}</strong> total · <span className="text-emerald-700">{peso(paidAmt)} paid</span> · <span className="text-amber-700">{unpaid.length} to pay</span></div>
             </div>
+            {subconPayoutOpen && <PayoutModal kind="subcon" periodStart={periodStart} periodEnd={activeWeek} lines={payoutLines} bankAccounts={bankAccounts} profile={profile} onMarkPaid={markPayoutPaid} onClose={()=>setSubconPayoutOpen(false)} onSaved={()=>{ setSubconPayoutOpen(false); reload && reload(); }} />}
             <div className="bg-white rounded-xl border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-600 text-xs uppercase"><tr>
@@ -26297,7 +26469,7 @@ function App(){
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
-        {view==='payroll' && <SewingPayroll profile={profile} />}
+        {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} reload={loadAll} />}
@@ -26308,7 +26480,7 @@ function App(){
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
-        {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} reload={loadAll} />}
+        {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
