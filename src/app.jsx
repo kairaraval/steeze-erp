@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 196 · RFP: pay several approved POs for one supplier with a single check — tick the approved RFPs, click 'Pay together as one check' → one consolidated voucher (particulars auto-lists each PO), one bank deduction, all POs+RFPs marked paid";
+const BUILD = "Live build 197 · Fix proof-of-payment photos not showing on Verify payment (and the 📷 links) — stored signed URLs expire after 1h, so we now regenerate a fresh URL from the saved storage path every time";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11167,6 +11167,19 @@ function PreviewImg({ value, h }){
 
 function TImg({ path, maxH }){ const [u,setU]=useState(''); useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on)setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]); if(!u) return null; return <img src={u} style={{maxWidth:'100%', maxHeight:maxH||'100%', objectFit:'contain'}} />; }
 function TpHdrCell({ label, value, red }){ return <div className="border-r border-b border-slate-400 px-2 py-0.5 leading-tight"><span className="text-[8px] font-bold text-slate-500 uppercase">{label} </span><span className={`text-[10px] ${red?'text-red-600 font-bold':'text-slate-800'}`}>{value||''}</span></div>; }
+// Opens a proof-of-payment attachment. Stored attachment_url is a signed url
+// that expires after 1h, so we regenerate a fresh one from the durable path on
+// click (falling back to the stored url only if there's no path).
+function ProofLink({ path, url, className, title, children }){
+  async function open(e){
+    e.preventDefault(); e.stopPropagation();
+    let u = url;
+    if(path){ try { u = await signedUrl(path); } catch(_){} }
+    if(u) window.open(u, '_blank', 'noopener');
+  }
+  if(!path && !url) return null;
+  return <a href={url||'#'} onClick={open} target="_blank" rel="noreferrer" className={className} title={title||'Proof of payment'}>{children}</a>;
+}
 function TpPageFrame({ hdr, title, pageNo, children }){
   return (<div className="tp-page">
     <div className="flex items-stretch border-2 border-slate-900">
@@ -16808,7 +16821,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
                     <td className="py-1.5 text-[10px]">{loggedBy?(loggedBy.name||loggedBy.email):'—'}{verifiedBy && <div className="text-emerald-700">✓ {verifiedBy.name||verifiedBy.email}</div>}</td>
                     <td className="py-1.5 text-right font-semibold">{peso(p.amount)}{p.bank_charge_amount > 0 && <div className="text-[9px] text-amber-700">(−{peso(p.bank_charge_amount)} bank fee)</div>}</td>
                     <td className="py-1.5 text-right whitespace-nowrap">
-                      {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-600 hover:underline mr-1" title="Proof of payment">📷</a>}
+                      {(p.attachment_url||p.attachment_path) && <ProofLink path={p.attachment_path} url={p.attachment_url} className="text-[10px] text-indigo-600 hover:underline mr-1">📷</ProofLink>}
                       {p.status === 'pending' && canVerifySOPayment(profile) && onVerifyPayment && (
                         <button onClick={()=>onVerifyPayment(p, so)} className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Verify</button>
                       )}
@@ -17038,11 +17051,16 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [proofUrl,setProofUrl]=useState(payment.attachment_url||null);
   const [showLightbox,setShowLightbox]=useState(false);
-  // If proof URL has expired (signed URLs last 1h), regenerate from the path.
+  // Stored attachment_url is a SIGNED url that expires after 1h, so for any
+  // payment older than an hour it 404s (broken image). Always regenerate a
+  // fresh signed url from the durable storage path when we have one; only fall
+  // back to the stored url if no path was saved.
   useEffect(()=>{
-    if(!payment.attachment_url && payment.attachment_path){
-      signedUrl(payment.attachment_path).then(setProofUrl).catch(()=>{});
+    let on=true;
+    if(payment.attachment_path){
+      signedUrl(payment.attachment_path).then(u=>{ if(on) setProofUrl(u); }).catch(()=>{});
     }
+    return ()=>{ on=false; };
   }, [payment.attachment_path]);
 
   const diff = Math.round((loggedAmount - Number(verifyAmount||0)) * 100) / 100;
@@ -17328,7 +17346,7 @@ function SalesOrderPaymentsFeed({ profile, profiles, visibleSOs, soPayments, ban
                   {status==='voided' && p.void_reason && <div className="text-rose-600 italic" title={p.void_reason}>voided</div>}
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
-                  {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs mr-1" title="Proof of payment">📷</a>}
+                  {(p.attachment_url||p.attachment_path) && <ProofLink path={p.attachment_path} url={p.attachment_url} className="text-xs mr-1">📷</ProofLink>}
                   {status==='pending' && canVerifySOPayment(profile) && <button onClick={(e)=>{e.stopPropagation(); onVerify(p, so);}} className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Verify</button>}
                 </td>
               </tr>
@@ -19371,7 +19389,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
                       <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(p.amount)}</td>
                       <td className="px-3 py-2 text-xs">{loggedBy?(loggedBy.name||loggedBy.email):'—'}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" className="text-xs mr-2" title="Proof of payment">📷</a>}
+                        {(p.attachment_url||p.attachment_path) && <ProofLink path={p.attachment_path} url={p.attachment_url} className="text-xs mr-2">📷</ProofLink>}
                         <button onClick={()=>setVerifyingPayment({ payment: p, so })} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Verify →</button>
                       </td>
                     </tr>
@@ -19386,7 +19404,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
                 const so = (salesOrders||[]).find(s => s.id === p.sales_order_id);
                 return (
                   <ApprovalMRow key={p.id} title={so?.number||'—'} sub={so?.client_name||'—'} meta={`${payMethodLabel(p.method)} · ${fmtDate(p.date)}${p.reference?` · ${p.reference}`:''}`} amount={peso(p.amount)} amountClass="text-emerald-700">
-                    {p.attachment_url && <a href={p.attachment_url} target="_blank" rel="noreferrer" className="py-2 px-3 rounded-lg bg-slate-100 text-sm" title="Proof of payment">📷</a>}
+                    {(p.attachment_url||p.attachment_path) && <ProofLink path={p.attachment_path} url={p.attachment_url} className="py-2 px-3 rounded-lg bg-slate-100 text-sm">📷</ProofLink>}
                     <button onClick={()=>setVerifyingPayment({ payment: p, so })} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">✓ Verify →</button>
                   </ApprovalMRow>
                 );
