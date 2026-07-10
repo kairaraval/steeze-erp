@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 206 · Batch payroll payouts: In-house Sewing Payout tab + Subcon Payroll Payout (Weekly Summary). Pays a whole week as ONE expense + one bank deduction (finance picks category + bank), with a printable payout sheet listing every name + signature — no more per-person expense logs";
+const BUILD = "Live build 207 · Subcon Weekly Summary: Record payout now covers all unpaid subcons for the week (draft or finalized), not just finalized ones — fixes the missing button";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25293,9 +25293,9 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
         const paidAmt = rows.filter(r=>r.p.status==='paid').reduce((s,r)=>s+Number(r.p.total_amount||0),0);
         const unpaid = rows.filter(r=>r.p.status!=='paid' && r.p.status!=='cancelled');
         async function markPaid(p){ if(!confirm(`Mark ${p.number} as PAID?`)) return; const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload && reload(); }
-        // Batch payout: pay every unpaid (finalized) subcon for the week as one
-        // expense + one bank deduction. Drafts are excluded (finalize them first).
-        const payoutRows = unpaid.filter(r=> r.p.status==='finalized');
+        // Batch payout: pay every unpaid subcon for the week (draft or finalized)
+        // as one expense + one bank deduction. Recording the payout marks them paid.
+        const payoutRows = unpaid;
         const payoutLines = payoutRows.map(r=>({ name:r.subcon?.name||'Subcon', amount:Number(r.p.total_amount||0) }));
         const periodStart = activeWeek ? (()=>{ const d=new Date(activeWeek+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })() : activeWeek;
         async function markPayoutPaid(payoutId){ const ids=payoutRows.map(r=>r.p.id); if(ids.length){ const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString(), payout_id:payoutId }).in('id', ids); if(error) throw error; } }
