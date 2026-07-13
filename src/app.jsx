@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 213 · Costing Calculator: Labor search now shows whole-garment price (sum of operations), and each cost line has a Qty/consumption field (e.g. 1.5 yards) so Total = Unit ₱ × Qty auto-computes";
+const BUILD = "Live build 214 · Costing Calculator: added Overhead % (10/15/20) and Reject allowance % — direct cost → +overhead → +reject = fully-loaded unit cost, then margin applied on top";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2920,6 +2920,8 @@ function CostingCalculatorView({ profile }){
   const [item,setItem]=useState('');
   const [qty,setQty]=useState(100);
   const [margin,setMargin]=useState(60);
+  const [overheadPct,setOverheadPct]=useState(15);
+  const [rejectPct,setRejectPct]=useState(3);
   const [comps,setComps]=useState([ blankComp() ]);
   const [editingId,setEditingId]=useState(null);
   const [saved,setSaved]=useState([]);
@@ -2961,9 +2963,12 @@ function CostingCalculatorView({ profile }){
   function up(i,k,v){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c,[k]:v}:c)); }
   function addComp(){ setComps(cs=>[...cs, blankComp()]); }
   function delComp(i){ setComps(cs=>cs.filter((_,idx)=>idx!==i)); }
-  function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setComps([blankComp()]); setEditingId(null); setMsg(''); }
+  function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setOverheadPct(15); setRejectPct(3); setComps([blankComp()]); setEditingId(null); setMsg(''); }
 
-  const unitCost = comps.reduce((s,c)=> s + lineTotal(c), 0);
+  const directCost = comps.reduce((s,c)=> s + lineTotal(c), 0);
+  const overheadAmt = directCost * (Number(overheadPct)||0)/100;
+  const rejectAmt = (directCost + overheadAmt) * (Number(rejectPct)||0)/100;
+  const unitCost = directCost + overheadAmt + rejectAmt; // true fully-loaded unit cost
   const targetSrp = srpForMargin(unitCost, margin);
   const suggestedSrp = roundUpTo(targetSrp, 5);
   const totalCost = unitCost * (Number(qty)||0);
@@ -2978,7 +2983,8 @@ function CostingCalculatorView({ profile }){
     try {
       const payload = {
         name: name.trim()||item.trim(), item: item.trim()||null, quantity: Number(qty)||0,
-        target_margin: Number(margin)||0, unit_cost: unitCost, srp: suggestedSrp,
+        target_margin: Number(margin)||0, overhead_pct: Number(overheadPct)||0, reject_pct: Number(rejectPct)||0,
+        unit_cost: unitCost, srp: suggestedSrp,
         components: comps.map(c=>({ category:c.category, label:c.label||'', cost:Number(c.cost)||0, qty:(c.qty===''||c.qty==null?1:Number(c.qty)||0) })),
       };
       if(editingId){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('costings').update(payload).eq('id', editingId); if(error) throw error; }
@@ -2988,6 +2994,7 @@ function CostingCalculatorView({ profile }){
   }
   function loadInto(c){
     setName(c.name||''); setItem(c.item||''); setQty(c.quantity||0); setMargin(c.target_margin||60);
+    setOverheadPct(c.overhead_pct??15); setRejectPct(c.reject_pct??3);
     setComps(Array.isArray(c.components)&&c.components.length ? c.components.map(x=>({ id:crypto.randomUUID(), category:x.category||'Other', label:x.label||'', cost:x.cost??'', qty:(x.qty==null?1:x.qty) })) : [blankComp()]);
     setEditingId(c.id); setTab('calc'); setMsg('Loaded — edit and Save to update.');
   }
@@ -3043,8 +3050,31 @@ function CostingCalculatorView({ profile }){
                     </tr>
                   ))}
                 </tbody>
-                <tfoot><tr className="border-t"><td colSpan={4} className="py-1.5 text-right text-xs font-semibold uppercase text-slate-500">Unit cost / pc</td><td className="py-1.5 text-right font-bold">{peso(unitCost)}</td><td></td></tr></tfoot>
+                <tfoot><tr className="border-t"><td colSpan={4} className="py-1.5 text-right text-xs font-semibold uppercase text-slate-500">Direct cost / pc</td><td className="py-1.5 text-right font-bold">{peso(directCost)}</td><td></td></tr></tfoot>
               </table>
+            </div>
+
+            <div className="bg-white border rounded-xl p-4">
+              <div className="text-sm font-semibold mb-2">Overhead &amp; allowances</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500">Overhead %</label>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="0.5" value={overheadPct} onChange={e=>setOverheadPct(e.target.value)} className="border rounded px-2 py-1 text-sm w-20 text-right" />
+                    <div className="flex gap-1">{[10,15,20].map(v=><button key={v} onClick={()=>setOverheadPct(v)} className={`text-[10px] px-1.5 py-0.5 rounded border ${Number(overheadPct)===v?'bg-indigo-600 text-white border-indigo-600':'bg-white'}`}>{v}</button>)}</div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">+{peso(overheadAmt)} /pc</div>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500">Reject allowance %</label>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="0.5" value={rejectPct} onChange={e=>setRejectPct(e.target.value)} className="border rounded px-2 py-1 text-sm w-20 text-right" />
+                    <div className="flex gap-1">{[0,3,5].map(v=><button key={v} onClick={()=>setRejectPct(v)} className={`text-[10px] px-1.5 py-0.5 rounded border ${Number(rejectPct)===v?'bg-indigo-600 text-white border-indigo-600':'bg-white'}`}>{v}</button>)}</div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">+{peso(rejectAmt)} /pc</div>
+                </div>
+              </div>
+              <div className="flex justify-between border-t mt-2 pt-2 text-sm"><span className="font-semibold uppercase text-xs text-slate-500 self-center">Fully-loaded unit cost</span><span className="font-bold">{peso(unitCost)}</span></div>
             </div>
 
             <div className="bg-white border rounded-xl p-4">
@@ -3082,9 +3112,12 @@ function CostingCalculatorView({ profile }){
               {realMargin<50 && unitCost>0 && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded p-1.5">Below your 50% floor — raise the SRP or trim costs.</div>}
             </div>
 
-            {byCat.length>0 && <div className="bg-white border rounded-xl p-4 text-xs">
+            {(byCat.length>0 || overheadAmt>0 || rejectAmt>0) && <div className="bg-white border rounded-xl p-4 text-xs">
               <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Cost breakdown / pc</div>
               {byCat.map(x=><div key={x.cat} className="flex justify-between py-0.5"><span className="text-slate-500">{x.cat}</span><span className="font-medium">{peso(x.total)}</span></div>)}
+              {overheadAmt>0 && <div className="flex justify-between py-0.5"><span className="text-slate-500">Overhead ({overheadPct}%)</span><span className="font-medium">{peso(overheadAmt)}</span></div>}
+              {rejectAmt>0 && <div className="flex justify-between py-0.5"><span className="text-slate-500">Reject allowance ({rejectPct}%)</span><span className="font-medium">{peso(rejectAmt)}</span></div>}
+              <div className="flex justify-between py-0.5 border-t mt-1 pt-1 font-bold"><span>Unit cost</span><span>{peso(unitCost)}</span></div>
             </div>}
 
             <div className="flex gap-2">
