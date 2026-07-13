@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 210 · Sales Pipeline manager filter now lists only sales managers + sales assistants (not production/other roles)";
+const BUILD = "Live build 211 · Sales module: admin-only Costing Calculator — build unit cost (fabric/trims/labor/etc.), get SRP recommendations at 50/60/70% margin, enter quantity to see project profit, and save costings in a Saved tab";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2898,6 +2898,179 @@ function SalesResourcesView({ profile }){
         <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
           <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
           <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────── COSTING CALCULATOR (admin only) ───────────
+// Build up an item's unit cost from fabric / trims / labor / etc., get an SRP
+// recommendation at the target 50–70% margin, enter a quantity to see project
+// profit, and save the costing for later.
+const COSTING_CATEGORIES = ['Fabric','Trims','Labor','Printing/Embro','Packaging','Overhead','Other'];
+function srpForMargin(cost, marginPct){ const m=Number(marginPct)||0; if(m>=100) return cost; return cost/(1-(m/100)); }
+function roundUpTo(n, step){ if(!isFinite(n)) return 0; return Math.ceil(n/step)*step; }
+
+function CostingCalculatorView({ profile }){
+  const [tab,setTab]=useState('calc');
+  const blankComp = ()=>({ id:crypto.randomUUID(), category:'Fabric', label:'', cost:'' });
+  const [name,setName]=useState('');
+  const [item,setItem]=useState('');
+  const [qty,setQty]=useState(100);
+  const [margin,setMargin]=useState(60);
+  const [comps,setComps]=useState([ blankComp() ]);
+  const [editingId,setEditingId]=useState(null);
+  const [saved,setSaved]=useState([]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function loadSaved(){ const { data }=await sb.from('costings').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
+  useEffect(()=>{ loadSaved(); },[]);
+  function up(i,k,v){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c,[k]:v}:c)); }
+  function addComp(){ setComps(cs=>[...cs, blankComp()]); }
+  function delComp(i){ setComps(cs=>cs.filter((_,idx)=>idx!==i)); }
+  function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setComps([blankComp()]); setEditingId(null); setMsg(''); }
+
+  const unitCost = comps.reduce((s,c)=> s + (Number(c.cost)||0), 0);
+  const targetSrp = srpForMargin(unitCost, margin);
+  const suggestedSrp = roundUpTo(targetSrp, 5);
+  const totalCost = unitCost * (Number(qty)||0);
+  const revenue = suggestedSrp * (Number(qty)||0);
+  const profit = revenue - totalCost;
+  const realMargin = revenue>0 ? (profit/revenue*100) : 0;
+  const byCat = COSTING_CATEGORIES.map(cat=>({ cat, total: comps.filter(c=>c.category===cat).reduce((s,c)=>s+(Number(c.cost)||0),0) })).filter(x=>x.total>0);
+
+  async function save(){
+    if(!name.trim() && !item.trim()){ setMsg('Give the costing a name or item.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload = {
+        name: name.trim()||item.trim(), item: item.trim()||null, quantity: Number(qty)||0,
+        target_margin: Number(margin)||0, unit_cost: unitCost, srp: suggestedSrp,
+        components: comps.map(c=>({ category:c.category, label:c.label||'', cost:Number(c.cost)||0 })),
+      };
+      if(editingId){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('costings').update(payload).eq('id', editingId); if(error) throw error; }
+      else { const { error }=await sb.from('costings').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); setMsg('Saved ✓'); loadSaved(); setTab('saved'); reset();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  function loadInto(c){
+    setName(c.name||''); setItem(c.item||''); setQty(c.quantity||0); setMargin(c.target_margin||60);
+    setComps(Array.isArray(c.components)&&c.components.length ? c.components.map(x=>({ id:crypto.randomUUID(), category:x.category||'Other', label:x.label||'', cost:x.cost??'' })) : [blankComp()]);
+    setEditingId(c.id); setTab('calc'); setMsg('Loaded — edit and Save to update.');
+  }
+  async function delSaved(c){ if(!confirm(`Delete costing "${c.name||c.item||''}"?`)) return; const { error }=await sb.from('costings').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } loadSaved(); }
+
+  const Money = ({v, cls})=> <span className={cls}>{peso(v)}</span>;
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">🧮 Costing Calculator</h1><p className="text-slate-500 text-sm">Build unit cost, get an SRP at your 50–70% margin target, and see project profit.</p></div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+          <button onClick={()=>setTab('calc')} className={`px-3 py-1.5 rounded-md ${tab==='calc'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Calculator</button>
+          <button onClick={()=>setTab('saved')} className={`px-3 py-1.5 rounded-md ${tab==='saved'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Saved ({saved.length})</button>
+        </div>
+      </div>
+
+      {tab==='calc' && (
+        <div className="grid md:grid-cols-3 gap-4">
+          {/* Left: inputs (2 cols) */}
+          <div className="md:col-span-2 space-y-4">
+            <div className="bg-white border rounded-xl p-4 grid grid-cols-2 gap-3">
+              <div className="col-span-2"><label className="text-xs font-semibold text-slate-500">Costing name</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" placeholder='e.g. "JTI Polo — cotton pique"' /></div>
+              <div><label className="text-xs font-semibold text-slate-500">Item / garment</label><input value={item} onChange={e=>setItem(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="Polo shirt" /></div>
+              <div><label className="text-xs font-semibold text-slate-500">Quantity</label><input type="number" value={qty} onChange={e=>setQty(e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" /></div>
+            </div>
+
+            <div className="bg-white border rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2"><div className="text-sm font-semibold">Cost per piece</div><button onClick={addComp} className="text-xs px-2 py-1 rounded bg-slate-100 border font-semibold hover:bg-slate-200">+ Add cost line</button></div>
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Category</th><th className="text-left py-1">Description</th><th className="text-right py-1">Cost/pc</th><th></th></tr></thead>
+                <tbody>
+                  {comps.map((c,i)=>(
+                    <tr key={c.id}>
+                      <td className="py-1 pr-2"><select value={c.category} onChange={e=>up(i,'category',e.target.value)} className="border rounded px-1.5 py-1 text-xs w-32">{COSTING_CATEGORIES.map(x=><option key={x}>{x}</option>)}</select></td>
+                      <td className="py-1 pr-2"><input value={c.label} onChange={e=>up(i,'label',e.target.value)} className="border rounded px-2 py-1 text-xs w-full" placeholder="e.g. Cotton pique 1.2m @ ₱180" /></td>
+                      <td className="py-1 pr-2"><input type="number" value={c.cost} onChange={e=>up(i,'cost',e.target.value)} className="border rounded px-2 py-1 text-xs w-24 text-right" placeholder="0" /></td>
+                      <td className="py-1 text-right"><button onClick={()=>delComp(i)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot><tr className="border-t"><td colSpan={2} className="py-1.5 text-right text-xs font-semibold uppercase text-slate-500">Unit cost</td><td className="py-1.5 text-right font-bold">{peso(unitCost)}</td><td></td></tr></tfoot>
+              </table>
+            </div>
+
+            <div className="bg-white border rounded-xl p-4">
+              <label className="text-xs font-semibold text-slate-500">Target margin: <span className="text-indigo-700 font-bold">{margin}%</span></label>
+              <input type="range" min="0" max="90" value={margin} onChange={e=>setMargin(e.target.value)} className="w-full accent-indigo-600" />
+              <div className="flex gap-2 mt-1">{[50,60,70].map(m=><button key={m} onClick={()=>setMargin(m)} className={`text-xs px-2 py-1 rounded border ${Number(margin)===m?'bg-indigo-600 text-white border-indigo-600':'bg-white'}`}>{m}%</button>)}</div>
+              <div className="text-[11px] text-slate-400 mt-1">Margin = profit ÷ selling price. SRP = cost ÷ (1 − margin).</div>
+            </div>
+          </div>
+
+          {/* Right: results (1 col) */}
+          <div className="space-y-4">
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+              <div className="text-[10px] uppercase font-semibold text-indigo-500">Recommended SRP</div>
+              <div className="text-3xl font-bold text-indigo-800">{peso(suggestedSrp)}</div>
+              <div className="text-[11px] text-slate-500">per piece · at {margin}% margin (rounded)</div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                {[50,60,70].map(m=>{ const s=srpForMargin(unitCost,m); return (
+                  <div key={m} className={`rounded-lg p-2 ${Number(margin)===m?'bg-indigo-600 text-white':'bg-white border'}`}>
+                    <div className="text-[9px] uppercase opacity-70">{m}%</div>
+                    <div className="text-sm font-bold">{peso(roundUpTo(s,5))}</div>
+                  </div>
+                ); })}
+              </div>
+            </div>
+
+            <div className="bg-white border rounded-xl p-4 space-y-2 text-sm">
+              <div className="text-[10px] uppercase font-semibold text-slate-400">Project ({Number(qty)||0} pcs)</div>
+              <div className="flex justify-between"><span className="text-slate-500">Unit cost</span><Money v={unitCost} cls="font-semibold" /></div>
+              <div className="flex justify-between"><span className="text-slate-500">SRP / pc</span><Money v={suggestedSrp} cls="font-semibold" /></div>
+              <div className="flex justify-between border-t pt-2"><span className="text-slate-500">Total cost</span><Money v={totalCost} cls="font-semibold text-rose-600" /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Revenue</span><Money v={revenue} cls="font-semibold" /></div>
+              <div className="flex justify-between border-t pt-2"><span className="font-semibold">Projected profit</span><Money v={profit} cls="font-bold text-emerald-700 text-lg" /></div>
+              <div className="flex justify-between"><span className="text-slate-500">Actual margin</span><span className={`font-semibold ${realMargin>=50?'text-emerald-700':'text-amber-600'}`}>{realMargin.toFixed(1)}%</span></div>
+              {realMargin<50 && unitCost>0 && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded p-1.5">Below your 50% floor — raise the SRP or trim costs.</div>}
+            </div>
+
+            {byCat.length>0 && <div className="bg-white border rounded-xl p-4 text-xs">
+              <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Cost breakdown / pc</div>
+              {byCat.map(x=><div key={x.cat} className="flex justify-between py-0.5"><span className="text-slate-500">{x.cat}</span><span className="font-medium">{peso(x.total)}</span></div>)}
+            </div>}
+
+            <div className="flex gap-2">
+              <button disabled={busy} onClick={save} className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':(editingId?'Update costing':'💾 Save costing')}</button>
+              <button onClick={reset} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">New</button>
+            </div>
+            {msg && <div className="text-xs text-center text-slate-500">{msg}</div>}
+          </div>
+        </div>
+      )}
+
+      {tab==='saved' && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              <th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Item</th>
+              <th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Unit cost</th>
+              <th className="text-right px-3 py-2">SRP</th><th className="text-right px-3 py-2">Margin</th>
+              <th className="text-right px-3 py-2">Proj. profit</th><th className="text-right px-3 py-2">Saved</th><th></th>
+            </tr></thead>
+            <tbody>{saved.map(c=>{ const prof=(Number(c.srp||0)-Number(c.unit_cost||0))*Number(c.quantity||0); return (
+              <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>loadInto(c)}>
+                <td className="px-3 py-2 font-semibold">{c.name||'—'}</td>
+                <td className="px-3 py-2 text-slate-600">{c.item||'—'}</td>
+                <td className="px-3 py-2 text-right">{c.quantity}</td>
+                <td className="px-3 py-2 text-right">{peso(c.unit_cost)}</td>
+                <td className="px-3 py-2 text-right font-semibold text-indigo-700">{peso(c.srp)}</td>
+                <td className="px-3 py-2 text-right">{Number(c.target_margin||0)}%</td>
+                <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(prof)}</td>
+                <td className="px-3 py-2 text-right text-xs text-slate-500">{fmtDate(String(c.created_at).slice(0,10))}</td>
+                <td className="px-3 py-2 text-right"><button onClick={(e)=>{ e.stopPropagation(); delSaved(c); }} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+              </tr>
+            ); })}{saved.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-10">No saved costings yet. Build one in the Calculator tab and click Save.</td></tr>}</tbody>
+          </table>
         </div>
       )}
     </div>
@@ -26361,7 +26534,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
@@ -26502,6 +26675,7 @@ function App(){
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
+        {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
