@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 214 · Costing Calculator: added Overhead % (10/15/20) and Reject allowance % — direct cost → +overhead → +reject = fully-loaded unit cost, then margin applied on top";
+const BUILD = "Live build 215 · Costing Calculator: enter a manual SRP you already have and it computes the actual margin % + profit/pc (falls back to the recommended SRP when left blank)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2922,6 +2922,7 @@ function CostingCalculatorView({ profile }){
   const [margin,setMargin]=useState(60);
   const [overheadPct,setOverheadPct]=useState(15);
   const [rejectPct,setRejectPct]=useState(3);
+  const [manualSrp,setManualSrp]=useState(''); // optional: a price you already have
   const [comps,setComps]=useState([ blankComp() ]);
   const [editingId,setEditingId]=useState(null);
   const [saved,setSaved]=useState([]);
@@ -2963,7 +2964,7 @@ function CostingCalculatorView({ profile }){
   function up(i,k,v){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c,[k]:v}:c)); }
   function addComp(){ setComps(cs=>[...cs, blankComp()]); }
   function delComp(i){ setComps(cs=>cs.filter((_,idx)=>idx!==i)); }
-  function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setOverheadPct(15); setRejectPct(3); setComps([blankComp()]); setEditingId(null); setMsg(''); }
+  function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setOverheadPct(15); setRejectPct(3); setManualSrp(''); setComps([blankComp()]); setEditingId(null); setMsg(''); }
 
   const directCost = comps.reduce((s,c)=> s + lineTotal(c), 0);
   const overheadAmt = directCost * (Number(overheadPct)||0)/100;
@@ -2971,8 +2972,11 @@ function CostingCalculatorView({ profile }){
   const unitCost = directCost + overheadAmt + rejectAmt; // true fully-loaded unit cost
   const targetSrp = srpForMargin(unitCost, margin);
   const suggestedSrp = roundUpTo(targetSrp, 5);
+  // If you already have a set price, use it; otherwise use the recommendation.
+  const usingManual = Number(manualSrp) > 0;
+  const effectiveSrp = usingManual ? Number(manualSrp) : suggestedSrp;
   const totalCost = unitCost * (Number(qty)||0);
-  const revenue = suggestedSrp * (Number(qty)||0);
+  const revenue = effectiveSrp * (Number(qty)||0);
   const profit = revenue - totalCost;
   const realMargin = revenue>0 ? (profit/revenue*100) : 0;
   const byCat = COSTING_CATEGORIES.map(cat=>({ cat, total: comps.filter(c=>c.category===cat).reduce((s,c)=>s+lineTotal(c),0) })).filter(x=>x.total>0);
@@ -2984,7 +2988,7 @@ function CostingCalculatorView({ profile }){
       const payload = {
         name: name.trim()||item.trim(), item: item.trim()||null, quantity: Number(qty)||0,
         target_margin: Number(margin)||0, overhead_pct: Number(overheadPct)||0, reject_pct: Number(rejectPct)||0,
-        unit_cost: unitCost, srp: suggestedSrp,
+        unit_cost: unitCost, srp: effectiveSrp,
         components: comps.map(c=>({ category:c.category, label:c.label||'', cost:Number(c.cost)||0, qty:(c.qty===''||c.qty==null?1:Number(c.qty)||0) })),
       };
       if(editingId){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('costings').update(payload).eq('id', editingId); if(error) throw error; }
@@ -2995,6 +2999,7 @@ function CostingCalculatorView({ profile }){
   function loadInto(c){
     setName(c.name||''); setItem(c.item||''); setQty(c.quantity||0); setMargin(c.target_margin||60);
     setOverheadPct(c.overhead_pct??15); setRejectPct(c.reject_pct??3);
+    { const uc=Number(c.unit_cost)||0; const rec=roundUpTo(srpForMargin(uc, c.target_margin||60),5); setManualSrp(Math.abs((Number(c.srp)||0)-rec) > 0.5 ? String(c.srp) : ''); }
     setComps(Array.isArray(c.components)&&c.components.length ? c.components.map(x=>({ id:crypto.randomUUID(), category:x.category||'Other', label:x.label||'', cost:x.cost??'', qty:(x.qty==null?1:x.qty) })) : [blankComp()]);
     setEditingId(c.id); setTab('calc'); setMsg('Loaded — edit and Save to update.');
   }
@@ -3099,12 +3104,21 @@ function CostingCalculatorView({ profile }){
                   </div>
                 ); })}
               </div>
+              <div className="mt-3 border-t border-indigo-200 pt-2">
+                <label className="text-[10px] uppercase font-semibold text-indigo-500">Already have a price? Enter it</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-sm text-slate-500">₱</span>
+                  <input type="number" value={manualSrp} onChange={e=>setManualSrp(e.target.value)} className="border rounded px-2 py-1 text-sm w-28" placeholder="e.g. 450" />
+                  {usingManual && <button onClick={()=>setManualSrp('')} className="text-[10px] text-slate-500 hover:underline">use recommended</button>}
+                </div>
+                {usingManual && <div className={`mt-1 text-xs font-semibold ${realMargin>=50?'text-emerald-700':realMargin>=0?'text-amber-600':'text-rose-600'}`}>→ {peso(effectiveSrp)} gives a {realMargin.toFixed(1)}% margin ({peso(effectiveSrp-unitCost)}/pc profit){realMargin<50 && realMargin>=0 ? ' — below your 50% target' : realMargin<0 ? ' — LOSS' : ''}</div>}
+              </div>
             </div>
 
             <div className="bg-white border rounded-xl p-4 space-y-2 text-sm">
               <div className="text-[10px] uppercase font-semibold text-slate-400">Project ({Number(qty)||0} pcs)</div>
               <div className="flex justify-between"><span className="text-slate-500">Unit cost</span><Money v={unitCost} cls="font-semibold" /></div>
-              <div className="flex justify-between"><span className="text-slate-500">SRP / pc</span><Money v={suggestedSrp} cls="font-semibold" /></div>
+              <div className="flex justify-between"><span className="text-slate-500">SRP / pc{usingManual && <span className="text-[10px] text-indigo-600"> (your price)</span>}</span><Money v={effectiveSrp} cls="font-semibold" /></div>
               <div className="flex justify-between border-t pt-2"><span className="text-slate-500">Total cost</span><Money v={totalCost} cls="font-semibold text-rose-600" /></div>
               <div className="flex justify-between"><span className="text-slate-500">Revenue</span><Money v={revenue} cls="font-semibold" /></div>
               <div className="flex justify-between border-t pt-2"><span className="font-semibold">Projected profit</span><Money v={profit} cls="font-bold text-emerald-700 text-lg" /></div>
