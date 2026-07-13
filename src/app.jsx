@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 209 · Commission payout: choose which items to pay — a 'Pay up to month' cut-off (e.g. only June) plus per-row checkboxes in each rep's breakdown. Only the selected rows are paid + marked paid; July's deals stay outstanding";
+const BUILD = "Live build 210 · Sales Pipeline manager filter now lists only sales managers + sales assistants (not production/other roles)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6472,7 +6472,9 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   //   <profile id> = that specific manager
   const [managerFilter,setManagerFilter]=useState('');
   const selectedMgr = managerFilter && managerFilter!=='all' ? profiles.find(p=>p.id===managerFilter) : null;
-  const salesPeople = profiles.filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Only sales managers + sales assistants own leads / appear in the pipeline
+  // filter (they're the only roles with a Sales Pipeline).
+  const salesPeople = profiles.filter(p=>['manager','assistant'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   function ownerMatch(l){
     if(isAdmin && managerFilter==='all') return true;
