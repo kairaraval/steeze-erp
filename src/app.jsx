@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 211 · Sales module: admin-only Costing Calculator — build unit cost (fabric/trims/labor/etc.), get SRP recommendations at 50/60/70% margin, enter quantity to see project profit, and save costings in a Saved tab";
+const BUILD = "Live build 212 · Costing Calculator: type in a cost line's Description to search live prices — inventory items for materials, sewing-payroll operations for Labor — and click to auto-fill the price";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2923,8 +2923,35 @@ function CostingCalculatorView({ profile }){
   const [editingId,setEditingId]=useState(null);
   const [saved,setSaved]=useState([]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Live lookups: inventory items (materials) + sewing-payroll operations (labor)
+  // so a cost line can pull the real price from the other modules.
+  const [inv,setInv]=useState([]);
+  const [ops,setOps]=useState([]);
+  const [openRow,setOpenRow]=useState(null); // which cost-line's suggestion list is open
   async function loadSaved(){ const { data }=await sb.from('costings').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
-  useEffect(()=>{ loadSaved(); },[]);
+  async function loadSources(){
+    const [it, g] = await Promise.all([
+      sb.from('items').select('id,name,cost,price,unit,bucket').order('name',{ascending:true}),
+      sb.from('payroll_garments').select('name,operations'),
+    ]);
+    setInv(it.data||[]);
+    const flat=[];
+    (g.data||[]).forEach(row=> (row.operations||[]).forEach(o=>{ if(o && o.name) flat.push({ name:o.name, garment:row.name||'', price:Number(o.price)||0 }); }));
+    setOps(flat);
+  }
+  useEffect(()=>{ loadSaved(); loadSources(); },[]);
+  // Suggestions for a cost line: Labor → payroll operations, else → inventory items.
+  function suggestionsFor(c){
+    const q=String(c.label||'').toLowerCase().trim();
+    if(q.length<1) return [];
+    if(c.category==='Labor'){
+      return ops.filter(o=> (o.name+' '+o.garment).toLowerCase().includes(q)).slice(0,8)
+        .map(o=>({ kind:'labor', label:o.name, sub:o.garment, cost:o.price }));
+    }
+    return (inv||[]).filter(it=> String(it.name||'').toLowerCase().includes(q)).slice(0,8)
+      .map(it=>({ kind:'item', label:it.name, sub:`${it.bucket||it.category||''}${it.unit?` · per ${it.unit}`:''}`, cost:Number(it.cost||it.price||0) }));
+  }
+  function pickSuggestion(i, s){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c, label:s.label, cost:s.cost}:c)); setOpenRow(null); }
   function up(i,k,v){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c,[k]:v}:c)); }
   function addComp(){ setComps(cs=>[...cs, blankComp()]); }
   function delComp(i){ setComps(cs=>cs.filter((_,idx)=>idx!==i)); }
@@ -2982,14 +3009,27 @@ function CostingCalculatorView({ profile }){
             </div>
 
             <div className="bg-white border rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2"><div className="text-sm font-semibold">Cost per piece</div><button onClick={addComp} className="text-xs px-2 py-1 rounded bg-slate-100 border font-semibold hover:bg-slate-200">+ Add cost line</button></div>
+              <div className="flex items-center justify-between mb-1"><div className="text-sm font-semibold">Cost per piece</div><button onClick={addComp} className="text-xs px-2 py-1 rounded bg-slate-100 border font-semibold hover:bg-slate-200">+ Add cost line</button></div>
+              <div className="text-[11px] text-slate-400 mb-2">Tip: type in Description to search live prices — inventory for materials, sewing payroll for Labor.</div>
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Category</th><th className="text-left py-1">Description</th><th className="text-right py-1">Cost/pc</th><th></th></tr></thead>
                 <tbody>
                   {comps.map((c,i)=>(
                     <tr key={c.id}>
                       <td className="py-1 pr-2"><select value={c.category} onChange={e=>up(i,'category',e.target.value)} className="border rounded px-1.5 py-1 text-xs w-32">{COSTING_CATEGORIES.map(x=><option key={x}>{x}</option>)}</select></td>
-                      <td className="py-1 pr-2"><input value={c.label} onChange={e=>up(i,'label',e.target.value)} className="border rounded px-2 py-1 text-xs w-full" placeholder="e.g. Cotton pique 1.2m @ ₱180" /></td>
+                      <td className="py-1 pr-2 relative">
+                        <input value={c.label} onChange={e=>{ up(i,'label',e.target.value); setOpenRow(i); }} onFocus={()=>setOpenRow(i)} onBlur={()=>setTimeout(()=>setOpenRow(r=>r===i?null:r),150)} className="border rounded px-2 py-1 text-xs w-full" placeholder={c.category==='Labor'?'Type a sewing operation…':'Type a fabric / material…'} />
+                        {openRow===i && suggestionsFor(c).length>0 && (
+                          <div className="absolute z-30 left-0 right-0 top-full mt-0.5 bg-white border rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                            {suggestionsFor(c).map((s,si)=>(
+                              <button key={si} type="button" onMouseDown={(e)=>{ e.preventDefault(); pickSuggestion(i,s); }} className="w-full text-left px-2 py-1.5 hover:bg-indigo-50 flex items-center justify-between gap-2 border-b last:border-b-0">
+                                <span className="min-w-0"><span className="text-xs font-medium block truncate">{s.label}</span>{s.sub && <span className="text-[10px] text-slate-400 block truncate">{s.kind==='labor'?'🧵 ':'📦 '}{s.sub}</span>}</span>
+                                <span className="text-xs font-semibold text-emerald-700 shrink-0">{peso(s.cost)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td className="py-1 pr-2"><input type="number" value={c.cost} onChange={e=>up(i,'cost',e.target.value)} className="border rounded px-2 py-1 text-xs w-24 text-right" placeholder="0" /></td>
                       <td className="py-1 text-right"><button onClick={()=>delComp(i)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button></td>
                     </tr>
