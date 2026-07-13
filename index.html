@@ -217,6 +217,35 @@
        (see package.json + vercel.json). Removes the in-browser Babel pass that
        used to transpile ~1.5MB of JSX on every cold load. defer = run after the
        DOM (so #root exists) and after the React / Supabase CDN scripts above. -->
-  <script src="/app.js" defer></script>
+  <!-- Resilient boot. The app needs React, ReactDOM and Supabase from the CDNs
+       above. If one CDN is slow or fails, fall back to an alternate CDN before
+       loading /app.js — so a single flaky CDN can't white-screen the whole app
+       with "React is not defined". -->
+  <script>
+  (function(){
+    var FALLBACKS = [
+      ['React',    'https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js'],
+      ['ReactDOM', 'https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js'],
+      ['supabase', 'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js']
+    ];
+    function have(){ return window.React && window.ReactDOM && window.supabase; }
+    function load(src){ return new Promise(function(res,rej){ var s=document.createElement('script'); s.src=src; s.crossOrigin='anonymous'; s.onload=res; s.onerror=function(){ rej(new Error('load '+src)); }; document.head.appendChild(s); }); }
+    function wait(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+    async function boot(){
+      // Give the deferred primary CDN scripts up to ~4s to execute.
+      for(var i=0;i<80 && !have();i++){ await wait(50); }
+      // For anything still missing, try the fallback CDN.
+      for(var j=0;j<FALLBACKS.length;j++){ var name=FALLBACKS[j][0], url=FALLBACKS[j][1]; if(!window[name]){ try{ await load(url); }catch(e){} } }
+      if(have()){ load('/app.js'); return; }
+      // Still missing after fallbacks — almost always no internet. Friendly retry.
+      var s=document.getElementById('steeze-splash');
+      if(s){ s.innerHTML = '<div style="text-align:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#fff;padding:24px;">'
+        + '<div style="font-size:20px;font-weight:800;margin-bottom:10px;">Could not reach the internet</div>'
+        + '<div style="font-size:13px;opacity:.75;max-width:340px;margin:0 auto 18px;line-height:1.5;">Steeze OS needs a connection to start up. Check your Wi-Fi or data, then reload.</div>'
+        + '<button onclick="location.reload()" style="background:#fbbf24;color:#1e293b;border:0;border-radius:10px;padding:10px 22px;font-weight:700;font-size:14px;cursor:pointer;">Reload</button></div>'; }
+    }
+    boot();
+  })();
+  </script>
 </body>
 </html>
