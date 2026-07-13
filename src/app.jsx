@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 212 · Costing Calculator: type in a cost line's Description to search live prices — inventory items for materials, sewing-payroll operations for Labor — and click to auto-fill the price";
+const BUILD = "Live build 213 · Costing Calculator: Labor search now shows whole-garment price (sum of operations), and each cost line has a Qty/consumption field (e.g. 1.5 yards) so Total = Unit ₱ × Qty auto-computes";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2914,7 +2914,8 @@ function roundUpTo(n, step){ if(!isFinite(n)) return 0; return Math.ceil(n/step)
 
 function CostingCalculatorView({ profile }){
   const [tab,setTab]=useState('calc');
-  const blankComp = ()=>({ id:crypto.randomUUID(), category:'Fabric', label:'', cost:'' });
+  const blankComp = ()=>({ id:crypto.randomUUID(), category:'Fabric', label:'', cost:'', qty:1 });
+  const lineTotal = (c)=> (Number(c.cost)||0) * (c.qty===''||c.qty==null ? 1 : (Number(c.qty)||0));
   const [name,setName]=useState('');
   const [item,setItem]=useState('');
   const [qty,setQty]=useState(100);
@@ -2935,9 +2936,13 @@ function CostingCalculatorView({ profile }){
       sb.from('payroll_garments').select('name,operations'),
     ]);
     setInv(it.data||[]);
-    const flat=[];
-    (g.data||[]).forEach(row=> (row.operations||[]).forEach(o=>{ if(o && o.name) flat.push({ name:o.name, garment:row.name||'', price:Number(o.price)||0 }); }));
-    setOps(flat);
+    // Whole-garment labor = sum of all its operation prices (one entry per garment).
+    const garments=(g.data||[]).map(row=>({
+      garment: row.name||'',
+      price: (row.operations||[]).reduce((s,o)=> s + (Number(o&&o.price)||0), 0),
+      ops: (row.operations||[]).length,
+    })).filter(x=> x.garment && x.price>0);
+    setOps(garments);
   }
   useEffect(()=>{ loadSaved(); loadSources(); },[]);
   // Suggestions for a cost line: Labor → payroll operations, else → inventory items.
@@ -2945,26 +2950,27 @@ function CostingCalculatorView({ profile }){
     const q=String(c.label||'').toLowerCase().trim();
     if(q.length<1) return [];
     if(c.category==='Labor'){
-      return ops.filter(o=> (o.name+' '+o.garment).toLowerCase().includes(q)).slice(0,8)
-        .map(o=>({ kind:'labor', label:o.name, sub:o.garment, cost:o.price }));
+      return ops.filter(o=> o.garment.toLowerCase().includes(q)).slice(0,8)
+        .map(o=>({ kind:'labor', label:o.garment, sub:`whole garment · ${o.ops} operation${o.ops===1?'':'s'}`, cost:o.price, qty:1 }));
     }
     return (inv||[]).filter(it=> String(it.name||'').toLowerCase().includes(q)).slice(0,8)
       .map(it=>({ kind:'item', label:it.name, sub:`${it.bucket||it.category||''}${it.unit?` · per ${it.unit}`:''}`, cost:Number(it.cost||it.price||0) }));
   }
-  function pickSuggestion(i, s){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c, label:s.label, cost:s.cost}:c)); setOpenRow(null); }
+  // Fill unit price (and qty=1 for labor); keep the line's existing consumption for materials.
+  function pickSuggestion(i, s){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c, label:s.label, cost:s.cost, ...(s.qty?{qty:s.qty}:{})}:c)); setOpenRow(null); }
   function up(i,k,v){ setComps(cs=>cs.map((c,idx)=> idx===i?{...c,[k]:v}:c)); }
   function addComp(){ setComps(cs=>[...cs, blankComp()]); }
   function delComp(i){ setComps(cs=>cs.filter((_,idx)=>idx!==i)); }
   function reset(){ setName(''); setItem(''); setQty(100); setMargin(60); setComps([blankComp()]); setEditingId(null); setMsg(''); }
 
-  const unitCost = comps.reduce((s,c)=> s + (Number(c.cost)||0), 0);
+  const unitCost = comps.reduce((s,c)=> s + lineTotal(c), 0);
   const targetSrp = srpForMargin(unitCost, margin);
   const suggestedSrp = roundUpTo(targetSrp, 5);
   const totalCost = unitCost * (Number(qty)||0);
   const revenue = suggestedSrp * (Number(qty)||0);
   const profit = revenue - totalCost;
   const realMargin = revenue>0 ? (profit/revenue*100) : 0;
-  const byCat = COSTING_CATEGORIES.map(cat=>({ cat, total: comps.filter(c=>c.category===cat).reduce((s,c)=>s+(Number(c.cost)||0),0) })).filter(x=>x.total>0);
+  const byCat = COSTING_CATEGORIES.map(cat=>({ cat, total: comps.filter(c=>c.category===cat).reduce((s,c)=>s+lineTotal(c),0) })).filter(x=>x.total>0);
 
   async function save(){
     if(!name.trim() && !item.trim()){ setMsg('Give the costing a name or item.'); return; }
@@ -2973,7 +2979,7 @@ function CostingCalculatorView({ profile }){
       const payload = {
         name: name.trim()||item.trim(), item: item.trim()||null, quantity: Number(qty)||0,
         target_margin: Number(margin)||0, unit_cost: unitCost, srp: suggestedSrp,
-        components: comps.map(c=>({ category:c.category, label:c.label||'', cost:Number(c.cost)||0 })),
+        components: comps.map(c=>({ category:c.category, label:c.label||'', cost:Number(c.cost)||0, qty:(c.qty===''||c.qty==null?1:Number(c.qty)||0) })),
       };
       if(editingId){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('costings').update(payload).eq('id', editingId); if(error) throw error; }
       else { const { error }=await sb.from('costings').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
@@ -2982,7 +2988,7 @@ function CostingCalculatorView({ profile }){
   }
   function loadInto(c){
     setName(c.name||''); setItem(c.item||''); setQty(c.quantity||0); setMargin(c.target_margin||60);
-    setComps(Array.isArray(c.components)&&c.components.length ? c.components.map(x=>({ id:crypto.randomUUID(), category:x.category||'Other', label:x.label||'', cost:x.cost??'' })) : [blankComp()]);
+    setComps(Array.isArray(c.components)&&c.components.length ? c.components.map(x=>({ id:crypto.randomUUID(), category:x.category||'Other', label:x.label||'', cost:x.cost??'', qty:(x.qty==null?1:x.qty) })) : [blankComp()]);
     setEditingId(c.id); setTab('calc'); setMsg('Loaded — edit and Save to update.');
   }
   async function delSaved(c){ if(!confirm(`Delete costing "${c.name||c.item||''}"?`)) return; const { error }=await sb.from('costings').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } loadSaved(); }
@@ -3010,9 +3016,9 @@ function CostingCalculatorView({ profile }){
 
             <div className="bg-white border rounded-xl p-4">
               <div className="flex items-center justify-between mb-1"><div className="text-sm font-semibold">Cost per piece</div><button onClick={addComp} className="text-xs px-2 py-1 rounded bg-slate-100 border font-semibold hover:bg-slate-200">+ Add cost line</button></div>
-              <div className="text-[11px] text-slate-400 mb-2">Tip: type in Description to search live prices — inventory for materials, sewing payroll for Labor.</div>
+              <div className="text-[11px] text-slate-400 mb-2">Tip: type in Description to pull live prices — inventory for materials, whole-garment labor from sewing payroll. Use <span className="font-semibold">Qty</span> for consumption (e.g. 1.5 yards of fabric); Total = Unit ₱ × Qty.</div>
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Category</th><th className="text-left py-1">Description</th><th className="text-right py-1">Cost/pc</th><th></th></tr></thead>
+                <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Category</th><th className="text-left py-1">Description</th><th className="text-right py-1 w-16">Qty</th><th className="text-right py-1 w-24">Unit ₱</th><th className="text-right py-1 w-24">Total</th><th></th></tr></thead>
                 <tbody>
                   {comps.map((c,i)=>(
                     <tr key={c.id}>
@@ -3030,12 +3036,14 @@ function CostingCalculatorView({ profile }){
                           </div>
                         )}
                       </td>
+                      <td className="py-1 pr-2"><input type="number" step="0.01" value={c.qty} onChange={e=>up(i,'qty',e.target.value)} className="border rounded px-2 py-1 text-xs w-16 text-right" placeholder="1" title="Consumption — e.g. 1.5 yards" /></td>
                       <td className="py-1 pr-2"><input type="number" value={c.cost} onChange={e=>up(i,'cost',e.target.value)} className="border rounded px-2 py-1 text-xs w-24 text-right" placeholder="0" /></td>
+                      <td className="py-1 pr-2 text-right text-xs font-semibold">{peso(lineTotal(c))}</td>
                       <td className="py-1 text-right"><button onClick={()=>delComp(i)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button></td>
                     </tr>
                   ))}
                 </tbody>
-                <tfoot><tr className="border-t"><td colSpan={2} className="py-1.5 text-right text-xs font-semibold uppercase text-slate-500">Unit cost</td><td className="py-1.5 text-right font-bold">{peso(unitCost)}</td><td></td></tr></tfoot>
+                <tfoot><tr className="border-t"><td colSpan={4} className="py-1.5 text-right text-xs font-semibold uppercase text-slate-500">Unit cost / pc</td><td className="py-1.5 text-right font-bold">{peso(unitCost)}</td><td></td></tr></tfoot>
               </table>
             </div>
 
