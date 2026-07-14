@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 215 · Costing Calculator: enter a manual SRP you already have and it computes the actual margin % + profit/pc (falls back to the recommended SRP when left blank)";
+const BUILD = "Live build 216 · Sales Orders: month filter + a Monthly totals panel showing SO count, total value, collected and balance per month (click a month to filter the list)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17282,6 +17282,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment row to verify
   const [filter,setFilter]=useState('');
   const [search,setSearch]=useState('');
+  const [monthFilter,setMonthFilter]=useState(''); // '' = all months, else 'YYYY-MM'
   // Top-level sub-tab: 'orders' = the SO list (default), 'payments' = a flat
   // chronological feed of all sales_order_payments across visible SOs.
   // Admin + Accounting both get the Payments sub-view since they need it to
@@ -17366,8 +17367,23 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   // bankAccounts is only needed for the (admin/accounting-gated) payment tools.
 
   const counts = SO_STATUSES.reduce((a,s)=>{ a[s.key]=visibleSOs.filter(o=>o.status===s.key).length; return a; }, {});
+  // Month of an SO (order date, fallback to created_at).
+  const soMonth = (o)=> String(o.date || o.created_at || '').slice(0,7);
+  // Base set for month views = visible SOs of the current kind (production/sample), excluding cancelled.
+  const monthBase = visibleSOs.filter(o=> (kindFilter==='all' || (o.kind||'production')===kindFilter) && o.status!=='cancelled');
+  const monthList = Array.from(new Set(monthBase.map(soMonth).filter(Boolean))).sort().reverse();
+  // Per-month totals for the summary panel.
+  const monthlySummary = monthList.map(m=>{
+    const os = monthBase.filter(o=> soMonth(o)===m);
+    return { m, count:os.length,
+      total: os.reduce((s,o)=>s+Number(o.total||0),0),
+      paid: os.reduce((s,o)=>s+Number(o.amount_paid||0),0),
+      balance: os.reduce((s,o)=>s+Number(o.balance_due||0),0) };
+  });
+  const monthLabel = (m)=> m ? new Date(m+'-01T00:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'}) : '';
   const rows = visibleSOs
     .filter(o=>kindFilter==='all' || (o.kind||'production')===kindFilter)
+    .filter(o=>!monthFilter || soMonth(o)===monthFilter)
     .filter(o=>!filter || o.status===filter)
     .filter(o=>!search || `${o.number} ${o.client_name} ${o.qb_invoice_number||''}`.toLowerCase().includes(search.toLowerCase()));
   const totalAR = visibleSOs.filter(o=>o.status!=='paid' && o.status!=='cancelled').reduce((s,o)=>s+Number(o.balance_due||0),0);
@@ -17437,7 +17453,48 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
         ))}
       </div>
 
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SO# or client or QB invoice#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72 mb-4" />
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SO# or client or QB invoice#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        <select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white">
+          <option value="">All months</option>
+          {monthList.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        {monthFilter && (()=>{ const s=monthlySummary.find(x=>x.m===monthFilter); return s ? <span className="text-sm text-slate-600">{s.count} SO{s.count===1?'':'s'} · <strong className="text-slate-900">{peso(s.total)}</strong> total</span> : null; })()}
+      </div>
+
+      {/* Monthly totals — total SO count + value per month. Click a month to filter. */}
+      {monthlySummary.length>0 && (
+        <div className="bg-white rounded-xl border overflow-hidden mb-4">
+          <div className="px-3 py-2 text-xs font-semibold uppercase text-slate-500 bg-slate-50 border-b">Monthly totals ({kindFilter==='all'?'all orders':kindFilter})</div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
+              <th className="text-left px-3 py-2">Month</th>
+              <th className="text-right px-3 py-2">SOs</th>
+              <th className="text-right px-3 py-2">Total</th>
+              <th className="text-right px-3 py-2">Collected</th>
+              <th className="text-right px-3 py-2">Balance</th>
+            </tr></thead>
+            <tbody>
+              {monthlySummary.map(s=>(
+                <tr key={s.m} onClick={()=>setMonthFilter(monthFilter===s.m?'':s.m)} className={`border-t cursor-pointer hover:bg-slate-50 ${monthFilter===s.m?'bg-indigo-50':''}`}>
+                  <td className="px-3 py-2 font-medium">{monthLabel(s.m)}</td>
+                  <td className="px-3 py-2 text-right">{s.count}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(s.total)}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700">{peso(s.paid)}</td>
+                  <td className="px-3 py-2 text-right text-rose-700">{peso(s.balance)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold">
+                <td className="px-3 py-2">All months</td>
+                <td className="px-3 py-2 text-right">{monthlySummary.reduce((a,s)=>a+s.count,0)}</td>
+                <td className="px-3 py-2 text-right">{peso(monthlySummary.reduce((a,s)=>a+s.total,0))}</td>
+                <td className="px-3 py-2 text-right text-emerald-700">{peso(monthlySummary.reduce((a,s)=>a+s.paid,0))}</td>
+                <td className="px-3 py-2 text-right text-rose-700">{peso(monthlySummary.reduce((a,s)=>a+s.balance,0))}</td>
+              </tr>
+            </tbody>
+          </table></div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
