@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 217 · Sales Orders now store the sales rep on the SO itself, so trashing a lead no longer blanks the Sales Rep column. Backfilled all existing SOs + fixed Clara Poblador's name";
+const BUILD = "Live build 218 · When a Production job is marked Delivered, its lead auto-moves to 'Delivered - For Payment' and the linked SO is stamped delivered (✓ Delivered badge) — no more manual tagging before collection";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17524,6 +17524,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
             <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(o.balance_due)}</td>
             <td className="px-3 py-2">
               <span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
+              {o.delivered_at && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800" title={`Delivered ${fmtDate(o.delivered_at)}`}>✓ Delivered</span>}
               {pendN > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-100 text-amber-800" title={`${pendN} payment${pendN===1?'':'s'} awaiting verification`}>⏳ {pendN}</span>}
               {(soActivityCounts||{})[o.id] > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800" title={`${(soActivityCounts||{})[o.id]} comment${(soActivityCounts||{})[o.id]===1?'':'s'} on this SO`}>💬 {(soActivityCounts||{})[o.id]}</span>}
             </td>
