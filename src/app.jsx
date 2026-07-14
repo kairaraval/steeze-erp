@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 216 · Sales Orders: month filter + a Monthly totals panel showing SO count, total value, collected and balance per month (click a month to filter the list)";
+const BUILD = "Live build 217 · Sales Orders now store the sales rep on the SO itself, so trashing a lead no longer blanks the Sales Rep column. Backfilled all existing SOs + fixed Clara Poblador's name";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15609,6 +15609,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       kind: 'production',
       date: today,
       lead_id: lead.id,
+      manager_id: lead.manager_id||null,   // stamp the rep so a trashed lead can't orphan it
       client_id: lead.client_id||null,
       client_name: client?.company||'',
       items,
@@ -15671,7 +15672,7 @@ async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
     const subtotal = Number(estimate.subtotal ?? total)||0; // ex-VAT base drives commission
     const payload = {
       number, kind:'sample', date: today,
-      lead_id: lead.id, client_id: lead.client_id||null,
+      lead_id: lead.id, manager_id: lead.manager_id||null, client_id: lead.client_id||null,
       client_name: client?.company || estimate.client_name || lead.client_name || '',
       items: estimate.items || [],
       subtotal, total, amount_paid: 0, balance_due: total, status: 'open',
@@ -17310,16 +17311,15 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   // see everything by default; admin can toggle "Mine" or pick a specific
   // manager from the dropdown.
   const restrictToOwn = (profile.role === 'assistant' || profile.role === 'manager');
-  function isMine(o){
-    if(!o.lead_id) return false;
-    const lead = (leads||[]).find(l => l.id === o.lead_id);
-    return lead && lead.manager_id === profile.id;
-  }
+  // Prefer the rep stamped on the SO itself; fall back to the linked lead (for
+  // any older SOs that predate the manager_id column and whose lead is still live).
   function ownerOf(o){
+    if(o.manager_id) return o.manager_id;
     if(!o.lead_id) return null;
     const lead = (leads||[]).find(l => l.id === o.lead_id);
     return lead ? lead.manager_id : null;
   }
+  function isMine(o){ return ownerOf(o) === profile.id; }
   const visibleSOs = (()=>{
     let base = salesOrders || [];
     if(restrictToOwn) return base.filter(isMine);
