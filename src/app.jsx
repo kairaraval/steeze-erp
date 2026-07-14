@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 218 · When a Production job is marked Delivered, its lead auto-moves to 'Delivered - For Payment' and the linked SO is stamped delivered (✓ Delivered badge) — no more manual tagging before collection";
+const BUILD = "Live build 219 · Sales Orders: removed the QB Invoice column, added a '✓ Delivered' filter to view all delivered SOs";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17284,6 +17284,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   const [filter,setFilter]=useState('');
   const [search,setSearch]=useState('');
   const [monthFilter,setMonthFilter]=useState(''); // '' = all months, else 'YYYY-MM'
+  const [deliveredOnly,setDeliveredOnly]=useState(false); // show only delivered SOs
   // Top-level sub-tab: 'orders' = the SO list (default), 'payments' = a flat
   // chronological feed of all sales_order_payments across visible SOs.
   // Admin + Accounting both get the Payments sub-view since they need it to
@@ -17381,11 +17382,13 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
       balance: os.reduce((s,o)=>s+Number(o.balance_due||0),0) };
   });
   const monthLabel = (m)=> m ? new Date(m+'-01T00:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'}) : '';
+  const deliveredCount = visibleSOs.filter(o=> o.delivered_at && o.status!=='cancelled').length;
   const rows = visibleSOs
     .filter(o=>kindFilter==='all' || (o.kind||'production')===kindFilter)
+    .filter(o=>!deliveredOnly || !!o.delivered_at)
     .filter(o=>!monthFilter || soMonth(o)===monthFilter)
     .filter(o=>!filter || o.status===filter)
-    .filter(o=>!search || `${o.number} ${o.client_name} ${o.qb_invoice_number||''}`.toLowerCase().includes(search.toLowerCase()));
+    .filter(o=>!search || `${o.number} ${o.client_name}`.toLowerCase().includes(search.toLowerCase()));
   const totalAR = visibleSOs.filter(o=>o.status!=='paid' && o.status!=='cancelled').reduce((s,o)=>s+Number(o.balance_due||0),0);
   // Pending payments count per SO so the row shows a "1 pending" badge.
   function pendingCountFor(soId){
@@ -17459,6 +17462,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
           <option value="">All months</option>
           {monthList.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
         </select>
+        <button onClick={()=>setDeliveredOnly(v=>!v)} className={`px-3 py-2 text-sm rounded-lg border font-semibold ${deliveredOnly?'bg-emerald-600 text-white border-emerald-600':'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>✓ Delivered{deliveredCount>0?` (${deliveredCount})`:''}</button>
         {monthFilter && (()=>{ const s=monthlySummary.find(x=>x.m===monthFilter); return s ? <span className="text-sm text-slate-600">{s.count} SO{s.count===1?'':'s'} · <strong className="text-slate-900">{peso(s.total)}</strong> total</span> : null; })()}
       </div>
 
@@ -17506,7 +17510,6 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
           <th className="text-right px-3 py-2">Paid</th>
           <th className="text-right px-3 py-2">Balance</th>
           <th className="text-left px-3 py-2">Status</th>
-          <th className="text-left px-3 py-2">QB Invoice</th>
           <th></th>
         </tr></thead>
         <tbody>{rows.map(o => { const meta=soMeta(o.status); const pendN = pendingCountFor(o.id); const ownerId = ownerOf(o); const owner = ownerId ? (profiles||[]).find(p=>p.id===ownerId) : null; return (
@@ -17528,14 +17531,13 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
               {pendN > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-100 text-amber-800" title={`${pendN} payment${pendN===1?'':'s'} awaiting verification`}>⏳ {pendN}</span>}
               {(soActivityCounts||{})[o.id] > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800" title={`${(soActivityCounts||{})[o.id]} comment${(soActivityCounts||{})[o.id]===1?'':'s'} on this SO`}>💬 {(soActivityCounts||{})[o.id]}</span>}
             </td>
-            <td className="px-3 py-2 text-xs">{o.qb_invoice_number ? <a href={o.qb_invoice_url||'#'} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-indigo-600 hover:underline">{o.qb_invoice_number}</a> : <span className="text-slate-300">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               {o.status!=='paid' && o.status!=='cancelled' && canLogSOPayment(profile) && <button onClick={(e)=>{e.stopPropagation(); setPaying(o);}} className="text-xs text-amber-600 hover:underline mr-2">📩 Log payment</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteSO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan={canSeeAllReps?10:9} className="text-center text-slate-400 py-8">{restrictToOwn ? 'No sales orders assigned to you yet. SOs auto-create when a lead you own hits Closed Won.' : (managerFilter ? 'This sales manager has no SOs matching the current filter.' : 'No sales orders yet. They auto-create when a deal hits Closed Won.')}</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan={canSeeAllReps?9:8} className="text-center text-slate-400 py-8">{restrictToOwn ? 'No sales orders assigned to you yet. SOs auto-create when a lead you own hits Closed Won.' : (managerFilter ? 'This sales manager has no SOs matching the current filter.' : 'No sales orders yet. They auto-create when a deal hits Closed Won.')}</td></tr>}</tbody>
       </table></div></div>
 
       </>}
