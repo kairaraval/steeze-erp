@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 220 · Reports: new Sales Meeting tab — booked sales per rep by month, current pipeline per rep, and the clients each rep booked (printable for monthly team meetings)";
+const BUILD = "Live build 221 · Sales Meeting report now also includes the two admin sales accounts (Kaira & Miko) alongside managers + assistants";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9990,7 +9990,8 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
   }).sort((a,b)=>b.wonValue-a.wonValue);
 
   // ───── Sales Meeting: booked per month + pipeline + clients per rep ─────
-  const salesTeam = (profiles||[]).filter(p=>['manager','assistant'].includes(p.role))
+  // Sales team = managers + assistants, plus admins (Kaira & Miko carry their own accounts).
+  const salesTeam = (profiles||[]).filter(p=>['manager','assistant','admin'].includes(p.role))
     .sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
   // Last 6 months for the booked-per-month matrix.
   const meetingMonths = [];
@@ -10535,7 +10536,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
               )}
             </div>
           ); })}
-          {salesTeam.length===0 && <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No sales reps found (roles: manager / assistant).</div>}
+          {salesTeam.length===0 && <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No sales reps found (roles: admin / manager / assistant).</div>}
         </div>
       )}
 
