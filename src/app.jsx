@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 225 · Leads: Contact Person + Delivery Address (+ secondary contact) saved to the client; required before Sampling/Closed Won; Closed Won needs value>0; flows to the Delivery Schedule";
+const BUILD = "Live build 226 · Deliveries now carry the contact person + address from the specific lead (order), falling back to the client — so every new delivery schedule row is pre-filled";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -823,14 +823,19 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   // Contact person + delivery address — saved to the CLIENT record. Required
   // before a lead can move to Sampling or Closed Won.
   const initClient = (existing?.client_id) ? (clients||[]).find(c=>c.id===existing.client_id) : (clients||[]).find(c=>c.id===clientId);
-  const [contactPerson,setContactPerson]=useState(initClient?.contact||'');
-  const [contactPhone,setContactPhone]=useState(initClient?.phone||'');
-  const [address,setAddress]=useState(initClient?.address||'');
+  // Prefer the lead's own (order-specific) contact/address; fall back to the client.
+  const [contactPerson,setContactPerson]=useState(existing?.contact_person || initClient?.contact || '');
+  const [contactPhone,setContactPhone]=useState(existing?.contact_phone || initClient?.phone || '');
+  const [address,setAddress]=useState(existing?.delivery_address || initClient?.address || '');
   const [secondaryContact,setSecondaryContact]=useState('');
   const [secondaryPhone,setSecondaryPhone]=useState('');
-  // When picking a different existing client, load its contact/phone/address.
+  // When the user PICKS A DIFFERENT existing client, load that client's
+  // contact/phone/address. Skip the first render so we don't clobber the lead's
+  // own saved values when editing.
+  const didInitClient = useRef(false);
   useEffect(()=>{
     if(clientMode!=='existing') return;
+    if(!didInitClient.current){ didInitClient.current = true; return; }
     const c=(clients||[]).find(x=>x.id===clientId);
     if(c){ setContactPerson(c.contact||''); setContactPhone(c.phone||''); setAddress(c.address||''); }
   }, [clientId, clientMode]);
@@ -902,7 +907,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
       }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -16007,16 +16012,23 @@ async function maybeAutoCreateDeliveryFromJob(profile, job, jobType){
     // Pick a date — prefer job.due_date, but never schedule into the past.
     const today = new Date().toISOString().slice(0,10);
     const dueDate = (job.due_date && job.due_date >= today) ? job.due_date : today;
-    // Look up the client to pre-fill address + primary contact.
+    // Carry the contact + address from the LEAD (this order's specifics), then
+    // fall back to the client record.
+    let lead = null;
+    if(job.lead_id){
+      const { data: l } = await sb.from('leads').select('contact_person,contact_phone,delivery_address,client_id').eq('id', job.lead_id).maybeSingle();
+      lead = l || null;
+    }
     let client = null;
-    if(job.client_id){
-      const { data: c } = await sb.from('clients').select('id,company,address,contact,phone,contacts').eq('id', job.client_id).maybeSingle();
+    const clientId = job.client_id || lead?.client_id;
+    if(clientId){
+      const { data: c } = await sb.from('clients').select('id,company,address,contact,phone,contacts').eq('id', clientId).maybeSingle();
       client = c || null;
     }
-    // Prefer the client's PRIMARY contact; fall back to the first saved secondary.
     const primary = (client && Array.isArray(client.contacts) && client.contacts.length>0) ? client.contacts[0] : null;
-    const contactName  = client?.contact || (primary && primary.name)  || '';
-    const contactPhone = client?.phone   || (primary && primary.phone) || '';
+    const contactName  = (lead?.contact_person||'').trim()  || client?.contact || (primary && primary.name)  || '';
+    const contactPhone = (lead?.contact_phone||'').trim()   || client?.phone   || (primary && primary.phone) || '';
+    const deliverAddr  = (lead?.delivery_address||'').trim() || client?.address || '';
     const tag = jobType === 'sampling_job' ? 'Sample' : 'Order';
     const noteParts = [`${tag} ${job.number||''}`.trim()];
     if(job.quantity) noteParts.push(`${job.quantity} pcs`);
@@ -16027,7 +16039,7 @@ async function maybeAutoCreateDeliveryFromJob(profile, job, jobType){
       client_id: job.client_id || null,
       client_name: client?.company || job.client_name || '',
       item: job.item || (jobType === 'sampling_job' ? 'Sample' : 'Order'),
-      address: client?.address || '',
+      address: deliverAddr,
       contact: contactName,
       contact_phone: contactPhone,
       notes: noteParts.filter(Boolean).join(' · '),
