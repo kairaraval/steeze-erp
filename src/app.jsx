@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 219 · Sales Orders: removed the QB Invoice column, added a '✓ Delivered' filter to view all delivered SOs";
+const BUILD = "Live build 220 · Reports: new Sales Meeting tab — booked sales per rep by month, current pipeline per rep, and the clients each rep booked (printable for monthly team meetings)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9989,6 +9989,26 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
     };
   }).sort((a,b)=>b.wonValue-a.wonValue);
 
+  // ───── Sales Meeting: booked per month + pipeline + clients per rep ─────
+  const salesTeam = (profiles||[]).filter(p=>['manager','assistant'].includes(p.role))
+    .sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
+  // Last 6 months for the booked-per-month matrix.
+  const meetingMonths = [];
+  for(let i=5;i>=0;i--){ const d=new Date(year, today.getMonth()-i, 1); meetingMonths.push({ key:d.toISOString().slice(0,7), label:d.toLocaleString('en-PH',{month:'short'})+" '"+String(d.getFullYear()).slice(2) }); }
+  // Booked (won) value per rep per month — all-time won leads bucketed by month.
+  const bookedByMgrMonth = {};
+  wonLeads.forEach(l=>{ const mgr=l.manager_id||'__u'; const mk=String(l.won_at||l.created_at||'').slice(0,7); if(!mk) return; (bookedByMgrMonth[mgr]=bookedByMgrMonth[mgr]||{}); (bookedByMgrMonth[mgr][mk]=bookedByMgrMonth[mgr][mk]||{count:0,total:0}); bookedByMgrMonth[mgr][mk].count++; bookedByMgrMonth[mgr][mk].total+=Number(l.value||0); });
+  // Booked in the selected period per rep (for the period column + client list).
+  const bookedInPeriodByMgr = {};
+  wonInPeriod.forEach(l=>{ const mgr=l.manager_id||'__u'; (bookedInPeriodByMgr[mgr]=bookedInPeriodByMgr[mgr]||{count:0,total:0}); bookedInPeriodByMgr[mgr].count++; bookedInPeriodByMgr[mgr].total+=Number(l.value||0); });
+  // Current open pipeline per rep (not period-bound — it's what's live now).
+  const pipelineByMgr = {};
+  openLeadsInPeriod.forEach(l=>{ const mgr=l.manager_id||'__u'; (pipelineByMgr[mgr]=pipelineByMgr[mgr]||{count:0,total:0}); pipelineByMgr[mgr].count++; pipelineByMgr[mgr].total+=Number(l.value||0); });
+  // Clients each rep booked in the selected period.
+  const clientsByMgr = {};
+  wonInPeriod.forEach(l=>{ const mgr=l.manager_id||'__u'; const ck=l.client_id||'__nc'; (clientsByMgr[mgr]=clientsByMgr[mgr]||{}); (clientsByMgr[mgr][ck]=clientsByMgr[mgr][ck]||{count:0,total:0}); clientsByMgr[mgr][ck].count++; clientsByMgr[mgr][ck].total+=Number(l.value||0); });
+  function clientsFor(mgrId){ return Object.entries(clientsByMgr[mgrId]||{}).map(([cid,v])=>({ cid, name: cid==='__nc'?'(no client)':((clients||[]).find(c=>c.id===cid)?.company||'—'), ...v })).sort((a,b)=>b.total-a.total); }
+
   // ───── Tile + small helpers ─────
   function Tile({ label, value, sub, color='slate' }){
     const palette = {
@@ -10112,6 +10132,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
     { key:'suppliers',  label:'Suppliers',  icon:'⚒' },
     { key:'inventory',  label:'Inventory',  icon:'📦' },
     { key:'team',       label:'Team',       icon:'🏆' },
+    { key:'salesmeeting', label:'Sales Meeting', icon:'🗓' },
     { key:'hr',         label:'HR',         icon:'👤' },
   ];
 
@@ -10452,6 +10473,69 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
               </table>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ───── SALES MEETING ───── */}
+      {tab==='salesmeeting' && (
+        <div className="space-y-4">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2 text-xs text-indigo-800">🗓 Monthly sales meeting view — booked sales per rep by month, current pipeline, and the clients each rep booked ({periodLabel} for the client list &amp; period totals). Use the period buttons above and 🖨 Print to bring to the meeting.</div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Tile label={`Team booked (${periodLabel})`} value={peso(wonValue)} sub={`${wonInPeriod.length} deals`} color="emerald" />
+            <Tile label="Team pipeline (now)" value={peso(openLeadsInPeriod.reduce((s,l)=>s+Number(l.value||0),0))} sub={`${openLeadsInPeriod.length} open leads`} color="amber" />
+            <Tile label="Sales reps" value={salesTeam.length} color="indigo" />
+            <Tile label="Avg deal size" value={peso(avgDealSize)} color="blue" />
+          </div>
+
+          {/* Booked per month matrix */}
+          <div className="bg-white border rounded-xl p-4 overflow-x-auto">
+            <div className="text-sm font-bold mb-3">Booked sales per month</div>
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase text-slate-500"><tr>
+                <th className="text-left py-2">Sales rep</th>
+                {meetingMonths.map(m=><th key={m.key} className="text-right py-2 px-2">{m.label}</th>)}
+                <th className="text-right py-2 px-2 bg-slate-50">{periodLabel}</th>
+              </tr></thead>
+              <tbody>
+                {salesTeam.map(rep=>(
+                  <tr key={rep.id} className="border-t">
+                    <td className="py-2 font-medium">{rep.name||rep.email}</td>
+                    {meetingMonths.map(m=>{ const v=bookedByMgrMonth[rep.id]?.[m.key]; return <td key={m.key} className="py-2 px-2 text-right">{v&&v.total>0 ? <span className="font-semibold text-emerald-700">{peso(v.total)}</span> : <span className="text-slate-300">—</span>}</td>; })}
+                    <td className="py-2 px-2 text-right font-bold bg-slate-50">{peso(bookedInPeriodByMgr[rep.id]?.total||0)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold">
+                  <td className="py-2">Team total</td>
+                  {meetingMonths.map(m=>{ const t=salesTeam.reduce((s,rep)=>s+(bookedByMgrMonth[rep.id]?.[m.key]?.total||0),0); return <td key={m.key} className="py-2 px-2 text-right">{t>0?peso(t):'—'}</td>; })}
+                  <td className="py-2 px-2 text-right">{peso(salesTeam.reduce((s,rep)=>s+(bookedInPeriodByMgr[rep.id]?.total||0),0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Per-rep: booked, pipeline, and clients booked */}
+          {salesTeam.map(rep=>{ const booked=bookedInPeriodByMgr[rep.id]||{count:0,total:0}; const pipe=pipelineByMgr[rep.id]||{count:0,total:0}; const cls=clientsFor(rep.id); return (
+            <div key={rep.id} className="bg-white border rounded-xl p-4">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                <div className="font-bold text-lg">{rep.name||rep.email}</div>
+                <div className="flex gap-4 text-sm">
+                  <div className="text-right"><div className="text-[10px] uppercase text-slate-400">Booked ({periodLabel})</div><div className="font-bold text-emerald-700">{peso(booked.total)} <span className="text-xs text-slate-400 font-normal">· {booked.count} deal{booked.count===1?'':'s'}</span></div></div>
+                  <div className="text-right"><div className="text-[10px] uppercase text-slate-400">Pipeline (now)</div><div className="font-bold text-amber-700">{peso(pipe.total)} <span className="text-xs text-slate-400 font-normal">· {pipe.count} lead{pipe.count===1?'':'s'}</span></div></div>
+                </div>
+              </div>
+              <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Clients booked ({periodLabel})</div>
+              {cls.length===0 ? <div className="text-sm text-slate-400 py-2">No deals booked in this period.</div> : (
+                <table className="w-full text-sm">
+                  <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Client</th><th className="text-right py-1">Deals</th><th className="text-right py-1">Booked value</th></tr></thead>
+                  <tbody>{cls.map(c=>(
+                    <tr key={c.cid} className="border-t"><td className="py-1.5">{c.name}</td><td className="py-1.5 text-right">{c.count}</td><td className="py-1.5 text-right font-semibold text-emerald-700">{peso(c.total)}</td></tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+          ); })}
+          {salesTeam.length===0 && <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No sales reps found (roles: manager / assistant).</div>}
         </div>
       )}
 
