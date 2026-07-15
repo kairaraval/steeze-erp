@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 224 · Subcon payroll: per-row 'Pay' now goes through the payout flow so it always logs an expense + bank deduction (no more paid-but-no-expense). Backfilled the 3 Jul-13 subcons' ₱9,130 expense";
+const BUILD = "Live build 225 · Leads: Contact Person + Delivery Address (+ secondary contact) saved to the client; required before Sampling/Closed Won; Closed Won needs value>0; flows to the Delivery Schedule";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -820,6 +820,21 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const [notes,setNotes]=useState(existing?.notes||'');
   const [managerId,setManagerId]=useState(existing?.manager_id||profile.id);
   const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Contact person + delivery address — saved to the CLIENT record. Required
+  // before a lead can move to Sampling or Closed Won.
+  const initClient = (existing?.client_id) ? (clients||[]).find(c=>c.id===existing.client_id) : (clients||[]).find(c=>c.id===clientId);
+  const [contactPerson,setContactPerson]=useState(initClient?.contact||'');
+  const [contactPhone,setContactPhone]=useState(initClient?.phone||'');
+  const [address,setAddress]=useState(initClient?.address||'');
+  const [secondaryContact,setSecondaryContact]=useState('');
+  const [secondaryPhone,setSecondaryPhone]=useState('');
+  // When picking a different existing client, load its contact/phone/address.
+  useEffect(()=>{
+    if(clientMode!=='existing') return;
+    const c=(clients||[]).find(x=>x.id===clientId);
+    if(c){ setContactPerson(c.contact||''); setContactPhone(c.phone||''); setAddress(c.address||''); }
+  }, [clientId, clientMode]);
+  const existingClientContacts = (()=>{ const c=(clients||[]).find(x=>x.id===clientId); return Array.isArray(c?.contacts)?c.contacts:[]; })();
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
@@ -863,10 +878,29 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   }
   function addLink(){ const url=(prompt('Link URL (https://…):')||'').trim(); if(!url) return; const name=(prompt('Link title (optional):')||url).trim(); setAttachments(a=>[...a,{ type:'link', name, url }]); }
   function removeAtt(idx){ setAttachments(a=>a.filter((_,i)=>i!==idx)); }
-  async function save(){ if(!title.trim()){ setMsg('Lead title is required.'); return; } setBusy(true); setMsg('');
+  async function save(){ if(!title.trim()){ setMsg('Lead title is required.'); return; }
+    // Gate: contact person + delivery address required to move to Sampling / Closed Won.
+    if(['sampling','won'].includes(stage) && (!contactPerson.trim() || !address.trim())){
+      setMsg(`⚠ Add the Contact Person and Delivery Address before moving this lead to "${stageMeta(stage).label}".`); return;
+    }
+    // Gate: a Closed Won deal can't have ₱0 value.
+    if(stage==='won' && !(value>0)){
+      setMsg('⚠ Deal value can\'t be ₱0 for Closed Won — add line items or a manual value first.'); return;
+    }
+    setBusy(true); setMsg('');
     try{ let finalClientId=clientId;
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
-        const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:newContact.trim(), manager_id:profile.id }).select().single(); if(error) throw error; finalClientId=data.id; }
+        const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:contactPerson.trim()||null, phone:contactPhone.trim()||null, address:address.trim()||null, manager_id:profile.id, contacts: secondaryContact.trim()?[{name:secondaryContact.trim(), phone:secondaryPhone.trim()||null}]:[] }).select().single(); if(error) throw error; finalClientId=data.id; }
+      // Write the contact + address through to the client record (source of truth).
+      if(finalClientId && clientMode!=='new'){
+        const patch={ contact:contactPerson.trim()||null, phone:contactPhone.trim()||null, address:address.trim()||null };
+        if(secondaryContact.trim()){
+          const c=(clients||[]).find(x=>x.id===finalClientId); const cur=Array.isArray(c?.contacts)?c.contacts:[];
+          const dup=cur.some(x=>String(x.name||'').toLowerCase()===secondaryContact.trim().toLowerCase());
+          patch.contacts = dup?cur:[...cur, {name:secondaryContact.trim(), phone:secondaryPhone.trim()||null}];
+        }
+        try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
+      }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
       const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
@@ -955,8 +989,23 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     <Modal title={isEdit?'Edit lead':'New lead'} onClose={onClose}>
       <div className="space-y-3" onPaste={onPasteLead}>
         {!isEdit && (<div className="flex gap-2 text-xs"><button onClick={()=>setClientMode('existing')} disabled={!clients.length} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='existing'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'} disabled:opacity-40`}>Existing client</button><button onClick={()=>setClientMode('new')} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='new'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>+ New client</button></div>)}
-        {clientMode==='existing' ? (<select className="input" value={clientId} onChange={e=>setClientId(e.target.value)}>{clients.map(c=><option key={c.id} value={c.id}>{c.company}</option>)}</select>) : (<div className="grid grid-cols-2 gap-2"><input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} /><input className="input" placeholder="Contact name" value={newContact} onChange={e=>setNewContact(e.target.value)} /></div>)}
+        {clientMode==='existing' ? (<select className="input" value={clientId} onChange={e=>setClientId(e.target.value)}>{clients.map(c=><option key={c.id} value={c.id}>{c.company}</option>)}</select>) : (<input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} />)}
         <input className="input" placeholder="Lead title" value={title} onChange={e=>setTitle(e.target.value)} />
+        {/* Contact person + delivery address — saved to the client record and
+           required before moving to Sampling or Closed Won. */}
+        <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 space-y-2">
+          <div className="text-xs font-semibold text-slate-700">📇 Contact &amp; delivery address <span className="font-normal text-slate-400">· saved to the client · required for Sampling / Closed Won</span></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[10px] text-slate-500 uppercase">Contact person</label><input className="input mt-0.5" value={contactPerson} onChange={e=>setContactPerson(e.target.value)} placeholder="Name" /></div>
+            <div><label className="text-[10px] text-slate-500 uppercase">Contact phone</label><input className="input mt-0.5" value={contactPhone} onChange={e=>setContactPhone(e.target.value)} placeholder="Mobile / landline" /></div>
+          </div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Delivery address</label><textarea className="input mt-0.5 min-h-[52px]" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Full delivery address" /></div>
+          {existingClientContacts.length>0 && <div className="text-[10px] text-slate-500">Other contacts on file: {existingClientContacts.map(c=>`${c.name||''}${c.phone?` (${c.phone})`:''}`).join(' · ')}</div>}
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[10px] text-slate-500 uppercase">Secondary contact (optional)</label><input className="input mt-0.5" value={secondaryContact} onChange={e=>setSecondaryContact(e.target.value)} placeholder="Different contact for this order" /></div>
+            <div><label className="text-[10px] text-slate-500 uppercase">Secondary phone</label><input className="input mt-0.5" value={secondaryPhone} onChange={e=>setSecondaryPhone(e.target.value)} placeholder="Phone" /></div>
+          </div>
+        </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
           <div className="space-y-2">{items.map((it,idx)=>(
@@ -6765,6 +6814,20 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   }
   const visible=leads.filter(l=>ownerMatch(l) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
   async function move(l,st){
+    // Gate: contact person + delivery address must be on the client before a
+    // lead can move to Sampling or Closed Won.
+    if(['sampling','won'].includes(st) && l.stage!==st){
+      const c=(clients||[]).find(x=>x.id===l.client_id);
+      if(!c || !String(c.contact||'').trim() || !String(c.address||'').trim()){
+        alert(`⚠ Missing info — "${l.title||'this lead'}" needs a Contact Person and Delivery Address before it can move to "${stageMeta(st).label}".\n\nOpen the lead → Edit → fill in the "Contact & delivery address" section, then move it again.`);
+        return;
+      }
+    }
+    // Gate: a Closed Won deal can't be ₱0.
+    if(st==='won' && l.stage!==st && !(Number(l.value)>0)){
+      alert(`⚠ "${l.title||'this lead'}" has ₱0 value. Add the deal value on the lead before moving it to Closed Won.`);
+      return;
+    }
     const wasSold = SOLD_STAGES.includes(l.stage);
     const willBeSold = SOLD_STAGES.includes(st);
     const patch={ stage:st };
@@ -15950,9 +16013,10 @@ async function maybeAutoCreateDeliveryFromJob(profile, job, jobType){
       const { data: c } = await sb.from('clients').select('id,company,address,contact,phone,contacts').eq('id', job.client_id).maybeSingle();
       client = c || null;
     }
+    // Prefer the client's PRIMARY contact; fall back to the first saved secondary.
     const primary = (client && Array.isArray(client.contacts) && client.contacts.length>0) ? client.contacts[0] : null;
-    const contactName  = (primary && primary.name)  || client?.contact || '';
-    const contactPhone = (primary && primary.phone) || client?.phone   || '';
+    const contactName  = client?.contact || (primary && primary.name)  || '';
+    const contactPhone = client?.phone   || (primary && primary.phone) || '';
     const tag = jobType === 'sampling_job' ? 'Sample' : 'Order';
     const noteParts = [`${tag} ${job.number||''}`.trim()];
     if(job.quantity) noteParts.push(`${job.quantity} pcs`);
