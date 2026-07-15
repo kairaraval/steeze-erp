@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 221 · Sales Meeting report now also includes the two admin sales accounts (Kaira & Miko) alongside managers + assistants";
+const BUILD = "Live build 222 · Reports → Sales: Year-to-Date total sales panel — admin can type pre-OS monthly sales (e.g. Jan–May); OS Sales Orders fill the rest automatically, giving a true full-year YTD figure";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9838,6 +9838,91 @@ function HROrgChartView({ profile, employees }){
    the same state the rest of the app uses, with a period selector at top.
    Covers: Sales, Production, Customers (AR), Suppliers (Spend), Team.
 */
+// Year-to-date total sales that blends manually-entered pre-OS months (e.g.
+// Jan–May, before you moved to Steeze OS) with what the OS has recorded since.
+function YtdSalesPanel({ profile, salesOrders, year }){
+  const isAdmin = profile?.role === 'admin';
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const curMonthIdx = new Date().getMonth(); // 0-based, current year
+  const [manual,setManual]=useState({});   // { 'YYYY-MM': amount }
+  const [edit,setEdit]=useState({});        // local edits
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function load(){
+    const { data }=await sb.from('annual_sales_manual').select('*').like('ym', `${year}-%`);
+    const m={}; (data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; });
+    setManual(m); setEdit({});
+  }
+  useEffect(()=>{ load(); },[year]);
+  // OS-recorded sales per month = sum of SO totals (excl. cancelled) by SO date.
+  const osByMonth = {};
+  (salesOrders||[]).forEach(o=>{ if(o.status==='cancelled' || o.deleted_at) return; const ym=String(o.date||'').slice(0,7); if(!ym.startsWith(String(year))) return; osByMonth[ym]=(osByMonth[ym]||0)+Number(o.total||0); });
+  const ym = (i)=> `${year}-${String(i+1).padStart(2,'0')}`;
+  const manualVal = (i)=> { const k=ym(i); return (edit[k]!==undefined ? edit[k] : (manual[k]!=null ? String(manual[k]) : '')); };
+  // Effective monthly sales = manual entry if provided, otherwise OS-recorded.
+  const effFor = (i)=> { const k=ym(i); const man = edit[k]!==undefined ? edit[k] : manual[k]; const hasMan = man!=='' && man!=null && !isNaN(Number(man)); return hasMan ? Number(man) : (osByMonth[k]||0); };
+  const ytdTotal = MONTHS.reduce((s,_,i)=> i<=curMonthIdx ? s+effFor(i) : s, 0);
+  const fullYearTotal = MONTHS.reduce((s,_,i)=> s+effFor(i), 0);
+  function up(i,v){ setEdit(e=>({...e, [ym(i)]: v })); }
+  async function save(){
+    setBusy(true); setMsg('');
+    try {
+      const rows = Object.entries(edit).filter(([k,v])=> v!=='' && !isNaN(Number(v)))
+        .map(([k,v])=>({ ym:k, amount:Number(v), updated_by:profile.id, updated_at:new Date().toISOString() }));
+      const clears = Object.entries(edit).filter(([k,v])=> v==='').map(([k])=>k);
+      if(rows.length){ const { error }=await sb.from('annual_sales_manual').upsert(rows, { onConflict:'ym' }); if(error) throw error; }
+      if(clears.length){ await sb.from('annual_sales_manual').delete().in('ym', clears); }
+      setBusy(false); setMsg('Saved ✓'); load();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const dirty = Object.keys(edit).length>0;
+  return (
+    <div className="bg-white border rounded-xl p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div className="text-sm font-bold">📅 {year} Total Sales (Year to Date)</div>
+        <div className="flex items-center gap-4">
+          <div className="text-right"><div className="text-[10px] uppercase text-slate-400">YTD (Jan–{MONTHS[curMonthIdx]})</div><div className="text-xl font-extrabold text-emerald-700">{peso(ytdTotal)}</div></div>
+          <div className="text-right"><div className="text-[10px] uppercase text-slate-400">Full year</div><div className="text-lg font-bold text-slate-700">{peso(fullYearTotal)}</div></div>
+        </div>
+      </div>
+      {isAdmin && <div className="text-[11px] text-slate-400 mb-2">Type your pre-OS monthly sales (e.g. Jan–May). Months with a manual figure use it; the rest use OS Sales Orders automatically. Leave a month blank to fall back to the OS number.</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-[10px] uppercase text-slate-400"><tr>
+            <th className="text-left py-1">Month</th>
+            <th className="text-right py-1">OS sales</th>
+            <th className="text-right py-1">Manual entry</th>
+            <th className="text-right py-1">Total used</th>
+          </tr></thead>
+          <tbody>
+            {MONTHS.map((mn,i)=>{ const k=ym(i); const os=osByMonth[k]||0; const future=i>curMonthIdx; return (
+              <tr key={k} className={`border-t ${future?'opacity-40':''}`}>
+                <td className="py-1.5 font-medium">{mn} {String(year).slice(2)}</td>
+                <td className="py-1.5 text-right text-slate-500">{os>0?peso(os):'—'}</td>
+                <td className="py-1.5 text-right">
+                  {isAdmin
+                    ? <input type="number" value={manualVal(i)} onChange={e=>up(i,e.target.value)} placeholder={os>0?'(OS)':'0'} className="border rounded px-2 py-1 text-xs w-28 text-right" />
+                    : (manual[k]!=null ? peso(manual[k]) : '—')}
+                </td>
+                <td className="py-1.5 text-right font-semibold">{peso(effFor(i))}</td>
+              </tr>
+            ); })}
+            <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold">
+              <td className="py-2">Year to date</td>
+              <td className="py-2 text-right text-slate-500">{peso(MONTHS.reduce((s,_,i)=> i<=curMonthIdx?s+(osByMonth[ym(i)]||0):s,0))}</td>
+              <td></td>
+              <td className="py-2 text-right text-emerald-700">{peso(ytdTotal)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {isAdmin && <div className="flex items-center gap-2 mt-3">
+        <button disabled={busy||!dirty} onClick={save} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'💾 Save manual figures'}</button>
+        {msg && <span className="text-xs text-slate-500">{msg}</span>}
+      </div>}
+    </div>
+  );
+}
+
 function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees }){
   const [tab,setTab]=useState('sales');
   const [period,setPeriod]=useState('ytd'); // 'month' | 'quarter' | 'ytd' | 'all'
@@ -10164,6 +10249,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
       {/* ───── SALES ───── */}
       {tab==='sales' && (
         <div className="space-y-4">
+          <YtdSalesPanel profile={profile} salesOrders={salesOrders} year={year} />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Tile label="Won deals" value={wonInPeriod.length} sub={`out of ${allLeadsInPeriod.length} created`} color="emerald" />
             <Tile label="Won revenue" value={peso(wonValue)} sub={`avg ${peso(avgDealSize)}`} color="emerald" />
