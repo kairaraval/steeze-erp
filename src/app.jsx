@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 223 · Sales managers can now open My Invoices (filtered to their own); SO list shows a 🧾 Invoiced tag; pipeline lead detail has a View Invoice button (admin already had View Estimate)";
+const BUILD = "Live build 224 · Subcon payroll: per-row 'Pay' now goes through the payout flow so it always logs an expense + bank deduction (no more paid-but-no-expense). Backfilled the 3 Jul-13 subcons' ₱9,130 expense";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25568,6 +25568,7 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
 // ─────────── MAIN SUBCON MONITORING VIEW ───────────
 function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, subcons, subconSends, subconReturns, subconPayrolls, subconPayrollItems, subconProjects, bankAccounts, reload }){
   const [subconPayoutOpen,setSubconPayoutOpen]=useState(false);
+  const [singleSubconPayout,setSingleSubconPayout]=useState(null); // pay ONE subcon via the payout flow (so it logs an expense)
   const [tab,setTab]=useState('projects');
   const [search,setSearch]=useState('');
   const [creatingSubcon,setCreatingSubcon]=useState(false);
@@ -25894,7 +25895,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                     <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View</button>
-                      {p.status==='finalized' && canRunSubconPayroll(profile) && <button onClick={()=>markPaid(p)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💰 Mark paid</button>}
+                      {p.status==='finalized' && payoutCanRun(profile) && <button onClick={()=>setSingleSubconPayout({ p, subcon })} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700" title="Pay this subcon — logs an expense + deducts from the bank">💵 Pay</button>}
                     </td>
                   </tr>
                 ); })}</tbody>
@@ -25920,6 +25921,14 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       {generatingPayroll && <SubconPayrollGenerateModal profile={profile} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} onClose={()=>setGeneratingPayroll(false)} onSaved={(summary)=>{ setGeneratingPayroll(false); reload && reload(); alert(summary); }} />}
       {viewingPayroll && <SubconPayrollViewModal payroll={viewingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setViewingPayroll(null)} onSaved={()=>{ setViewingPayroll(null); reload && reload(); }} onEdit={()=>{ setEditingPayroll(viewingPayroll); setViewingPayroll(null); }} />}
       {editingPayroll && <SubconPayrollEditModal payroll={editingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setEditingPayroll(null)} onSaved={()=>{ setEditingPayroll(null); reload && reload(); }} />}
+      {singleSubconPayout && <PayoutModal kind="subcon"
+        periodStart={(()=>{ const d=new Date(String(singleSubconPayout.p.week_ending)+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })()}
+        periodEnd={singleSubconPayout.p.week_ending}
+        lines={[{ name: singleSubconPayout.subcon?.name||'Subcon', amount:Number(singleSubconPayout.p.total_amount||0) }]}
+        bankAccounts={bankAccounts} profile={profile}
+        onMarkPaid={async(payoutId)=>{ const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString(), payout_id:payoutId }).eq('id', singleSubconPayout.p.id); if(error) throw error; }}
+        onClose={()=>setSingleSubconPayout(null)}
+        onSaved={()=>{ setSingleSubconPayout(null); reload && reload(); }} />}
     </div>
   );
 }
