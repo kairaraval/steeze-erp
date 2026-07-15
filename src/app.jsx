@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 222 · Reports → Sales: Year-to-Date total sales panel — admin can type pre-OS monthly sales (e.g. Jan–May); OS Sales Orders fill the rest automatically, giving a true full-year YTD figure";
+const BUILD = "Live build 223 · Sales managers can now open My Invoices (filtered to their own); SO list shows a 🧾 Invoiced tag; pipeline lead detail has a View Invoice button (admin already had View Estimate)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1978,8 +1978,16 @@ function InvoicesListView({ profile, profiles, invoices, salesOrders, leads, cli
   const [q,setQ]=useState('');
   const [open,setOpen]=useState(null);
   const isManager = profile.role!=='admin' && profile.role!=='accounting';
-
-  const all = invoices||[];
+  // A manager only sees invoices whose Sales Order (or its lead) is theirs.
+  function ownsInvoice(e){
+    if(!isManager) return true;
+    const so = (salesOrders||[]).find(s=>s.id===e.sales_order_id);
+    if(so && so.manager_id) return so.manager_id === profile.id;
+    const leadId = so?.lead_id || e.lead_id;
+    const lead = leadId ? (leads||[]).find(l=>l.id===leadId) : null;
+    return lead ? lead.manager_id === profile.id : false;
+  }
+  const all = (invoices||[]).filter(ownsInvoice);
   const rows = all.filter(e=>{
     if(statusFilter!=='all' && (e.status||'draft')!==statusFilter) return false;
     if(q){ const s=q.toLowerCase(); if(!((e.number||'').toLowerCase().includes(s)||(e.client_name||'').toLowerCase().includes(s))) return false; }
@@ -2151,11 +2159,15 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
   );
 }
 
-function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
+function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoices, salesOrders, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
   const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||profile.role==='assistant'||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
   const canEstimate = profile.role==='admin' || profile.role==='accounting';
+  // Invoice(s) generated for this lead (via the lead directly or its Sales Order).
+  const leadSO = (salesOrders||[]).find(s=>s.lead_id===lead.id && s.kind==='production' && !s.deleted_at);
+  const leadInvoice = (invoices||[]).find(iv=> iv.lead_id===lead.id || (leadSO && iv.sales_order_id===leadSO.id));
+  const [showInvoice,setShowInvoice]=useState(false);
   // Holds which estimate purpose is open ('sample' | 'production'), or null.
   const [showEstimate,setShowEstimate]=useState(null);
   // A lead can carry a Sample estimate and a Production estimate. Look each up.
@@ -2223,6 +2235,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdi
             {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const ex=estFor(pp); if(!ex || (ex.status||'draft')==='draft') return null; return (
               <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate</button>
             ); })}
+            {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
@@ -2240,6 +2253,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, onEdi
         </div>
       </div>
       {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
+      {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
     </Modal>
   );
 }
@@ -17699,6 +17713,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
             <td className="px-3 py-2">
               <span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
               {o.delivered_at && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800" title={`Delivered ${fmtDate(o.delivered_at)}`}>✓ Delivered</span>}
+              {(invoices||[]).some(iv=>iv.sales_order_id===o.id) && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-indigo-100 text-indigo-700" title="Invoice generated">🧾 Invoiced</span>}
               {pendN > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-100 text-amber-800" title={`${pendN} payment${pendN===1?'':'s'} awaiting verification`}>⏳ {pendN}</span>}
               {(soActivityCounts||{})[o.id] > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800" title={`${(soActivityCounts||{})[o.id]} comment${(soActivityCounts||{})[o.id]===1?'':'s'} on this SO`}>💬 {(soActivityCounts||{})[o.id]}</span>}
             </td>
@@ -26275,7 +26290,7 @@ function App(){
       allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','ledger','commissions','budgets','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
@@ -27078,7 +27093,7 @@ function App(){
       )}
       {showNew && <LeadForm profile={profile} profiles={profiles} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
       {liveDetail && !editLead && !activityLead && !sendGraphicLead && !sendPrintLead && (
-        <LeadDetail profile={profile} profiles={profiles} reload={loadAll} lead={liveDetail} clients={clients} estimates={estimates} activityCount={activityCounts[liveDetail.id]}
+        <LeadDetail profile={profile} profiles={profiles} reload={loadAll} lead={liveDetail} clients={clients} estimates={estimates} invoices={invoices} salesOrders={salesOrders} activityCount={activityCounts[liveDetail.id]}
           onEdit={()=>setEditLead(liveDetail)} onOpenActivity={()=>setActivityLead(liveDetail)}
           onSendProduction={()=>sendToProduction(liveDetail)} onSendGraphic={()=>setSendGraphicLead(liveDetail)}
           onSendSampling={()=>sendLeadToSampling(liveDetail)}
