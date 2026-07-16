@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 226 · Deliveries now carry the contact person + address from the specific lead (order), falling back to the client — so every new delivery schedule row is pre-filled";
+const BUILD = "Live build 227 · New Marketing module (Phase 1): Content Planner (board + list by channel/status/date, AI-draftable copy) + Campaigns. Admin + sales managers can edit; everyone can view";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9920,6 +9920,239 @@ function HROrgChartView({ profile, employees }){
    the same state the rest of the app uses, with a period selector at top.
    Covers: Sales, Production, Customers (AR), Suppliers (Spend), Team.
 */
+/* ═══════════ MARKETING MODULE (Phase 1: Content Planner + Campaigns) ═══════════ */
+const MKT_CHANNELS = [
+  { key:'facebook',  label:'Facebook',   icon:'📘', color:'bg-blue-100 text-blue-700' },
+  { key:'instagram', label:'Instagram',  icon:'📸', color:'bg-pink-100 text-pink-700' },
+  { key:'email',     label:'Email',      icon:'✉️', color:'bg-amber-100 text-amber-700' },
+  { key:'blog',      label:'Blog / SEO', icon:'✍️', color:'bg-emerald-100 text-emerald-700' },
+  { key:'website',   label:'Website',    icon:'🌐', color:'bg-slate-100 text-slate-700' },
+  { key:'other',     label:'Other',      icon:'•',  color:'bg-slate-100 text-slate-600' },
+];
+const MKT_STATUSES = [
+  { key:'idea',      label:'Idea',      color:'bg-slate-200 text-slate-700' },
+  { key:'drafting',  label:'Drafting',  color:'bg-amber-100 text-amber-700' },
+  { key:'ready',     label:'Ready',     color:'bg-blue-100 text-blue-700' },
+  { key:'scheduled', label:'Scheduled', color:'bg-violet-100 text-violet-700' },
+  { key:'posted',    label:'Posted',    color:'bg-emerald-100 text-emerald-700' },
+];
+const MKT_CAMPAIGN_STATUSES = [['planning','Planning'],['active','Active'],['paused','Paused'],['completed','Completed']];
+function mktChan(k){ return MKT_CHANNELS.find(c=>c.key===k) || MKT_CHANNELS[MKT_CHANNELS.length-1]; }
+function mktStat(k){ return MKT_STATUSES.find(s=>s.key===k) || MKT_STATUSES[0]; }
+function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='manager'; }
+
+function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({
+    title: existing?.title||'', channel: existing?.channel||'facebook', status: existing?.status||'idea',
+    scheduled_date: existing?.scheduled_date||'', campaign_id: existing?.campaign_id||'',
+    copy: existing?.copy||'', hashtags: existing?.hashtags||'', link: existing?.link||'', notes: existing?.notes||'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim()){ setMsg('Give the post a title.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload={ title:f.title.trim(), channel:f.channel, status:f.status, scheduled_date:f.scheduled_date||null,
+        campaign_id:f.campaign_id||null, copy:f.copy||null, hashtags:f.hashtags||null, link:f.link||null, notes:f.notes||null };
+      if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('marketing_content').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('marketing_content').insert({ ...payload, owner_id:profile.id, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit content':'+ New content'} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "New Collection teaser — carousel"' /></div>
+        <div className="grid grid-cols-3 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Channel</label><select value={f.channel} onChange={e=>up('channel',e.target.value)} className="w-full border rounded px-2 py-1.5">{MKT_CHANNELS.map(c=><option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}</select></div>
+          <div><label className="text-xs font-semibold text-slate-500">Status</label><select value={f.status} onChange={e=>up('status',e.target.value)} className="w-full border rounded px-2 py-1.5">{MKT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
+          <div><label className="text-xs font-semibold text-slate-500">Scheduled date</label><input type="date" value={f.scheduled_date} onChange={e=>up('scheduled_date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Campaign</label><select value={f.campaign_id} onChange={e=>up('campaign_id',e.target.value)} className="w-full border rounded px-2 py-1.5"><option value="">— none —</option>{(campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+        <div><label className="text-xs font-semibold text-slate-500">Copy / caption <span className="text-slate-400 font-normal">· ask Claude in Cowork to draft or polish this</span></label><textarea value={f.copy} onChange={e=>up('copy',e.target.value)} rows={5} className="w-full border rounded px-2 py-1.5" placeholder="The post caption or email body…" /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Hashtags</label><input value={f.hashtags} onChange={e=>up('hashtags',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="#steeze #customjersey" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Link</label><input value={f.link} onChange={e=>up('link',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="Canva / asset / landing page" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add content')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function MarketingCampaignModal({ profile, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({ name:existing?.name||'', objective:existing?.objective||'', status:existing?.status||'planning',
+    start_date:existing?.start_date||'', end_date:existing?.end_date||'', budget:existing?.budget??'', notes:existing?.notes||'',
+    channels: Array.isArray(existing?.channels)?existing.channels:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function toggleChan(k){ setF(p=>({...p, channels: p.channels.includes(k)?p.channels.filter(x=>x!==k):[...p.channels,k] })); }
+  async function save(){
+    if(!f.name.trim()){ setMsg('Give the campaign a name.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload={ name:f.name.trim(), objective:f.objective||null, status:f.status, channels:f.channels,
+        start_date:f.start_date||null, end_date:f.end_date||null, budget:f.budget===''?null:Number(f.budget), notes:f.notes||null };
+      if(isEdit){ const { error }=await sb.from('marketing_campaigns').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('marketing_campaigns').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit campaign':'+ New campaign'} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Campaign name *</label><input value={f.name} onChange={e=>up('name',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "New Collection Launch — Q3"' /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Objective</label><input value={f.objective} onChange={e=>up('objective',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. grow IG followers + drive inquiries" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Channels</label>
+          <div className="flex flex-wrap gap-1.5 mt-1">{MKT_CHANNELS.filter(c=>c.key!=='other').map(c=>(
+            <button key={c.key} type="button" onClick={()=>toggleChan(c.key)} className={`text-xs px-2 py-1 rounded border ${f.channels.includes(c.key)?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>{c.icon} {c.label}</button>
+          ))}</div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Status</label><select value={f.status} onChange={e=>up('status',e.target.value)} className="w-full border rounded px-2 py-1.5">{MKT_CAMPAIGN_STATUSES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></div>
+          <div><label className="text-xs font-semibold text-slate-500">Start</label><input type="date" value={f.start_date} onChange={e=>up('start_date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">End</label><input type="date" value={f.end_date} onChange={e=>up('end_date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Budget (₱, optional)</label><input type="number" value={f.budget} onChange={e=>up('budget',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create campaign')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function MarketingHub({ profile }){
+  const canEdit = marketingCanEdit(profile);
+  const [tab,setTab]=useState('content');
+  const [layout,setLayout]=useState('board');
+  const [campaigns,setCampaigns]=useState([]);
+  const [content,setContent]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [chanFilter,setChanFilter]=useState('');
+  const [campFilter,setCampFilter]=useState('');
+  const [search,setSearch]=useState('');
+  const [editingPost,setEditingPost]=useState(null);
+  const [creatingPost,setCreatingPost]=useState(false);
+  const [editingCampaign,setEditingCampaign]=useState(null);
+  const [creatingCampaign,setCreatingCampaign]=useState(false);
+  async function load(){
+    setLoading(true);
+    const [c,p]=await Promise.all([
+      sb.from('marketing_campaigns').select('*').is('deleted_at',null).order('created_at',{ascending:false}),
+      sb.from('marketing_content').select('*').is('deleted_at',null).order('scheduled_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
+    ]);
+    setCampaigns(c.data||[]); setContent(p.data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  async function movePost(post, status){ if(!canEdit) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
+  async function delPost(post){ if(!confirm(`Delete "${post.title||'this post'}"?`)) return; const { error }=await sb.from('marketing_content').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
+  async function delCampaign(c){ if(!confirm(`Delete campaign "${c.name}"? Its content stays but loses the campaign link.`)) return; const { error }=await sb.from('marketing_campaigns').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } load(); }
+  const q=search.toLowerCase();
+  const filtered = content.filter(p=> (!chanFilter||p.channel===chanFilter) && (!campFilter||p.campaign_id===campFilter) && (!q||`${p.title||''} ${p.copy||''} ${p.hashtags||''}`.toLowerCase().includes(q)));
+  const campName = (id)=> (campaigns.find(c=>c.id===id)||{}).name;
+  const Card = ({p})=>{ const ch=mktChan(p.channel); const camp=campName(p.campaign_id); return (
+    <div className="bg-white border rounded-lg shadow-sm p-2 group relative">
+      {canEdit && <button onClick={()=>delPost(p)} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 w-5 h-5 rounded-full bg-white border text-slate-400 hover:bg-rose-500 hover:text-white text-[10px]">✕</button>}
+      <button onClick={()=>setEditingPost(p)} className="text-left w-full">
+        <div className="flex items-center gap-1 mb-1"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span>{p.scheduled_date && <span className="text-[10px] text-slate-500">{fmtDate(p.scheduled_date)}</span>}</div>
+        <div className="text-sm font-semibold leading-tight">{p.title||'—'}</div>
+        {camp && <div className="text-[10px] text-indigo-600 mt-0.5">🎯 {camp}</div>}
+        {p.copy && <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">{p.copy}</div>}
+      </button>
+      {canEdit && <select value={p.status} onChange={e=>movePost(p,e.target.value)} className="mt-1.5 w-full text-[11px] border rounded px-1 py-0.5 bg-slate-50">{MKT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>}
+    </div>
+  ); };
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📣 Marketing</h1><p className="text-slate-500 text-sm">Content planner + campaigns · plan, draft, schedule, track</p></div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {tab==='content' && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button></div>}
+            {canEdit && tab==='content' && <button onClick={()=>setCreatingPost(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Content</button>}
+            {canEdit && tab==='campaigns' && <button onClick={()=>setCreatingCampaign(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Campaign</button>}
+          </div>
+        </div>
+        <div className="flex gap-1 mt-3">
+          <button onClick={()=>setTab('content')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='content'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🗓 Content Planner ({content.length})</button>
+          <button onClick={()=>setTab('campaigns')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='campaigns'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎯 Campaigns ({campaigns.length})</button>
+        </div>
+        {tab==='content' && <div className="flex gap-2 mt-2 flex-wrap">
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
+          <select value={chanFilter} onChange={e=>setChanFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white"><option value="">All channels</option>{MKT_CHANNELS.map(c=><option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}</select>
+          <select value={campFilter} onChange={e=>setCampFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white"><option value="">All campaigns</option>{campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        </div>}
+      </div>
+
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='content' ? (
+        layout==='board' ? (
+          <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-220px)]">
+            {MKT_STATUSES.map(st=>{ const col=filtered.filter(p=>p.status===st.key); return (
+              <div key={st.key} className="flex-shrink-0 w-64 flex flex-col h-full">
+                <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
+                <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
+                  {col.map(p=><Card key={p.id} p={p} />)}
+                  {col.length===0 && <div className="text-[10px] text-center py-3 text-slate-400">—</div>}
+                </div>
+              </div>
+            ); })}
+          </div>
+        ) : (
+          <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Title</th><th className="text-left px-3 py-2">Channel</th><th className="text-left px-3 py-2">Campaign</th><th className="text-left px-3 py-2">Scheduled</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+            <tbody>{filtered.map(p=>{ const ch=mktChan(p.channel); const st=mktStat(p.status); return (
+              <tr key={p.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditingPost(p)}>
+                <td className="px-3 py-2 font-medium">{p.title||'—'}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span></td>
+                <td className="px-3 py-2 text-xs text-indigo-600">{campName(p.campaign_id)||'—'}</td>
+                <td className="px-3 py-2 text-xs">{p.scheduled_date?fmtDate(p.scheduled_date):'—'}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${st.color}`}>{st.label}</span></td>
+                <td className="px-3 py-2 text-right">{canEdit && <button onClick={(e)=>{ e.stopPropagation(); delPost(p); }} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
+              </tr>
+            ); })}{filtered.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-10">No content yet.{canEdit?' Click "+ Content" to plan a post.':''}</td></tr>}</tbody>
+          </table></div>
+        )
+      ) : (
+        <div className="grid md:grid-cols-2 gap-3">
+          {campaigns.map(c=>{ const posts=content.filter(p=>p.campaign_id===c.id); const stMeta=MKT_CAMPAIGN_STATUSES.find(([k])=>k===c.status); return (
+            <div key={c.id} className="bg-white border rounded-xl p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div><div className="font-bold">{c.name}</div>{c.objective && <div className="text-xs text-slate-500">{c.objective}</div>}</div>
+                <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{stMeta?stMeta[1]:c.status}</span>
+              </div>
+              <div className="flex flex-wrap gap-1 mt-2">{(Array.isArray(c.channels)?c.channels:[]).map(k=>{ const ch=mktChan(k); return <span key={k} className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span>; })}</div>
+              <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
+                <span>{c.start_date?fmtDate(c.start_date):'—'} → {c.end_date?fmtDate(c.end_date):'—'}</span>
+                {c.budget!=null && <span>· Budget {peso(c.budget)}</span>}
+                <span>· {posts.length} post{posts.length===1?'':'s'}</span>
+              </div>
+              {canEdit && <div className="flex gap-2 mt-3"><button onClick={()=>setEditingCampaign(c)} className="text-xs text-indigo-600 hover:underline">Edit</button><button onClick={()=>delCampaign(c)} className="text-xs text-rose-500 hover:underline">Delete</button></div>}
+            </div>
+          ); })}
+          {campaigns.length===0 && <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No campaigns yet.{canEdit?' Click "+ Campaign" to group your content under a theme.':''}</div>}
+        </div>
+      )}
+
+      {(creatingPost||editingPost) && <ContentPostModal profile={profile} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
+      {(creatingCampaign||editingCampaign) && <MarketingCampaignModal profile={profile} existing={editingCampaign} onClose={()=>{ setCreatingCampaign(false); setEditingCampaign(null); }} onSaved={()=>{ setCreatingCampaign(false); setEditingCampaign(null); load(); }} />}
+    </div>
+  );
+}
+
 // Year-to-date total sales that blends manually-entered pre-OS months (e.g.
 // Jan–May, before you moved to Steeze OS) with what the OS has recorded since.
 function YtdSalesPanel({ profile, salesOrders, year }){
@@ -26375,7 +26608,7 @@ function App(){
       allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
       fallback = 'pipeline';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
@@ -26949,6 +27182,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'] ] },
+      { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
@@ -26961,6 +27195,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'] ] },
+      { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
@@ -27102,6 +27337,7 @@ function App(){
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
+        {view==='marketing' && <MarketingHub profile={profile} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
