@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 227 · New Marketing module (Phase 1): Content Planner (board + list by channel/status/date, AI-draftable copy) + Campaigns. Admin + sales managers can edit; everyone can view";
+const BUILD = "Live build 228 · Marketing Phase 2 (Analytics): log monthly per-channel snapshots (followers, reach, engagement, clicks, spend), KPI tiles with growth deltas, FB/IG follower trend bars, per-campaign performance roll-up from posted content. Per-post results now captured on content cards";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9947,6 +9947,7 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
     title: existing?.title||'', channel: existing?.channel||'facebook', status: existing?.status||'idea',
     scheduled_date: existing?.scheduled_date||'', campaign_id: existing?.campaign_id||'',
     copy: existing?.copy||'', hashtags: existing?.hashtags||'', link: existing?.link||'', notes: existing?.notes||'',
+    reach: existing?.reach??'', engagement: existing?.engagement??'', clicks: existing?.clicks??'',
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
@@ -9955,7 +9956,8 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
     setBusy(true); setMsg('');
     try {
       const payload={ title:f.title.trim(), channel:f.channel, status:f.status, scheduled_date:f.scheduled_date||null,
-        campaign_id:f.campaign_id||null, copy:f.copy||null, hashtags:f.hashtags||null, link:f.link||null, notes:f.notes||null };
+        campaign_id:f.campaign_id||null, copy:f.copy||null, hashtags:f.hashtags||null, link:f.link||null, notes:f.notes||null,
+        reach:f.reach===''?null:Number(f.reach), engagement:f.engagement===''?null:Number(f.engagement), clicks:f.clicks===''?null:Number(f.clicks) };
       if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('marketing_content').update(payload).eq('id', existing.id); if(error) throw error; }
       else { const { error }=await sb.from('marketing_content').insert({ ...payload, owner_id:profile.id, created_by:profile.id }); if(error) throw error; }
       setBusy(false); onSaved && onSaved();
@@ -9977,6 +9979,14 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
           <div><label className="text-xs font-semibold text-slate-500">Link</label><input value={f.link} onChange={e=>up('link',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="Canva / asset / landing page" /></div>
         </div>
         <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        <div className="border-t pt-2">
+          <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Results (fill in after posting)</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs font-semibold text-slate-500">Reach</label><input type="number" value={f.reach} onChange={e=>up('reach',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+            <div><label className="text-xs font-semibold text-slate-500">Engagement</label><input type="number" value={f.engagement} onChange={e=>up('engagement',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+            <div><label className="text-xs font-semibold text-slate-500">Clicks</label><input type="number" value={f.clicks} onChange={e=>up('clicks',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+          </div>
+        </div>
         {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add content')}</button>
@@ -10035,12 +10045,76 @@ function MarketingCampaignModal({ profile, existing, onClose, onSaved }){
   );
 }
 
+// Per-channel labels so the same metric columns read correctly for each channel.
+const MKT_METRIC_LABELS = {
+  facebook:  { audience:'Followers',   reach:'Reach',    engagement:'Engagement', clicks:'Link clicks', posts:'Posts',     spend:'Ad spend' },
+  instagram: { audience:'Followers',   reach:'Reach',    engagement:'Engagement', clicks:'Link clicks', posts:'Posts',     spend:'Ad spend' },
+  email:     { audience:'Subscribers', reach:'Emails sent', engagement:'Opens',   clicks:'Clicks',      posts:'Campaigns', spend:'Spend' },
+  blog:      { audience:'—',           reach:'Visitors', engagement:'Pageviews',  clicks:'Inquiries',   posts:'Posts',     spend:'Spend' },
+  website:   { audience:'—',           reach:'Sessions', engagement:'Pageviews',  clicks:'Conversions', posts:'Pages',     spend:'Spend' },
+};
+function mktMetricLabels(ch){ return MKT_METRIC_LABELS[ch] || MKT_METRIC_LABELS.facebook; }
+
+function MetricSnapshotModal({ profile, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const monthEnd = ()=>{ const d=new Date(); return new Date(d.getFullYear(), d.getMonth()+1, 0).toISOString().slice(0,10); };
+  const [f,setF]=useState({
+    period: existing?.period || monthEnd(), channel: existing?.channel || 'facebook',
+    audience_size: existing?.audience_size??'', reach: existing?.reach??'', engagement: existing?.engagement??'',
+    clicks: existing?.clicks??'', posts: existing?.posts??'', spend: existing?.spend??'', notes: existing?.notes||'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const L = mktMetricLabels(f.channel);
+  const num = (v)=> v===''?null:Number(v);
+  async function save(){
+    if(!f.period){ setMsg('Pick the period date.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload={ period:f.period, channel:f.channel, audience_size:num(f.audience_size), reach:num(f.reach),
+        engagement:num(f.engagement), clicks:num(f.clicks), posts:num(f.posts), spend:num(f.spend), notes:f.notes||null };
+      if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('marketing_metrics').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('marketing_metrics').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const Field = ({k,label})=> label==='—' ? null : (
+    <div><label className="text-xs font-semibold text-slate-500">{label}</label><input type="number" value={f[k]} onChange={e=>up(k,e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+  );
+  return (
+    <Modal title={isEdit?'Edit metrics':'+ Log metrics'} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Period (as of date)</label><input type="date" value={f.period} onChange={e=>up('period',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Channel</label><select value={f.channel} onChange={e=>up('channel',e.target.value)} className="w-full border rounded px-2 py-1.5">{MKT_CHANNELS.filter(c=>c.key!=='other').map(c=><option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}</select></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="audience_size" label={L.audience} />
+          <Field k="reach" label={L.reach} />
+          <Field k="engagement" label={L.engagement} />
+          <Field k="clicks" label={L.clicks} />
+          <Field k="posts" label={L.posts} />
+          <Field k="spend" label={L.spend} />
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><input value={f.notes} onChange={e=>up('notes',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Save metrics')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function MarketingHub({ profile }){
   const canEdit = marketingCanEdit(profile);
   const [tab,setTab]=useState('content');
   const [layout,setLayout]=useState('board');
   const [campaigns,setCampaigns]=useState([]);
   const [content,setContent]=useState([]);
+  const [metrics,setMetrics]=useState([]);
   const [loading,setLoading]=useState(true);
   const [chanFilter,setChanFilter]=useState('');
   const [campFilter,setCampFilter]=useState('');
@@ -10049,14 +10123,18 @@ function MarketingHub({ profile }){
   const [creatingPost,setCreatingPost]=useState(false);
   const [editingCampaign,setEditingCampaign]=useState(null);
   const [creatingCampaign,setCreatingCampaign]=useState(false);
+  const [editingMetric,setEditingMetric]=useState(null);
+  const [creatingMetric,setCreatingMetric]=useState(false);
   async function load(){
     setLoading(true);
-    const [c,p]=await Promise.all([
+    const [c,p,m]=await Promise.all([
       sb.from('marketing_campaigns').select('*').is('deleted_at',null).order('created_at',{ascending:false}),
       sb.from('marketing_content').select('*').is('deleted_at',null).order('scheduled_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
+      sb.from('marketing_metrics').select('*').is('deleted_at',null).order('period',{ascending:false}),
     ]);
-    setCampaigns(c.data||[]); setContent(p.data||[]); setLoading(false);
+    setCampaigns(c.data||[]); setContent(p.data||[]); setMetrics(m.data||[]); setLoading(false);
   }
+  async function delMetric(m){ if(!confirm('Delete this metric snapshot?')) return; const { error }=await sb.from('marketing_metrics').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } load(); }
   useEffect(()=>{ load(); },[]);
   async function movePost(post, status){ if(!canEdit) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delPost(post){ if(!confirm(`Delete "${post.title||'this post'}"?`)) return; const { error }=await sb.from('marketing_content').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
@@ -10085,11 +10163,13 @@ function MarketingHub({ profile }){
             {tab==='content' && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button></div>}
             {canEdit && tab==='content' && <button onClick={()=>setCreatingPost(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Content</button>}
             {canEdit && tab==='campaigns' && <button onClick={()=>setCreatingCampaign(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Campaign</button>}
+            {canEdit && tab==='analytics' && <button onClick={()=>setCreatingMetric(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Log metrics</button>}
           </div>
         </div>
         <div className="flex gap-1 mt-3">
           <button onClick={()=>setTab('content')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='content'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🗓 Content Planner ({content.length})</button>
           <button onClick={()=>setTab('campaigns')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='campaigns'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎯 Campaigns ({campaigns.length})</button>
+          <button onClick={()=>setTab('analytics')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='analytics'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📊 Analytics</button>
         </div>
         {tab==='content' && <div className="flex gap-2 mt-2 flex-wrap">
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
@@ -10126,7 +10206,7 @@ function MarketingHub({ profile }){
             ); })}{filtered.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-10">No content yet.{canEdit?' Click "+ Content" to plan a post.':''}</td></tr>}</tbody>
           </table></div>
         )
-      ) : (
+      ) : tab==='campaigns' ? (
         <div className="grid md:grid-cols-2 gap-3">
           {campaigns.map(c=>{ const posts=content.filter(p=>p.campaign_id===c.id); const stMeta=MKT_CAMPAIGN_STATUSES.find(([k])=>k===c.status); return (
             <div key={c.id} className="bg-white border rounded-xl p-4">
@@ -10145,8 +10225,66 @@ function MarketingHub({ profile }){
           ); })}
           {campaigns.length===0 && <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No campaigns yet.{canEdit?' Click "+ Campaign" to group your content under a theme.':''}</div>}
         </div>
-      )}
+      ) : (()=>{
+        const periods = Array.from(new Set(metrics.map(m=>m.period))).sort().reverse();
+        const latest = periods[0], prev = periods[1];
+        const snap = (ch,p)=> metrics.find(m=>m.channel===ch && m.period===p);
+        const socialNow = ['facebook','instagram'].reduce((s,ch)=> s+(Number(snap(ch,latest)?.audience_size)||0), 0);
+        const socialPrev= ['facebook','instagram'].reduce((s,ch)=> s+(Number(snap(ch,prev)?.audience_size)||0), 0);
+        const socialDelta = socialNow - socialPrev;
+        const sumPeriod = (p,k)=> metrics.filter(m=>m.period===p).reduce((s,m)=>s+(Number(m[k])||0),0);
+        const emailSubs = Number(snap('email',latest)?.audience_size)||0;
+        const trendPeriods = periods.slice(0,6).reverse();
+        const trendRow = (ch)=> trendPeriods.map(p=>({ p, v:Number(snap(ch,p)?.audience_size)||0 }));
+        const fmtP = (p)=> p ? new Date(p+'T00:00:00').toLocaleDateString(undefined,{month:'short',year:'2-digit'}) : '';
+        const campPerf = campaigns.map(c=>{ const ps=content.filter(x=>x.campaign_id===c.id && x.status==='posted'); return { c, n:ps.length, reach:ps.reduce((s,x)=>s+(Number(x.reach)||0),0), engagement:ps.reduce((s,x)=>s+(Number(x.engagement)||0),0), clicks:ps.reduce((s,x)=>s+(Number(x.clicks)||0),0) }; }).filter(x=>x.reach||x.engagement||x.clicks);
+        const Delta = ({v})=> v===0?null:<span className={`text-xs font-semibold ${v>0?'text-emerald-600':'text-rose-600'}`}> {v>0?'▲':'▼'}{Math.abs(v).toLocaleString()}</span>;
+        const Bars = ({ch,color})=>{ const row=trendRow(ch); const max=Math.max(1,...row.map(x=>x.v)); return (
+          <div className="flex items-end gap-2 h-24">{row.map((x,i)=>(<div key={i} className="flex-1 flex flex-col items-center gap-1"><div className="text-[9px] text-slate-500">{x.v?x.v.toLocaleString():''}</div><div className={`${color} rounded-t w-full`} style={{height:`${(x.v/max)*100||2}%`}} title={`${fmtP(x.p)}: ${x.v}`} /><div className="text-[9px] text-slate-400">{fmtP(x.p)}</div></div>))}</div>
+        ); };
+        if(metrics.length===0) return <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No metrics yet.{canEdit?' Click "+ Log metrics" to record your first monthly snapshot per channel.':''}</div>;
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="border-2 rounded-xl p-4 bg-blue-50 border-blue-200"><div className="text-[10px] uppercase font-bold text-blue-500">Social followers (FB+IG)</div><div className="text-2xl font-extrabold text-blue-800">{socialNow.toLocaleString()}<Delta v={socialDelta} /></div><div className="text-[11px] text-slate-500">as of {fmtP(latest)}</div></div>
+              <div className="border-2 rounded-xl p-4 bg-amber-50 border-amber-200"><div className="text-[10px] uppercase font-bold text-amber-500">Email subscribers</div><div className="text-2xl font-extrabold text-amber-800">{emailSubs.toLocaleString()}</div></div>
+              <div className="border-2 rounded-xl p-4 bg-violet-50 border-violet-200"><div className="text-[10px] uppercase font-bold text-violet-500">Reach ({fmtP(latest)})</div><div className="text-2xl font-extrabold text-violet-800">{sumPeriod(latest,'reach').toLocaleString()}</div></div>
+              <div className="border-2 rounded-xl p-4 bg-emerald-50 border-emerald-200"><div className="text-[10px] uppercase font-bold text-emerald-500">Engagement ({fmtP(latest)})</div><div className="text-2xl font-extrabold text-emerald-800">{sumPeriod(latest,'engagement').toLocaleString()}</div></div>
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="bg-white border rounded-xl p-4"><div className="text-sm font-bold mb-2">📘 Facebook followers</div><Bars ch="facebook" color="bg-blue-500" /></div>
+              <div className="bg-white border rounded-xl p-4"><div className="text-sm font-bold mb-2">📸 Instagram followers</div><Bars ch="instagram" color="bg-pink-500" /></div>
+            </div>
+            {campPerf.length>0 && (
+              <div className="bg-white border rounded-xl p-4">
+                <div className="text-sm font-bold mb-2">Campaign performance <span className="font-normal text-slate-400 text-xs">· from posted content results</span></div>
+                <table className="w-full text-sm"><thead className="text-xs uppercase text-slate-500"><tr><th className="text-left py-1">Campaign</th><th className="text-right py-1">Posts</th><th className="text-right py-1">Reach</th><th className="text-right py-1">Engagement</th><th className="text-right py-1">Clicks</th></tr></thead>
+                <tbody>{campPerf.map(x=>(<tr key={x.c.id} className="border-t"><td className="py-1.5 font-medium">{x.c.name}</td><td className="py-1.5 text-right">{x.n}</td><td className="py-1.5 text-right">{x.reach.toLocaleString()}</td><td className="py-1.5 text-right">{x.engagement.toLocaleString()}</td><td className="py-1.5 text-right">{x.clicks.toLocaleString()}</td></tr>))}</tbody></table>
+              </div>
+            )}
+            <div className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-3 py-2 text-xs font-semibold uppercase text-slate-500 bg-slate-50 border-b">Logged snapshots</div>
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Period</th><th className="text-left px-3 py-2">Channel</th><th className="text-right px-3 py-2">Audience</th><th className="text-right px-3 py-2">Reach</th><th className="text-right px-3 py-2">Engagement</th><th className="text-right px-3 py-2">Clicks</th><th className="text-right px-3 py-2">Spend</th>{canEdit && <th></th>}</tr></thead>
+                <tbody>{metrics.map(m=>{ const ch=mktChan(m.channel); return (
+                  <tr key={m.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2">{fmtDate(m.period)}</td>
+                    <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span></td>
+                    <td className="px-3 py-2 text-right">{m.audience_size!=null?Number(m.audience_size).toLocaleString():'—'}</td>
+                    <td className="px-3 py-2 text-right">{m.reach!=null?Number(m.reach).toLocaleString():'—'}</td>
+                    <td className="px-3 py-2 text-right">{m.engagement!=null?Number(m.engagement).toLocaleString():'—'}</td>
+                    <td className="px-3 py-2 text-right">{m.clicks!=null?Number(m.clicks).toLocaleString():'—'}</td>
+                    <td className="px-3 py-2 text-right">{m.spend!=null?peso(m.spend):'—'}</td>
+                    {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditingMetric(m)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>delMetric(m)} className="text-xs text-rose-500 hover:underline">Delete</button></td>}
+                  </tr>
+                ); })}</tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
+      {(creatingMetric||editingMetric) && <MetricSnapshotModal profile={profile} existing={editingMetric} onClose={()=>{ setCreatingMetric(false); setEditingMetric(null); }} onSaved={()=>{ setCreatingMetric(false); setEditingMetric(null); load(); }} />}
       {(creatingPost||editingPost) && <ContentPostModal profile={profile} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
       {(creatingCampaign||editingCampaign) && <MarketingCampaignModal profile={profile} existing={editingCampaign} onClose={()=>{ setCreatingCampaign(false); setEditingCampaign(null); }} onSaved={()=>{ setCreatingCampaign(false); setEditingCampaign(null); load(); }} />}
     </div>
