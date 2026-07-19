@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 238 · PR: renamed the 'Submitted' status to 'Requests' across the board, stat cards, badges and dropdown (status key unchanged). Stock Movements resolves PR-sourced stock-outs; Fulfill from Stock records a real stock-out";
+const BUILD = "Live build 239 · New Purchasing → Resources: Pricelist (Fabrics / Trims folders with supplier, unit, unit price, MOQ), Fabric Swatches board, and Ready Made Items board — drag & drop images/PDFs. Admin + Purchasing can edit. Mirrors the Sales Resources module";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2962,6 +2962,267 @@ function SalesResourcesView({ profile }){
       )}
       {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} defaultFolder={folder} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
       {(addingPrice||editingPrice) && <PricelistRowForm profile={profile} existing={editingPrice} onClose={()=>{ setAddingPrice(false); setEditingPrice(null); }} onSaved={()=>{ setAddingPrice(false); setEditingPrice(null); load(); }} />}
+      {lightbox && (
+        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
+          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
+          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────── PURCHASING RESOURCES (pricelist / swatches / ready-made) ───────────
+// Mirrors Sales Resources but for the sourcing team: a fabric/trim pricelist
+// plus drag-drop boards for fabric swatches and ready-made item references.
+const PUR_RES_TABS = [
+  { key:'pricelist', label:'Pricelist',        icon:'💲' },
+  { key:'swatches',  label:'Fabric Swatches',  icon:'🧵' },
+  { key:'readymade', label:'Ready Made Items', icon:'👕' },
+];
+const PUR_RES_FOLDERS = { pricelist: ['Fabrics','Trims'] };
+function purFoldersFor(category){ return PUR_RES_FOLDERS[category] || []; }
+// Admin + Purchasing team can add/edit; everyone else who can see it is read-only.
+function purResCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='purchasing'; }
+
+// A structured pricelist row (material name / supplier / unit / unit price),
+// filed under a Fabrics or Trims folder.
+function PurchasingPricelistRowForm({ profile, existing, defaultFolder, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({ folder: existing?.folder||defaultFolder||'Fabrics', title: existing?.title||'', supplier: existing?.supplier||'', unit: existing?.unit||'yd', unit_price: existing?.unit_price??'', moq: existing?.moq??'', notes: existing?.notes||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim()){ setMsg('Material / item name is required.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload={ category:'pricelist', folder:f.folder||'Fabrics', title:f.title.trim(), supplier:f.supplier||null, unit:f.unit||null, unit_price:f.unit_price===''?null:Number(f.unit_price), moq:f.moq===''?null:Number(f.moq), notes:f.notes||null };
+      if(isEdit){ const { error }=await sb.from('purchasing_resources').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('purchasing_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`${isEdit?'Edit':'+ Add'} pricelist item`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Category</label><select value={f.folder} onChange={e=>up('folder',e.target.value)} className="w-full border rounded px-2 py-1.5">{PUR_RES_FOLDERS.pricelist.map(fd=><option key={fd} value={fd}>{fd}</option>)}</select></div>
+          <div><label className="text-xs font-semibold text-slate-500">Unit</label><input value={f.unit} onChange={e=>up('unit',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="yd / m / pc / kg / roll" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Material / item *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "150gsm Dri-cool" or "YKK zipper #5"' /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Supplier</label><input value={f.supplier} onChange={e=>up('supplier',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. Sunrise Textile" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Unit price (₱)</label><input type="number" step="0.01" value={f.unit_price} onChange={e=>up('unit_price',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 220" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">MOQ (optional)</label><input type="number" value={f.moq} onChange={e=>up('moq',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 1 roll / 50 pcs" /></div>
+          <div></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Color range, lead time, remarks…" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// File / link resource (swatches, ready-made references).
+function PurchasingResourceForm({ profile, category, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const catLabel = (PUR_RES_TABS.find(t=>t.key===category)||{}).label || category;
+  const [f,setF]=useState({ title: existing?.title||'', url: existing?.url||'', notes: existing?.notes||'' });
+  const [file,setFile]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim() && !file && !f.url.trim() && !existing?.file_path){ setMsg('Add a title, a link, or a file.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      let file_path=existing?.file_path||null, file_name=existing?.file_name||null, file_type=existing?.file_type||null;
+      if(file){
+        const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
+        const key=`purchasing-resources/${category}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        file_path=key; file_name=file.name||key; file_type=file.type||'';
+      }
+      const payload={ category, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
+      if(isEdit){ const { error }=await sb.from('purchasing_resources').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('purchasing_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`${isEdit?'Edit':'+ Add'} — ${catLabel}`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Title</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Dri-cool navy swatch"' /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Link (optional — Drive / catalog)</label><input value={f.url} onChange={e=>up('url',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="https://…" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">File (optional — image or PDF)</label>
+          <input type="file" onChange={e=>setFile(e.target.files?.[0]||null)} className="w-full text-xs" accept="image/*,application/pdf" />
+          {existing?.file_name && !file && <div className="text-[11px] text-slate-500 mt-1">Current file: {existing.file_name}</div>}
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add')}</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PurchasingResourcesView({ profile }){
+  const [tab,setTab]=useState('pricelist');
+  const [folder,setFolder]=useState('Fabrics');
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState('');
+  const [adding,setAdding]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [addingPrice,setAddingPrice]=useState(false);
+  const [editingPrice,setEditingPrice]=useState(null);
+  const [lightbox,setLightbox]=useState(null);
+  const [dragOver,setDragOver]=useState(false);
+  const [uploading,setUploading]=useState('');
+  const folders = purFoldersFor(tab);
+  const isPricelist = tab==='pricelist';
+  const canEdit = purResCanEdit(profile);
+  useEffect(()=>{ setFolder(purFoldersFor(tab)[0]||''); }, [tab]);
+  async function load(){
+    setLoading(true);
+    const { data }=await sb.from('purchasing_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  async function uploadFiles(fileList){
+    const files = Array.from(fileList||[]).filter(f => (f.type||'').startsWith('image') || (f.type||'').includes('pdf'));
+    if(!files.length) return;
+    let done = 0;
+    for(const file of files){
+      done++; setUploading(`Uploading ${done}/${files.length}…`);
+      try {
+        const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
+        const key=`purchasing-resources/${tab}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        const { error }=await sb.from('purchasing_resources').insert({ category:tab, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
+        if(error) throw error;
+      } catch(e){ alert('Upload failed: '+(e.message||e)); }
+    }
+    setUploading(''); await load();
+  }
+  function onDrop(e){ e.preventDefault(); setDragOver(false); if(!canEdit || isPricelist) return; uploadFiles(e.dataTransfer?.files); }
+  function onDragOver(e){ if(!canEdit || isPricelist) return; e.preventDefault(); if(!dragOver) setDragOver(true); }
+  function onDragLeave(e){ if(e.currentTarget===e.target) setDragOver(false); }
+  function onPaste(e){ if(!canEdit || isPricelist) return; const imgs=Array.from(e.clipboardData?.items||[]).filter(i=>i.type.startsWith('image')).map(i=>i.getAsFile()).filter(Boolean); if(imgs.length){ e.preventDefault(); uploadFiles(imgs); } }
+  async function delRes(r){
+    if(!confirm(`Delete "${r.title||r.file_name||'this item'}"?`)) return;
+    const { error }=await sb.from('purchasing_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
+    if(error){ alert(error.message); return; } load();
+  }
+  async function openRes(r){
+    if(r.file_path){ try { const u=await signedUrl(r.file_path); if((r.file_type||'').startsWith('image')) setLightbox(u); else window.open(u,'_blank','noopener'); } catch(_){} return; }
+    if(r.url) window.open(r.url,'_blank','noopener');
+  }
+  const q=search.toLowerCase();
+  const matchTxt=(r)=> !q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''} ${r.supplier||''}`.toLowerCase().includes(q);
+  const list = rows.filter(r=> r.category===tab && matchTxt(r));
+  const priceRows = rows.filter(r=> r.category==='pricelist' && (r.folder===folder || (!r.folder && folder===folders[0])) && matchTxt(r)).slice().sort((a,b)=> String(a.title||'').localeCompare(String(b.title||'')));
+  const countFor=(k)=> rows.filter(r=>r.category===k).length;
+  const folderCount=(fd)=> rows.filter(r=>r.category==='pricelist' && (r.folder===fd || (!r.folder && fd===folders[0]))).length;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📚 Purchasing Resources</h1><p className="text-slate-500 text-sm">Fabric &amp; trim pricelist, swatches, and ready-made references</p></div>
+          <div className="flex items-center gap-2">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
+            {canEdit && <button onClick={()=> isPricelist ? setAddingPrice(true) : setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
+          </div>
+        </div>
+        <div className="flex gap-1 mt-3 flex-wrap">
+          {PUR_RES_TABS.map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab===t.key?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>{t.icon} {t.label} <span className="opacity-60">({countFor(t.key)})</span></button>
+          ))}
+        </div>
+        {folders.length>0 && (
+          <div className="flex gap-1 mt-2 flex-wrap">
+            {folders.map(fd=>(
+              <button key={fd} onClick={()=>setFolder(fd)} className={`px-3 py-1 rounded-md text-xs font-semibold border ${folder===fd?'bg-violet-600 text-white border-violet-600':'bg-white text-slate-600 hover:bg-slate-50'}`}>📁 {fd} <span className="opacity-60">({folderCount(fd)})</span></button>
+            ))}
+          </div>
+        )}
+      </div>
+      {isPricelist && !canEdit && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">🔒 View only — Admin &amp; Purchasing can add or edit the pricelist.</div>
+      )}
+
+      {isPricelist ? (
+        loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+        : (
+          <div className="bg-white rounded-xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Material / item</th>
+                <th className="text-left px-3 py-2">Supplier</th>
+                <th className="text-left px-3 py-2">Unit</th>
+                <th className="text-right px-3 py-2">Unit price</th>
+                <th className="text-right px-3 py-2">MOQ</th>
+                <th className="text-left px-3 py-2">Notes</th>
+                {canEdit && <th className="px-3 py-2"></th>}
+              </tr></thead>
+              <tbody>
+                {priceRows.map(r=>(
+                  <tr key={r.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{r.title||'—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{r.supplier||'—'}</td>
+                    <td className="px-3 py-2 text-slate-600 text-xs">{r.unit||'—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{r.unit_price!=null?peso(r.unit_price):'—'}</td>
+                    <td className="px-3 py-2 text-right text-slate-600">{r.moq!=null?Number(r.moq).toLocaleString('en-PH'):'—'}</td>
+                    <td className="px-3 py-2 text-slate-600 text-xs">{r.notes||''}</td>
+                    {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={()=>setEditingPrice(r)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                      <button onClick={()=>delRes(r)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                    </td>}
+                  </tr>
+                ))}
+                {priceRows.length===0 && <tr><td colSpan={canEdit?7:6} className="text-center text-slate-400 py-8">No {folder} pricelist items yet.{canEdit?' Click “+ Add” to create one.':''}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : (
+        <>
+          {canEdit && <div className="mb-3 text-xs text-slate-400">Tip: drag &amp; drop images/PDFs anywhere below, or paste a screenshot with ⌘V, to add them here.</div>}
+          <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onPaste={onPaste} tabIndex={canEdit?0:undefined}
+               className={`relative rounded-xl transition ${dragOver?'ring-2 ring-indigo-400 bg-indigo-50/40':''} ${canEdit?'outline-none':''}`}>
+            {dragOver && canEdit && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-indigo-50/80 border-2 border-dashed border-indigo-400 pointer-events-none">
+                <div className="text-indigo-700 font-semibold text-sm">Drop to add to {(PUR_RES_TABS.find(t=>t.key===tab)||{}).label}</div>
+              </div>
+            )}
+            {uploading && <div className="mb-3 text-xs text-indigo-600 font-semibold">{uploading}</div>}
+            {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div>
+              : list.length===0 ? (
+                <div className="border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">
+                  Nothing here yet.{canEdit ? ' Drag & drop files here, or click “+ Add”.' : ''}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  {list.map(r=><DesignResourceCard key={r.id} r={r} canEdit={canEdit} onOpen={openRes} onEdit={setEditing} onDelete={delRes} />)}
+                </div>
+              )}
+          </div>
+        </>
+      )}
+      {(adding||editing) && <PurchasingResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
+      {(addingPrice||editingPrice) && <PurchasingPricelistRowForm profile={profile} existing={editingPrice} defaultFolder={folder} onClose={()=>{ setAddingPrice(false); setEditingPrice(null); }} onSaved={()=>{ setAddingPrice(false); setEditingPrice(null); load(); }} />}
       {lightbox && (
         <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
           <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
@@ -27163,7 +27424,7 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -27668,7 +27929,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -27738,7 +27999,7 @@ function App(){
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -27876,6 +28137,7 @@ function App(){
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
+        {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
