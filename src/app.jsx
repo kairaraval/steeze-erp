@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 239 · New Purchasing → Resources: Pricelist (Fabrics / Trims folders with supplier, unit, unit price, MOQ), Fabric Swatches board, and Ready Made Items board — drag & drop images/PDFs. Admin + Purchasing can edit. Mirrors the Sales Resources module";
+const BUILD = "Live build 240 · Sales pipeline: removed the 'Send to Production' and 'Send to PR' buttons — both the production job and the Purchase Request now auto-create when a lead reaches a Won/Delivered stage, so the manual buttons were redundant";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2294,8 +2294,9 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
             {lead.stage==='sampling' && <button onClick={onSendPrinting} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
-            {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendProduction} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">⚙ Send to Production</button>}
-            {SOLD_STAGES.includes(lead.stage) && <button onClick={onSendToPR} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">📝 Send to PR</button>}
+            {/* "Send to Production" and "Send to PR" removed — both the production
+                job AND the Purchase Request (BOM) are now auto-created the moment
+                a lead enters a Won/Delivered stage (see maybeAutoCreate…ForLead). */}
             {onDuplicate && <button onClick={onDuplicate} className="py-2 px-3 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700" title="Duplicate this lead — useful for reorders (client + items + techpack carry over)">📋 Duplicate as new lead</button>}
             <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
           </div>
