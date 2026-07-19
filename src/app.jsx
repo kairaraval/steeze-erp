@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 237 · Stock Movements now resolves PR-sourced stock-outs: the Reference column shows the PR number and Client/Notes shows the linked client (or Manual) for materials fulfilled from stock. Fulfill from Stock records a real stock-out + reduces on-hand; board Submitted/Approved/Ordered/Fulfilled from Stock/Rejected + source chips";
+const BUILD = "Live build 238 · PR: renamed the 'Submitted' status to 'Requests' across the board, stat cards, badges and dropdown (status key unchanged). Stock Movements resolves PR-sourced stock-outs; Fulfill from Stock records a real stock-out";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16768,7 +16768,7 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
 
 /* ====================== PURCHASE REQUESTS ====================== */
 const PR_STATUSES=[
-  { key:'submitted', label:'Submitted', color:'bg-amber-100 text-amber-700' },
+  { key:'submitted', label:'Requests', color:'bg-amber-100 text-amber-700' },
   { key:'approved',  label:'Approved',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
   { key:'fulfilled_stock', label:'Fulfilled from Stock', color:'bg-teal-100 text-teal-700' },
