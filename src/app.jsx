@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 234 · Purchase Requests: new Board (Kanban) view with Board/List toggle — columns Submitted/Approved/Ordered/Rejected, quick Approve/Reject/Create-PO on cards. Each PR now carries a source chip (Production / Sampling / Manual) with source filters. Samples now auto-raise a Sampling PR the moment they land on the board";
+const BUILD = "Live build 235 · Purchase Requests: stock-covered PRs can now be closed with '📦 Fulfill from Stock' (new terminal status) instead of forcing a PO — button shows on fully-covered approved PRs in the board card + PR form. Materials stay reserved and are deducted at Stock-Out. Board now: Submitted/Approved/Ordered/Fulfilled from Stock/Rejected. Source chips (Production/Sampling/Manual) + sample auto-PR remain";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16625,7 +16625,10 @@ async function cascadeDueDatesFromLead(lead){
 function computeStockReservations(requests){
   const map = new Map();
   (requests||[]).forEach(pr => {
-    if(pr.status !== 'approved') return;
+    // Approved PRs reserve their allocated stock. PRs closed as "Fulfilled from
+    // Stock" keep the reservation too — the material is spoken for and will be
+    // physically deducted later at Stock-Out.
+    if(pr.status !== 'approved' && pr.status !== 'fulfilled_stock') return;
     (pr.lines||[]).forEach(line => {
       if(!line.item_id) return;
       if(line.linked_po_id) return;   // Already in a PO — released
@@ -16663,6 +16666,19 @@ function lineCoverage(line, item, reservations){
   if(snap.available >= Number(line.qty||0)) return { state:'covered', snap, need, shortfall:0, allocated };
   if(snap.available <= 0) return { state:'none', snap, need, shortfall:Number(line.qty||0), allocated };
   return { state:'partial', snap, need, shortfall: Number(line.qty||0) - snap.available, allocated };
+}
+
+// Is a whole PR fully coverable from stock right now? True when every material
+// line that maps to an inventory item is 'covered' (nothing needs buying) and
+// there's at least one such line. Non-inventory / free-text lines are ignored.
+function prFullyCovered(pr, items, reservations){
+  const lines = (pr?.lines||[]).filter(l=> l.item_id && (Number(l.qty||0)+Number(l.stock_allocated||0))>0 );
+  if(lines.length===0) return false;
+  return lines.every(l=>{
+    const it = (items||[]).find(i=>i.id===l.item_id);
+    const cov = lineCoverage(l, it, reservations);
+    return cov && (cov.state==='covered' || cov.state==='overage');
+  });
 }
 
 // Reusable stock-visibility strip that renders under a PR/PO line item.
@@ -16711,8 +16727,9 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
 const PR_STATUSES=[
   { key:'submitted', label:'Submitted', color:'bg-amber-100 text-amber-700' },
   { key:'approved',  label:'Approved',  color:'bg-emerald-100 text-emerald-700' },
-  { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
+  { key:'fulfilled_stock', label:'Fulfilled from Stock', color:'bg-teal-100 text-teal-700' },
+  { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 const PR_URGENCIES=['normal','high','urgent'];
@@ -16748,6 +16765,13 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
     if(error){ alert(error.message); return; } reload();
   }
+  const prReservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  async function fulfillFromStock(pr){
+    if(!confirm(`Mark ${pr.number||'this PR'} as Fulfilled from Stock?\n\nNo PO — materials are drawn from inventory (reserved now, deducted at Stock-Out). This closes the PR.`)) return;
+    const newLines=(pr.lines||[]).map(l=> (l.item_id&&Number(l.qty||0)>0) ? {...l, stock_allocated:Number(l.stock_allocated||0)+Number(l.qty||0), qty:0} : l);
+    const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
+    if(error){ alert(error.message); return; } reload();
+  }
   // Soft-delete a PR — sends it to Trash so admin can restore from Settings.
   // Admin + Accounting + Purchasing can delete. Once ordered, the PR is locked
   // (it's already been converted to a PO).
@@ -16779,7 +16803,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-4 gap-4 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR# or justification…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
         <div className="flex items-center gap-1 flex-wrap ml-auto">
@@ -16812,6 +16836,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                         <button onClick={()=>setPRStatus(r,'approved')} className="text-[11px] text-emerald-600 hover:underline font-medium">✔ Approve</button>
                         <button onClick={()=>setPRStatus(r,'rejected')} className="text-[11px] text-rose-500 hover:underline">✕ Reject</button>
                       </>}
+                      {r.status==='approved' && prFullyCovered(r, items, prReservations) && <button onClick={()=>fulfillFromStock(r)} className="text-[11px] text-teal-600 hover:underline font-medium" title="No PO needed — draw from stock">📦 From stock</button>}
                       {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
                       {r.status==='rejected' && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
                       <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
@@ -16879,7 +16904,20 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
     return computeStockReservations(others);
   },[allRequests, existing]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const readOnly = f.status==='ordered' || (f.status==='rejected' && !canApprove);
+  const readOnly = f.status==='ordered' || f.status==='fulfilled_stock' || (f.status==='rejected' && !canApprove);
+  // Fully covered by stock → can be closed as "Fulfilled from Stock" (no PO).
+  const fullyCovered = prFullyCovered(f, items, reservations);
+  async function fulfillFromStock(){
+    if(!isEdit) return;
+    if(!confirm('Mark this PR as Fulfilled from Stock?\n\nNo PO will be created — all materials will be drawn from inventory (reserved now, deducted at Stock-Out). This closes the PR.')) return;
+    setBusy(true); setMsg('');
+    // Pull every inventory line fully from stock so nothing is left "to buy".
+    const newLines = (f.lines||[]).map(l=> (l.item_id && Number(l.qty||0)>0) ? { ...l, stock_allocated: Number(l.stock_allocated||0)+Number(l.qty||0), qty:0 } : l);
+    const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', existing.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
   // Resolve linked lead → client → techpack for the header banner.
   const linkedLead = existing&&existing.linked_lead_id ? (leads||[]).find(l=>l.id===existing.linked_lead_id) : null;
   const client = linkedLead && linkedLead.client_id ? (clients||[]).find(c=>c.id===linkedLead.client_id) : null;
@@ -17129,9 +17167,11 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
           {isEdit && onPrint && <button onClick={()=>onPrint(existing)} className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">🖨 Print preview</button>}
           {isEdit && canApprove && f.status==='submitted' && <button onClick={()=>setStatus('approved')} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">✓ Approve</button>}
           {isEdit && canApprove && f.status==='submitted' && <button onClick={()=>setStatus('rejected')} disabled={busy} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold disabled:opacity-50">✕ Reject</button>}
+          {isEdit && f.status==='approved' && fullyCovered && <button onClick={fulfillFromStock} disabled={busy} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold disabled:opacity-50" title="No PO needed — draw all materials from inventory and close the PR">📦 Fulfill from Stock</button>}
           {isEdit && f.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(existing)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">→ Create PO</button>}
           {!readOnly && <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Create PR')}</button>}
-          {readOnly && <div className="flex-1 text-xs text-slate-500 self-center text-center">This PR is {f.status} and locked.</div>}
+          {readOnly && f.status==='fulfilled_stock' && <div className="flex-1 text-xs text-teal-700 self-center text-center font-medium">✓ Fulfilled from stock — materials drawn from inventory, no PO needed.</div>}
+          {readOnly && f.status!=='fulfilled_stock' && <div className="flex-1 text-xs text-slate-500 self-center text-center">This PR is {f.status} and locked.</div>}
         </div>
       </div>
       {/* Nested inventory item create modal — opens when user picks
