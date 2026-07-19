@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 229 · Marketing content: attachment box on each post — drag & drop PDFs, files, or photos (or click to browse); attachments + clickable Canva/asset links show on the board cards and list. Phase 2 Analytics remains";
+const BUILD = "Live build 230 · P&L fix: revenue now recognized only when an SO is delivered (or already paid/partial). Open, undelivered orders that were merely dated in the month no longer inflate revenue — July corrected from ₱7.56M to ₱3.61M";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22577,9 +22577,14 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
     return mode==='ytd' ? d.startsWith(String(year)) : d.startsWith(monthKey);
   }
 
-  // Revenue — we use SOs delivered in the period as the revenue trigger (accrual).
-  // If delivered_at is not set, fall back to date (helpful while you're adopting).
-  const revenueSOs = salesOrders.filter(s => s.status!=='cancelled' && inRange(s.delivered_at || s.date));
+  // Revenue — recognized on ACCRUAL when the SO is actually earned:
+  //   • delivered_at is set  → recognize on the delivery date, OR
+  //   • status is paid/partial (cash received) → recognize on the SO date.
+  // An open SO that hasn't been delivered is still backlog, NOT revenue —
+  // otherwise merely dating an order in a month would inflate that month's
+  // sales (this was over-counting undelivered orders before).
+  function recogDate(s){ return s.delivered_at || ((s.status==='paid'||s.status==='partial') ? s.date : null); }
+  const revenueSOs = salesOrders.filter(s => s.status!=='cancelled' && inRange(recogDate(s)));
   const revenue = revenueSOs.reduce((s,o)=>s+Number(o.total||0), 0);
 
   // COGS — PO totals for POs received in the period (subtotal only, VAT we get back).
@@ -22662,7 +22667,7 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📊 P&L Summary</h1>
-            <p className="text-slate-500 text-sm">{mode==='month'?monthName:`Year ${year} (YTD)`} · {revenueSOs.length} delivered SOs · {opexExpenses.length + opexVouchers.length} opex entries ({opexExpenses.length} expense{opexExpenses.length===1?'':'s'} + {opexVouchers.length} voucher{opexVouchers.length===1?'':'s'})</p>
+            <p className="text-slate-500 text-sm">{mode==='month'?monthName:`Year ${year} (YTD)`} · {revenueSOs.length} delivered/paid SOs · {opexExpenses.length + opexVouchers.length} opex entries ({opexExpenses.length} expense{opexExpenses.length===1?'':'s'} + {opexVouchers.length} voucher{opexVouchers.length===1?'':'s'})</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
@@ -22695,7 +22700,7 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
         <table className="w-full text-sm">
           <tbody>
             <Row label="REVENUE" value={revenue} bold />
-            <Row label="Sales (delivered SOs)" value={revenue} indent sub={`${revenueSOs.length} SO${revenueSOs.length===1?'':'s'}`} />
+            <Row label="Sales (delivered / paid SOs)" value={revenue} indent sub={`${revenueSOs.length} SO${revenueSOs.length===1?'':'s'}`} />
             <Row label="COST OF GOODS SOLD" value={cogsTotal} bold color="text-rose-700" />
             <Row label="Materials & supplier costs (POs)" value={cogs} indent sub={`${cogsPOs.length} PO${cogsPOs.length===1?'':'s'}`} />
             {cogsFromExpenses > 0 && (
