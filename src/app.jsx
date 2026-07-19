@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 235 · Purchase Requests: stock-covered PRs can now be closed with '📦 Fulfill from Stock' (new terminal status) instead of forcing a PO — button shows on fully-covered approved PRs in the board card + PR form. Materials stay reserved and are deducted at Stock-Out. Board now: Submitted/Approved/Ordered/Fulfilled from Stock/Rejected. Source chips (Production/Sampling/Manual) + sample auto-PR remain";
+const BUILD = "Live build 236 · Fulfill from Stock now records a real stock-out: it writes a Stock Movement and reduces on-hand immediately (visible in Stock Movements / Stock Out history), then closes the PR — no more silent reservation. Backfilled the 4 PRs already fulfilled under the old behavior. Board: Submitted/Approved/Ordered/Fulfilled from Stock/Rejected + source chips";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16625,10 +16625,10 @@ async function cascadeDueDatesFromLead(lead){
 function computeStockReservations(requests){
   const map = new Map();
   (requests||[]).forEach(pr => {
-    // Approved PRs reserve their allocated stock. PRs closed as "Fulfilled from
-    // Stock" keep the reservation too — the material is spoken for and will be
-    // physically deducted later at Stock-Out.
-    if(pr.status !== 'approved' && pr.status !== 'fulfilled_stock') return;
+    // Only APPROVED PRs reserve stock. Once a PR is "Fulfilled from Stock" the
+    // material has already been issued (a stock-out movement decremented
+    // on-hand), so it's no longer a reservation.
+    if(pr.status !== 'approved') return;
     (pr.lines||[]).forEach(line => {
       if(!line.item_id) return;
       if(line.linked_po_id) return;   // Already in a PO — released
@@ -16679,6 +16679,40 @@ function prFullyCovered(pr, items, reservations){
     const cov = lineCoverage(l, it, reservations);
     return cov && (cov.state==='covered' || cov.state==='overage');
   });
+}
+
+// Close a PR as "Fulfilled from Stock": write a stock-out movement for every
+// inventory line (so it shows in Stock Movements + Stock Out history),
+// decrement on-hand, and flip the PR to fulfilled_stock with lines zeroed out
+// (fully consumed — no leftover to buy, nothing left reserved). Shared by the
+// board card + the PR form so both behave identically.
+async function issuePRFromStock(pr, items, profile){
+  const date = new Date().toISOString().slice(0,10);
+  const consume = (pr.lines||[])
+    .filter(l=> l.item_id && (Number(l.qty||0)+Number(l.stock_allocated||0))>0)
+    .map(l=>({ item_id:l.item_id, qty: Number(l.qty||0)+Number(l.stock_allocated||0) }));
+  if(consume.length){
+    const movements = consume.map(c=>({
+      item_id:c.item_id, type:'out', qty:c.qty,
+      reason:'production', ref_type:'purchase_request', ref_id:pr.id,
+      actor_id:profile.id, date,
+    }));
+    const { error: smErr } = await sb.from('stock_movements').insert(movements);
+    if(smErr){
+      // Some installs lack the optional `date` column — retry without it.
+      const stripped = movements.map(({date, ...rest})=>rest);
+      const { error: retry } = await sb.from('stock_movements').insert(stripped);
+      if(retry) throw retry;
+    }
+    // Decrement on-hand for each consumed item.
+    for(const c of consume){
+      const it = (items||[]).find(x=>x.id===c.item_id);
+      await sb.from('items').update({ qty: Number(it?.qty||0) - c.qty }).eq('id', c.item_id);
+    }
+  }
+  const newLines = (pr.lines||[]).map(l=> l.item_id ? { ...l, qty:0, stock_allocated:0 } : l);
+  const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
+  if(error) throw error;
 }
 
 // Reusable stock-visibility strip that renders under a PR/PO line item.
@@ -16767,10 +16801,9 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   }
   const prReservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   async function fulfillFromStock(pr){
-    if(!confirm(`Mark ${pr.number||'this PR'} as Fulfilled from Stock?\n\nNo PO — materials are drawn from inventory (reserved now, deducted at Stock-Out). This closes the PR.`)) return;
-    const newLines=(pr.lines||[]).map(l=> (l.item_id&&Number(l.qty||0)>0) ? {...l, stock_allocated:Number(l.stock_allocated||0)+Number(l.qty||0), qty:0} : l);
-    const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
-    if(error){ alert(error.message); return; } reload();
+    if(!confirm(`Fulfill ${pr.number||'this PR'} from stock?\n\nNo PO — materials are issued straight from inventory now: a stock-out is recorded and on-hand is reduced. This closes the PR.`)) return;
+    try { await issuePRFromStock(pr, items, profile); reload(); }
+    catch(err){ alert(err.message||String(err)); }
   }
   // Soft-delete a PR — sends it to Trash so admin can restore from Settings.
   // Admin + Accounting + Purchasing can delete. Once ordered, the PR is locked
@@ -16909,14 +16942,10 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
   const fullyCovered = prFullyCovered(f, items, reservations);
   async function fulfillFromStock(){
     if(!isEdit) return;
-    if(!confirm('Mark this PR as Fulfilled from Stock?\n\nNo PO will be created — all materials will be drawn from inventory (reserved now, deducted at Stock-Out). This closes the PR.')) return;
+    if(!confirm('Fulfill this PR from stock?\n\nNo PO will be created — all materials are issued straight from inventory now: a stock-out is recorded and on-hand is reduced. This closes the PR.')) return;
     setBusy(true); setMsg('');
-    // Pull every inventory line fully from stock so nothing is left "to buy".
-    const newLines = (f.lines||[]).map(l=> (l.item_id && Number(l.qty||0)>0) ? { ...l, stock_allocated: Number(l.stock_allocated||0)+Number(l.qty||0), qty:0 } : l);
-    const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', existing.id);
-    setBusy(false);
-    if(error){ setMsg(error.message); return; }
-    onSaved();
+    try { await issuePRFromStock({ ...existing, lines:f.lines }, items, profile); setBusy(false); onSaved(); }
+    catch(err){ setBusy(false); setMsg(err.message||String(err)); }
   }
   // Resolve linked lead → client → techpack for the header banner.
   const linkedLead = existing&&existing.linked_lead_id ? (leads||[]).find(l=>l.id===existing.linked_lead_id) : null;
