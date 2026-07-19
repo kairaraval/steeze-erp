@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 231 · Expense Log: post-dated checks (future-dated check vouchers, e.g. Carapacho rent PDCs) now hidden by default so the daily log is clean. Banner shows PDC count/total/next-due with Hide / Show all / Only PDCs toggle; PDC rows badged. P&L delivered/paid revenue fix remains";
+const BUILD = "Live build 232 · Roles: 'Accounting' is now Accounting Supervisor (Rose Vista); added Accounting Officer role — same view access, no edit/delete. Officer encodes expenses & vouchers as PENDING drafts needing 2 approvals (Supervisor → Admin); no bank movement and excluded from Expense Log / P&L until fully approved. Officer can edit/delete her own entry until the first approval";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11868,7 +11868,8 @@ function roleLabel(r){
          r==='production'             ? 'Production Team' :
          r==='production_supervisor'  ? 'Production Supervisor' :
          r==='purchasing'             ? 'Purchasing Team' :
-         r==='accounting'             ? 'Accounting Team' :
+         r==='accounting'             ? 'Accounting Supervisor' :
+         r==='accounting_officer'     ? 'Accounting Officer' :
          r==='graphic'                ? 'Graphic Design' :
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
@@ -11885,6 +11886,7 @@ function RoleBadge({ role }){
     role==='production_supervisor'  ? 'bg-teal-100 text-teal-700' :
     role==='purchasing'             ? 'bg-violet-100 text-violet-700' :
     role==='accounting'             ? 'bg-sky-100 text-sky-700' :
+    role==='accounting_officer'     ? 'bg-sky-50 text-sky-600' :
     role==='graphic'                ? 'bg-pink-100 text-pink-700' :
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
@@ -12094,7 +12096,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'graphic',     label:'Graphic',       count:profiles.filter(p=>p.role==='graphic').length },
     { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
-    { key:'accounting',  label:'Accounting',    count:profiles.filter(p=>p.role==='accounting').length },
+    { key:'accounting',  label:'Acct. Supervisor', count:profiles.filter(p=>p.role==='accounting').length },
+    { key:'accounting_officer', label:'Acct. Officer', count:profiles.filter(p=>p.role==='accounting_officer').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
@@ -12102,7 +12105,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -12143,7 +12146,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
-              <option value="accounting">Accounting Team</option>
+              <option value="accounting">Accounting Supervisor</option>
+              <option value="accounting_officer">Accounting Officer</option>
               <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
               <option value="hr">HR Department</option>
@@ -12647,6 +12651,26 @@ function TpLbl({ t, children }){ return <div><div className="text-[10px] upperca
    person), plus a printable payout sheet with a signature column. It also marks
    the underlying rows paid via the caller-supplied onMarkPaid(payoutId). */
 function payoutCanRun(profile){ const r=profile?.role; return r==='admin' || r==='accounting'; }
+
+/* ─────────── ACCOUNTING OFFICER · 2-STEP APPROVAL HELPERS ───────────
+   An Accounting Officer encodes expenses + vouchers, but those entries stay
+   PENDING (no bank movement, kept out of the Expense Log / P&L) until they get
+   two sign-offs: first the Accounting Supervisor, then Admin. Entries created
+   by the Supervisor or Admin post immediately (approval_status defaults to
+   'approved'). Officer may edit/delete her OWN entry only while it's still
+   'pending_supervisor' (i.e. before the first approval locks it). */
+function isAcctOfficer(p){ return p?.role==='accounting_officer'; }
+function financeCanEncode(p){ const r=p?.role; return r==='admin' || r==='accounting' || r==='accounting_officer'; }
+function canSupervisorApprove(p){ const r=p?.role; return r==='admin' || r==='accounting'; }
+function canAdminApprove(p){ return p?.role==='admin'; }
+// A row is "live" (real money out) only when approved. Rows with no
+// approval_status column value are legacy/normal and count as approved.
+function isApprovedFin(row){ const s=row?.approval_status; return !s || s==='approved'; }
+function acctApprovalMeta(status){
+  return status==='pending_supervisor' ? { label:'Awaiting Supervisor', cls:'bg-amber-100 text-amber-700' }
+       : status==='pending_admin'      ? { label:'Awaiting Admin',      cls:'bg-orange-100 text-orange-700' }
+       : { label:'Approved', cls:'bg-emerald-100 text-emerald-700' };
+}
 function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profile, onMarkPaid, onClose, onSaved }){
   const title = kind==='sewing' ? 'In-house Sewing Payroll Payout' : 'Subcon Payroll Payout';
   const peopleWord = kind==='sewing' ? 'sewers' : 'subcons';
@@ -20379,6 +20403,9 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
         // Also auto-void any signature so the edited doc must be re-approved.
         const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, signed_at: null, approved_by: null, approved_at: null }).eq('id', existing.id);
         if(vErr) throw vErr;
+        // A still-pending Officer draft has no bank movement yet — leave the
+        // bank untouched (it posts only on final admin approval).
+        if(!isApprovedFin(existing)){ setBusy(false); onSaved(); return; }
         if(existing.bank_transaction_id){
           // Update the existing linked bank transaction. If the user moved the
           // voucher to a different bank, this row follows (effectively transferring
@@ -20403,6 +20430,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
         return;
       }
       // CREATE MODE
+      const officer = isAcctOfficer(profile);
       const prefix = f.type==='check' ? 'CV' : (f.type==='bank_transfer' ? 'BT' : 'CASH');
       // Allocate number from the database (counts ALL rows including soft-deleted
       // ones) and retry up to 5 times on unique-constraint collision in case
@@ -20410,7 +20438,9 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
       // counter silently breaks once any voucher is soft-deleted.
       let number = await nextFinanceNumberFromDb(prefix, monthKey);
       let bankTxId = null;
-      if(f.bank_id){
+      // Accounting Officer vouchers are PENDING drafts — no bank movement until
+      // Admin gives final approval, at which point the bank txn is created.
+      if(f.bank_id && !officer){
         const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
           bank_id: f.bank_id, date: f.date, direction: 'out', amount: Number(f.amount),
           description: `${number} — ${f.payee} — ${f.particulars||f.expense_category||''}`.slice(0,200),
@@ -20427,7 +20457,9 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
           rfp_id: null, po_id: null,
           bank_transaction_id: bankTxId,
           prepared_by: profile.id,
-          released_at: new Date().toISOString(),
+          released_at: officer ? null : new Date().toISOString(),
+          approval_status: officer ? 'pending_supervisor' : 'approved',
+          submitted_by: officer ? profile.id : null,
         }).select('id').single();
         if(!res.error){ vdata = res.data; lastErr = null; break; }
         // 23505 = PostgreSQL unique_violation. Re-query for the new max and try again.
@@ -20749,7 +20781,39 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
   const [autoPrint,setAutoPrint]=useState(false);
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
+  const isOfficer = isAcctOfficer(profile);
   const canManageVouchers = isAdmin || isAccounting; // admin + accounting can edit/void
+  // Officer can edit/void her OWN voucher only while it's still awaiting the
+  // first (supervisor) sign-off.
+  const canEditRow = (v)=> canManageVouchers || (isOfficer && v.submitted_by===profile.id && v.approval_status==='pending_supervisor');
+  async function supApproveV(v){
+    const { error } = await sb.from('vouchers').update({ approval_status:'pending_admin', sup_approved_by:profile.id, sup_approved_at:new Date().toISOString() }).eq('id', v.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  async function adminApproveV(v){
+    // Final approval — post the money now (create the bank txn), then approve.
+    try {
+      let bankTxId=null;
+      if(v.bank_id){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id:v.bank_id, date:v.date, direction:'out', amount:Number(v.amount||0),
+          description:`${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
+          ref_type:'voucher', ref_id:v.id, reference_number:v.check_number||v.number, created_by:profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr; bankTxId=btx.id;
+      }
+      const patch={ approval_status:'approved', admin_approved_by:profile.id, admin_approved_at:new Date().toISOString(), released_at:new Date().toISOString() };
+      if(bankTxId) patch.bank_transaction_id=bankTxId;
+      const { error } = await sb.from('vouchers').update(patch).eq('id', v.id);
+      if(error) throw error;
+      reload && reload();
+    } catch(err){ alert(err.message||String(err)); }
+  }
+  async function rejectV(v){
+    if(!confirm(`Reject pending voucher ${v.number}? It goes to Trash and the encoder must re-submit.`)) return;
+    const { error } = await sb.from('vouchers').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', v.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
   // Soft-delete (void). Also hard-deletes the linked bank_transaction so
   // the bank balance corrects (voided vouchers shouldn't leak as expenses).
   async function deleteVoucher(v){
@@ -20790,9 +20854,9 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search voucher # / payee / particulars" className="ml-auto px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-72" />
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Voucher#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Payee</th><th className="text-left px-3 py-2">Check#</th><th className="text-left px-3 py-2">Bank</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Actions</th></tr></thead>
-        <tbody>{rows.map(v=>{ const bank=bankAccounts.find(b=>b.id===v.bank_id); return (
-          <tr key={v.id} className="border-t hover:bg-slate-50">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Voucher#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Payee</th><th className="text-left px-3 py-2">Check#</th><th className="text-left px-3 py-2">Bank</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-right px-3 py-2">Actions</th></tr></thead>
+        <tbody>{rows.map(v=>{ const bank=bankAccounts.find(b=>b.id===v.bank_id); const pending=!isApprovedFin(v); const am=acctApprovalMeta(v.approval_status); return (
+          <tr key={v.id} className={`border-t hover:bg-slate-50 ${pending?'bg-amber-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{v.number}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(v.date)}</td>
             <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${v.type==='check'?'bg-blue-100 text-blue-700':v.type==='bank_transfer'?'bg-violet-100 text-violet-700':'bg-amber-100 text-amber-700'}`}>{v.type==='check'?'CV':v.type==='bank_transfer'?'BT':'Cash'}</span></td>
@@ -20800,14 +20864,18 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
             <td className="px-3 py-2 font-mono text-xs">{v.check_number||'—'}</td>
             <td className="px-3 py-2 text-xs">{bank?bank.bank_name:'—'}</td>
             <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(v.amount)}</td>
+            <td className="px-3 py-2">{pending ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${am.cls}`}>{am.label}</span> : <span className="text-[10px] text-slate-400">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>{ setAutoPrint(false); setViewing(v); }} className="text-xs text-indigo-600 hover:underline font-medium mr-3">👁 View</button>
               <button onClick={()=>{ setAutoPrint(true); setViewing(v); }} className="text-xs text-slate-600 hover:underline font-medium mr-3">🖨 Print</button>
-              {canManageVouchers && <button onClick={()=>setEditing(v)} className="text-xs text-amber-600 hover:underline font-medium mr-3" title="Edit voucher (admin + accounting)">✎ Edit</button>}
-              {canManageVouchers && <button onClick={()=>deleteVoucher(v)} className="text-xs text-rose-500 hover:underline font-medium" title="Void voucher + reverse bank transaction (admin + accounting)">🗑 Void</button>}
+              {v.approval_status==='pending_supervisor' && canSupervisorApprove(profile) && <button onClick={()=>supApproveV(v)} className="text-xs text-emerald-600 hover:underline font-medium mr-3">✔ Approve (Sup.)</button>}
+              {v.approval_status==='pending_admin' && canAdminApprove(profile) && <button onClick={()=>adminApproveV(v)} className="text-xs text-emerald-700 hover:underline font-semibold mr-3">✔ Final approve</button>}
+              {pending && canSupervisorApprove(profile) && <button onClick={()=>rejectV(v)} className="text-xs text-rose-500 hover:underline font-medium mr-3">Reject</button>}
+              {canEditRow(v) && <button onClick={()=>setEditing(v)} className="text-xs text-amber-600 hover:underline font-medium mr-3" title="Edit voucher">✎ Edit</button>}
+              {canManageVouchers && !pending && <button onClick={()=>deleteVoucher(v)} className="text-xs text-rose-500 hover:underline font-medium" title="Void voucher + reverse bank transaction">🗑 Void</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No vouchers yet. Click <b>+ New Voucher</b> to create one, or pay an approved RFP.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No vouchers yet. Click <b>+ New Voucher</b> to create one, or pay an approved RFP.</td></tr>}</tbody>
       </table></div></div>
       {creating && <StandaloneVoucherModal profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
       {editing && <StandaloneVoucherModal key={editing.id} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
@@ -21206,7 +21274,41 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
   const [monthFilter,setMonthFilter]=useState(''); // YYYY-MM
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
-  const canEdit = isAdmin || isAccounting;
+  const isOfficer = isAcctOfficer(profile);
+  const canEdit = isAdmin || isAccounting;       // supervisor/admin: full edit/delete
+  const canCreate = canEdit || isOfficer;        // officer can encode drafts too
+  // Can the current user edit/delete THIS row?
+  const canEditRow = (e)=> canEdit || (isOfficer && e.submitted_by===profile.id && e.approval_status==='pending_supervisor');
+
+  async function supApprove(e){
+    const { error } = await sb.from('expenses').update({ approval_status:'pending_admin', sup_approved_by:profile.id, sup_approved_at:new Date().toISOString() }).eq('id', e.id);
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function adminApprove(e){
+    // Final approval — the money moves now: create the bank txn (if bank-paid),
+    // then flip to approved so it enters the Expense Log / P&L.
+    try {
+      let bankTxId=null;
+      if(e.paid_via==='bank' && e.bank_id){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id:e.bank_id, date:e.date, direction:'out', amount:Number(e.amount||0),
+          description:`Expense · ${e.category||''}${e.vendor?' · '+e.vendor:''}`,
+          ref_type:'expense', ref_id:e.id, created_by:profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr; bankTxId=btx.id;
+      }
+      const patch={ approval_status:'approved', admin_approved_by:profile.id, admin_approved_at:new Date().toISOString() };
+      if(bankTxId) patch.bank_transaction_id=bankTxId;
+      const { error } = await sb.from('expenses').update(patch).eq('id', e.id);
+      if(error) throw error;
+      reload();
+    } catch(err){ alert(err.message||String(err)); }
+  }
+  async function reject(e){
+    if(!confirm('Reject this pending expense? It goes to Trash and the encoder must re-submit.')) return;
+    const { error } = await sb.from('expenses').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', e.id);
+    if(error){ alert(error.message); return; } reload();
+  }
 
   const rows = expenses
     .filter(e=>!filter || e.category===filter)
@@ -21235,7 +21337,7 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
             <h1 className="text-2xl font-bold">💸 Expenses</h1>
             <p className="text-slate-500 text-sm">{rows.length} expense{rows.length===1?'':'s'} · Total {peso(totalThisFilter)}{monthFilter?` in ${monthFilter}`:''}</p>
           </div>
-          {canEdit && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
+          {canCreate && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
         </div>
       </div>
 
@@ -21264,10 +21366,11 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
           <th className="text-left px-3 py-2">Bank</th>
           <th className="text-right px-3 py-2">Amount</th>
           <th className="text-center px-3 py-2">Tax-ded</th>
+          <th className="text-left px-3 py-2">Status</th>
           <th></th>
         </tr></thead>
-        <tbody>{rows.map(e=>{ const bank=bankAccounts.find(b=>b.id===e.bank_id); const via=PAID_VIA_OPTIONS.find(p=>p.key===e.paid_via); return (
-          <tr key={e.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>canEdit && setEditing(e)}>
+        <tbody>{rows.map(e=>{ const bank=bankAccounts.find(b=>b.id===e.bank_id); const via=PAID_VIA_OPTIONS.find(p=>p.key===e.paid_via); const pending=!isApprovedFin(e); const am=acctApprovalMeta(e.approval_status); const editable=canEditRow(e); return (
+          <tr key={e.id} className={`border-t hover:bg-slate-50 ${editable?'cursor-pointer':''} ${pending?'bg-amber-50/40':''}`} onClick={()=>editable && setEditing(e)}>
             <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
             <td className="px-3 py-2"><span className="text-xs px-1.5 py-0.5 rounded bg-slate-100">{e.category||'—'}</span></td>
             <td className="px-3 py-2">{e.vendor||'—'}</td>
@@ -21276,12 +21379,16 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
             <td className="px-3 py-2 text-xs">{bank?bank.bank_name:'—'}</td>
             <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
             <td className="px-3 py-2 text-center">{e.tax_deductible? '✓':'—'}</td>
+            <td className="px-3 py-2">{pending ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${am.cls}`}>{am.label}</span> : <span className="text-[10px] text-slate-400">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
-              {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" onClick={ev=>ev.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎 Receipt</a>}
-              {canEdit && <button onClick={(ev)=>{ev.stopPropagation(); del(e);}} className="text-xs text-rose-500 hover:underline">Delete</button>}
+              {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" onClick={ev=>ev.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎</a>}
+              {e.approval_status==='pending_supervisor' && canSupervisorApprove(profile) && <button onClick={(ev)=>{ev.stopPropagation(); supApprove(e);}} className="text-xs text-emerald-600 hover:underline font-medium mr-2">✔ Approve (Sup.)</button>}
+              {e.approval_status==='pending_admin' && canAdminApprove(profile) && <button onClick={(ev)=>{ev.stopPropagation(); adminApprove(e);}} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">✔ Final approve</button>}
+              {pending && (canSupervisorApprove(profile)) && <button onClick={(ev)=>{ev.stopPropagation(); reject(e);}} className="text-xs text-rose-500 hover:underline mr-2">Reject</button>}
+              {editable && <button onClick={(ev)=>{ev.stopPropagation(); del(e);}} className="text-xs text-rose-500 hover:underline">Delete</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No expenses match this filter. {canEdit && 'Click "+ New expense" to log one.'}</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No expenses match this filter. {canCreate && 'Click "+ New expense" to log one.'}</td></tr>}</tbody>
       </table></div></div>
 
       {(creating||editing) && <ExpenseFormModal existing={editing} profile={profile} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
@@ -21331,8 +21438,18 @@ function ExpenseFormModal({ existing, profile, bankAccounts, onClose, onSaved })
       };
       // For new expense paid via bank: create matching bank txn so the bank balance updates.
       // For edit, keep the existing bank txn linked (we don't reconcile changes — too risky to auto-fix).
+      const officer = isAcctOfficer(profile);
       if(!isEdit){
         payload.created_by = profile.id;
+        // Accounting Officer entries are PENDING drafts — no bank movement yet.
+        // The bank transaction is created only when Admin gives final approval.
+        if(officer){
+          payload.approval_status = 'pending_supervisor';
+          payload.submitted_by = profile.id;
+          const { error } = await sb.from('expenses').insert(payload).select('id').single();
+          if(error) throw error;
+          setBusy(false); onSaved(); return;
+        }
         let bankTxId = null;
         if(f.paid_via==='bank' && f.bank_id){
           const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
@@ -22599,14 +22716,14 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
   //   "COGS — …"  → Cost of Goods Sold (adds to material/PO COGS)
   //   "CAPEX — …" → Capitalized below the line (doesn't expense this period)
   //   everything else → Operating Expenses
-  const inPeriodExpenses = (expenses||[]).filter(e => inRange(e.date));
+  const inPeriodExpenses = (expenses||[]).filter(e => inRange(e.date) && isApprovedFin(e));
   // VOUCHERS are real disbursements too (rent, gov fees, transport paid via
   // Check / BT / Cash directly — outside the PO chain). Skip:
   //   • deleted vouchers (deleted_at set)
   //   • vouchers tied to a PO or RFP (their cost is already in COGS via the
   //     PO total, so double-counting would inflate cost)
   const inPeriodVouchers = (vouchers||[]).filter(v =>
-    inRange(v.date) && !v.deleted_at && !v.rfp_id && !v.po_id
+    inRange(v.date) && !v.deleted_at && !v.rfp_id && !v.po_id && isApprovedFin(v)
   );
   function categoryBucket(cat){
     const c = String(cat||'');
@@ -22765,15 +22882,22 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     // since some teams record real spend ONLY in the BR (no separate
     // voucher). Approved / pending / rejected BRs stay out — they're
     // commitments, not movements.
-    (vouchers||[]).forEach(v=> out.push({
-      date: v.date, source:'voucher', amount: Number(v.amount||0),
-      label: v.payee || '(payee)', category: v.expense_category || '—',
-      ref: v.number, raw:v,
-    }));
+    (vouchers||[]).forEach(v=>{
+      // Officer drafts awaiting approval haven't moved money yet — keep them
+      // out of the actual money-out log until they're fully approved.
+      if(!isApprovedFin(v)) return;
+      out.push({
+        date: v.date, source:'voucher', amount: Number(v.amount||0),
+        label: v.payee || '(payee)', category: v.expense_category || '—',
+        ref: v.number, raw:v,
+      });
+    });
     (expenses||[]).forEach(e=>{
       // Skip ONLY expenses that are linked to a specific petty cash float —
       // their cash movement is already counted in that float's issuance row.
       if(e.petty_cash_id) return;
+      // Skip pending Officer drafts (not yet approved / no money out).
+      if(!isApprovedFin(e)) return;
       out.push({
         date: e.date, source:'expense', amount: Number(e.amount||0),
         label: e.description || e.vendor || '(expense)',
@@ -26851,8 +26975,9 @@ function App(){
       // Default landing is the Purchasing Home dashboard.
       allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
       fallback = 'pur-home';
-    } else if(profile.role==='accounting'){
+    } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
+      // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
       allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
@@ -27248,6 +27373,7 @@ function App(){
   const isProduction=profile.role==='production';
   const isPurchasing=profile.role==='purchasing';
   const isAccounting=profile.role==='accounting';
+  const isAccountingOfficer=profile.role==='accounting_officer';
   const isManager=profile.role==='manager';
   const isGraphicTeam=profile.role==='graphic';
   const isPrintingTeam=profile.role==='printing';
@@ -27357,8 +27483,10 @@ function App(){
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
     ];
-  } else if(isAccounting){
+  } else if(isAccounting || isAccountingOfficer){
     // Accounting/Finance team — full Finance module + Sales visibility + Operations + Purchasing + Logistics + Payroll + inbox.
+    // Accounting Officer shares the exact same nav as the Supervisor; the
+    // difference is purely edit/delete/approval rights, gated inside each view.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       FINANCE_FULL,
