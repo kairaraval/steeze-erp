@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 232 · Roles: 'Accounting' is now Accounting Supervisor (Rose Vista); added Accounting Officer role — same view access, no edit/delete. Officer encodes expenses & vouchers as PENDING drafts needing 2 approvals (Supervisor → Admin); no bank movement and excluded from Expense Log / P&L until fully approved. Officer can edit/delete her own entry until the first approval";
+const BUILD = "Live build 233 · Fix: the Settings team role dropdown now shows Accounting Supervisor + Accounting Officer (it was still labelled 'Accounting Team' and missing the Officer option). Roles: Accounting Supervisor (Rose Vista) + new Accounting Officer with 2-step (Supervisor → Admin) expense/voucher approval; drafts stay out of bank / Expense Log / P&L until fully approved";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12242,7 +12242,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="graphic">Graphic Design</option>
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
-                  <option value="accounting">Accounting Team</option>
+                  <option value="accounting">Accounting Supervisor</option>
+                  <option value="accounting_officer">Accounting Officer</option>
                   <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
                   <option value="hr">HR Department</option>
