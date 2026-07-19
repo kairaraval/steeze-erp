@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 233 · Fix: the Settings team role dropdown now shows Accounting Supervisor + Accounting Officer (it was still labelled 'Accounting Team' and missing the Officer option). Roles: Accounting Supervisor (Rose Vista) + new Accounting Officer with 2-step (Supervisor → Admin) expense/voucher approval; drafts stay out of bank / Expense Log / P&L until fully approved";
+const BUILD = "Live build 234 · Purchase Requests: new Board (Kanban) view with Board/List toggle — columns Submitted/Approved/Ordered/Rejected, quick Approve/Reject/Create-PO on cards. Each PR now carries a source chip (Production / Sampling / Manual) with source filters. Samples now auto-raise a Sampling PR the moment they land on the board";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6387,7 +6387,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
       })}</div>
       )}
 
-      {creating && <SamplingJobForm existing={null} leads={leads} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+      {creating && <SamplingJobForm existing={null} profile={profile} leads={leads} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
     </div>
   );
 }
@@ -6524,7 +6524,7 @@ function SendSampleToPrintingModal({ sample, lead, onClose, onSent }){
   );
 }
 
-function SamplingJobForm({ existing, leads, onClose, onSaved }){
+function SamplingJobForm({ existing, profile, leads, onClose, onSaved }){
   const isEdit=!!existing;
   const [f,setF]=useState(existing||{ client_name:'', item:'', quantity:0, status:'endorsed', due_date:'', notes:'', lead_id:null });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -6532,8 +6532,15 @@ function SamplingJobForm({ existing, leads, onClose, onSaved }){
   async function save(){ if(!f.client_name && !f.item){ setMsg('Client or item required.'); return; } setBusy(true); setMsg('');
     const payload={ client_name:f.client_name||'', item:f.item||'', quantity:Number(f.quantity)||0, status:f.status, due_date:f.due_date||null, notes:f.notes||'', lead_id:f.lead_id||null };
     if(!isEdit) payload.number='SMP-'+Date.now().toString().slice(-5);
-    const { error } = isEdit ? await sb.from('sampling_jobs').update(payload).eq('id',existing.id) : await sb.from('sampling_jobs').insert(payload);
-    setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
+    if(isEdit){
+      const { error } = await sb.from('sampling_jobs').update(payload).eq('id',existing.id);
+      setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); return;
+    }
+    const { data, error } = await sb.from('sampling_jobs').insert(payload).select().single();
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    // A new sample on the board → raise its Sampling PR automatically.
+    if(data && profile){ try { await maybeAutoCreatePRForSample(profile, data); } catch(_){} }
+    onSaved(); }
   return (
     <Modal title={isEdit?'Edit sample job':'New sample job'} onClose={onClose}>
       <div className="space-y-3">
@@ -16187,9 +16194,54 @@ function buildPRFromLead(profile, lead){
     status:'submitted',
     justification:`Materials for Closed Won deal "${lead.title}". Lead value ${peso(lead.value)}.`,
     approver_note:'',
+    source:'production',
     linked_lead_id: lead.id,
     lines: lines.length?lines:[{description:`Materials for "${lead.title}"`, sku:'', item_id:null, qty:1, est_cost:0, link:'', notes:''}],
   };
+}
+
+// Where did a PR come from? Explicit `source` wins; otherwise derive from links
+// (sample link → Sampling, lead link → Production, neither → Manual).
+function prSource(r){
+  if(r?.source) return r.source;
+  if(r?.linked_sample_id) return 'sampling';
+  if(r?.linked_lead_id) return 'production';
+  return 'manual';
+}
+const PR_SOURCES = [
+  { key:'production', label:'Production', icon:'⚙', color:'bg-emerald-100 text-emerald-700' },
+  { key:'sampling',   label:'Sampling',   icon:'🧵', color:'bg-purple-100 text-purple-700' },
+  { key:'manual',     label:'Manual',     icon:'✍️', color:'bg-slate-100 text-slate-600' },
+];
+function prSourceMeta(k){ return PR_SOURCES.find(s=>s.key===k) || PR_SOURCES[2]; }
+
+// Idempotent: raise a Sampling PR the moment a sample job lands on the board,
+// so purchasing can start sourcing sample materials. Keyed on linked_sample_id
+// so a given sample can only ever spawn one PR. Does NOT set linked_lead_id, so
+// it never blocks the later Production PR that keys off the lead.
+async function maybeAutoCreatePRForSample(profile, sample){
+  if(!sample || !profile) return null;
+  try {
+    const { data: existing, error: lookupErr } = await sb.from('purchase_requests')
+      .select('id').eq('linked_sample_id', sample.id).is('deleted_at', null).limit(1);
+    if(lookupErr){ console.warn('Sample-PR lookup failed:', lookupErr.message); return null; }
+    if(existing && existing.length > 0) return null;
+    const lines = (sample.items||[]).map(it=>({
+      description: `${it.itemType||'Item'}${it.category?` (${it.category})`:''} — sample for "${sample.item||''}"`,
+      sku:'', item_id:null, qty:Number(it.quantity)||0, est_cost:0, link:'', notes:'',
+    }));
+    const payload = {
+      number:'PR-'+Date.now().toString().slice(-5),
+      date:new Date().toISOString().slice(0,10),
+      requested_by: profile.id, dept_id:null, urgency:'normal', status:'submitted',
+      justification:`Sample materials for "${sample.item||''}"${sample.client_name?` · ${sample.client_name}`:''} (${sample.number||''}).`,
+      approver_note:'', source:'sampling', linked_sample_id: sample.id,
+      lines: lines.length?lines:[{description:`Sample materials for "${sample.item||''}"`, sku:'', item_id:null, qty:1, est_cost:0, link:'', notes:''}],
+    };
+    const { data, error } = await sb.from('purchase_requests').insert(payload).select().single();
+    if(error){ if(String(error.code||'').startsWith('23')) return null; console.warn('Sample-PR insert failed:', error.message); return null; }
+    return data;
+  } catch(e){ console.warn('Sample-PR unexpected error:', e); return null; }
 }
 
 // Idempotent auto-create. Skips if a PR already exists for this lead. Used by
@@ -16433,6 +16485,8 @@ async function maybeAutoCreateSamplingJobForLead(profile, lead, clients){
       if(String(error.code||'').startsWith('23')) return null;
       console.warn('Sampling auto-create insert failed:', error.message); return null;
     }
+    // The sample just landed on the board — raise its Sampling PR too.
+    try { await maybeAutoCreatePRForSample(profile, data); } catch(_){}
     return data;
   } catch(e){
     console.warn('Sampling auto-create unexpected error:', e);
@@ -16663,12 +16717,37 @@ const PR_STATUSES=[
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 const PR_URGENCIES=['normal','high','urgent'];
 
-function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, reload, onCreatePO, onViewTechpack }){
+function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
+  const [layout,setLayout]=useState('board');       // 'board' | 'list'
+  const [sourceFilter,setSourceFilter]=useState(''); // '' | production | sampling | manual
   const counts=PR_STATUSES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>r.status===s.key).length; return a; },{});
-  const rows=requests.filter(r=>(!filter||r.status===filter)&&(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
+  const srcCounts=PR_SOURCES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>prSource(r)===s.key).length; return a; },{});
+  const rows=requests
+    .filter(r=>(!filter||r.status===filter))
+    .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
+    .filter(r=>(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
   const reqName=(id)=>profiles.find(p=>p.id===id)?.name||'—';
   const deptName=(id)=>departments.find(d=>d.id===id)?.name||'—';
+  // Resolve display fields for a PR row from whichever source it came from.
+  function derivePR(r){
+    const src = prSource(r);
+    const lead = r.linked_lead_id ? (leads||[]).find(l=>l.id===r.linked_lead_id) : null;
+    const sample = r.linked_sample_id ? (sampleJobs||[]).find(s=>s.id===r.linked_sample_id) : null;
+    const cli = lead && lead.client_id ? (clients||[]).find(c=>c.id===lead.client_id) : null;
+    const clientName = cli?.company || sample?.client_name || (src==='manual' ? 'Manual request' : '—');
+    const tpNo = lead?.techpack?.prodFormNo || lead?.techpack_number || sample?.number || '';
+    const lines = r.lines || [];
+    const firstLine = lines[0];
+    const firstItemName = (()=>{ if(!firstLine) return '—'; if(firstLine.item_id){ const it=(items||[]).find(i=>i.id===firstLine.item_id); if(it) return it.name+(it.color?` - ${it.color}`:''); } return firstLine.description || '—'; })();
+    const moreCount = Math.max(0, lines.length-1);
+    const totalQty = lines.reduce((s,l)=>s+(Number(l.qty)||0), 0);
+    return { src, clientName, tpNo, firstItemName, moreCount, totalQty };
+  }
+  async function setPRStatus(pr, s){
+    const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
+    if(error){ alert(error.message); return; } reload();
+  }
   // Soft-delete a PR — sends it to Trash so admin can restore from Settings.
   // Admin + Accounting + Purchasing can delete. Once ordered, the PR is locked
   // (it's already been converted to a PO).
@@ -16691,17 +16770,65 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📝 Purchase Requests</h1><p className="text-slate-500 text-sm">{requests.length} request{requests.length===1?'':'s'} · {counts.submitted||0} awaiting approval</p></div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New PR</button>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+              <button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button>
+              <button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button>
+            </div>
+            <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New PR</button>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-4 gap-4 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR# or justification…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        <div className="flex items-center gap-1 flex-wrap ml-auto">
+          <span className="text-xs text-slate-400 mr-1">Source:</span>
+          <button onClick={()=>setSourceFilter('')} className={`text-xs px-2.5 py-1 rounded-full border ${sourceFilter===''?'bg-slate-800 text-white border-slate-800':'bg-white hover:bg-slate-50'}`}>All</button>
+          {PR_SOURCES.map(s=>(<button key={s.key} onClick={()=>setSourceFilter(sourceFilter===s.key?'':s.key)} className={`text-xs px-2.5 py-1 rounded-full border ${sourceFilter===s.key?'bg-slate-800 text-white border-slate-800':'bg-white hover:bg-slate-50'}`}>{s.icon} {s.label} <span className="opacity-60">{srcCounts[s.key]||0}</span></button>))}
+        </div>
       </div>
+
+      {layout==='board' ? (
+        <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-300px)]">
+          {PR_STATUSES.map(st=>{ const col=rows.filter(r=>r.status===st.key); return (
+            <div key={st.key} className="flex-shrink-0 w-72 flex flex-col h-full">
+              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold flex items-center justify-between ${st.color}`}><span>{st.label}</span><span className="opacity-70">{col.length}</span></div>
+              <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/50">
+                {col.map(r=>{ const d=derivePR(r); const sm=prSourceMeta(d.src); return (
+                  <div key={r.id} className="bg-white border rounded-lg shadow-sm p-2.5 group">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="font-mono text-[11px] text-slate-500">{r.number||r.id.slice(0,6)}</span>
+                      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span>
+                    </div>
+                    <button onClick={()=>setEditing(r)} className="text-left w-full">
+                      <div className="text-sm font-semibold leading-tight truncate" title={d.firstItemName}>{d.firstItemName}</div>
+                      {d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}
+                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.clientName}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
+                      {d.tpNo && <div className="text-[10px] font-mono text-slate-400 mt-0.5">TP {d.tpNo}</div>}
+                    </button>
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t">
+                      {r.status==='submitted' && <>
+                        <button onClick={()=>setPRStatus(r,'approved')} className="text-[11px] text-emerald-600 hover:underline font-medium">✔ Approve</button>
+                        <button onClick={()=>setPRStatus(r,'rejected')} className="text-[11px] text-rose-500 hover:underline">✕ Reject</button>
+                      </>}
+                      {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
+                      {r.status==='rejected' && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
+                      <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
+                    </div>
+                  </div>
+                ); })}
+                {col.length===0 && <div className="text-[10px] text-center py-4 text-slate-400">—</div>}
+              </div>
+            </div>
+          ); })}
+        </div>
+      ) : (
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
           <th className="text-left px-3 py-2">PR#</th>
           <th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">Source</th>
           <th className="text-left px-3 py-2">Client</th>
           <th className="text-left px-3 py-2">Item</th>
           <th className="text-right px-3 py-2">Qty</th>
@@ -16710,39 +16837,23 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
           <th></th>
         </tr></thead>
         <tbody>{rows.map(r=>{
-          const meta=prMeta(r.status);
-          // Resolve linked lead → client + techpack number for this row.
-          const lead = r.linked_lead_id ? (leads||[]).find(l=>l.id===r.linked_lead_id) : null;
-          const cli = lead && lead.client_id ? (clients||[]).find(c=>c.id===lead.client_id) : null;
-          const tpNo = lead?.techpack?.prodFormNo || lead?.techpack_number || '';
-          // Item summary: first line's item name (or description) + "+ N more".
-          const lines = r.lines || [];
-          const firstLine = lines[0];
-          const firstItemName = (() => {
-            if(!firstLine) return '';
-            if(firstLine.item_id){
-              const it = (items||[]).find(i=>i.id===firstLine.item_id);
-              if(it) return it.name + (it.color?` - ${it.color}`:'');
-            }
-            return firstLine.description || '—';
-          })();
-          const moreCount = Math.max(0, lines.length-1);
-          // Total qty across all lines.
-          const totalQty = lines.reduce((s,l)=>s+(Number(l.qty)||0), 0);
+          const meta=prMeta(r.status); const d=derivePR(r); const sm=prSourceMeta(d.src);
           return (
             <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(r)}>
               <td className="px-3 py-2 font-mono text-xs">{r.number||r.id.slice(0,6)}</td>
               <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
-              <td className="px-3 py-2">{cli?.company || <span className="text-slate-400">—</span>}</td>
-              <td className="px-3 py-2"><div className="truncate max-w-[18rem]" title={firstItemName}>{firstItemName}</div>{moreCount>0 && <div className="text-[10px] text-slate-500">+ {moreCount} more line{moreCount===1?'':'s'}</div>}</td>
-              <td className="px-3 py-2 text-right font-medium">{totalQty || '—'}</td>
-              <td className="px-3 py-2 text-xs font-mono">{tpNo || <span className="text-slate-400">—</span>}</td>
+              <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span></td>
+              <td className="px-3 py-2">{d.clientName==='—'? <span className="text-slate-400">—</span> : d.clientName}</td>
+              <td className="px-3 py-2"><div className="truncate max-w-[18rem]" title={d.firstItemName}>{d.firstItemName}</div>{d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}</td>
+              <td className="px-3 py-2 text-right font-medium">{d.totalQty || '—'}</td>
+              <td className="px-3 py-2 text-xs font-mono">{d.tpNo || <span className="text-slate-400">—</span>}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{ e.stopPropagation(); setPrinting(r); }} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{ e.stopPropagation(); setEditing(r); }} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{canDelete && <button onClick={(e)=>{ e.stopPropagation(); delPR(r); }} className="text-xs text-rose-500 hover:underline" title="Send to Trash">Delete</button>}</td>
             </tr>
           );
-        })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase requests yet. Click "+ New PR" to add one.</td></tr>}</tbody>
+        })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
       </table></div></div>
+      )}
       {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
@@ -27697,7 +27808,7 @@ function App(){
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
-        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
+        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
