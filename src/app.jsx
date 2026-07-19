@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 236 · Fulfill from Stock now records a real stock-out: it writes a Stock Movement and reduces on-hand immediately (visible in Stock Movements / Stock Out history), then closes the PR — no more silent reservation. Backfilled the 4 PRs already fulfilled under the old behavior. Board: Submitted/Approved/Ordered/Fulfilled from Stock/Rejected + source chips";
+const BUILD = "Live build 237 · Stock Movements now resolves PR-sourced stock-outs: the Reference column shows the PR number and Client/Notes shows the linked client (or Manual) for materials fulfilled from stock. Fulfill from Stock records a real stock-out + reduces on-hand; board Submitted/Approved/Ordered/Fulfilled from Stock/Rejected + source chips";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4641,7 +4641,7 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
    production issuances). The Stock Out tab is for action ("issue materials");
    this view is for review ("did everything land correctly today?").
 */
-function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements }){
+function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements, requests, leads, clients, sampleJobs }){
   const [type,setType]=useState('');         // '' | 'in' | 'out'
   const [search,setSearch]=useState('');
   const [from,setFrom]=useState('');
@@ -4672,14 +4672,23 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
     const it = (items||[]).find(x=>x.id===s.item_id);
     const job = s.ref_type==='production_job' ? (prodJobs||[]).find(j=>j.id===s.ref_id) : null;
     const po  = s.ref_type==='po'             ? (orders||[]).find(o=>o.id===s.ref_id) : null;
+    const pr  = s.ref_type==='purchase_request' ? (requests||[]).find(r=>r.id===s.ref_id) : null;
+    // Resolve a PR's client from whichever source it links to.
+    let prClient = '';
+    if(pr){
+      const lead = pr.linked_lead_id ? (leads||[]).find(l=>l.id===pr.linked_lead_id) : null;
+      const sample = pr.linked_sample_id ? (sampleJobs||[]).find(sj=>sj.id===pr.linked_sample_id) : null;
+      const cli = lead && lead.client_id ? (clients||[]).find(c=>c.id===lead.client_id) : null;
+      prClient = cli?.company || sample?.client_name || (pr.linked_lead_id||pr.linked_sample_id ? '' : 'Manual request');
+    }
     return {
       ...s,
       _date: localDateOf(s),
       _item: it,
       _job: job,
       _po: po,
-      _ref: job?job.number : (po?po.number : ''),
-      _client: job?job.client_name : '',
+      _ref: job?job.number : po?po.number : pr?(pr.number||'PR'):'',
+      _client: job?job.client_name : (pr?prClient:''),
     };
   });
 
@@ -27882,7 +27891,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
-        {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} />}
+        {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
