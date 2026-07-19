@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 230 · P&L fix: revenue now recognized only when an SO is delivered (or already paid/partial). Open, undelivered orders that were merely dated in the month no longer inflate revenue — July corrected from ₱7.56M to ₱3.61M";
+const BUILD = "Live build 231 · Expense Log: post-dated checks (future-dated check vouchers, e.g. Carapacho rent PDCs) now hidden by default so the daily log is clean. Banner shows PDC count/total/next-due with Hide / Show all / Only PDCs toggle; PDC rows badged. P&L delivered/paid revenue fix remains";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22806,12 +22806,23 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   const [src,setSrc]=useState('');
   const [from,setFrom]=useState('');
   const [to,setTo]=useState('');
+  const [pdcMode,setPdcMode]=useState('exclude'); // 'exclude' | 'all' | 'only'
   const today = new Date().toISOString().slice(0,10);
   const monthKey = today.slice(0,7);
   const yearKey = today.slice(0,4);
   function startOfWeek(){ const d=new Date(today+'T00:00:00'); const day=d.getDay(); const diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); return d.toISOString().slice(0,10); }
   const weekStart = startOfWeek();
-  const sumWhere = (pred) => rows.filter(pred).reduce((s,r)=>s+r.amount, 0);
+  // A post-dated check (PDC) = a check voucher whose check date is still in the
+  // future, i.e. the money hasn't actually left the bank yet. These clutter the
+  // daily log (and inflate period totals) because they sort by their future
+  // date, so by default we keep them out of the "actual money-out" view.
+  const isPDC = (r)=> r.source==='voucher' && r.raw && r.raw.type==='check' && String(r.raw.check_date || r.date || '') > today;
+  const pdcRows = rows.filter(isPDC);
+  const pdcTotal = pdcRows.reduce((s,r)=>s+r.amount, 0);
+  const pdcNext = pdcRows.map(r=>String(r.raw.check_date||r.date)).sort()[0] || null;
+  // Base feed after applying the PDC control — everything else derives from this.
+  const baseRows = rows.filter(r=> pdcMode==='all' ? true : pdcMode==='only' ? isPDC(r) : !isPDC(r));
+  const sumWhere = (pred) => baseRows.filter(pred).reduce((s,r)=>s+r.amount, 0);
   const tot = {
     today:  sumWhere(r => r.date === today),
     week:   sumWhere(r => r.date >= weekStart && r.date <= today),
@@ -22819,12 +22830,12 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     year:   sumWhere(r => r.date.startsWith(yearKey)),
   };
   const cnt = {
-    today:  rows.filter(r => r.date === today).length,
-    week:   rows.filter(r => r.date >= weekStart && r.date <= today).length,
-    month:  rows.filter(r => r.date.startsWith(monthKey)).length,
-    year:   rows.filter(r => r.date.startsWith(yearKey)).length,
+    today:  baseRows.filter(r => r.date === today).length,
+    week:   baseRows.filter(r => r.date >= weekStart && r.date <= today).length,
+    month:  baseRows.filter(r => r.date.startsWith(monthKey)).length,
+    year:   baseRows.filter(r => r.date.startsWith(yearKey)).length,
   };
-  const filtered = rows.filter(r=>{
+  const filtered = baseRows.filter(r=>{
     if(src && r.source !== src) return false;
     if(from && r.date < from) return false;
     if(to && r.date > to) return false;
@@ -22858,6 +22869,22 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">This Month</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.month)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.month} item{cnt.month===1?'':'s'} · {monthKey}</div></div>
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">This Year</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.year)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.year} item{cnt.year===1?'':'s'} · {yearKey}</div></div>
       </div>
+
+      {pdcRows.length>0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 mb-4 flex flex-wrap items-center gap-3">
+          <div className="text-sm">
+            <span className="font-bold text-indigo-900">🗓 {pdcRows.length} post-dated check{pdcRows.length===1?'':'s'}</span>
+            <span className="text-indigo-700"> worth {peso(pdcTotal)} not yet due</span>
+            {pdcNext && <span className="text-indigo-500 text-xs"> · next clears {fmtDate(pdcNext)}</span>}
+            <span className="text-slate-400 text-xs"> — future-dated checks that haven't left the bank</span>
+          </div>
+          <div className="ml-auto inline-flex rounded-lg border bg-white p-0.5 text-xs">
+            <button onClick={()=>setPdcMode('exclude')} className={`px-2.5 py-1 rounded-md ${pdcMode==='exclude'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>Hide PDCs</button>
+            <button onClick={()=>setPdcMode('all')} className={`px-2.5 py-1 rounded-md ${pdcMode==='all'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>Show all</button>
+            <button onClick={()=>setPdcMode('only')} className={`px-2.5 py-1 rounded-md ${pdcMode==='only'?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>Only PDCs</button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white border rounded-xl p-3 mb-4">
         <div className="flex flex-wrap gap-2 items-end">
@@ -22907,10 +22934,10 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
               <th className="text-right px-3 py-2">Amount</th>
             </tr>
           </thead>
-          <tbody>{filtered.map((r,i)=>{ const b=srcBadge(r.source); return (
-            <tr key={r.source+'_'+(r.ref||i)+'_'+i} className="border-t hover:bg-slate-50">
+          <tbody>{filtered.map((r,i)=>{ const b=srcBadge(r.source); const pdc=isPDC(r); return (
+            <tr key={r.source+'_'+(r.ref||i)+'_'+i} className={`border-t hover:bg-slate-50 ${pdc?'bg-indigo-50/40':''}`}>
               <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(r.date)}</td>
-              <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${b.cls}`}>{b.label}</span></td>
+              <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${b.cls}`}>{b.label}</span>{pdc && <span className="ml-1 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">PDC</span>}</td>
               <td className="px-3 py-2">{r.label}</td>
               <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{r.category}</span></td>
               <td className="px-3 py-2 font-mono text-xs">{r.ref||'—'}</td>
