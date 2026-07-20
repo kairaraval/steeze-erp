@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 245 · New HR → Employee Loans: record company loans to staff at 3%/month simple interest (on original principal), with a full repayment ledger and running outstanding balance that auto-marks Paid when settled. Repayments (usually salary deduction) tracked in HR only";
+const BUILD = "Live build 246 · Fix: removed a duplicate declaration that broke the Vercel build (build 245 failed to compile). HR → Employee Loans is now live: 3%/month simple interest, full repayment ledger, running outstanding balance, auto-marks Paid when settled";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10109,7 +10109,6 @@ function LoanDetailModal({ profile, loan, employees, payments, onClose, onSaved 
 }
 
 function HRRecruitmentView({ profile, profiles, employees, hrJobs, hrApplicants, reload }){
-  const [openJobId,setOpenJobId]=useState(null);
   const [openJobId,setOpenJobId]=useState(null);
   const [creatingJob,setCreatingJob]=useState(false);
   const [editingJob,setEditingJob]=useState(null);
