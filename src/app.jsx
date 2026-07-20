@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 241 · Accounting Officer can now fully operate (like the Supervisor) RFPs, Budget Requests, Petty Cash, Commissions, and Subcon + Sewing payroll payouts. Vouchers/expenses she encodes still route through the 2-step (Supervisor → Admin) approval; voucher edit/void stays Supervisor/Admin";
+const BUILD = "Live build 242 · New 'Request from Purchasing' — any department can file a manual purchasing request (item, qty, urgency, needed-by, details) with drag-drop photos. It lands in Purchase Requests as a Manual request in the Requests column, attachments show on the PR, and the Purchasing team is pinged in real time";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17189,6 +17189,139 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   );
 }
 
+// ─────────── DEPARTMENT PURCHASE REQUEST (manual intake) ───────────
+// A lightweight form any department can use to request anything from
+// Purchasing (like the Budget Request form). It files a Manual PR in the
+// "Requests" column with photo attachments, and the existing realtime channel
+// pings the Purchasing team.
+function PurchaseIntakeForm({ profile, onClose, onSaved }){
+  const [f,setF]=useState({ item:'', qty:'', unit:'', urgency:'normal', needed_by:'', details:'' });
+  const [attachments,setAttachments]=useState([]);
+  const [uploading,setUploading]=useState(false); const [drag,setDrag]=useState(false);
+  const fileInput=useRef(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function uploadFiles(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean);
+    if(!files.length) return;
+    setUploading(true); setMsg('');
+    try {
+      for(const file of files){
+        const ext=(file.name.split('.').pop()||'bin').toLowerCase();
+        const key=`purchase-requests/manual/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        const { data: pu }=await sb.storage.from(BUCKET).getPublicUrl(key);
+        setAttachments(prev=>[...prev,{ name:file.name, url:pu.publicUrl, path:key, type:file.type||'' }]);
+      }
+    } catch(e){ setMsg('Upload failed: '+(e.message||String(e))); }
+    setUploading(false);
+  }
+  function removeAtt(i){ setAttachments(prev=>prev.filter((_,x)=>x!==i)); }
+  async function submit(){
+    if(!f.item.trim()){ setMsg('What do you need? Please describe the item.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const number='PR-'+Date.now().toString().slice(-5);
+      const line={ description:f.item.trim(), sku:'', item_id:null, qty:Number(f.qty)||1, unit:f.unit||null, est_cost:0, link:'', notes:'' };
+      const payload={
+        number, date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null,
+        urgency:f.urgency, status:'submitted', source:'manual',
+        justification:`Manual request by ${profile.name||profile.email}${f.needed_by?` · needed by ${f.needed_by}`:''}${f.details?` — ${f.details}`:''}`,
+        approver_note:'', lines:[line], attachments,
+      };
+      const { error }=await sb.from('purchase_requests').insert(payload);
+      if(error) throw error;
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="Request from Purchasing" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="text-xs text-slate-500">Ask Purchasing to buy or source anything. Your request lands in their board as a <b>Manual request</b> and they’re notified right away.</div>
+        <div><label className="text-xs font-semibold text-slate-500">What do you need? *</label><input value={f.item} onChange={e=>up('item',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "2 rolls of white bias tape" or "Stapler + staples for office"' /></div>
+        <div className="grid grid-cols-3 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Quantity</label><input type="number" value={f.qty} onChange={e=>up('qty',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 2" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Unit</label><input value={f.unit} onChange={e=>up('unit',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="pcs / rolls / kg" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Urgency</label><select value={f.urgency} onChange={e=>up('urgency',e.target.value)} className="w-full border rounded px-2 py-1.5">{PR_URGENCIES.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Needed by</label><input type="date" value={f.needed_by} onChange={e=>up('needed_by',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Details / where to buy / specs</label><textarea value={f.details} onChange={e=>up('details',e.target.value)} rows={3} className="w-full border rounded px-2 py-1.5" placeholder="Brand, color, supplier, link, budget, or any note for Purchasing…" /></div>
+        <div>
+          <label className="text-xs font-semibold text-slate-500">Photos / attachments</label>
+          <div
+            onDragOver={e=>{ e.preventDefault(); setDrag(true); }} onDragLeave={()=>setDrag(false)}
+            onDrop={e=>{ e.preventDefault(); setDrag(false); uploadFiles(e.dataTransfer.files); }}
+            onClick={()=>fileInput.current&&fileInput.current.click()}
+            className={`mt-1 border-2 border-dashed rounded-lg px-3 py-4 text-center cursor-pointer transition ${drag?'border-indigo-500 bg-indigo-50':'border-slate-300 hover:border-slate-400 bg-slate-50'}`}>
+            <div className="text-xs text-slate-500">{uploading?'Uploading…':'Drag & drop photos here, or click to browse'}</div>
+            <input ref={fileInput} type="file" multiple accept="image/*,.pdf" className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
+          </div>
+          {attachments.length>0 && <div className="mt-2 space-y-1">
+            {attachments.map((a,i)=>(
+              <div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5">
+                <span>{/image/i.test(a.type)?'🖼':'📎'}</span>
+                <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-indigo-600 hover:underline" onClick={e=>e.stopPropagation()}>{a.name}</a>
+                <button type="button" onClick={()=>removeAtt(i)} className="text-slate-400 hover:text-rose-500">✕</button>
+              </div>
+            ))}
+          </div>}
+        </div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <button onClick={submit} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Submitting…':'Submit request to Purchasing'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function PurchaseIntakeView({ profile }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [creating,setCreating]=useState(false);
+  async function load(){
+    setLoading(true);
+    const { data }=await sb.from('purchase_requests').select('*')
+      .eq('requested_by', profile.id).eq('source','manual').is('deleted_at',null)
+      .order('created_at',{ascending:false});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🛒 Request from Purchasing</h1><p className="text-slate-500 text-sm">Ask Purchasing to buy or source anything — with photos. Track your requests below.</p></div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New request</button>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">Item</th>
+          <th className="text-right px-3 py-2">Qty</th>
+          <th className="text-left px-3 py-2">Urgency</th>
+          <th className="text-left px-3 py-2">Files</th>
+          <th className="text-left px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody>{loading ? <tr><td colSpan="6" className="text-center text-slate-400 py-8">Loading…</td></tr> : rows.map(r=>{
+          const meta=prMeta(r.status); const line=(r.lines||[])[0]||{}; const atts=Array.isArray(r.attachments)?r.attachments:[];
+          return (
+            <tr key={r.id} className="border-t">
+              <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(r.date)}</td>
+              <td className="px-3 py-2">{line.description||'—'}</td>
+              <td className="px-3 py-2 text-right">{line.qty||'—'}{line.unit?` ${line.unit}`:''}</td>
+              <td className="px-3 py-2 text-xs">{r.urgency||'normal'}</td>
+              <td className="px-3 py-2 text-xs">{atts.length?atts.map((a,i)=><a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="mr-1 hover:text-indigo-600">📎</a>):<span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+            </tr>
+          );
+        })}{!loading && rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No requests yet. Click “+ New request” to ask Purchasing for something.</td></tr>}</tbody>
+      </table></div></div>
+      {creating && <PurchaseIntakeForm profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); load(); }} />}
+    </div>
+  );
+}
+
 function PurchaseRequestForm({ profile, existing, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
   // When the user picks "+ Add new inventory item" on a line, this stores the
   // line index so we can auto-select the new item on that line after save.
@@ -17378,6 +17511,19 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
           <TpLbl t="Urgency"><select className="input" value={f.urgency} onChange={e=>up('urgency',e.target.value)} disabled={readOnly}>{PR_URGENCIES.map(u=><option key={u} value={u}>{u}</option>)}</select></TpLbl>
         </div>
         <TpLbl t="Justification / business reason"><textarea className="input min-h-[50px]" value={f.justification} onChange={e=>up('justification',e.target.value)} disabled={readOnly} placeholder="Why is this needed? (Auto-filled for closed-won deals.)" /></TpLbl>
+
+        {Array.isArray(existing?.attachments) && existing.attachments.length>0 && (
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Attachments from requester</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {existing.attachments.map((a,i)=> /image/i.test(a.type||'') ? (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name}><img src={a.url} alt={a.name} className="w-16 h-16 object-cover rounded border" /></a>
+              ) : (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline border rounded px-2 py-1 bg-white">📎 {a.name||'file'}</a>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Line items — BOM style. Each row is one inventory item with qty,
             unit cost, and the auto-derived supplier shown to the right. */}
@@ -27455,6 +27601,8 @@ function App(){
     } else {
       return; // admin / manager — no restrictions
     }
+    // Every restricted role may raise a manual Purchase Request (department intake).
+    allowed.add('pr-request');
     if(!allowed.has(view)) setView(fallback);
   },[profile, view]);
 
@@ -27611,11 +27759,15 @@ function App(){
         const r = p.new; if(!r) return;
         if(r.requested_by === profile.id) return;   // don't toast yourself
         if(!mutedRef.current) playPing();
+        const isManual = r.source==='manual';
         // Pull a short client/title hint if we can find it from the lead.
         const lead = r.linked_lead_id ? (leads||[]).find(l=>l.id===r.linked_lead_id) : null;
-        const hint = lead ? `${lead.title||''}` : (r.justification||'').slice(0, 80);
-        setToast({ title:`📝 New PR ${r.number||''}`, body: hint ? `Auto-created for ${hint}` : 'Auto-created from a Closed Won deal' });
-        if(!mutedRef.current) showSystemMention('Steeze OS — New PR for review', `${r.number||''} · ${hint}`, ()=>setView('requests'));
+        const line0 = (r.lines||[])[0]||{};
+        const hint = isManual ? (line0.description || (r.justification||'').slice(0,80))
+                   : (lead ? `${lead.title||''}` : (r.justification||'').slice(0, 80));
+        setToast({ title: isManual ? `🛒 New manual request ${r.number||''}` : `📝 New PR ${r.number||''}`,
+                   body: isManual ? (hint||'A department is requesting something') : (hint ? `Auto-created for ${hint}` : 'Auto-created from a Closed Won deal') });
+        if(!mutedRef.current) showSystemMention(isManual?'Steeze OS — New manual purchase request':'Steeze OS — New PR for review', `${r.number||''} · ${hint}`, ()=>setView('requests'));
         scheduleReload();
       })
       .subscribe();
@@ -27873,12 +28025,14 @@ function App(){
     ['invoices','My Invoices','🧾'],
     ['commissions','Commissions','💰'],
     ['budgets','Budget Requests','💰'],
+    ['pr-request','Request from Purchasing','🛒'],
   ] };
-  // Any role can submit a budget request — give all non-Finance roles a thin
-  // Finance group with just Budget Requests so HR / Production / Graphic / etc.
-  // can submit and check status of their requests.
+  // Any role can submit a budget request or a purchasing request — give all
+  // non-Finance roles a thin Finance group with Budget Requests + Request from
+  // Purchasing so HR / Production / Graphic / etc. can submit and track them.
   const FINANCE_DEPT_ONLY = { group:'Finance', items:[
     ['budgets','Budget Requests','💰'],
+    ['pr-request','Request from Purchasing','🛒'],
   ] };
   // Every user — regardless of role — gets a Personal group at the bottom of
   // their sidebar so they can manage their own profile (and, critically,
@@ -28150,6 +28304,7 @@ function App(){
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
+        {view==='pr-request' && <PurchaseIntakeView profile={profile} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
