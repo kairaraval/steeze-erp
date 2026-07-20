@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 244 · Purchase Requests: new 'Manual Requests' status/column — every manual request from Sales now lands in its own board column + stat card, separate from auto-generated production PRs. Approve/Reject works from there. 'Request from Purchasing' lives in Sales (managers/assistants/admin)";
+const BUILD = "Live build 245 · New HR → Employee Loans: record company loans to staff at 3%/month simple interest (on original principal), with a full repayment ledger and running outstanding balance that auto-marks Paid when settled. Repayments (usually salary deduction) tracked in HR only";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9877,7 +9877,239 @@ const APPLICANT_STAGES = [
 ];
 function applicantStageMeta(k){ return APPLICANT_STAGES.find(s=>s.key===k) || APPLICANT_STAGES[0]; }
 
+/* ─────────── EMPLOYEE LOANS (company lends to employee · 3%/mo simple) ───────────
+   Simple interest on the ORIGINAL principal: monthly interest = principal ×
+   rate%. Interest accrues per whole month from the grant date until the loan is
+   fully settled (settled_at freezes it). Full repayment ledger tracks each
+   payment (usually a salary deduction) and the running outstanding balance. */
+const LOAN_PAY_METHODS = ['salary_deduction','cash','bank','other'];
+function loanPayMethodLabel(m){ return m==='salary_deduction'?'Salary deduction':m==='cash'?'Cash':m==='bank'?'Bank':m==='other'?'Other':(m||'—'); }
+function loanMonthsElapsed(loan){
+  if(!loan?.date_granted) return 0;
+  const end = loan.settled_at || new Date().toISOString().slice(0,10);
+  const a = new Date(loan.date_granted+'T00:00:00'), b = new Date(end+'T00:00:00');
+  let m = (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth());
+  if(b.getDate() < a.getDate()) m -= 1;   // not a full month elapsed yet
+  return Math.max(0, m);
+}
+function loanCompute(loan, allPayments){
+  const principal = Number(loan.principal)||0;
+  const rate = Number(loan.rate_pct)||0;
+  const months = loanMonthsElapsed(loan);
+  const monthlyInterest = principal * (rate/100);
+  const interest = monthlyInterest * months;
+  const totalDue = principal + interest;
+  const paid = (allPayments||[]).filter(p=>p.loan_id===loan.id).reduce((s,p)=>s+Number(p.amount||0),0);
+  const outstanding = Math.max(0, totalDue - paid);
+  return { principal, rate, months, monthlyInterest, interest, totalDue, paid, outstanding };
+}
+
+function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload }){
+  const [filter,setFilter]=useState('active'); // 'active' | 'paid' | 'all'
+  const [creating,setCreating]=useState(false);
+  const [detail,setDetail]=useState(null);
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : (l.status!=='paid'&&l.status!=='cancelled'));
+  const active=(hrLoans||[]).filter(l=>l.status!=='paid'&&l.status!=='cancelled');
+  const totalOut = active.reduce((s,l)=> s + loanCompute(l, hrLoanPayments).outstanding, 0);
+  const totalPrincipal = active.reduce((s,l)=> s + (Number(l.principal)||0), 0);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">💵 Employee Loans</h1><p className="text-slate-500 text-sm">Company loans to staff · 3%/month simple interest · repaid via salary deduction</p></div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New loan</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Outstanding (active)</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(totalOut)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Active loans</div><div className="text-2xl font-bold mt-1">{active.length}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Principal out on loan</div><div className="text-2xl font-bold mt-1 text-slate-700">{peso(totalPrincipal)}</div></div>
+      </div>
+      <div className="flex items-center gap-1 mb-4">
+        {[['active','Active'],['paid','Paid'],['all','All']].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
+        ))}
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Employee</th>
+          <th className="text-left px-3 py-2">Granted</th>
+          <th className="text-right px-3 py-2">Principal</th>
+          <th className="text-right px-3 py-2">Rate</th>
+          <th className="text-right px-3 py-2">Interest/mo</th>
+          <th className="text-right px-3 py-2">Paid</th>
+          <th className="text-right px-3 py-2">Outstanding</th>
+          <th className="text-left px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanPayments); const paidUp=l.status==='paid'; return (
+          <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setDetail(l)}>
+            <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
+            <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(l.date_granted)}</td>
+            <td className="px-3 py-2 text-right">{peso(c.principal)}</td>
+            <td className="px-3 py-2 text-right text-xs">{c.rate}%/mo</td>
+            <td className="px-3 py-2 text-right text-xs">{peso(c.monthlyInterest)}</td>
+            <td className="px-3 py-2 text-right text-emerald-700">{peso(c.paid)}</td>
+            <td className="px-3 py-2 text-right font-semibold text-rose-700">{peso(c.outstanding)}</td>
+            <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${paidUp?'bg-emerald-100 text-emerald-700':l.status==='cancelled'?'bg-slate-200 text-slate-600':'bg-amber-100 text-amber-700'}`}>{paidUp?'Paid':l.status==='cancelled'?'Cancelled':'Active'}</span></td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
+      </table></div></div>
+      {creating && <LoanFormModal profile={profile} employees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+      {detail && <LoanDetailModal profile={profile} loan={detail} employees={employees} payments={(hrLoanPayments||[]).filter(p=>p.loan_id===detail.id)} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+    </div>
+  );
+}
+
+function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const liveEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  const [f,setF]=useState({
+    employee_id: existing?.employee_id||'', principal: existing?.principal??'', rate_pct: existing?.rate_pct??3,
+    date_granted: existing?.date_granted||new Date().toISOString().slice(0,10), term_months: existing?.term_months??'',
+    purpose: existing?.purpose||'', notes: existing?.notes||'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick the employee.'); return; }
+    if(!(Number(f.principal)>0)){ setMsg('Enter the loan amount.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ employee_id:f.employee_id, principal:Number(f.principal), rate_pct:Number(f.rate_pct)||0,
+      date_granted:f.date_granted||null, term_months:f.term_months===''?null:Number(f.term_months),
+      purpose:f.purpose||null, notes:f.notes||null };
+    const { error } = isEdit
+      ? await sb.from('employee_loans').update(payload).eq('id', existing.id)
+      : await sb.from('employee_loans').insert({ ...payload, status:'active', created_by:profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  const monthlyInterest = (Number(f.principal)||0) * ((Number(f.rate_pct)||0)/100);
+  return (
+    <Modal title={isEdit?'Edit loan':'New employee loan'} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Employee *</label>
+          <select value={f.employee_id} onChange={e=>up('employee_id',e.target.value)} className="w-full border rounded px-2 py-1.5">
+            <option value="">— pick —</option>
+            {liveEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+          </select></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Loan amount (₱) *</label><input type="number" step="0.01" value={f.principal} onChange={e=>up('principal',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 20000" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Interest (% / month)</label><input type="number" step="0.01" value={f.rate_pct} onChange={e=>up('rate_pct',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Date granted</label><input type="date" value={f.date_granted} onChange={e=>up('date_granted',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Term (months, optional)</label><input type="number" value={f.term_months} onChange={e=>up('term_months',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 6" /></div>
+        </div>
+        {Number(f.principal)>0 && <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Monthly interest: <b>{peso(monthlyInterest)}</b> ({f.rate_pct||0}% of {peso(Number(f.principal)||0)}) · simple, on the original principal.</div>}
+        <div><label className="text-xs font-semibold text-slate-500">Purpose</label><input value={f.purpose} onChange={e=>up('purpose',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. Medical / tuition / emergency" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Repayment arrangement, agreed deduction per cutoff…" /></div>
+        {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Record loan')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function LoanDetailModal({ profile, loan, employees, payments, onClose, onSaved }){
+  const [editing,setEditing]=useState(false);
+  const [pay,setPay]=useState({ date:new Date().toISOString().slice(0,10), amount:'', method:'salary_deduction', notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const emp=(employees||[]).find(e=>e.id===loan.employee_id);
+  const c=loanCompute(loan, (payments||[]).map(p=>({...p, loan_id:loan.id})));
+  function upPay(k,v){ setPay(p=>({...p,[k]:v})); }
+  async function addPayment(){
+    const amt=Number(pay.amount)||0;
+    if(amt<=0){ setMsg('Enter the repayment amount.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const { error }=await sb.from('employee_loan_payments').insert({ loan_id:loan.id, date:pay.date||null, amount:amt, method:pay.method, notes:pay.notes||null, created_by:profile.id });
+      if(error) throw error;
+      // If this repayment settles the loan, mark it paid and freeze interest at this date.
+      const newPaid = c.paid + amt;
+      if(newPaid >= c.totalDue - 0.005 && loan.status!=='paid'){
+        await sb.from('employee_loans').update({ status:'paid', settled_at:pay.date||new Date().toISOString().slice(0,10) }).eq('id', loan.id);
+      }
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function delPayment(p){
+    if(!confirm('Delete this repayment?')) return;
+    const { error }=await sb.from('employee_loan_payments').delete().eq('id', p.id);
+    if(error){ alert(error.message); return; }
+    // Re-open the loan if it was marked paid (a payment was removed).
+    if(loan.status==='paid') await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id);
+    onSaved();
+  }
+  async function markPaid(){
+    if(!confirm('Mark this loan as fully paid?')) return;
+    const { error }=await sb.from('employee_loans').update({ status:'paid', settled_at:new Date().toISOString().slice(0,10) }).eq('id', loan.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  async function reopen(){
+    const { error }=await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  async function delLoan(){
+    if(!confirm('Delete this loan and its repayment history?')) return;
+    const { error }=await sb.from('employee_loans').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', loan.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={`Loan · ${emp?fullName(emp):'—'}`} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Principal</div><div className="font-bold">{peso(c.principal)}</div></div>
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Interest ({c.rate}%/mo × {c.months}mo)</div><div className="font-bold">{peso(c.interest)}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-600">Total paid</div><div className="font-bold text-emerald-800">{peso(c.paid)}</div></div>
+          <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Outstanding</div><div className="font-bold text-rose-800">{peso(c.outstanding)}</div></div>
+        </div>
+        <div className="text-xs text-slate-500">Granted {fmtDate(loan.date_granted)}{loan.term_months?` · term ${loan.term_months} mo`:''}{loan.settled_at?` · settled ${fmtDate(loan.settled_at)}`:''}{loan.purpose?` · ${loan.purpose}`:''}{loan.status==='paid'?' · PAID':''}</div>
+        {loan.notes && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 whitespace-pre-line">{loan.notes}</div>}
+
+        {loan.status!=='paid' && (
+          <div className="border rounded-lg p-3 bg-slate-50">
+            <div className="text-xs font-semibold text-slate-700 mb-2">Record a repayment</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" value={pay.date} onChange={e=>upPay('date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+              <div><label className="text-[10px] uppercase text-slate-500">Amount (₱)</label><input type="number" step="0.01" value={pay.amount} onChange={e=>upPay('amount',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
+              <div><label className="text-[10px] uppercase text-slate-500">Method</label><select value={pay.method} onChange={e=>upPay('method',e.target.value)} className="w-full border rounded px-2 py-1.5">{LOAN_PAY_METHODS.map(m=><option key={m} value={m}>{loanPayMethodLabel(m)}</option>)}</select></div>
+              <div><label className="text-[10px] uppercase text-slate-500">Note</label><input value={pay.notes} onChange={e=>upPay('notes',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="cutoff / OR #" /></div>
+            </div>
+            {msg && <div className="text-xs text-rose-600 mt-2">{msg}</div>}
+            <button onClick={addPayment} disabled={busy} className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">{busy?'Saving…':'+ Add repayment'}</button>
+          </div>
+        )}
+
+        <div className="border rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-slate-50 border-b text-xs font-semibold uppercase text-slate-500">Repayment history</div>
+          <table className="w-full text-sm">
+            <tbody>{(payments||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(p=>(
+              <tr key={p.id} className="border-t">
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(p.date)}</td>
+                <td className="px-3 py-2 text-xs">{loanPayMethodLabel(p.method)}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{p.notes||''}</td>
+                <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(p.amount)}</td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>delPayment(p)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
+              </tr>
+            ))}{(payments||[]).length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-6 text-xs">No repayments recorded yet.</td></tr>}</tbody>
+          </table>
+        </div>
+
+        <div className="flex gap-2 pt-2 border-t flex-wrap">
+          <button onClick={()=>setEditing(true)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">✎ Edit loan</button>
+          {loan.status!=='paid' ? <button onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">Mark fully paid</button>
+            : <button onClick={reopen} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold">Reopen</button>}
+          <div className="flex-1"></div>
+          <button onClick={delLoan} className="px-3 py-2 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>
+        </div>
+      </div>
+      {editing && <LoanFormModal profile={profile} employees={employees} existing={loan} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); onSaved(); }} />}
+    </Modal>
+  );
+}
+
 function HRRecruitmentView({ profile, profiles, employees, hrJobs, hrApplicants, reload }){
+  const [openJobId,setOpenJobId]=useState(null);
   const [openJobId,setOpenJobId]=useState(null);
   const [creatingJob,setCreatingJob]=useState(false);
   const [editingJob,setEditingJob]=useState(null);
@@ -27266,6 +27498,7 @@ function App(){
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
+  const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
@@ -27494,6 +27727,8 @@ function App(){
     try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const cwl = await sb.from('cutting_worklist').select('*').order('start_date',{ascending:false}); setCuttingWorklist(cwl && !cwl.error ? (cwl.data||[]) : []); } catch(_){ setCuttingWorklist([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
+    try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
+    try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
     setHrReviewCycles(hcyc && !hcyc.error ? (hcyc.data||[]) : []);
@@ -27595,7 +27830,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-recruit','hr-templates','payroll','budgets','profile']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','hr-recruit','hr-templates','payroll','budgets','profile']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — only the Daily Schedule.
@@ -28053,7 +28288,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
@@ -28160,7 +28395,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -28276,6 +28511,7 @@ function App(){
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
+        {view==='hr-loans' && <EmployeeLoansView profile={profile} employees={employees} hrLoans={hrLoans} hrLoanPayments={hrLoanPayments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
