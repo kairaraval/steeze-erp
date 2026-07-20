@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 242 · New 'Request from Purchasing' — any department can file a manual purchasing request (item, qty, urgency, needed-by, details) with drag-drop photos. It lands in Purchase Requests as a Manual request in the Requests column, attachments show on the PR, and the Purchasing team is pinged in real time";
+const BUILD = "Live build 243 · 'Request from Purchasing' moved to the Sales module — visible only to sales managers, sales assistants and admin. Files a Manual purchasing request with drag-drop photos into the Requests column; attachments show on the PR and Purchasing is pinged in real time";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27601,8 +27601,9 @@ function App(){
     } else {
       return; // admin / manager — no restrictions
     }
-    // Every restricted role may raise a manual Purchase Request (department intake).
-    allowed.add('pr-request');
+    // Manual Purchase Request intake lives in the Sales module — only sales
+    // managers + sales assistants (and admin, who is unrestricted) may open it.
+    if(profile.role==='manager' || profile.role==='assistant') allowed.add('pr-request');
     if(!allowed.has(view)) setView(fallback);
   },[profile, view]);
 
@@ -28025,14 +28026,12 @@ function App(){
     ['invoices','My Invoices','🧾'],
     ['commissions','Commissions','💰'],
     ['budgets','Budget Requests','💰'],
-    ['pr-request','Request from Purchasing','🛒'],
   ] };
-  // Any role can submit a budget request or a purchasing request — give all
-  // non-Finance roles a thin Finance group with Budget Requests + Request from
-  // Purchasing so HR / Production / Graphic / etc. can submit and track them.
+  // Any role can submit a budget request — give all non-Finance roles a thin
+  // Finance group with Budget Requests so HR / Production / Graphic / etc. can
+  // submit and track them.
   const FINANCE_DEPT_ONLY = { group:'Finance', items:[
     ['budgets','Budget Requests','💰'],
-    ['pr-request','Request from Purchasing','🛒'],
   ] };
   // Every user — regardless of role — gets a Personal group at the bottom of
   // their sidebar so they can manage their own profile (and, critically,
@@ -28127,7 +28126,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -28137,7 +28136,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
@@ -28150,7 +28149,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
