@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 243 · 'Request from Purchasing' moved to the Sales module — visible only to sales managers, sales assistants and admin. Files a Manual purchasing request with drag-drop photos into the Requests column; attachments show on the PR and Purchasing is pinged in real time";
+const BUILD = "Live build 244 · Purchase Requests: new 'Manual Requests' status/column — every manual request from Sales now lands in its own board column + stat card, separate from auto-generated production PRs. Approve/Reject works from there. 'Request from Purchasing' lives in Sales (managers/assistants/admin)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4565,7 +4565,7 @@ function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPay
 function PurchasingHomeView({ profile, profiles, requests, orders, items, suppliers, prodJobs, leads, rfps, stockMovements, navTo }){
   // ---- Tile counts ----
   // 1. PRs awaiting approval — status='submitted', not deleted
-  const prsToApprove = (requests||[]).filter(r => r.status==='submitted' && !r.deleted_at);
+  const prsToApprove = (requests||[]).filter(r => (r.status==='submitted' || r.status==='manual_request') && !r.deleted_at);
   // 2. Materials Queue: count of unique supplier groups with at-least-one
   //    unfulfilled approved-or-submitted PR line.
   const queueSupplierCount = (()=>{
@@ -17030,12 +17030,15 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
 
 /* ====================== PURCHASE REQUESTS ====================== */
 const PR_STATUSES=[
+  { key:'manual_request', label:'Manual Requests', color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'submitted', label:'Requests', color:'bg-amber-100 text-amber-700' },
   { key:'approved',  label:'Approved',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
   { key:'fulfilled_stock', label:'Fulfilled from Stock', color:'bg-teal-100 text-teal-700' },
   { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
+// Statuses that represent a new, not-yet-actioned request awaiting approval.
+const PR_AWAITING = ['submitted','manual_request'];
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 const PR_URGENCIES=['normal','high','urgent'];
 
@@ -17097,7 +17100,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">📝 Purchase Requests</h1><p className="text-slate-500 text-sm">{requests.length} request{requests.length===1?'':'s'} · {counts.submitted||0} awaiting approval</p></div>
+          <div><h1 className="text-2xl font-bold">📝 Purchase Requests</h1><p className="text-slate-500 text-sm">{requests.length} request{requests.length===1?'':'s'} · {(counts.submitted||0)+(counts.manual_request||0)} awaiting approval{counts.manual_request?` · ${counts.manual_request} manual`:''}</p></div>
           <div className="flex items-center gap-2">
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
               <button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button>
@@ -17107,7 +17110,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR# or justification…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
         <div className="flex items-center gap-1 flex-wrap ml-auto">
@@ -17136,7 +17139,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       {d.tpNo && <div className="text-[10px] font-mono text-slate-400 mt-0.5">TP {d.tpNo}</div>}
                     </button>
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t">
-                      {r.status==='submitted' && <>
+                      {PR_AWAITING.includes(r.status) && <>
                         <button onClick={()=>setPRStatus(r,'approved')} className="text-[11px] text-emerald-600 hover:underline font-medium">✔ Approve</button>
                         <button onClick={()=>setPRStatus(r,'rejected')} className="text-[11px] text-rose-500 hover:underline">✕ Reject</button>
                       </>}
@@ -17226,7 +17229,7 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
       const line={ description:f.item.trim(), sku:'', item_id:null, qty:Number(f.qty)||1, unit:f.unit||null, est_cost:0, link:'', notes:'' };
       const payload={
         number, date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null,
-        urgency:f.urgency, status:'submitted', source:'manual',
+        urgency:f.urgency, status:'manual_request', source:'manual',
         justification:`Manual request by ${profile.name||profile.email}${f.needed_by?` · needed by ${f.needed_by}`:''}${f.details?` — ${f.details}`:''}`,
         approver_note:'', lines:[line], attachments,
       };
@@ -17611,8 +17614,8 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
 
         <div className="flex gap-2 pt-2 border-t flex-wrap">
           {isEdit && onPrint && <button onClick={()=>onPrint(existing)} className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">🖨 Print preview</button>}
-          {isEdit && canApprove && f.status==='submitted' && <button onClick={()=>setStatus('approved')} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">✓ Approve</button>}
-          {isEdit && canApprove && f.status==='submitted' && <button onClick={()=>setStatus('rejected')} disabled={busy} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold disabled:opacity-50">✕ Reject</button>}
+          {isEdit && canApprove && PR_AWAITING.includes(f.status) && <button onClick={()=>setStatus('approved')} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">✓ Approve</button>}
+          {isEdit && canApprove && PR_AWAITING.includes(f.status) && <button onClick={()=>setStatus('rejected')} disabled={busy} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold disabled:opacity-50">✕ Reject</button>}
           {isEdit && f.status==='approved' && fullyCovered && <button onClick={fulfillFromStock} disabled={busy} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold disabled:opacity-50" title="No PO needed — draw all materials from inventory and close the PR">📦 Fulfill from Stock</button>}
           {isEdit && f.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(existing)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">→ Create PO</button>}
           {!readOnly && <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Create PR')}</button>}
