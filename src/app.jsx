@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 240 · Sales pipeline: removed the 'Send to Production' and 'Send to PR' buttons — both the production job and the Purchase Request now auto-create when a lead reaches a Won/Delivered stage, so the manual buttons were redundant";
+const BUILD = "Live build 241 · Accounting Officer can now fully operate (like the Supervisor) RFPs, Budget Requests, Petty Cash, Commissions, and Subcon + Sewing payroll payouts. Vouchers/expenses she encodes still route through the 2-step (Supervisor → Admin) approval; voucher edit/void stays Supervisor/Admin";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12929,7 +12929,7 @@ function TpLbl({ t, children }){ return <div><div className="text-[10px] upperca
    ONE bank deduction for the batch total (so Finance logs the batch, not each
    person), plus a printable payout sheet with a signature column. It also marks
    the underlying rows paid via the caller-supplied onMarkPaid(payoutId). */
-function payoutCanRun(profile){ const r=profile?.role; return r==='admin' || r==='accounting'; }
+function payoutCanRun(profile){ const r=profile?.role; return r==='admin' || r==='accounting' || r==='accounting_officer'; }
 
 /* ─────────── ACCOUNTING OFFICER · 2-STEP APPROVAL HELPERS ───────────
    An Accounting Officer encodes expenses + vouchers, but those entries stay
@@ -19603,7 +19603,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
 //     per rep with the sum of their unpaid commission, marks the rows paid.
 function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissions, bankAccounts, reload }){
   const isAdmin = profile.role === 'admin';
-  const isAccounting = profile.role === 'accounting';
+  const isAccounting = profile.role === 'accounting' || profile.role === 'accounting_officer';
   const canSeeAll = isAdmin || isAccounting;
   // "Mine" or "Team" — non-admin/non-accounting roles see only their own.
   const [scope,setScope] = useState(canSeeAll ? 'team' : 'mine');
@@ -20273,7 +20273,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   const [selected,setSelected]=useState({}); // { rfpId: true } for approved RFPs to batch-pay
   const [filter,setFilter]=useState('');
   const isAdmin = profile.role==='admin';
-  const isAccounting = profile.role==='accounting';
+  const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canPay = isAdmin || isAccounting;
   // The currently-selected approved RFPs (as objects).
   const selectedRfps = (rfps||[]).filter(r => selected[r.id] && r.status==='approved');
@@ -21972,7 +21972,7 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState('');
   const isAdmin = profile.role==='admin';
-  const isAccounting = profile.role==='accounting';
+  const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canApprove = isAdmin || isAccounting;
   // canSeeAll = full visibility into every department's requests (for
   // approval, audit, P&L). Department users get a submit-only view so they
@@ -22383,7 +22383,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   function spentOn(row){ return expensesFor(row).reduce((s,e)=>s+Number(e.amount||0), 0); }
   const [filter,setFilter]=useState('open'); // default to open so the work-in-progress shows
   const isAdmin = profile.role==='admin';
-  const isAccounting = profile.role==='accounting';
+  const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canEdit = isAdmin || isAccounting;
   async function deleteCA(c){
     const label = isPetty ? 'petty cash float' : 'cash advance';
@@ -25432,10 +25432,10 @@ function canManageSubcon(profile){
   return r==='admin' || r==='accounting' || r==='production_supervisor' || r==='purchasing';
 }
 function canRunSubconPayroll(profile){
-  // Only Admin + Accounting can finalize / pay a subcon payroll. The other
-  // roles can view + create draft runs but not commit them.
+  // Admin + Accounting Supervisor + Accounting Officer can finalize / pay a
+  // subcon payroll. Other roles can view + create draft runs but not commit.
   const r = profile?.role;
-  return r==='admin' || r==='accounting';
+  return r==='admin' || r==='accounting' || r==='accounting_officer';
 }
 
 // Derive return totals + status for a single send batch.
