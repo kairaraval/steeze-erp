@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 249 · Sample estimates: sales managers + assistants can now Accept (client approved) or Decline a sample estimate straight from the estimate preview — Accept spins up the Sample Sales Order. They still can't edit estimate content (a secure status-only path); production estimates stay Admin/Accounting.";
+const BUILD = "Live build 250 · My Profile is now a sales dashboard for managers/assistants: KPI tiles, a Sales Forecast chart (open pipeline by expected close date), Won trend, Biggest clients closed, and Top items sold. Removed the Closed Won/payment table (it's in Sales Orders). Added an 'Expected close date' field to leads. Signature moved to the bottom.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -810,6 +810,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const [newCompany,setNewCompany]=useState(''); const [newContact,setNewContact]=useState('');
   const [title,setTitle]=useState(existing?.title||''); const [stage,setStage]=useState(existing?.stage||'new');
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
+  const [forecastClose,setForecastClose]=useState(existing?.forecast_close_date||'');
   // Payment terms set on the lead — flows through to the Sales Order on
   // Closed Won so Accounting knows the expected payment timing without
   // having to re-enter it.
@@ -907,7 +908,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
       }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -1031,6 +1032,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
           <div><label className="text-[10px] text-slate-500 uppercase">Stage</label><select className="input mt-0.5" value={stage} onChange={e=>setStage(e.target.value)}>{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Due Date</label><input type="date" className="input mt-0.5" value={expectedClose||''} onChange={e=>setExpectedClose(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Sample Due Date</label><input type="date" className="input mt-0.5" value={deliveryDate||''} onChange={e=>setDeliveryDate(e.target.value)} /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase" title="Your best estimate of when this deal will close — drives the sales forecast">Expected close date</label><input type="date" className="input mt-0.5" value={forecastClose||''} onChange={e=>setForecastClose(e.target.value)} /></div>
           {/* Payment terms — set here on the lead; carried over to the Sales
              Order on Closed Won so Accounting + Sales both see the expected
              payment timing without re-entering it. */}
@@ -2412,6 +2414,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
             <div><div className="text-[10px] uppercase text-slate-400">Techpack No.</div><div>{lead.techpack_number||'—'}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Due Date</div><div>{fmtDate(lead.expected_close)||'—'}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Sample Due Date</div><div>{fmtDate(lead.delivery_date)||'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400">Expected close</div><div>{fmtDate(lead.forecast_close_date)||'—'}</div></div>
           </div>
           {items.length>0 && (
             <div>
@@ -12465,66 +12468,97 @@ function MySignatureCard({ profile, reload }){
 function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
-  // Show the sales dashboard chunk only when the user actually has leads or is
-  // a sales-track role. Other roles (Production, Purchasing, Finance, etc.)
-  // see just the header + signature card so the page is meaningful for them.
+  const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const isSalesRole = ['admin','manager','assistant'].includes(profile.role);
   const showSalesDash = isSalesRole && mine.length > 0;
-  async function setPayment(l,val){ const {error}=await sb.from('leads').update({ payment_status:val }).eq('id',l.id); if(error){ alert(error.message); return; } reload&&reload(); }
-  const payAgg=PAYMENT_OPTS.map(p=>{ const rows=won.filter(l=>(l.payment_status||'unpaid')===p.key); return { ...p, count:rows.length, total:rows.reduce((s,l)=>s+(Number(l.value)||0),0) }; });
-  const wonTotal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
-  const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
+  const now=new Date();
+  const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   const wonVal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
-  // Won this month — sum of won deals whose won_at falls in the current calendar month.
-  const _now=new Date();
-  const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===_now.getMonth()&&d.getFullYear()===_now.getFullYear(); });
+  // Won this month
+  const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear(); });
   const wonMonthVal=wonThisMonth.reduce((s,l)=>s+(Number(l.value)||0),0);
-  // last 6 months won totals
-  const months=[]; const now=new Date();
-  for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1); months.push({ key:d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
+  // Won trend — last 6 months (by won_at)
+  const months=[];
+  for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1); months.push({ key:'w'+d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
   won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
   const maxM=Math.max(1,...months.map(m=>m.total));
-  const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
+  // Forecast — open pipeline value by EXPECTED CLOSE month, next 6 months
+  const fMonths=[];
+  for(let i=0;i<6;i++){ const d=new Date(now.getFullYear(), now.getMonth()+i, 1); fMonths.push({ key:'f'+d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0, count:0 }); }
+  open.forEach(l=>{ if(!l.forecast_close_date) return; const d=new Date(l.forecast_close_date+'T00:00:00'); const slot=fMonths.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot){ slot.total+=Number(l.value)||0; slot.count++; } });
+  const maxF=Math.max(1,...fMonths.map(m=>m.total));
+  const forecastNext6=fMonths.reduce((s,m)=>s+m.total,0);
+  const forecastThisMonth=fMonths[0]?.total||0;
+  const unscheduled=open.filter(l=>!l.forecast_close_date).length;
+  // Biggest clients closed
+  const byClient={}; won.forEach(l=>{ const k=l.client_id||'—'; if(!byClient[k]) byClient[k]={ id:k, total:0, count:0 }; byClient[k].total+=Number(l.value)||0; byClient[k].count++; });
+  const topClients=Object.values(byClient).sort((a,b)=>b.total-a.total).slice(0,6);
+  const maxClient=Math.max(1,...topClients.map(c=>c.total));
+  // Top items sold (across won deals)
+  const byItem={}; won.forEach(l=>{ (l.items||[]).forEach(it=>{ const k=(it.itemType||'—').trim()||'—'; if(!byItem[k]) byItem[k]={ name:k, qty:0, total:0 }; byItem[k].qty+=Number(it.quantity)||0; byItem[k].total+=Number(it.lineTotal)|| (Number(it.quantity)||0)*(Number(it.pricePerItem)||0); }); });
+  const topItems=Object.values(byItem).sort((a,b)=>b.total-a.total).slice(0,6);
+  const maxItem=Math.max(1,...topItems.map(i=>i.total));
   return (
     <div className="p-6">
       <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'} · {profile.email}</p></div></div>
-      <MySignatureCard profile={profile} reload={reload} />
+
+      {showSalesDash && (<>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} lead{open.length===1?'':'s'}</div></div>
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Forecast (6 mo)</div><div className="text-2xl font-bold mt-1 text-indigo-700">{peso(forecastNext6)}</div><div className="text-xs text-slate-500">{peso(forecastThisMonth)} this month</div></div>
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won this month</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonMonthVal)}</div><div className="text-xs text-slate-500">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won (all-time)</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonVal)}</div><div className="text-xs text-slate-500">{won.length} deals</div></div>
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Win rate</div><div className="text-2xl font-bold mt-1">{mine.length?Math.round(won.length/mine.length*100):0}%</div><div className="text-xs text-slate-500">{won.length}/{mine.length}</div></div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-1">📈 Sales forecast — next 6 months</div>
+            <div className="text-xs text-slate-400 mb-3">Open pipeline by expected close date{unscheduled>0?` · ${unscheduled} lead${unscheduled===1?'':'s'} with no expected close date set`:''}</div>
+            <div className="flex items-end gap-3 h-40">{fMonths.map(m=>(<div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1"><div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div><div className="w-full bg-indigo-400 rounded-t" style={{ height:(m.total/maxF*100)+'%', minHeight:m.total?'4px':'0' }} title={`${m.count} deal(s)`}></div><div className="text-[11px] text-slate-500">{m.label}</div></div>))}</div>
+          </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-1">🏆 Won sales — last 6 months</div>
+            <div className="text-xs text-slate-400 mb-3">Closed-won value by month</div>
+            <div className="flex items-end gap-3 h-40">{months.map(m=>(<div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1"><div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div><div className="w-full bg-emerald-500 rounded-t" style={{ height:(m.total/maxM*100)+'%', minHeight:m.total?'4px':'0' }}></div><div className="text-[11px] text-slate-500">{m.label}</div></div>))}</div>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-3">👑 Biggest clients closed</div>
+            {topClients.length===0 ? <div className="text-sm text-slate-400 py-4 text-center">No closed deals yet.</div> : (
+              <div className="space-y-2">{topClients.map((c,i)=>(
+                <div key={c.id}>
+                  <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700 truncate">{i+1}. {clientName(c.id)} <span className="text-slate-400 text-xs">· {c.count} deal{c.count===1?'':'s'}</span></span><span className="font-bold text-slate-900 ml-2">{peso(c.total)}</span></div>
+                  <div className="h-1.5 bg-slate-100 rounded mt-1"><div className="h-1.5 bg-amber-400 rounded" style={{width:(c.total/maxClient*100)+'%'}}></div></div>
+                </div>
+              ))}</div>
+            )}
+          </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-3">👕 Top items you sell</div>
+            {topItems.length===0 ? <div className="text-sm text-slate-400 py-4 text-center">No items on closed deals yet.</div> : (
+              <div className="space-y-2">{topItems.map((it,i)=>(
+                <div key={it.name}>
+                  <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-700 truncate">{i+1}. {it.name} <span className="text-slate-400 text-xs">· {it.qty.toLocaleString('en-PH')} pc</span></span><span className="font-bold text-slate-900 ml-2">{peso(it.total)}</span></div>
+                  <div className="h-1.5 bg-slate-100 rounded mt-1"><div className="h-1.5 bg-indigo-400 rounded" style={{width:(it.total/maxItem*100)+'%'}}></div></div>
+                </div>
+              ))}</div>
+            )}
+          </div>
+        </div>
+      </>)}
+
       {!showSalesDash && (
-        <div className="bg-white border rounded-xl p-5 text-sm text-slate-500">
-          Your profile page. Use the <strong>My E-Signature</strong> section above to set up your signature so it appears automatically on documents you approve.
+        <div className="bg-white border rounded-xl p-5 text-sm text-slate-500 mb-6">
+          Your profile page. Use the <strong>My E-Signature</strong> section below to set up your signature so it appears automatically on documents you approve.
         </div>
       )}
-      {showSalesDash && (<><div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} leads</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won this month</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonMonthVal)}</div><div className="text-xs text-slate-500">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won (all-time)</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonVal)}</div><div className="text-xs text-slate-500">{won.length} deals</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">My leads</div><div className="text-2xl font-bold mt-1">{mine.length}</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Win rate</div><div className="text-2xl font-bold mt-1">{mine.length?Math.round(won.length/mine.length*100):0}%</div></div>
-      </div>
-      <div className="bg-white border rounded-xl p-4 mb-6"><div className="font-semibold text-slate-900 mb-3">Won sales — last 6 months</div>
-        <div className="flex items-end gap-3 h-40">{months.map(m=>(<div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1"><div className="text-[10px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div><div className="w-full bg-indigo-500 rounded-t" style={{ height:(m.total/maxM*100)+'%', minHeight:m.total?'4px':'0' }}></div><div className="text-[11px] text-slate-500">{m.label}</div></div>))}</div>
-      </div>
-      <div className="bg-white border rounded-xl p-4">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <div className="font-semibold text-slate-900">Closed Won deals</div>
-          <div className="flex items-center gap-2 flex-wrap text-xs">{payAgg.map(p=>(<span key={p.key} className={`px-2 py-1 rounded-full font-medium ${p.chip}`}>{p.label}: <strong>{p.count}</strong> · {peso(p.total)}</span>))}</div>
-        </div>
-        <div className="overflow-x-auto"><table className="w-full text-sm">
-          <thead className="text-[11px] uppercase text-slate-400 border-b"><tr><th className="text-left py-2 pr-3">Date won</th><th className="text-left py-2 pr-3">Client</th><th className="text-left py-2 pr-3">Lead</th><th className="text-right py-2 pr-3">Amount</th><th className="text-left py-2">Payment</th></tr></thead>
-          <tbody>{won.map(l=>{ const mgr=profiles?profiles.find(p=>p.id===l.manager_id):null; const pm=payMeta(l.payment_status); return (
-            <tr key={l.id} className="border-b last:border-0">
-              <td className="py-2 pr-3 text-slate-600 align-top">{fmtDate(l.won_at)}</td>
-              <td className="py-2 pr-3 align-top"><div className="font-medium text-slate-800">{clientName(l.client_id)}</div>{mgr && <div className="text-xs text-slate-400">{mgr.name}</div>}</td>
-              <td className="py-2 pr-3 align-top"><div className="text-slate-700">{l.title}</div></td>
-              <td className="py-2 pr-3 text-right font-bold text-slate-900 align-top">{peso(l.value)}</td>
-              <td className="py-2 align-top"><select value={l.payment_status||'unpaid'} onChange={e=>setPayment(l,e.target.value)} className={`text-xs px-2 py-1 rounded-lg border font-medium cursor-pointer ${pm.sel}`}>{PAYMENT_OPTS.map(p=><option key={p.key} value={p.key}>{p.label}</option>)}</select></td>
-            </tr>
-          ); })}{won.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-4">No closed-won deals yet.</td></tr>}</tbody>
-          {won.length>0 && <tfoot><tr className="border-t-2"><td colSpan="3" className="py-2 text-right text-xs uppercase tracking-wide text-slate-500 font-semibold pr-3">Total Closed Won</td><td className="py-2 pr-3 text-right font-bold text-slate-900">{peso(wonTotal)}</td><td></td></tr></tfoot>}
-        </table></div>
-      </div>
-      </>)}
+
+      {/* Signature lives at the bottom so the sales progress shows first. */}
+      <MySignatureCard profile={profile} reload={reload} />
     </div>
   );
 }
