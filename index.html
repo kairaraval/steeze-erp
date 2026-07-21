@@ -110,6 +110,9 @@
          @page override at runtime so this size is what actually fits. */
       .po-page { width:7.7in; height:10.2in; min-height:0; box-shadow:none; border:none; margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
       .po-page:last-child { page-break-after: avoid !important; break-after: avoid !important; }
+      /* Flowing document (e.g. HR letters with long body text): let it grow past
+         one page and paginate naturally instead of being clipped to 10.2in. */
+      .po-page.flow { height:auto !important; min-height:0 !important; overflow:visible !important; display:block !important; page-break-after: auto !important; break-after: auto !important; page-break-inside: auto !important; break-inside: auto !important; }
       /* Let images respect their inline maxH (e.g. 6in for cover shots) so
          we don't blow them up beyond the design intent. The previous
          !important override was stripping the inline cap. */

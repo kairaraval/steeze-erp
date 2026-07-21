@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 254 · Employee Relations letters: removed the auto 5-day directive paragraph (HR writes the body), and the print view now has a Document chooser — NTE, Preventive Suspension, Administrative Hearing, Notice of Decision (NOD), or Case Summary — on the same letterhead.";
+const BUILD = "Live build 255 · Fix: HR relations letters now paginate across multiple pages instead of being clipped to one — long NTE/decision bodies flow onto page 2+ and the signature block stays together. Document chooser (NTE/Preventive/Hearing/NOD) remains.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9871,7 +9871,7 @@ function CaseNTEPrintView({ caseRow, employees, profile, initialDoc, onClose }){
         </div>
       </div>
       <div className="tp-print py-6">
-        <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.3in', fontSize:'11pt', color:'#222'}}>
+        <div className="po-page flow mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.3in', fontSize:'11pt', color:'#222'}}>
           <SteezeLetterhead docTitle={doc.title} />
           <div className="grid grid-cols-3 gap-3 mt-3 mb-3 text-[11px]">
             <div><div className={LBL}>Date</div><div className="font-medium">{fmtDate(caseRow.opened_date)}</div></div>
@@ -9891,7 +9891,7 @@ function CaseNTEPrintView({ caseRow, employees, profile, initialDoc, onClose }){
           {caseRow.resolution && <Section title="Decision / Resolution">{caseRow.resolution}</Section>}
           {atts.length>0 && <Section title="Attachments on file">{atts.map(a=>a.name).join(' · ')}</Section>}
 
-          <div className="grid grid-cols-3 gap-6 mt-12">
+          <div className="grid grid-cols-3 gap-6 mt-12" style={{ breakInside:'avoid', pageBreakInside:'avoid' }}>
             <SigLine role="Prepared by — HR" />
             <SigLine role="Received & acknowledged by — Employee" />
             <SigLine role="Noted by — Management" />
