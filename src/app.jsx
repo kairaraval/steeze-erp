@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 256 · Employee Loans reworked to match the company sheet: interest is now 3%/mo × amortization term (fixed total), with columns Loan amount, Loan date, Amortization (mo), Interest %, Interest amount, Total payable, Per weekly cut-off, Total deduction, Remaining balance. Form + detail show the full breakdown.";
+const BUILD = "Live build 257 · Employee Loans: choose a repayment schedule (Weekly / Every 2 weeks / 15th & 30th). On save the exact payment dates are auto-plotted for the full term — HR just ticks each installment as Paid (overdue ones flag red); remaining balance updates and the loan auto-closes when all are paid.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10070,30 +10070,71 @@ function loanMonthsElapsed(loan){
   if(b.getDate() < a.getDate()) m -= 1;   // not a full month elapsed yet
   return Math.max(0, m);
 }
-// Weekly cut-offs per month used for the per-cut-off amortization.
-const LOAN_CUTOFFS_PER_MONTH = 4;
-function loanCompute(loan, allPayments){
+const LOAN_CUTOFFS_PER_MONTH = 4; // fallback (weekly) when no schedule generated
+const LOAN_FREQUENCIES = [
+  { key:'weekly',      label:'Weekly (every Friday)' },
+  { key:'biweekly',    label:'Every 2 weeks' },
+  { key:'semimonthly', label:'Semi-monthly (15th & 30th)' },
+];
+function loanFreqLabel(k){ return (LOAN_FREQUENCIES.find(f=>f.key===k)||LOAN_FREQUENCIES[0]).label; }
+// Plot the due dates for a loan based on its frequency + amortization term.
+function loanInstallmentDates(loan){
+  const term=Number(loan.term_months)||0; if(term<=0) return [];
+  const freq=loan.repayment_frequency||'weekly';
+  const start=new Date((loan.date_granted||new Date().toISOString().slice(0,10))+'T00:00:00');
+  const iso=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const out=[];
+  if(freq==='semimonthly'){
+    let y=start.getFullYear(), m=start.getMonth();
+    while(out.length<2*term){
+      const lastDay=new Date(y,m+1,0).getDate();
+      [15, Math.min(30,lastDay)].forEach(day=>{ const d=new Date(y,m,day); if(d>start && out.length<2*term) out.push(iso(d)); });
+      m++; if(m>11){ m=0; y++; }
+    }
+  } else {
+    const step=freq==='biweekly'?14:7;
+    const end=new Date(start); end.setMonth(end.getMonth()+term);
+    const d=new Date(start);
+    let add=(5-d.getDay()+7)%7; if(add===0) add=7; // first Friday after the grant date
+    d.setDate(d.getDate()+add);
+    while(d<=end){ out.push(iso(new Date(d))); d.setDate(d.getDate()+step); }
+  }
+  return out;
+}
+// (Re)generate the installment schedule for a loan in the DB. Safe to call on
+// create or when key terms change and nothing has been marked paid yet.
+async function regenLoanSchedule(loan){
+  const dates=loanInstallmentDates(loan); const n=dates.length; if(!n) return;
+  const c=loanCompute(loan, []);
+  const per=Math.round((c.totalPayable/n)*100)/100;
+  const rows=dates.map((dd,i)=>({ loan_id:loan.id, seq:i+1, due_date:dd, amount: i===n-1 ? Math.round((c.totalPayable-per*(n-1))*100)/100 : per, paid:false }));
+  try { await sb.from('employee_loan_installments').delete().eq('loan_id', loan.id); } catch(_){}
+  try { await sb.from('employee_loan_installments').insert(rows); } catch(e){ console.warn('schedule insert failed', e); }
+}
+function loanCompute(loan, allInstallments){
   const principal = Number(loan.principal)||0;
   const rate = Number(loan.rate_pct)||0;
   const term = Number(loan.term_months)||0;               // amortization, in months
   const monthlyInterest = principal * (rate/100);         // the 3%/month amount
   const interest = monthlyInterest * term;                // TOTAL interest over the whole term (fixed, up-front)
   const totalPayable = principal + interest;              // principal + total interest
-  const cutoffs = term * LOAN_CUTOFFS_PER_MONTH;          // number of weekly cut-offs
-  const perCutoff = cutoffs>0 ? totalPayable / cutoffs : 0;
-  const paid = (allPayments||[]).filter(p=>p.loan_id===loan.id).reduce((s,p)=>s+Number(p.amount||0),0); // total deduction
+  const inst = (allInstallments||[]).filter(x=>x.loan_id===loan.id);
+  const n = inst.length;
+  const perCutoff = n>0 ? Number(inst[0].amount)||0 : (term>0 ? totalPayable/(term*LOAN_CUTOFFS_PER_MONTH) : 0);
+  const paidInst = inst.filter(x=>x.paid);
+  const paid = paidInst.reduce((s,x)=>s+Number(x.amount||0),0); // total deduction
   const outstanding = Math.max(0, totalPayable - paid);   // remaining balance
-  return { principal, rate, term, monthlyInterest, interest, totalPayable, totalDue: totalPayable, cutoffs, perCutoff, paid, outstanding };
+  return { principal, rate, term, monthlyInterest, interest, totalPayable, totalDue: totalPayable, cutoffs:n, perCutoff, paid, outstanding, installments:inst, paidCount:paidInst.length };
 }
 
-function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload }){
+function EmployeeLoansView({ profile, employees, hrLoans, hrLoanInstallments, reload }){
   const [filter,setFilter]=useState('active'); // 'active' | 'paid' | 'all'
   const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : (l.status!=='paid'&&l.status!=='cancelled'));
   const active=(hrLoans||[]).filter(l=>l.status!=='paid'&&l.status!=='cancelled');
-  const aC=(l)=>loanCompute(l, hrLoanPayments);
+  const aC=(l)=>loanCompute(l, hrLoanInstallments);
   const totalOut = active.reduce((s,l)=> s + aC(l).outstanding, 0);
   const totalPrincipal = active.reduce((s,l)=> s + aC(l).principal, 0);
   const totalInterest = active.reduce((s,l)=> s + aC(l).interest, 0);
@@ -10133,7 +10174,7 @@ function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload
           <th className="text-right px-3 py-2">Remaining</th>
           <th className="text-left px-3 py-2">Status</th>
         </tr></thead>
-        <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanPayments); const paidUp=l.status==='paid'; return (
+        <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanInstallments); const paidUp=l.status==='paid'; return (
           <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setDetail(l)}>
             <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
             <td className="px-3 py-2 text-right">{peso(c.principal)}</td>
@@ -10150,7 +10191,7 @@ function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload
         ); })}{rows.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
       </table></div></div>
       {creating && <LoanFormModal profile={profile} employees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
-      {detail && <LoanDetailModal profile={profile} loan={detail} employees={employees} payments={(hrLoanPayments||[]).filter(p=>p.loan_id===detail.id)} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {detail && <LoanDetailModal profile={profile} loan={detail} employees={employees} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===detail.id)} reload={reload} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
     </div>
   );
 }
@@ -10161,6 +10202,7 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
   const [f,setF]=useState({
     employee_id: existing?.employee_id||'', principal: existing?.principal??'', rate_pct: existing?.rate_pct??3,
     date_granted: existing?.date_granted||new Date().toISOString().slice(0,10), term_months: existing?.term_months??'',
+    repayment_frequency: existing?.repayment_frequency||'weekly',
     purpose: existing?.purpose||'', notes: existing?.notes||'',
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -10171,17 +10213,30 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
     setBusy(true); setMsg('');
     const payload={ employee_id:f.employee_id, principal:Number(f.principal), rate_pct:Number(f.rate_pct)||0,
       date_granted:f.date_granted||null, term_months:f.term_months===''?null:Number(f.term_months),
-      purpose:f.purpose||null, notes:f.notes||null };
-    const { error } = isEdit
-      ? await sb.from('employee_loans').update(payload).eq('id', existing.id)
-      : await sb.from('employee_loans').insert({ ...payload, status:'active', created_by:profile.id });
-    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+      repayment_frequency:f.repayment_frequency||'weekly', purpose:f.purpose||null, notes:f.notes||null };
+    let loanRow=null;
+    if(isEdit){
+      const { error }=await sb.from('employee_loans').update(payload).eq('id', existing.id);
+      if(error){ setBusy(false); setMsg(error.message); return; }
+      loanRow={ ...existing, ...payload };
+      // Only re-plot the schedule if nothing has been marked paid yet.
+      const { count }=await sb.from('employee_loan_installments').select('id',{count:'exact',head:true}).eq('loan_id', existing.id).eq('paid', true);
+      if(!count){ await regenLoanSchedule(loanRow); }
+    } else {
+      const { data, error }=await sb.from('employee_loans').insert({ ...payload, status:'active', created_by:profile.id }).select().single();
+      if(error){ setBusy(false); setMsg(error.message); return; }
+      loanRow=data;
+      await regenLoanSchedule(loanRow);
+    }
+    setBusy(false); onSaved();
   }
   const _p=Number(f.principal)||0, _r=Number(f.rate_pct)||0, _t=Number(f.term_months)||0;
   const monthlyInterest = _p*(_r/100);
   const totalInterest = monthlyInterest*_t;
   const totalPayable = _p+totalInterest;
-  const perCutoff = _t>0 ? totalPayable/(_t*LOAN_CUTOFFS_PER_MONTH) : 0;
+  const _sched = loanInstallmentDates({ term_months:_t, repayment_frequency:f.repayment_frequency, date_granted:f.date_granted });
+  const _n = _sched.length;
+  const perCutoff = _n>0 ? totalPayable/_n : 0;
   return (
     <Modal title={isEdit?'Edit loan':'New employee loan'} onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -10198,12 +10253,14 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
           <div><label className="text-xs font-semibold text-slate-500">Date granted</label><input type="date" value={f.date_granted} onChange={e=>up('date_granted',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
           <div><label className="text-xs font-semibold text-slate-500">Amortization (months)</label><input type="number" value={f.term_months} onChange={e=>up('term_months',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 5" /></div>
         </div>
+        <div><label className="text-xs font-semibold text-slate-500">Repayment schedule</label><select value={f.repayment_frequency} onChange={e=>up('repayment_frequency',e.target.value)} className="w-full border rounded px-2 py-1.5">{LOAN_FREQUENCIES.map(fr=><option key={fr.key} value={fr.key}>{fr.label}</option>)}</select></div>
         {_p>0 && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 space-y-0.5">
           <div>Monthly interest (3% of {peso(_p)}): <b>{peso(monthlyInterest)}</b></div>
           {_t>0 ? <>
             <div>Total interest ({_r}% × {_t} mo): <b className="text-amber-700">{peso(totalInterest)}</b></div>
-            <div>Total payable: <b>{peso(totalPayable)}</b> · Per weekly cut-off: <b className="text-indigo-700">{peso(perCutoff)}</b> <span className="text-slate-400">({_t*LOAN_CUTOFFS_PER_MONTH} cut-offs)</span></div>
-          </> : <div className="text-slate-400">Enter the amortization (months) to compute total interest, total payable and per-cut-off.</div>}
+            <div>Total payable: <b>{peso(totalPayable)}</b> · Per cut-off: <b className="text-indigo-700">{peso(perCutoff)}</b> <span className="text-slate-400">({_n} payment{_n===1?'':'s'} · {loanFreqLabel(f.repayment_frequency)})</span></div>
+            <div className="text-slate-400">On save, {_n} payment dates will be plotted{_sched.length?` — first ${fmtDate(_sched[0])}, last ${fmtDate(_sched[_sched.length-1])}`:''}. HR just ticks each one when paid.</div>
+          </> : <div className="text-slate-400">Enter the amortization (months) to compute totals and plot the payment schedule.</div>}
         </div>}
         <div><label className="text-xs font-semibold text-slate-500">Purpose</label><input value={f.purpose} onChange={e=>up('purpose',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. Medical / tuition / emergency" /></div>
         <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Repayment arrangement, agreed deduction per cutoff…" /></div>
@@ -10214,47 +10271,36 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
   );
 }
 
-function LoanDetailModal({ profile, loan, employees, payments, onClose, onSaved }){
+function LoanDetailModal({ profile, loan, employees, installments, reload, onClose, onSaved }){
   const [editing,setEditing]=useState(false);
-  const [pay,setPay]=useState({ date:new Date().toISOString().slice(0,10), amount:'', method:'salary_deduction', notes:'' });
-  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [busy,setBusy]=useState(false);
   const emp=(employees||[]).find(e=>e.id===loan.employee_id);
-  const c=loanCompute(loan, (payments||[]).map(p=>({...p, loan_id:loan.id})));
-  function upPay(k,v){ setPay(p=>({...p,[k]:v})); }
-  async function addPayment(){
-    const amt=Number(pay.amount)||0;
-    if(amt<=0){ setMsg('Enter the repayment amount.'); return; }
-    setBusy(true); setMsg('');
-    try {
-      const { error }=await sb.from('employee_loan_payments').insert({ loan_id:loan.id, date:pay.date||null, amount:amt, method:pay.method, notes:pay.notes||null, created_by:profile.id });
-      if(error) throw error;
-      // If this repayment settles the loan, mark it paid and freeze interest at this date.
-      const newPaid = c.paid + amt;
-      if(newPaid >= c.totalDue - 0.005 && loan.status!=='paid'){
-        await sb.from('employee_loans').update({ status:'paid', settled_at:pay.date||new Date().toISOString().slice(0,10) }).eq('id', loan.id);
-      }
-      setBusy(false); onSaved();
-    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  const c=loanCompute(loan, installments);
+  const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const total=sched.length; const allPaid = total>0 && c.paidCount===total;
+  const todayISO=new Date().toISOString().slice(0,10);
+  async function toggleInst(inst){
+    setBusy(true);
+    const nextPaid=!inst.paid;
+    const { error }=await sb.from('employee_loan_installments').update({ paid:nextPaid, paid_date: nextPaid?todayISO:null }).eq('id', inst.id);
+    if(error){ setBusy(false); alert(error.message); return; }
+    const paidAfter=sched.filter(x=> x.id===inst.id ? nextPaid : x.paid).length;
+    if(total>0 && paidAfter===total && loan.status!=='paid'){ await sb.from('employee_loans').update({ status:'paid', settled_at:todayISO }).eq('id', loan.id); }
+    else if(loan.status==='paid' && paidAfter<total){ await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id); }
+    setBusy(false); reload && reload();
   }
-  async function delPayment(p){
-    if(!confirm('Delete this repayment?')) return;
-    const { error }=await sb.from('employee_loan_payments').delete().eq('id', p.id);
-    if(error){ alert(error.message); return; }
-    // Re-open the loan if it was marked paid (a payment was removed).
-    if(loan.status==='paid') await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id);
+  async function genSchedule(){ setBusy(true); await regenLoanSchedule(loan); setBusy(false); reload && reload(); }
+  async function markPaid(){
+    if(!confirm('Mark this loan as fully paid? All scheduled payments will be ticked.')) return;
+    await sb.from('employee_loan_installments').update({ paid:true, paid_date:todayISO }).eq('loan_id', loan.id).eq('paid', false);
+    await sb.from('employee_loans').update({ status:'paid', settled_at:todayISO }).eq('id', loan.id);
     onSaved();
   }
-  async function markPaid(){
-    if(!confirm('Mark this loan as fully paid?')) return;
-    const { error }=await sb.from('employee_loans').update({ status:'paid', settled_at:new Date().toISOString().slice(0,10) }).eq('id', loan.id);
-    if(error){ alert(error.message); return; } onSaved();
-  }
   async function reopen(){
-    const { error }=await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id);
-    if(error){ alert(error.message); return; } onSaved();
+    await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', loan.id); onSaved();
   }
   async function delLoan(){
-    if(!confirm('Delete this loan and its repayment history?')) return;
+    if(!confirm('Delete this loan and its payment schedule?')) return;
     const { error }=await sb.from('employee_loans').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', loan.id);
     if(error){ alert(error.message); return; } onSaved();
   }
@@ -10265,45 +10311,39 @@ function LoanDetailModal({ profile, loan, employees, payments, onClose, onSaved 
           <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Loan amount</div><div className="font-bold">{peso(c.principal)}</div></div>
           <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Interest ({c.rate}% × {c.term||0}mo)</div><div className="font-bold text-amber-700">{peso(c.interest)}</div></div>
           <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Total payable</div><div className="font-bold">{peso(c.totalPayable)}</div></div>
-          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-600">Per cut-off (weekly)</div><div className="font-bold text-indigo-800">{peso(c.perCutoff)}</div></div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-600">Per cut-off</div><div className="font-bold text-indigo-800">{peso(c.perCutoff)}</div></div>
           <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-600">Total deduction</div><div className="font-bold text-emerald-800">{peso(c.paid)}</div></div>
           <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Remaining balance</div><div className="font-bold text-rose-800">{peso(c.outstanding)}</div></div>
         </div>
-        <div className="text-xs text-slate-500">Granted {fmtDate(loan.date_granted)}{loan.term_months?` · term ${loan.term_months} mo`:''}{loan.settled_at?` · settled ${fmtDate(loan.settled_at)}`:''}{loan.purpose?` · ${loan.purpose}`:''}{loan.status==='paid'?' · PAID':''}</div>
+        <div className="text-xs text-slate-500">Granted {fmtDate(loan.date_granted)}{loan.term_months?` · ${loan.term_months} mo`:''} · {loanFreqLabel(loan.repayment_frequency)}{loan.purpose?` · ${loan.purpose}`:''}{allPaid?' · PAID':''}</div>
         {loan.notes && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 whitespace-pre-line">{loan.notes}</div>}
 
-        {loan.status!=='paid' && (
-          <div className="border rounded-lg p-3 bg-slate-50">
-            <div className="text-xs font-semibold text-slate-700 mb-2">Record a repayment</div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" value={pay.date} onChange={e=>upPay('date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
-              <div><label className="text-[10px] uppercase text-slate-500">Amount (₱)</label><input type="number" step="0.01" value={pay.amount} onChange={e=>upPay('amount',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
-              <div><label className="text-[10px] uppercase text-slate-500">Method</label><select value={pay.method} onChange={e=>upPay('method',e.target.value)} className="w-full border rounded px-2 py-1.5">{LOAN_PAY_METHODS.map(m=><option key={m} value={m}>{loanPayMethodLabel(m)}</option>)}</select></div>
-              <div><label className="text-[10px] uppercase text-slate-500">Note</label><input value={pay.notes} onChange={e=>upPay('notes',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="cutoff / OR #" /></div>
-            </div>
-            {msg && <div className="text-xs text-rose-600 mt-2">{msg}</div>}
-            <button onClick={addPayment} disabled={busy} className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">{busy?'Saving…':'+ Add repayment'}</button>
-          </div>
-        )}
-
         <div className="border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 bg-slate-50 border-b text-xs font-semibold uppercase text-slate-500">Repayment history</div>
-          <table className="w-full text-sm">
-            <tbody>{(payments||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(p=>(
-              <tr key={p.id} className="border-t">
-                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(p.date)}</td>
-                <td className="px-3 py-2 text-xs">{loanPayMethodLabel(p.method)}</td>
-                <td className="px-3 py-2 text-xs text-slate-500">{p.notes||''}</td>
-                <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(p.amount)}</td>
-                <td className="px-3 py-2 text-right"><button onClick={()=>delPayment(p)} className="text-xs text-rose-500 hover:underline">Delete</button></td>
-              </tr>
-            ))}{(payments||[]).length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-6 text-xs">No repayments recorded yet.</td></tr>}</tbody>
-          </table>
+          <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase text-slate-500">Payment schedule</span>
+            <span className="text-xs text-slate-500">{c.paidCount}/{total} paid</span>
+          </div>
+          {total===0 ? (
+            <div className="p-4 text-center text-xs text-slate-400">No schedule plotted yet.{loan.term_months?<> <button onClick={genSchedule} disabled={busy} className="text-indigo-600 hover:underline font-medium">Generate schedule</button></>:' Set an amortization (months) on the loan first.'}</div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto"><table className="w-full text-sm">
+              <thead className="bg-white text-[10px] uppercase text-slate-400 sticky top-0"><tr><th className="text-left px-3 py-1.5">#</th><th className="text-left px-3 py-1.5">Due date</th><th className="text-right px-3 py-1.5">Amount</th><th className="text-left px-3 py-1.5">Status</th><th></th></tr></thead>
+              <tbody>{sched.map(it=>{ const overdue=!it.paid && it.due_date<todayISO; return (
+                <tr key={it.id} className={`border-t ${it.paid?'bg-emerald-50/40':overdue?'bg-rose-50/40':''}`}>
+                  <td className="px-3 py-1.5 text-xs text-slate-400">{it.seq}</td>
+                  <td className="px-3 py-1.5 text-xs whitespace-nowrap">{fmtDate(it.due_date)}</td>
+                  <td className="px-3 py-1.5 text-right">{peso(it.amount)}</td>
+                  <td className="px-3 py-1.5">{it.paid ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Paid{it.paid_date?` · ${fmtDate(it.paid_date)}`:''}</span> : overdue ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Overdue</span> : <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">Pending</span>}</td>
+                  <td className="px-3 py-1.5 text-right"><button disabled={busy} onClick={()=>toggleInst(it)} className={`text-xs font-semibold ${it.paid?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{it.paid?'Undo':'✓ Mark paid'}</button></td>
+                </tr>
+              ); })}</tbody>
+            </table></div>
+          )}
         </div>
 
         <div className="flex gap-2 pt-2 border-t flex-wrap">
           <button onClick={()=>setEditing(true)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">✎ Edit loan</button>
-          {loan.status!=='paid' ? <button onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">Mark fully paid</button>
+          {!allPaid ? <button onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">Mark fully paid</button>
             : <button onClick={reopen} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold">Reopen</button>}
           <div className="flex-1"></div>
           <button onClick={delLoan} className="px-3 py-2 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>
@@ -27855,7 +27895,7 @@ function App(){
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
-  const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]);
+  const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]); const [hrLoanInstallments,setHrLoanInstallments]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
@@ -28087,6 +28127,7 @@ function App(){
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
+    try { const hli = await sb.from('employee_loan_installments').select('*').order('seq',{ascending:true}); setHrLoanInstallments(hli && !hli.error ? (hli.data||[]) : []); } catch(_){ setHrLoanInstallments([]); }
     try { const stg = await sb.from('sales_targets').select('*'); setSalesTargets(stg && !stg.error ? (stg.data||[]) : []); } catch(_){ setSalesTargets([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
@@ -28870,7 +28911,7 @@ function App(){
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
-        {view==='hr-loans' && <EmployeeLoansView profile={profile} employees={employees} hrLoans={hrLoans} hrLoanPayments={hrLoanPayments} reload={loadAll} />}
+        {view==='hr-loans' && <EmployeeLoansView profile={profile} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
