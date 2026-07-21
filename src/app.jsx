@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 251 · Profile dashboard gains a WEIGHTED forecast (value × stage win-probability: New 10% → Sampling 80%) shown vs raw pipeline, plus a Monthly Target ring (won-this-month vs quota). Admin sets each rep's monthly target in Team Overview or inline on the profile.";
+const BUILD = "Live build 252 · Admin now sees the same sales dashboard on My Profile (KPIs, weighted forecast, target ring, top clients/items) even without personally-owned leads. Weighted forecast + monthly target ring remain.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12473,7 +12473,9 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
   const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const isSalesRole = ['admin','manager','assistant'].includes(profile.role);
-  const showSalesDash = isSalesRole && mine.length > 0;
+  // Admin always gets the sales dashboard (even with 0 personally-owned leads);
+  // managers/assistants get it once they carry at least one lead.
+  const showSalesDash = isSalesRole && (profile.role==='admin' || mine.length > 0);
   const now=new Date();
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   const wonVal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
