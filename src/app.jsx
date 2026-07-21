@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 250 · My Profile is now a sales dashboard for managers/assistants: KPI tiles, a Sales Forecast chart (open pipeline by expected close date), Won trend, Biggest clients closed, and Top items sold. Removed the Closed Won/payment table (it's in Sales Orders). Added an 'Expected close date' field to leads. Signature moved to the bottom.";
+const BUILD = "Live build 251 · Profile dashboard gains a WEIGHTED forecast (value × stage win-probability: New 10% → Sampling 80%) shown vs raw pipeline, plus a Monthly Target ring (won-this-month vs quota). Admin sets each rep's monthly target in Team Overview or inline on the profile.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -79,6 +79,9 @@ const STAGES = [
 // Stages that count a deal as "sold" (post-won). Used for dashboards / pipeline filters.
 const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
 const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
+// Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
+const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
+function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -12465,7 +12468,7 @@ function MySignatureCard({ profile, reload }){
   );
 }
 
-function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
+function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
   const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
@@ -12483,14 +12486,29 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
   for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1); months.push({ key:'w'+d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
   won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
   const maxM=Math.max(1,...months.map(m=>m.total));
-  // Forecast — open pipeline value by EXPECTED CLOSE month, next 6 months
+  // Forecast — open pipeline by EXPECTED CLOSE month, next 6 months. We track
+  // both the RAW value and the WEIGHTED value (value × stage win-probability).
   const fMonths=[];
-  for(let i=0;i<6;i++){ const d=new Date(now.getFullYear(), now.getMonth()+i, 1); fMonths.push({ key:'f'+d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0, count:0 }); }
-  open.forEach(l=>{ if(!l.forecast_close_date) return; const d=new Date(l.forecast_close_date+'T00:00:00'); const slot=fMonths.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot){ slot.total+=Number(l.value)||0; slot.count++; } });
+  for(let i=0;i<6;i++){ const d=new Date(now.getFullYear(), now.getMonth()+i, 1); fMonths.push({ key:'f'+d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0, weighted:0, count:0 }); }
+  open.forEach(l=>{ if(!l.forecast_close_date) return; const d=new Date(l.forecast_close_date+'T00:00:00'); const slot=fMonths.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot){ const v=Number(l.value)||0; slot.total+=v; slot.weighted+=v*stageProb(l.stage); slot.count++; } });
   const maxF=Math.max(1,...fMonths.map(m=>m.total));
   const forecastNext6=fMonths.reduce((s,m)=>s+m.total,0);
+  const weightedNext6=fMonths.reduce((s,m)=>s+m.weighted,0);
   const forecastThisMonth=fMonths[0]?.total||0;
   const unscheduled=open.filter(l=>!l.forecast_close_date).length;
+  // Monthly target ring
+  const ym=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const targetRow=(salesTargets||[]).find(t=>t.profile_id===profile.id && t.ym===ym);
+  const target=Number(targetRow?.amount)||0;
+  const targetPct=target>0 ? Math.min(100, Math.round(wonMonthVal/target*100)) : 0;
+  const isAdmin=profile.role==='admin';
+  const [tgtEditing,setTgtEditing]=useState(false); const [tgtDraft,setTgtDraft]=useState(''); const [tgtBusy,setTgtBusy]=useState(false);
+  async function saveTarget(){
+    const amt=Number(tgtDraft)||0; setTgtBusy(true);
+    const { error }=await sb.from('sales_targets').upsert({ profile_id:profile.id, ym, amount:amt, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'profile_id,ym' });
+    setTgtBusy(false); if(error){ alert(error.message); return; } setTgtEditing(false); reload && reload();
+  }
+  const RING_C=2*Math.PI*42;
   // Biggest clients closed
   const byClient={}; won.forEach(l=>{ const k=l.client_id||'—'; if(!byClient[k]) byClient[k]={ id:k, total:0, count:0 }; byClient[k].total+=Number(l.value)||0; byClient[k].count++; });
   const topClients=Object.values(byClient).sort((a,b)=>b.total-a.total).slice(0,6);
@@ -12506,17 +12524,41 @@ function ProfileView({ profile, leads, clients, profiles, reload, onSendToPR }){
       {showSalesDash && (<>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} lead{open.length===1?'':'s'}</div></div>
-          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Forecast (6 mo)</div><div className="text-2xl font-bold mt-1 text-indigo-700">{peso(forecastNext6)}</div><div className="text-xs text-slate-500">{peso(forecastThisMonth)} this month</div></div>
+          <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Forecast (weighted)</div><div className="text-2xl font-bold mt-1 text-indigo-700">{peso(weightedNext6)}</div><div className="text-xs text-slate-500">of {peso(forecastNext6)} raw · 6 mo</div></div>
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won this month</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonMonthVal)}</div><div className="text-xs text-slate-500">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Won (all-time)</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(wonVal)}</div><div className="text-xs text-slate-500">{won.length} deals</div></div>
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Win rate</div><div className="text-2xl font-bold mt-1">{mine.length?Math.round(won.length/mine.length*100):0}%</div><div className="text-xs text-slate-500">{won.length}/{mine.length}</div></div>
         </div>
 
+        {/* Monthly target ring */}
+        <div className="bg-white border rounded-xl p-4 mb-6 flex items-center gap-5 flex-wrap">
+          <div className="relative w-28 h-28 shrink-0">
+            <svg viewBox="0 0 100 100" className="w-28 h-28 -rotate-90">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#e2e8f0" strokeWidth="10" />
+              {target>0 && <circle cx="50" cy="50" r="42" fill="none" stroke={targetPct>=100?'#059669':'#4f46e5'} strokeWidth="10" strokeLinecap="round" strokeDasharray={RING_C} strokeDashoffset={RING_C*(1-targetPct/100)} />}
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center"><div className="text-2xl font-extrabold text-slate-900">{target>0?targetPct:'—'}<span className="text-sm">%</span></div><div className="text-[9px] uppercase text-slate-400">of target</div></div>
+          </div>
+          <div className="flex-1 min-w-[180px]">
+            <div className="flex items-center gap-2 flex-wrap"><div className="font-semibold text-slate-900">🎯 This month's target — {now.toLocaleString('en-PH',{month:'long'})}</div>
+              {isAdmin && !tgtEditing && <button onClick={()=>{ setTgtDraft(target?String(target):''); setTgtEditing(true); }} className="text-xs text-indigo-600 hover:underline">{target>0?'Edit':'Set target'}</button>}
+            </div>
+            {tgtEditing ? (
+              <div className="flex items-center gap-2 mt-2"><input type="number" value={tgtDraft} onChange={e=>setTgtDraft(e.target.value)} placeholder="Monthly target ₱" className="border rounded px-2 py-1.5 text-sm w-40" /><button disabled={tgtBusy} onClick={saveTarget} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">Save</button><button onClick={()=>setTgtEditing(false)} className="text-xs text-slate-500">Cancel</button></div>
+            ) : target>0 ? (
+              <div className="mt-1 text-sm text-slate-600">Won <b className="text-emerald-700">{peso(wonMonthVal)}</b> of <b>{peso(target)}</b>{wonMonthVal<target?<> · <span className="text-rose-600">{peso(target-wonMonthVal)} to go</span></>:<> · <span className="text-emerald-700 font-semibold">🎉 target hit!</span></>}</div>
+            ) : (
+              <div className="mt-1 text-sm text-slate-400">{isAdmin?'No target set for this month — click “Set target”.':'No monthly target set yet — ask your admin to set one.'}</div>
+            )}
+          </div>
+        </div>
+
         <div className="grid md:grid-cols-2 gap-6 mb-6">
           <div className="bg-white border rounded-xl p-4">
             <div className="font-semibold text-slate-900 mb-1">📈 Sales forecast — next 6 months</div>
-            <div className="text-xs text-slate-400 mb-3">Open pipeline by expected close date{unscheduled>0?` · ${unscheduled} lead${unscheduled===1?'':'s'} with no expected close date set`:''}</div>
-            <div className="flex items-end gap-3 h-40">{fMonths.map(m=>(<div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1"><div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div><div className="w-full bg-indigo-400 rounded-t" style={{ height:(m.total/maxF*100)+'%', minHeight:m.total?'4px':'0' }} title={`${m.count} deal(s)`}></div><div className="text-[11px] text-slate-500">{m.label}</div></div>))}</div>
+            <div className="text-xs text-slate-400 mb-3">Weighted by stage (probability × value) · by expected close date{unscheduled>0?` · ${unscheduled} lead${unscheduled===1?'':'s'} with no date set`:''}</div>
+            <div className="flex items-end gap-3 h-40">{fMonths.map(m=>(<div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1"><div className="text-[9px] text-slate-500">{m.weighted?peso(Math.round(m.weighted)).replace('₱',''):''}</div><div className="w-full flex justify-center items-end h-full relative"><div className="w-full bg-slate-100 rounded-t absolute bottom-0" style={{ height:(m.total/maxF*100)+'%', minHeight:m.total?'4px':'0' }} title={`Raw ${peso(m.total)}`}></div><div className="w-full bg-indigo-500 rounded-t relative" style={{ height:(m.weighted/maxF*100)+'%', minHeight:m.weighted?'4px':'0' }} title={`Weighted ${peso(Math.round(m.weighted))} · ${m.count} deal(s)`}></div></div><div className="text-[11px] text-slate-500">{m.label}</div></div>))}</div>
+            <div className="text-[10px] text-slate-400 mt-2 flex gap-3"><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500"></span>Weighted</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-slate-200"></span>Raw pipeline</span></div>
           </div>
           <div className="bg-white border rounded-xl p-4">
             <div className="font-semibold text-slate-900 mb-1">🏆 Won sales — last 6 months</div>
@@ -12600,8 +12642,17 @@ function RoleBadge({ role }){
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
 
-function TeamOverview({ profile, profiles, leads, clients, reload }){
+function TeamOverview({ profile, profiles, leads, clients, salesTargets, reload }){
   const isAdmin = profile && profile.role==='admin';
+  const _tnow=new Date(); const tYm=`${_tnow.getFullYear()}-${String(_tnow.getMonth()+1).padStart(2,'0')}`;
+  const targetFor=(pid)=>{ const r=(salesTargets||[]).find(t=>t.profile_id===pid && t.ym===tYm); return Number(r?.amount)||0; };
+  const wonThisMonthFor=(pid)=> leads.filter(l=>l.manager_id===pid && SOLD_STAGES.includes(l.stage) && l.won_at && String(l.won_at).slice(0,7)===tYm).reduce((s,l)=>s+(Number(l.value)||0),0);
+  const [editingTgtId,setEditingTgtId]=useState(null); const [draftTgt,setDraftTgt]=useState('');
+  async function saveTarget(pid){
+    const amt=Number(draftTgt)||0;
+    const { error }=await sb.from('sales_targets').upsert({ profile_id:pid, ym:tYm, amount:amt, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'profile_id,ym' });
+    if(error){ alert(error.message); return; } setEditingTgtId(null); setDraftTgt(''); reload && reload();
+  }
   // Team Overview is now sales-focused — show only people who carry leads:
   // admin (you) + sales managers + sales assistants. Production / purchasing /
   // accounting teammates live in Settings instead.
@@ -12667,9 +12718,10 @@ function TeamOverview({ profile, profiles, leads, clients, reload }){
             <th className="text-right px-3 py-2">Open value</th>
             <th className="text-right px-3 py-2">Won deals</th>
             <th className="text-right px-3 py-2">Won value</th>
+            <th className="text-right px-3 py-2">This-mo target</th>
             <th className="text-right px-3 py-2">Actions</th>
           </tr></thead>
-          <tbody>{rows.map(({p,total,openVal,wonVal,wonCount})=>(
+          <tbody>{rows.map(({p,total,openVal,wonVal,wonCount})=>{ const tgt=targetFor(p.id); const wonM=wonThisMonthFor(p.id); const pct=tgt>0?Math.min(100,Math.round(wonM/tgt*100)):0; return (
             <tr key={p.id} className="border-t hover:bg-slate-50/60">
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2"><Avatar profile={p} size="sm" />
@@ -12709,10 +12761,24 @@ function TeamOverview({ profile, profiles, leads, clients, reload }){
               <td className="px-3 py-2 text-right">{wonCount}</td>
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(wonVal)}</td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
+                {editingTgtId===p.id ? (
+                  <div className="flex items-center gap-1 justify-end">
+                    <input autoFocus type="number" value={draftTgt} onChange={e=>setDraftTgt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') saveTarget(p.id); if(e.key==='Escape'){ setEditingTgtId(null); setDraftTgt(''); } }} className="text-xs px-2 py-1 rounded border border-indigo-300 bg-white w-24 text-right" placeholder="₱" />
+                    <button onClick={()=>saveTarget(p.id)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">Save</button>
+                    <button onClick={()=>{ setEditingTgtId(null); setDraftTgt(''); }} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100">×</button>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1 justify-end">
+                    {tgt>0 ? <span><b>{peso(tgt)}</b> <span className={`text-[10px] ${pct>=100?'text-emerald-600':'text-slate-400'}`}>({pct}%)</span></span> : <span className="text-slate-300">—</span>}
+                    {isAdmin && <button onClick={()=>{ setEditingTgtId(p.id); setDraftTgt(tgt?String(tgt):''); }} title="Set this month's target" className="text-slate-400 hover:text-indigo-600 text-xs">✎</button>}
+                  </div>
+                )}
+              </td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
                 <button onClick={()=>setViewingMember(p)} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">View profile</button>
               </td>
             </tr>
-          ))}</tbody>
+          ); })}</tbody>
         </table></div>
       </div>
 
@@ -27692,6 +27758,7 @@ function App(){
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
   const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]);
+  const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
@@ -27922,6 +27989,7 @@ function App(){
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
+    try { const stg = await sb.from('sales_targets').select('*'); setSalesTargets(stg && !stg.error ? (stg.data||[]) : []); } catch(_){ setSalesTargets([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
     setHrReviewCycles(hcyc && !hcyc.error ? (hcyc.data||[]) : []);
@@ -28713,8 +28781,8 @@ function App(){
         {view==='clients' && (selectedClient
           ? <ClientDetail client={clients.find(c=>c.id===selectedClient.id)||selectedClient} profile={profile} profiles={profiles} leads={leads} reload={loadAll} onBack={()=>setSelectedClient(null)} onOpenLead={(l)=>setDetailLead(l)} />
           : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} reload={loadAll} />)}
-        {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} reload={loadAll} onSendToPR={sendLeadToPR} />}
-        {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} reload={loadAll} />}
+        {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} salesTargets={salesTargets} reload={loadAll} onSendToPR={sendLeadToPR} />}
+        {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
