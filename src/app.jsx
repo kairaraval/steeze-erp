@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 253 · Profile dashboard adds a Conversion funnel (leads by stage), Deal metrics (avg deal size, avg sales-cycle days, avg open lead, win rate), and a Quota vs Actual trend (won value vs monthly target, last 6 months).";
+const BUILD = "Live build 254 · Employee Relations letters: removed the auto 5-day directive paragraph (HR writes the body), and the print view now has a Document chooser — NTE, Preventive Suspension, Administrative Hearing, Notice of Decision (NOD), or Case Summary — on the same letterhead.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9722,7 +9722,7 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
                   <td className="px-3 py-2 text-xs">{fmtDate(c.opened_date)}</td>
                   <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    <button onClick={()=>setPrinting(c)} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print NTE / case summary">🖨</button>
+                    <button onClick={()=>setPrinting(c)} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print a letter — NTE, Preventive Suspension, Admin Hearing or Notice of Decision">🖨</button>
                     <button onClick={()=>setEditing(c)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
                     <button onClick={()=>toggleClose(c)} className="text-xs text-amber-700 hover:underline mr-2">{isClosed?'Reopen':'Close'}</button>
                     <button onClick={()=>del(c)} className="text-xs text-rose-500 hover:underline">Delete</button>
@@ -9821,7 +9821,7 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
         {f.status==='closed_case' && <TpLbl t="Resolution / Decision"><textarea className="input min-h-[60px]" value={f.resolution||''} onChange={e=>up('resolution',e.target.value)} placeholder="Final decision / how it was resolved" /></TpLbl>}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
-          {isEdit && onPrint && <button type="button" onClick={()=>onPrint(caseRow)} className="py-2 px-4 rounded-lg bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🖨 NTE / Summary</button>}
+          {isEdit && onPrint && <button type="button" onClick={()=>onPrint(caseRow)} className="py-2 px-4 rounded-lg bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🖨 Print letter</button>}
           <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save case':'Log case')}</button>
         </div>
       </div>
@@ -9830,7 +9830,16 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
 }
 
 // Printable Notice to Explain / Case Summary for a disciplinary case.
-function CaseNTEPrintView({ caseRow, employees, profile, onClose }){
+// Document letters HR can generate per case. Each is the same letterhead +
+// case header; HR writes the body in the case's Details field.
+const CASE_DOC_TYPES = [
+  { key:'nte',        label:'Notice to Explain (NTE)',    title:'NOTICE TO EXPLAIN (NTE)',            body:'Statement of the Case / Allegation' },
+  { key:'preventive', label:'Preventive Suspension',      title:'NOTICE OF PREVENTIVE SUSPENSION',    body:'Grounds for Preventive Suspension' },
+  { key:'hearing',    label:'Administrative Hearing',     title:'NOTICE OF ADMINISTRATIVE HEARING',   body:'Details of the Administrative Hearing' },
+  { key:'nod',        label:'Notice of Decision (NOD)',   title:'NOTICE OF DECISION (NOD)',           body:'Decision' },
+  { key:'summary',    label:'Case Summary',               title:'DISCIPLINARY CASE SUMMARY',          body:'Statement of the Case' },
+];
+function CaseNTEPrintView({ caseRow, employees, profile, initialDoc, onClose }){
   const emp=(employees||[]).find(e=>e.id===caseRow.employee_id);
   const ct=caseTypeMeta(caseRow.case_type);
   const sev=caseSeverityMeta(caseRow.severity);
@@ -9838,6 +9847,8 @@ function CaseNTEPrintView({ caseRow, employees, profile, onClose }){
   const atts=Array.isArray(caseRow.attachments)?caseRow.attachments:[];
   const closed=caseIsClosed(caseRow);
   const ref='CASE-'+String(caseRow.id).slice(0,8).toUpperCase();
+  const [docKey,setDocKey]=useState(initialDoc || (closed?'nod':'nte'));
+  const doc=CASE_DOC_TYPES.find(d=>d.key===docKey)||CASE_DOC_TYPES[0];
   const LBL='text-[9px] uppercase font-bold text-slate-500 tracking-wider';
   const Section=({title,children})=> (
     <div className="mb-3"><div className={LBL+' mb-1'}>{title}</div><div className="text-sm whitespace-pre-wrap leading-relaxed">{children}</div></div>
@@ -9849,15 +9860,19 @@ function CaseNTEPrintView({ caseRow, employees, profile, onClose }){
     <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
       <PortraitPagePrintStyle />
       <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
-        <div className="min-w-0"><div className="font-bold text-slate-900 truncate">⚖️ NTE / Case Summary — {emp?fullName(emp):''}</div><div className="text-xs text-slate-500">{ref} · {sm.label}</div></div>
-        <div className="flex items-center gap-2">
+        <div className="min-w-0"><div className="font-bold text-slate-900 truncate">⚖️ {emp?fullName(emp):''} · {ref}</div><div className="text-xs text-slate-500">{sm.label}</div></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-xs text-slate-500">Document</label>
+          <select value={docKey} onChange={e=>setDocKey(e.target.value)} className="text-sm border rounded-lg px-2 py-2 bg-white">
+            {CASE_DOC_TYPES.map(d=><option key={d.key} value={d.key}>{d.label}</option>)}
+          </select>
           <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
       <div className="tp-print py-6">
         <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.3in', fontSize:'11pt', color:'#222'}}>
-          <SteezeLetterhead docTitle={closed?'DISCIPLINARY CASE SUMMARY':'NOTICE TO EXPLAIN (NTE)'} />
+          <SteezeLetterhead docTitle={doc.title} />
           <div className="grid grid-cols-3 gap-3 mt-3 mb-3 text-[11px]">
             <div><div className={LBL}>Date</div><div className="font-medium">{fmtDate(caseRow.opened_date)}</div></div>
             <div><div className={LBL}>Case type</div><div className="font-medium">{ct.label}</div></div>
@@ -9870,13 +9885,10 @@ function CaseNTEPrintView({ caseRow, employees, profile, onClose }){
             <div className="flex gap-2"><div className={LBL+' w-24 shrink-0 pt-0.5'}>Status</div><div className="text-sm">{sm.label}</div></div>
           </div>
 
-          <Section title="Statement of the Case / Allegation">{caseRow.description||'—'}</Section>
-          {!closed && (
-            <div className="text-sm leading-relaxed mb-3">In view of the foregoing, you are hereby directed to submit a <b>written explanation within five (5) days</b> from receipt of this Notice as to why no disciplinary action should be taken against you for the above-stated offense. Failure to submit your explanation within the given period shall be construed as a waiver of your right to be heard, and the case shall be decided based on available records.</div>
-          )}
+          <Section title={doc.body}>{caseRow.description||'—'}</Section>
           {caseRow.sanction_type && <Section title="Sanction / Recommended Action">{caseRow.sanction_type}</Section>}
           {caseRow.remarks && <Section title="Remarks / Notes">{caseRow.remarks}</Section>}
-          {closed && caseRow.resolution && <Section title="Decision / Resolution">{caseRow.resolution}</Section>}
+          {caseRow.resolution && <Section title="Decision / Resolution">{caseRow.resolution}</Section>}
           {atts.length>0 && <Section title="Attachments on file">{atts.map(a=>a.name).join(' · ')}</Section>}
 
           <div className="grid grid-cols-3 gap-6 mt-12">
