@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 248 · HR Employee Relations: added a printable Notice to Explain (NTE) / Case Summary — letterhead doc with employee, offense, allegation, the 5-day explain directive, sanction, remarks, attachments-on-file and Prepared/Received/Noted signature lines. Print from the case list (🖨) or the case form. Plus NTE status workflow, sanction type, remarks, Minor/Major/Grave severity, attachments";
+const BUILD = "Live build 249 · Sample estimates: sales managers + assistants can now Accept (client approved) or Decline a sample estimate straight from the estimate preview — Accept spins up the Sample Sales Order. They still can't edit estimate content (a secure status-only path); production estimates stay Admin/Accounting.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1326,6 +1326,11 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const [msg,setMsg]=useState('');
   // Admin + Accounting may edit and delete estimates (also enforced by RLS).
   const canDelete = profile.role==='admin' || profile.role==='accounting';
+  // Sales managers + assistants can ACCEPT / REJECT a SAMPLE estimate (client
+  // decision) — this flips status only, they can't edit content. Accepting a
+  // sample estimate spins up the Sample Sales Order.
+  const isSample = purpose==='sample';
+  const canDecide = canEdit || (isSample && (profile.role==='manager' || profile.role==='assistant'));
   // editable fields
   const [number,setNumber]=useState('');
   const [status,setStatus]=useState('draft');
@@ -1425,6 +1430,26 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     finally{ setBusy(false); }
   }
 
+  // Sales manager / assistant accept-or-reject on a SAMPLE estimate. Uses a
+  // SECURITY DEFINER RPC to flip status only (they can't edit content). On
+  // Accept, spins up the Sample Sales Order.
+  async function decideSample(decision){
+    if(!estimate){ setMsg('Save the estimate first.'); return; }
+    if(decision==='approved' && !confirm('Mark this sample estimate ACCEPTED by the client?\n\nThis creates a Sample Sales Order for collection.')) return;
+    if(decision==='rejected' && !confirm('Mark this sample estimate DECLINED by the client?')) return;
+    setBusy(true); setMsg('');
+    try {
+      const { error } = await sb.rpc('decide_sample_estimate', { p_estimate_id: estimate.id, p_decision: decision });
+      if(error) throw error;
+      const updated = { ...estimate, status: decision };
+      setEstimate(updated); setStatus(decision);
+      if(decision==='approved'){ try { await maybeCreateSampleSOFromEstimate(profile, lead, client, updated); } catch(_){} }
+      setMsg(decision==='approved' ? 'Accepted — Sample Sales Order created.' : 'Marked declined.');
+      reload && reload();
+    } catch(e){ setMsg('Failed: '+(e.message||String(e))); }
+    finally{ setBusy(false); }
+  }
+
   async function del(){
     if(!estimate) return;
     if(estimate.sales_order_id){ setMsg('This estimate is linked to a Sales Order — delete/unlink that order first.'); return; }
@@ -1454,10 +1479,13 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
           <div className="min-w-0">
             <div className="font-bold text-slate-900 truncate">🧾 {number} — {purposeLabel} estimate preview</div>
-            <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'} · {peso(total)}</div>
+            <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'} · {peso(total)}{msg?<span className={`ml-2 font-semibold ${/fail/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</span>:''}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {!canEdit && canDecide && isSample && estimate && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('approved')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted — creates the Sample Sales Order">✅ Accept (client approved)</button>}
+            {!canEdit && canDecide && isSample && estimate && status!=='rejected' && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('rejected')} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">✕ Decline</button>}
+            {!canEdit && status==='approved' && <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 font-semibold">✓ Accepted</span>}
+            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button>
             <button onClick={()=> canEdit ? setView('edit') : onClose()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">{canEdit?'← Back to edit':'Close'}</button>
           </div>
         </div>
