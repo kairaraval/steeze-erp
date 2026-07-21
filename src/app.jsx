@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 252 · Admin now sees the same sales dashboard on My Profile (KPIs, weighted forecast, target ring, top clients/items) even without personally-owned leads. Weighted forecast + monthly target ring remain.";
+const BUILD = "Live build 253 · Profile dashboard adds a Conversion funnel (leads by stage), Deal metrics (avg deal size, avg sales-cycle days, avg open lead, win rate), and a Quota vs Actual trend (won value vs monthly target, last 6 months).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12519,6 +12519,22 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const byItem={}; won.forEach(l=>{ (l.items||[]).forEach(it=>{ const k=(it.itemType||'—').trim()||'—'; if(!byItem[k]) byItem[k]={ name:k, qty:0, total:0 }; byItem[k].qty+=Number(it.quantity)||0; byItem[k].total+=Number(it.lineTotal)|| (Number(it.quantity)||0)*(Number(it.pricePerItem)||0); }); });
   const topItems=Object.values(byItem).sort((a,b)=>b.total-a.total).slice(0,6);
   const maxItem=Math.max(1,...topItems.map(i=>i.total));
+  // Conversion funnel — counts by current stage
+  const FUNNEL=[{key:'new',label:'New',bar:'bg-slate-400'},{key:'qualified',label:'Qualified',bar:'bg-blue-400'},{key:'proposal',label:'Proposal',bar:'bg-indigo-400'},{key:'negotiation',label:'Negotiation',bar:'bg-amber-400'},{key:'sampling',label:'Sampling',bar:'bg-purple-400'},{key:'__won',label:'Won',bar:'bg-emerald-500'},{key:'lost',label:'Lost',bar:'bg-rose-400'}];
+  const funnel=FUNNEL.map(s=>({ ...s, count: s.key==='__won' ? mine.filter(l=>SOLD_STAGES.includes(l.stage)).length : mine.filter(l=>l.stage===s.key).length }));
+  const maxFunnel=Math.max(1,...funnel.map(f=>f.count));
+  // Avg deal size + sales-cycle days
+  const avgDeal = won.length ? wonVal/won.length : 0;
+  const avgOpen = open.length ? openVal/open.length : 0;
+  const cycleArr = won.filter(l=>l.won_at && l.created_at).map(l=>{ const a=new Date(String(l.created_at).slice(0,10)+'T00:00:00'); const b=new Date(l.won_at+'T00:00:00'); return Math.max(0,Math.round((b-a)/86400000)); });
+  const cycleDays = cycleArr.length ? Math.round(cycleArr.reduce((s,x)=>s+x,0)/cycleArr.length) : 0;
+  // Quota vs actual — last 6 months
+  const qMonths=[];
+  for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1); const ym2=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; qMonths.push({ key:'q'+ym2, label:d.toLocaleString('en-PH',{month:'short'}), ym:ym2, target:0, actual:0 }); }
+  qMonths.forEach(m=>{ const t=(salesTargets||[]).find(x=>x.profile_id===profile.id && x.ym===m.ym); m.target=Number(t?.amount)||0; });
+  won.forEach(l=>{ if(!l.won_at) return; const ym2=String(l.won_at).slice(0,7); const slot=qMonths.find(x=>x.ym===ym2); if(slot) slot.actual+=Number(l.value)||0; });
+  const maxQ=Math.max(1,...qMonths.map(m=>Math.max(m.target,m.actual)));
+  const hasAnyTarget=qMonths.some(m=>m.target>0);
   return (
     <div className="p-6">
       <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'} · {profile.email}</p></div></div>
@@ -12592,6 +12608,46 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
               ))}</div>
             )}
           </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-1">🔻 Conversion funnel</div>
+            <div className="text-xs text-slate-400 mb-3">Leads by current stage</div>
+            <div className="space-y-1.5">{funnel.map(s=>(
+              <div key={s.key} className="flex items-center gap-2">
+                <div className="w-20 text-xs text-slate-500 shrink-0 text-right">{s.label}</div>
+                <div className="flex-1 bg-slate-50 rounded h-5 relative"><div className={`${s.bar} h-5 rounded flex items-center`} style={{width:Math.max(s.count?8:0,(s.count/maxFunnel*100))+'%'}}></div></div>
+                <div className="w-8 text-xs font-semibold text-slate-700 text-right">{s.count}</div>
+              </div>
+            ))}</div>
+          </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-3">📊 Deal metrics</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Avg deal size (won)</div><div className="text-xl font-bold text-slate-900 mt-1">{peso(avgDeal)}</div></div>
+              <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Avg sales cycle</div><div className="text-xl font-bold text-slate-900 mt-1">{cycleDays} <span className="text-sm font-normal text-slate-500">day{cycleDays===1?'':'s'}</span></div></div>
+              <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Avg open lead</div><div className="text-xl font-bold text-slate-900 mt-1">{peso(avgOpen)}</div></div>
+              <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Win rate</div><div className="text-xl font-bold text-slate-900 mt-1">{mine.length?Math.round(won.length/mine.length*100):0}%</div></div>
+            </div>
+            <div className="text-[10px] text-slate-400 mt-2">Sales cycle = avg days from lead created → won ({cycleArr.length} deal{cycleArr.length===1?'':'s'} with dates).</div>
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-xl p-4 mb-6">
+          <div className="font-semibold text-slate-900 mb-1">🎯 Quota vs actual — last 6 months</div>
+          <div className="text-xs text-slate-400 mb-3">{hasAnyTarget?'Won value vs monthly target':'No targets set yet — set monthly targets in Team Overview or on the profile ring.'}</div>
+          <div className="flex items-end gap-3 h-40">{qMonths.map(m=>{ const hit=m.target>0 && m.actual>=m.target; return (
+            <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1">
+              <div className="text-[9px] text-slate-500">{m.actual?peso(m.actual).replace('₱',''):''}</div>
+              <div className="w-full flex items-end justify-center gap-0.5 h-full">
+                <div className={`w-1/2 ${hit?'bg-emerald-500':'bg-indigo-500'} rounded-t`} style={{ height:(m.actual/maxQ*100)+'%', minHeight:m.actual?'4px':'0' }} title={`Actual ${peso(m.actual)}`}></div>
+                <div className="w-1/2 bg-slate-200 rounded-t" style={{ height:(m.target/maxQ*100)+'%', minHeight:m.target?'4px':'0' }} title={`Target ${peso(m.target)}`}></div>
+              </div>
+              <div className="text-[11px] text-slate-500">{m.label}</div>
+            </div>
+          ); })}</div>
+          <div className="text-[10px] text-slate-400 mt-2 flex gap-3"><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500"></span>Actual won</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-slate-200"></span>Target</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>Target hit</span></div>
         </div>
       </>)}
 
