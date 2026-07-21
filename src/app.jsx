@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 246 · Fix: removed a duplicate declaration that broke the Vercel build (build 245 failed to compile). HR → Employee Loans is now live: 3%/month simple interest, full repayment ledger, running outstanding balance, auto-marks Paid when settled";
+const BUILD = "Live build 247 · HR Employee Relations: Status is now the NTE workflow (Issuance of NTE → Served → Awaiting Reply → Reply Received → Pending Decision → Closed Case); added Sanction Type (Verbal Warning … Dismissal) + Remarks/Notes; Severity is now Minor/Major/Grave Offense; and you can attach PDFs, photos & files to a case";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9603,7 +9603,26 @@ const CASE_TYPES = [
   { key:'other',         label:'Other',         color:'bg-slate-100 text-slate-600' },
 ];
 function caseTypeMeta(k){ return CASE_TYPES.find(t=>t.key===k) || CASE_TYPES[CASE_TYPES.length-1]; }
-const CASE_SEVERITY = { low:'bg-slate-100 text-slate-600', medium:'bg-amber-100 text-amber-700', high:'bg-rose-100 text-rose-700' };
+// Case workflow (NTE process). "closed_case" is the terminal/closed stage.
+const CASE_STATUSES = [
+  { key:'issuance_nte',     label:'Issuance of NTE', color:'bg-amber-100 text-amber-700' },
+  { key:'served_nte',       label:'Served NTE',      color:'bg-orange-100 text-orange-700' },
+  { key:'awaiting_reply',   label:'Awaiting Reply',  color:'bg-yellow-100 text-yellow-700' },
+  { key:'reply_received',   label:'Reply Received',  color:'bg-blue-100 text-blue-700' },
+  { key:'pending_decision', label:'Pending Decision',color:'bg-violet-100 text-violet-700' },
+  { key:'closed_case',      label:'Closed Case',     color:'bg-slate-200 text-slate-600' },
+];
+function caseStatusMeta(k){ return CASE_STATUSES.find(s=>s.key===k) || CASE_STATUSES[0]; }
+function caseIsClosed(c){ return c && (c.status==='closed_case' || c.status==='closed'); }
+// Severity = offense gravity
+const CASE_SEVERITIES = [
+  { key:'minor', label:'Minor Offense', color:'bg-slate-100 text-slate-600' },
+  { key:'major', label:'Major Offense', color:'bg-amber-100 text-amber-700' },
+  { key:'grave', label:'Grave Offense', color:'bg-rose-100 text-rose-700' },
+];
+function caseSeverityMeta(k){ return CASE_SEVERITIES.find(s=>s.key===k); }
+// Disciplinary sanctions (stored as the label string)
+const SANCTION_TYPES = ['Verbal Warning','Written Reprimand','Final Warning','1-Day Suspension','2–3 Days Suspension','4–5 Days Suspension','6–10 Days Suspension','Preventive Suspension','Dismissal'];
 
 function HRRelationsView({ profile, employees, hrCases, reload }){
   const [tab,setTab]=useState('active');
@@ -9612,14 +9631,14 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
   const [editing,setEditing]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
   const all=(hrCases||[]);
-  const active=all.filter(c=>c.status!=='closed');
-  const closed=all.filter(c=>c.status==='closed');
+  const active=all.filter(c=>!caseIsClosed(c));
+  const closed=all.filter(c=>caseIsClosed(c));
   const shown=(tab==='active'?active:tab==='closed'?closed:all)
-    .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.case_type}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.case_type} ${c.sanction_type||''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
   async function toggleClose(c){
-    const closing=c.status!=='closed';
-    const { error }=await sb.from('hr_cases').update({ status: closing?'closed':'active', closed_date: closing? new Date().toISOString().slice(0,10): null }).eq('id',c.id);
+    const closing=!caseIsClosed(c);
+    const { error }=await sb.from('hr_cases').update({ status: closing?'closed_case':'pending_decision', closed_date: closing? new Date().toISOString().slice(0,10): null }).eq('id',c.id);
     if(error){ alert(error.message); return; } reload();
   }
   async function del(c){ if(!confirm('Delete this case record?')) return; const { error }=await sb.from('hr_cases').delete().eq('id',c.id); if(error){ alert(error.message); return; } reload(); }
@@ -9653,18 +9672,20 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
                 <th className="text-left px-3 py-2">Case</th>
                 <th className="text-left px-3 py-2">Title</th>
                 <th className="text-center px-3 py-2">Severity</th>
+                <th className="text-left px-3 py-2">Sanction</th>
                 <th className="text-left px-3 py-2">Opened</th>
                 <th className="text-center px-3 py-2">Status</th>
                 <th></th>
               </tr></thead>
-              <tbody>{shown.map(c=>{ const ct=caseTypeMeta(c.case_type); const isClosed=c.status==='closed'; return (
+              <tbody>{shown.map(c=>{ const ct=caseTypeMeta(c.case_type); const isClosed=caseIsClosed(c); const sm=caseStatusMeta(c.status); const sev=caseSeverityMeta(c.severity); const atts=Array.isArray(c.attachments)?c.attachments:[]; return (
                 <tr key={c.id} className={`border-t hover:bg-slate-50 ${isClosed?'opacity-70':''}`}>
                   <td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td>
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ct.color}`}>{ct.label}</span></td>
-                  <td className="px-3 py-2 text-slate-600 truncate max-w-[240px]" title={c.title}>{c.title}</td>
-                  <td className="px-3 py-2 text-center">{c.severity ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${CASE_SEVERITY[c.severity]||'bg-slate-100 text-slate-600'}`}>{c.severity}</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]" title={c.title}>{c.title}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}</td>
+                  <td className="px-3 py-2 text-center">{sev ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sev.color}`}>{sev.label}</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2 text-xs">{c.sanction_type || <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(c.opened_date)}</td>
-                  <td className="px-3 py-2 text-center">{isClosed ? <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">Closed</span> : <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Active</span>}</td>
+                  <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button onClick={()=>setEditing(c)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
                     <button onClick={()=>toggleClose(c)} className="text-xs text-amber-700 hover:underline mr-2">{isClosed?'Reopen':'Close'}</button>
@@ -9683,15 +9704,37 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
 
 function CaseFormModal({ caseRow, employees, profile, onClose, onSaved }){
   const isEdit=!!caseRow;
-  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', severity:'medium', status:'active', opened_date:new Date().toISOString().slice(0,10), description:'', resolution:'' });
+  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', severity:'', sanction_type:'', status:'issuance_nte', opened_date:new Date().toISOString().slice(0,10), description:'', remarks:'', resolution:'' });
+  const [attachments,setAttachments]=useState(Array.isArray(caseRow?.attachments)?caseRow.attachments:[]);
+  const [uploading,setUploading]=useState(false); const [drag,setDrag]=useState(false);
+  const fileInput=useRef(null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  async function uploadFiles(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean);
+    if(!files.length) return;
+    setUploading(true); setMsg('');
+    try {
+      for(const file of files){
+        const ext=(file.name.split('.').pop()||'bin').toLowerCase();
+        const key=`hr-cases/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        const { data: pu }=await sb.storage.from(BUCKET).getPublicUrl(key);
+        setAttachments(prev=>[...prev,{ name:file.name, url:pu.publicUrl, path:key, type:file.type||'' }]);
+      }
+    } catch(e){ setMsg('Upload failed: '+(e.message||String(e))); }
+    setUploading(false);
+  }
+  function removeAtt(i){ setAttachments(prev=>prev.filter((_,x)=>x!==i)); }
+  function attIcon(a){ const t=(a.type||'')+' '+(a.name||''); if(/image|png|jpe?g|gif|webp/i.test(t)) return '🖼'; if(/pdf/i.test(t)) return '📄'; if(/word|docx?/i.test(t)) return '📝'; if(/sheet|xlsx?|csv/i.test(t)) return '📊'; return '📎'; }
   async function save(){
     if(!f.employee_id){ setMsg('Pick an employee.'); return; }
     if(!f.title?.trim()){ setMsg('Add a short title.'); return; }
     setBusy(true); setMsg('');
-    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), severity:f.severity||null, status:f.status||'active', opened_date:f.opened_date||null, closed_date: f.status==='closed' ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, resolution:f.resolution||null };
+    const closed = f.status==='closed_case';
+    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
     if(!isEdit) payload.created_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_cases').update(payload).eq('id',caseRow.id) : await sb.from('hr_cases').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -9711,12 +9754,34 @@ function CaseFormModal({ caseRow, employees, profile, onClose, onSaved }){
         </div>
         <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Tardiness — 3rd offense" /></TpLbl>
         <div className="grid grid-cols-3 gap-2">
-          <TpLbl t="Severity"><select className="input" value={f.severity||''} onChange={e=>up('severity',e.target.value)}><option value="">—</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></TpLbl>
-          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}><option value="active">Active</option><option value="closed">Closed</option></select></TpLbl>
+          <TpLbl t="Severity"><select className="input" value={f.severity||''} onChange={e=>up('severity',e.target.value)}><option value="">—</option>{CASE_SEVERITIES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{CASE_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
           <TpLbl t="Opened"><input type="date" className="input" value={f.opened_date||''} onChange={e=>up('opened_date',e.target.value)} /></TpLbl>
         </div>
+        <TpLbl t="Sanction type"><select className="input" value={f.sanction_type||''} onChange={e=>up('sanction_type',e.target.value)}><option value="">— none / not yet —</option>{SANCTION_TYPES.map(s=><option key={s} value={s}>{s}</option>)}</select></TpLbl>
         <TpLbl t="Details"><textarea className="input min-h-[90px]" value={f.description||''} onChange={e=>up('description',e.target.value)} placeholder="What happened, dates, people involved, actions taken…" /></TpLbl>
-        {f.status==='closed' && <TpLbl t="Resolution"><textarea className="input min-h-[60px]" value={f.resolution||''} onChange={e=>up('resolution',e.target.value)} placeholder="How it was resolved" /></TpLbl>}
+        <TpLbl t="Remarks / Notes"><textarea className="input min-h-[60px]" value={f.remarks||''} onChange={e=>up('remarks',e.target.value)} placeholder="Additional remarks, HR notes, follow-ups…" /></TpLbl>
+        <div>
+          <label className="text-xs font-semibold text-slate-500">Attachments <span className="text-slate-400 font-normal">· NTE, reply letter, evidence — PDFs, photos, files</span></label>
+          <div
+            onDragOver={e=>{ e.preventDefault(); setDrag(true); }} onDragLeave={()=>setDrag(false)}
+            onDrop={e=>{ e.preventDefault(); setDrag(false); uploadFiles(e.dataTransfer.files); }}
+            onClick={()=>fileInput.current&&fileInput.current.click()}
+            className={`mt-1 border-2 border-dashed rounded-lg px-3 py-4 text-center cursor-pointer transition ${drag?'border-indigo-500 bg-indigo-50':'border-slate-300 hover:border-slate-400 bg-slate-50'}`}>
+            <div className="text-xs text-slate-500">{uploading?'Uploading…':'Drag & drop files here, or click to browse'}</div>
+            <input ref={fileInput} type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
+          </div>
+          {attachments.length>0 && <div className="mt-2 space-y-1">
+            {attachments.map((a,i)=>(
+              <div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5">
+                <span>{attIcon(a)}</span>
+                <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-indigo-600 hover:underline" onClick={e=>e.stopPropagation()}>{a.name}</a>
+                <button type="button" onClick={()=>removeAtt(i)} className="text-slate-400 hover:text-rose-500">✕</button>
+              </div>
+            ))}
+          </div>}
+        </div>
+        {f.status==='closed_case' && <TpLbl t="Resolution / Decision"><textarea className="input min-h-[60px]" value={f.resolution||''} onChange={e=>up('resolution',e.target.value)} placeholder="Final decision / how it was resolved" /></TpLbl>}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save case':'Log case')}</button>
       </div>
