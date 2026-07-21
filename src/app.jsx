@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 255 · Fix: HR relations letters now paginate across multiple pages instead of being clipped to one — long NTE/decision bodies flow onto page 2+ and the signature block stays together. Document chooser (NTE/Preventive/Hearing/NOD) remains.";
+const BUILD = "Live build 256 · Employee Loans reworked to match the company sheet: interest is now 3%/mo × amortization term (fixed total), with columns Loan amount, Loan date, Amortization (mo), Interest %, Interest amount, Total payable, Per weekly cut-off, Total deduction, Remaining balance. Form + detail show the full breakdown.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10070,16 +10070,20 @@ function loanMonthsElapsed(loan){
   if(b.getDate() < a.getDate()) m -= 1;   // not a full month elapsed yet
   return Math.max(0, m);
 }
+// Weekly cut-offs per month used for the per-cut-off amortization.
+const LOAN_CUTOFFS_PER_MONTH = 4;
 function loanCompute(loan, allPayments){
   const principal = Number(loan.principal)||0;
   const rate = Number(loan.rate_pct)||0;
-  const months = loanMonthsElapsed(loan);
-  const monthlyInterest = principal * (rate/100);
-  const interest = monthlyInterest * months;
-  const totalDue = principal + interest;
-  const paid = (allPayments||[]).filter(p=>p.loan_id===loan.id).reduce((s,p)=>s+Number(p.amount||0),0);
-  const outstanding = Math.max(0, totalDue - paid);
-  return { principal, rate, months, monthlyInterest, interest, totalDue, paid, outstanding };
+  const term = Number(loan.term_months)||0;               // amortization, in months
+  const monthlyInterest = principal * (rate/100);         // the 3%/month amount
+  const interest = monthlyInterest * term;                // TOTAL interest over the whole term (fixed, up-front)
+  const totalPayable = principal + interest;              // principal + total interest
+  const cutoffs = term * LOAN_CUTOFFS_PER_MONTH;          // number of weekly cut-offs
+  const perCutoff = cutoffs>0 ? totalPayable / cutoffs : 0;
+  const paid = (allPayments||[]).filter(p=>p.loan_id===loan.id).reduce((s,p)=>s+Number(p.amount||0),0); // total deduction
+  const outstanding = Math.max(0, totalPayable - paid);   // remaining balance
+  return { principal, rate, term, monthlyInterest, interest, totalPayable, totalDue: totalPayable, cutoffs, perCutoff, paid, outstanding };
 }
 
 function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload }){
@@ -10089,49 +10093,61 @@ function EmployeeLoansView({ profile, employees, hrLoans, hrLoanPayments, reload
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : (l.status!=='paid'&&l.status!=='cancelled'));
   const active=(hrLoans||[]).filter(l=>l.status!=='paid'&&l.status!=='cancelled');
-  const totalOut = active.reduce((s,l)=> s + loanCompute(l, hrLoanPayments).outstanding, 0);
-  const totalPrincipal = active.reduce((s,l)=> s + (Number(l.principal)||0), 0);
+  const aC=(l)=>loanCompute(l, hrLoanPayments);
+  const totalOut = active.reduce((s,l)=> s + aC(l).outstanding, 0);
+  const totalPrincipal = active.reduce((s,l)=> s + aC(l).principal, 0);
+  const totalInterest = active.reduce((s,l)=> s + aC(l).interest, 0);
+  const totalPayableAll = active.reduce((s,l)=> s + aC(l).totalPayable, 0);
+  const totalPerCutoff = active.reduce((s,l)=> s + aC(l).perCutoff, 0);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">💵 Employee Loans</h1><p className="text-slate-500 text-sm">Company loans to staff · 3%/month simple interest · repaid via salary deduction</p></div>
+          <div><h1 className="text-2xl font-bold">💵 Employee Loans</h1><p className="text-slate-500 text-sm">Company loans to staff · 3%/month × term (fixed) interest · repaid weekly via salary deduction</p></div>
           <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New loan</button>
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Outstanding (active)</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(totalOut)}</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Active loans</div><div className="text-2xl font-bold mt-1">{active.length}</div></div>
-        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Principal out on loan</div><div className="text-2xl font-bold mt-1 text-slate-700">{peso(totalPrincipal)}</div></div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Principal on loan</div><div className="text-xl font-bold mt-1 text-slate-700">{peso(totalPrincipal)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total interest</div><div className="text-xl font-bold mt-1 text-amber-700">{peso(totalInterest)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total payable</div><div className="text-xl font-bold mt-1">{peso(totalPayableAll)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Per cut-off (weekly)</div><div className="text-xl font-bold mt-1 text-indigo-700">{peso(totalPerCutoff)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Remaining balance</div><div className="text-xl font-bold mt-1 text-rose-700">{peso(totalOut)}</div><div className="text-[11px] text-slate-500">{active.length} active</div></div>
       </div>
       <div className="flex items-center gap-1 mb-4">
         {[['active','Active'],['paid','Paid'],['all','All']].map(([k,l])=>(
           <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
         ))}
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
-          <th className="text-left px-3 py-2">Employee</th>
-          <th className="text-left px-3 py-2">Granted</th>
-          <th className="text-right px-3 py-2">Principal</th>
-          <th className="text-right px-3 py-2">Rate</th>
-          <th className="text-right px-3 py-2">Interest/mo</th>
-          <th className="text-right px-3 py-2">Paid</th>
-          <th className="text-right px-3 py-2">Outstanding</th>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Borrowee</th>
+          <th className="text-right px-3 py-2">Loan amount</th>
+          <th className="text-left px-3 py-2">Loan date</th>
+          <th className="text-right px-3 py-2">Amort. (mo)</th>
+          <th className="text-right px-3 py-2">Interest %</th>
+          <th className="text-right px-3 py-2">Interest amt</th>
+          <th className="text-right px-3 py-2">Total payable</th>
+          <th className="text-right px-3 py-2">Per cut-off</th>
+          <th className="text-right px-3 py-2">Total deduction</th>
+          <th className="text-right px-3 py-2">Remaining</th>
           <th className="text-left px-3 py-2">Status</th>
         </tr></thead>
         <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanPayments); const paidUp=l.status==='paid'; return (
           <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setDetail(l)}>
             <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
-            <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(l.date_granted)}</td>
             <td className="px-3 py-2 text-right">{peso(c.principal)}</td>
-            <td className="px-3 py-2 text-right text-xs">{c.rate}%/mo</td>
-            <td className="px-3 py-2 text-right text-xs">{peso(c.monthlyInterest)}</td>
+            <td className="px-3 py-2 text-xs">{fmtDate(l.date_granted)}</td>
+            <td className="px-3 py-2 text-right">{c.term||'—'}</td>
+            <td className="px-3 py-2 text-right text-xs">{c.rate}%</td>
+            <td className="px-3 py-2 text-right text-amber-700">{peso(c.interest)}</td>
+            <td className="px-3 py-2 text-right font-medium">{peso(c.totalPayable)}</td>
+            <td className="px-3 py-2 text-right text-indigo-700">{peso(c.perCutoff)}</td>
             <td className="px-3 py-2 text-right text-emerald-700">{peso(c.paid)}</td>
             <td className="px-3 py-2 text-right font-semibold text-rose-700">{peso(c.outstanding)}</td>
             <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${paidUp?'bg-emerald-100 text-emerald-700':l.status==='cancelled'?'bg-slate-200 text-slate-600':'bg-amber-100 text-amber-700'}`}>{paidUp?'Paid':l.status==='cancelled'?'Cancelled':'Active'}</span></td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
       </table></div></div>
       {creating && <LoanFormModal profile={profile} employees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
       {detail && <LoanDetailModal profile={profile} loan={detail} employees={employees} payments={(hrLoanPayments||[]).filter(p=>p.loan_id===detail.id)} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
@@ -10161,7 +10177,11 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
       : await sb.from('employee_loans').insert({ ...payload, status:'active', created_by:profile.id });
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
   }
-  const monthlyInterest = (Number(f.principal)||0) * ((Number(f.rate_pct)||0)/100);
+  const _p=Number(f.principal)||0, _r=Number(f.rate_pct)||0, _t=Number(f.term_months)||0;
+  const monthlyInterest = _p*(_r/100);
+  const totalInterest = monthlyInterest*_t;
+  const totalPayable = _p+totalInterest;
+  const perCutoff = _t>0 ? totalPayable/(_t*LOAN_CUTOFFS_PER_MONTH) : 0;
   return (
     <Modal title={isEdit?'Edit loan':'New employee loan'} onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -10176,9 +10196,15 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-xs font-semibold text-slate-500">Date granted</label><input type="date" value={f.date_granted} onChange={e=>up('date_granted',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
-          <div><label className="text-xs font-semibold text-slate-500">Term (months, optional)</label><input type="number" value={f.term_months} onChange={e=>up('term_months',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 6" /></div>
+          <div><label className="text-xs font-semibold text-slate-500">Amortization (months)</label><input type="number" value={f.term_months} onChange={e=>up('term_months',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. 5" /></div>
         </div>
-        {Number(f.principal)>0 && <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Monthly interest: <b>{peso(monthlyInterest)}</b> ({f.rate_pct||0}% of {peso(Number(f.principal)||0)}) · simple, on the original principal.</div>}
+        {_p>0 && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 space-y-0.5">
+          <div>Monthly interest (3% of {peso(_p)}): <b>{peso(monthlyInterest)}</b></div>
+          {_t>0 ? <>
+            <div>Total interest ({_r}% × {_t} mo): <b className="text-amber-700">{peso(totalInterest)}</b></div>
+            <div>Total payable: <b>{peso(totalPayable)}</b> · Per weekly cut-off: <b className="text-indigo-700">{peso(perCutoff)}</b> <span className="text-slate-400">({_t*LOAN_CUTOFFS_PER_MONTH} cut-offs)</span></div>
+          </> : <div className="text-slate-400">Enter the amortization (months) to compute total interest, total payable and per-cut-off.</div>}
+        </div>}
         <div><label className="text-xs font-semibold text-slate-500">Purpose</label><input value={f.purpose} onChange={e=>up('purpose',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="e.g. Medical / tuition / emergency" /></div>
         <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Repayment arrangement, agreed deduction per cutoff…" /></div>
         {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
@@ -10235,11 +10261,13 @@ function LoanDetailModal({ profile, loan, employees, payments, onClose, onSaved 
   return (
     <Modal title={`Loan · ${emp?fullName(emp):'—'}`} onClose={onClose} wide>
       <div className="space-y-3 text-sm">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Principal</div><div className="font-bold">{peso(c.principal)}</div></div>
-          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Interest ({c.rate}%/mo × {c.months}mo)</div><div className="font-bold">{peso(c.interest)}</div></div>
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-600">Total paid</div><div className="font-bold text-emerald-800">{peso(c.paid)}</div></div>
-          <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Outstanding</div><div className="font-bold text-rose-800">{peso(c.outstanding)}</div></div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Loan amount</div><div className="font-bold">{peso(c.principal)}</div></div>
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Interest ({c.rate}% × {c.term||0}mo)</div><div className="font-bold text-amber-700">{peso(c.interest)}</div></div>
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Total payable</div><div className="font-bold">{peso(c.totalPayable)}</div></div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-600">Per cut-off (weekly)</div><div className="font-bold text-indigo-800">{peso(c.perCutoff)}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-600">Total deduction</div><div className="font-bold text-emerald-800">{peso(c.paid)}</div></div>
+          <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Remaining balance</div><div className="font-bold text-rose-800">{peso(c.outstanding)}</div></div>
         </div>
         <div className="text-xs text-slate-500">Granted {fmtDate(loan.date_granted)}{loan.term_months?` · term ${loan.term_months} mo`:''}{loan.settled_at?` · settled ${fmtDate(loan.settled_at)}`:''}{loan.purpose?` · ${loan.purpose}`:''}{loan.status==='paid'?' · PAID':''}</div>
         {loan.notes && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 whitespace-pre-line">{loan.notes}</div>}
