@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 261 · Cutting: fabric consumption is now per-fabric — add a fabric name, then rows of Gender · Size · Per-pc consumption · Qty · Total (auto = per-pc × qty), with fabric subtotals. '+ Add fabric' lets you record multiple fabrics (e.g. body + lining) with a grand total.";
+const BUILD = "Live build 262 · Accounting Officer can now create/edit sample + production estimates and invoices (front-end + database RLS updated). Estimate accept→Sample SO and the rest of the estimate/invoice flow now work for the Officer.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2250,7 +2250,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||profile.role==='assistant'||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
-  const canEstimate = profile.role==='admin' || profile.role==='accounting';
+  const canEstimate = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Invoice(s) generated for this lead (via the lead directly or its Sales Order).
   const leadSO = (salesOrders||[]).find(s=>s.lead_id===lead.id && s.kind==='production' && !s.deleted_at);
   const leadInvoice = (invoices||[]).find(iv=> iv.lead_id===lead.id || (leadSO && iv.sales_order_id===leadSO.id));
@@ -19547,7 +19547,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
 }
 
 function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, salesCommissions, onClose, onSaved, onPay, onVerifyPayment }){
-  const canInvoice = profile.role==='admin' || profile.role==='accounting';
+  const canInvoice = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Commission rows tied to this SO + whether a PAID one was based on a total
   // that no longer matches (so we can flag the delta for manual settlement).
   const soComms = (salesCommissions||[]).filter(c=>c.sales_order_id===so.id);
