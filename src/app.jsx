@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 259 · Samples now plot on the Logistics delivery schedule the moment they're created (any status), using the sample due date — logistics sees the full sample pipeline. Backfilled the current active samples that were missing. (Delivered samples untouched as requested.)";
+const BUILD = "Live build 260 · Fix: the role shown under a person's name (profile header, sidebar, member card) now uses the real role label for every role — previously non-sales roles like Pattern Maker/Cutting Dept wrongly showed 'Sales Manager'.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12617,7 +12617,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const hasAnyTarget=qMonths.some(m=>m.target>0);
   return (
     <div className="p-6">
-      <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'} · {profile.email}</p></div></div>
+      <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{roleLabel(profile.role)} · {profile.email}</p></div></div>
 
       {showSalesDash && (<>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
@@ -13314,7 +13314,7 @@ function MemberProfileModal({ member, leads, clients, onClose }){
   won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
   const maxM=Math.max(1,...months.map(m=>m.total));
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.company||'—';
-  const roleLbl = member.role==='admin'?'Administrator' : member.role==='assistant'?'Sales Assistant' : 'Sales Manager';
+  const roleLbl = roleLabel(member.role);
   const recentWon=won.slice().sort((a,b)=>(b.won_at||'').localeCompare(a.won_at||'')).slice(0,8);
   return (
     <Modal title="Team member" onClose={onClose} wide>
@@ -28912,7 +28912,7 @@ function App(){
           })}
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
-          <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{profile.role==='admin'?'Administrator':profile.role==='assistant'?'Sales Assistant':'Sales Manager'}</div></div></div>
+          <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{roleLabel(profile.role)}</div></div></div>
           {/* System notification opt-in banner. Shows only when the browser
               supports notifications AND the user hasn't decided yet. Once
               granted (or permanently denied) the banner disappears. */}
