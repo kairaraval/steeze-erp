@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 258 · Two new roles: Pattern Maker (sees only the Pattern board) and Cutting Department (sees only In House Cutting). Added to Settings role pickers, badges and the profiles role constraint. Also fixed the constraint that blocked Accounting Officer signups.";
+const BUILD = "Live build 259 · Samples now plot on the Logistics delivery schedule the moment they're created (any status), using the sample due date — logistics sees the full sample pipeline. Backfilled the current active samples that were missing. (Delivered samples untouched as requested.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6844,7 +6844,7 @@ function SamplingJobForm({ existing, profile, leads, onClose, onSaved }){
     const { data, error } = await sb.from('sampling_jobs').insert(payload).select().single();
     setBusy(false); if(error){ setMsg(error.message); return; }
     // A new sample on the board → raise its Sampling PR automatically.
-    if(data && profile){ try { await maybeAutoCreatePRForSample(profile, data); } catch(_){} }
+    if(data && profile){ try { await maybeAutoCreatePRForSample(profile, data); } catch(_){} try { await maybeAutoCreateDeliveryFromJob(profile, data, 'sampling_job'); } catch(_){} }
     onSaved(); }
   return (
     <Modal title={isEdit?'Edit sample job':'New sample job'} onClose={onClose}>
@@ -17397,6 +17397,8 @@ async function maybeAutoCreateSamplingJobForLead(profile, lead, clients){
     }
     // The sample just landed on the board — raise its Sampling PR too.
     try { await maybeAutoCreatePRForSample(profile, data); } catch(_){}
+    // Plot on the delivery schedule right away (any status) so logistics sees it.
+    try { await maybeAutoCreateDeliveryFromJob(profile, data, 'sampling_job'); } catch(_){}
     return data;
   } catch(e){
     console.warn('Sampling auto-create unexpected error:', e);
@@ -28513,8 +28515,9 @@ function App(){
     const client=clients.find(c=>c.id===lead.client_id);
     const items=(lead.items||[]).map(it=>({ itemType:it.itemType, category:it.category||'', quantity:Number(it.quantity)||0 }));
     const qty=items.reduce((s,it)=>s+it.quantity,0);
-    const { error }=await sb.from('sampling_jobs').insert({ number:'SMP-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'endorsed', due_date:lead.delivery_date||lead.expected_close||null });
+    const { data:newSample, error }=await sb.from('sampling_jobs').insert({ number:'SMP-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'endorsed', due_date:lead.delivery_date||lead.expected_close||null }).select().single();
     if(error){ alert(error.message); return; }
+    if(newSample){ try { await maybeAutoCreatePRForSample(profile, newSample); } catch(_){} try { await maybeAutoCreateDeliveryFromJob(profile, newSample, 'sampling_job'); } catch(_){} }
     alert('Sent "'+lead.title+'" to Sampling Board.'); setDetailLead(null); setView('sampling'); loadAll();
   }
   async function sendToProduction(lead){
