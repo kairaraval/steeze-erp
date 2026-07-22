@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 260 · Fix: the role shown under a person's name (profile header, sidebar, member card) now uses the real role label for every role — previously non-sales roles like Pattern Maker/Cutting Dept wrongly showed 'Sales Manager'.";
+const BUILD = "Live build 261 · Cutting: fabric consumption is now per-fabric — add a fabric name, then rows of Gender · Size · Per-pc consumption · Qty · Total (auto = per-pc × qty), with fabric subtotals. '+ Add fabric' lets you record multiple fabrics (e.g. body + lining) with a grand total.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6381,33 +6381,51 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
 }
 
 // Detail modal for a cutting worklist item — pattern number + per-size consumption + overall.
+const CUT_GENDERS = ['', 'Male', 'Female', 'Unisex', 'Kids'];
 function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved }){
   const w=item;
   const [patternNumber,setPatternNumber]=useState(w.pattern_number||'');
-  const [rows,setRows]=useState(Array.isArray(w.size_consumption)&&w.size_consumption.length ? w.size_consumption.map(r=>({ size:r.size||'', qty:r.qty??'', consumption:r.consumption??'' })) : []);
+  // Multiple fabric blocks: [{ fabric, rows:[{gender,size,per_pc,qty}] }]
+  const [fabrics,setFabrics]=useState(()=>{
+    if(Array.isArray(w.fabrics) && w.fabrics.length) return w.fabrics.map(f=>({ fabric:f.fabric||'', rows:(Array.isArray(f.rows)?f.rows:[]).map(r=>({ gender:r.gender||'', size:r.size||'', per_pc:r.per_pc??'', qty:r.qty??'' })) }));
+    const legacy=Array.isArray(w.size_consumption)?w.size_consumption:[];
+    if(legacy.length) return [{ fabric:'', rows: legacy.map(r=>({ gender:'', size:r.size||'', per_pc:r.consumption??'', qty:r.qty??'' })) }];
+    return [{ fabric:'', rows:[] }];
+  });
   const [total,setTotal]=useState(w.total_consumption??'');
   const [notes,setNotes]=useState(w.notes||'');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const matchedPattern=(patterns||[]).find(p=> (p.pattern_code||'').trim().toLowerCase()===(patternNumber||'').trim().toLowerCase() && !p.deleted_at);
-  const sumConsumption=rows.reduce((s,r)=>s+(Number(r.consumption)||0),0);
-  function setRow(i,k,v){ setRows(rs=>rs.map((r,idx)=>idx===i?{...r,[k]:v}:r)); }
-  function addRow(){ setRows(rs=>[...rs,{size:'',qty:'',consumption:''}]); }
-  function delRow(i){ setRows(rs=>rs.filter((_,idx)=>idx!==i)); }
-  function fillFromPattern(){
+  const rowTotal=(r)=> (Number(r.per_pc)||0)*(Number(r.qty)||0);
+  const fabricTotal=(f)=> (f.rows||[]).reduce((s,r)=>s+rowTotal(r),0);
+  const grandTotal = fabrics.reduce((s,f)=>s+fabricTotal(f),0);
+  function setFabric(fi,k,v){ setFabrics(fs=>fs.map((f,i)=>i===fi?{...f,[k]:v}:f)); }
+  function addFabric(){ setFabrics(fs=>[...fs,{ fabric:'', rows:[{gender:'',size:'',per_pc:'',qty:''}] }]); }
+  function delFabric(fi){ setFabrics(fs=>fs.filter((_,i)=>i!==fi)); }
+  function setRow(fi,ri,k,v){ setFabrics(fs=>fs.map((f,i)=> i!==fi?f:{...f, rows:f.rows.map((r,j)=>j===ri?{...r,[k]:v}:r)})); }
+  function addRow(fi){ setFabrics(fs=>fs.map((f,i)=> i!==fi?f:{...f, rows:[...f.rows,{gender:'',size:'',per_pc:'',qty:''}]})); }
+  function delRow(fi,ri){ setFabrics(fs=>fs.map((f,i)=> i!==fi?f:{...f, rows:f.rows.filter((_,j)=>j!==ri)})); }
+  function fillFromPattern(fi){
     if(!matchedPattern){ setMsg('No pattern found with that number — type an exact pattern code first.'); return; }
     const male=Array.isArray(matchedPattern.sizes_male)?matchedPattern.sizes_male:[];
     const female=Array.isArray(matchedPattern.sizes_female)?matchedPattern.sizes_female:[];
     const add=[];
-    male.forEach(s=> add.push({ size:`${s} (M)`, qty:'', consumption:'' }));
-    female.forEach(s=> add.push({ size:`${s} (F)`, qty:'', consumption:'' }));
+    male.forEach(s=> add.push({ gender:'Male', size:s, per_pc:'', qty:'' }));
+    female.forEach(s=> add.push({ gender:'Female', size:s, per_pc:'', qty:'' }));
     if(add.length===0){ setMsg('That pattern has no male/female sizes recorded yet.'); return; }
-    const existing=new Set(rows.map(r=>r.size));
-    setRows(rs=>[...rs, ...add.filter(a=>!existing.has(a.size))]); setMsg('');
+    setFabrics(fs=>fs.map((f,i)=>{ if(i!==fi) return f; const seen=new Set(f.rows.map(r=>`${r.gender}|${r.size}`)); return {...f, rows:[...f.rows, ...add.filter(a=>!seen.has(`${a.gender}|${a.size}`))]}; }));
+    setMsg('');
   }
   async function save(){
     setBusy(true); setMsg('');
-    const clean=rows.filter(r=> (r.size||'').trim() || r.qty!=='' || r.consumption!=='').map(r=>({ size:(r.size||'').trim(), qty:r.qty===''?null:Number(r.qty), consumption:r.consumption===''?null:Number(r.consumption) }));
-    const { error }=await sb.from('cutting_worklist').update({ pattern_number: patternNumber.trim()||null, size_consumption: clean, total_consumption: total===''?null:Number(total), notes: notes||null }).eq('id', w.id);
+    const cleanFabrics = fabrics.map(f=>({
+      fabric:(f.fabric||'').trim(),
+      rows:(f.rows||[]).filter(r=>(r.gender||'').trim()||(r.size||'').trim()||r.per_pc!==''||r.qty!=='').map(r=>({ gender:(r.gender||'').trim(), size:(r.size||'').trim(), per_pc:r.per_pc===''?null:Number(r.per_pc), qty:r.qty===''?null:Number(r.qty), total: rowTotal(r) })),
+    })).filter(f=> f.fabric || f.rows.length);
+    // Keep a flattened size_consumption for the list-row summary / backward-compat.
+    const flat=[]; cleanFabrics.forEach(f=> f.rows.forEach(r=> flat.push({ size:[r.gender,r.size].filter(Boolean).join(' '), qty:r.qty, consumption:r.total })));
+    const overall = total===''? (grandTotal||null) : Number(total);
+    const { error }=await sb.from('cutting_worklist').update({ pattern_number: patternNumber.trim()||null, fabrics: cleanFabrics, size_consumption: flat, total_consumption: overall, notes: notes||null }).eq('id', w.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
@@ -6422,40 +6440,56 @@ function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved
         </div>
 
         <TpLbl t="Pattern number to use">
-          <div className="flex gap-2">
-            <input className="input" value={patternNumber} onChange={e=>setPatternNumber(e.target.value)} placeholder="e.g. 195" />
-            <button type="button" onClick={fillFromPattern} className="px-3 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50 whitespace-nowrap">Fill sizes from pattern</button>
-          </div>
+          <input className="input" value={patternNumber} onChange={e=>setPatternNumber(e.target.value)} placeholder="e.g. 195" />
           {patternNumber.trim() && (matchedPattern ? <div className="text-[11px] text-emerald-700 mt-1">✓ {matchedPattern.item_type||''} — {matchedPattern.name||''}</div> : <div className="text-[11px] text-amber-600 mt-1">No matching pattern code in the library (that's OK — it's saved as-is).</div>)}
         </TpLbl>
 
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold">Size breakdown — consumption per size</div>
-            <button type="button" onClick={addRow} className="text-xs px-2 py-1 rounded border hover:bg-slate-50">+ Add size</button>
-          </div>
-          <div className="border rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
-                <th className="text-left px-2 py-1.5">Size</th><th className="text-right px-2 py-1.5 w-28">Qty (pcs)</th><th className="text-right px-2 py-1.5 w-36">Consumption</th><th className="w-8"></th>
-              </tr></thead>
-              <tbody>
-                {rows.map((r,i)=>(
-                  <tr key={i} className="border-t">
-                    <td className="px-2 py-1"><input className="input !py-1" value={r.size} onChange={e=>setRow(i,'size',e.target.value)} placeholder="e.g. M / L / XL" /></td>
-                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={r.qty} onChange={e=>setRow(i,'qty',e.target.value)} placeholder="0" /></td>
-                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={r.consumption} onChange={e=>setRow(i,'consumption',e.target.value)} placeholder="0" /></td>
-                    <td className="px-2 py-1 text-center"><button onClick={()=>delRow(i)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
-                  </tr>
-                ))}
-                {rows.length===0 && <tr><td colSpan="4" className="px-2 py-3 text-center text-slate-400 text-xs">No sizes yet — add rows, or "Fill sizes from pattern".</td></tr>}
-              </tbody>
-              {rows.length>0 && <tfoot><tr className="bg-slate-50 font-semibold border-t"><td className="px-2 py-1.5 text-right uppercase text-[10px] tracking-wider" colSpan="2">Sum of per-size consumption</td><td className="px-2 py-1.5 text-right">{sumConsumption||0}</td><td></td></tr></tfoot>}
-            </table>
-          </div>
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold">Fabric consumption</div>
+          <button type="button" onClick={addFabric} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold hover:bg-indigo-100">+ Add fabric</button>
         </div>
 
-        <TpLbl t="Overall consumption for the project"><input type="number" className="input" value={total} onChange={e=>setTotal(e.target.value)} placeholder="e.g. total meters / yards of fabric used" /></TpLbl>
+        {fabrics.map((f,fi)=>(
+          <div key={fi} className="border rounded-lg p-3 space-y-2 bg-slate-50/40">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] uppercase font-bold text-slate-400 w-14">Fabric {fi+1}</span>
+              <input className="input flex-1 min-w-[160px]" value={f.fabric} onChange={e=>setFabric(fi,'fabric',e.target.value)} placeholder="Fabric name / material (e.g. Microfiber body, Gina lining)" />
+              <button type="button" onClick={()=>fillFromPattern(fi)} className="text-xs px-2 py-1.5 rounded border bg-white font-semibold hover:bg-slate-50 whitespace-nowrap">Fill sizes from pattern</button>
+              {fabrics.length>1 && <button type="button" onClick={()=>delFabric(fi)} className="text-xs px-2 py-1.5 rounded border border-rose-200 text-rose-600 hover:bg-rose-50">Remove fabric</button>}
+            </div>
+            <div className="border rounded-lg overflow-hidden bg-white">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                  <th className="text-left px-2 py-1.5 w-28">Gender</th>
+                  <th className="text-left px-2 py-1.5">Size</th>
+                  <th className="text-right px-2 py-1.5 w-28">Per-pc consm.</th>
+                  <th className="text-right px-2 py-1.5 w-24">Qty (pcs)</th>
+                  <th className="text-right px-2 py-1.5 w-28">Total consm.</th>
+                  <th className="w-8"></th>
+                </tr></thead>
+                <tbody>
+                  {f.rows.map((r,ri)=>(
+                    <tr key={ri} className="border-t">
+                      <td className="px-2 py-1"><select className="input !py-1" value={r.gender} onChange={e=>setRow(fi,ri,'gender',e.target.value)}>{CUT_GENDERS.map(g=><option key={g} value={g}>{g||'—'}</option>)}</select></td>
+                      <td className="px-2 py-1"><input className="input !py-1" value={r.size} onChange={e=>setRow(fi,ri,'size',e.target.value)} placeholder="e.g. M / L / XL" /></td>
+                      <td className="px-2 py-1"><input type="number" step="0.01" className="input !py-1 text-right" value={r.per_pc} onChange={e=>setRow(fi,ri,'per_pc',e.target.value)} placeholder="0" /></td>
+                      <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={r.qty} onChange={e=>setRow(fi,ri,'qty',e.target.value)} placeholder="0" /></td>
+                      <td className="px-2 py-1 text-right font-semibold text-slate-700">{rowTotal(r)?rowTotal(r).toLocaleString('en-PH',{maximumFractionDigits:2}):'—'}</td>
+                      <td className="px-2 py-1 text-center"><button onClick={()=>delRow(fi,ri)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
+                    </tr>
+                  ))}
+                  {f.rows.length===0 && <tr><td colSpan="6" className="px-2 py-3 text-center text-slate-400 text-xs">No sizes yet — add a row, or "Fill sizes from pattern".</td></tr>}
+                </tbody>
+                <tfoot><tr className="bg-slate-50 font-semibold border-t"><td className="px-2 py-1.5 text-right uppercase text-[10px] tracking-wider" colSpan="4">{f.fabric?`${f.fabric} total`:'Fabric total'}</td><td className="px-2 py-1.5 text-right text-indigo-700">{fabricTotal(f)?fabricTotal(f).toLocaleString('en-PH',{maximumFractionDigits:2}):0}</td><td></td></tr></tfoot>
+              </table>
+            </div>
+            <button type="button" onClick={()=>addRow(fi)} className="text-xs px-2 py-1 rounded border hover:bg-slate-50">+ Add size</button>
+          </div>
+        ))}
+
+        {fabrics.length>1 && <div className="flex justify-between items-center bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 text-sm"><span className="font-semibold text-indigo-900">Grand total (all fabrics)</span><span className="font-bold text-indigo-800">{grandTotal.toLocaleString('en-PH',{maximumFractionDigits:2})}</span></div>}
+
+        <TpLbl t="Overall consumption for the project"><input type="number" className="input" value={total} onChange={e=>setTotal(e.target.value)} placeholder={`e.g. total meters / yards — auto ${grandTotal||0} if left blank`} /></TpLbl>
 
         <TpLbl t="Notes"><textarea className="input min-h-[60px] bg-yellow-50 border-amber-300" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any cutting notes…" /></TpLbl>
 
