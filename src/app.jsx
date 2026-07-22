@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 257 · Employee Loans: choose a repayment schedule (Weekly / Every 2 weeks / 15th & 30th). On save the exact payment dates are auto-plotted for the full term — HR just ticks each installment as Paid (overdue ones flag red); remaining balance updates and the loan auto-closes when all are paid.";
+const BUILD = "Live build 258 · Two new roles: Pattern Maker (sees only the Pattern board) and Cutting Department (sees only In House Cutting). Added to Settings role pickers, badges and the profiles role constraint. Also fixed the constraint that blocked Accounting Officer signups.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12753,6 +12753,8 @@ function roleLabel(r){
          r==='purchasing'             ? 'Purchasing Team' :
          r==='accounting'             ? 'Accounting Supervisor' :
          r==='accounting_officer'     ? 'Accounting Officer' :
+         r==='pattern_maker'          ? 'Pattern Maker' :
+         r==='cutting_dept'           ? 'Cutting Department' :
          r==='graphic'                ? 'Graphic Design' :
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
@@ -12770,6 +12772,8 @@ function RoleBadge({ role }){
     role==='purchasing'             ? 'bg-violet-100 text-violet-700' :
     role==='accounting'             ? 'bg-sky-100 text-sky-700' :
     role==='accounting_officer'     ? 'bg-sky-50 text-sky-600' :
+    role==='pattern_maker'          ? 'bg-lime-100 text-lime-700' :
+    role==='cutting_dept'           ? 'bg-red-100 text-red-700' :
     role==='graphic'                ? 'bg-pink-100 text-pink-700' :
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
@@ -13005,6 +13009,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
     { key:'accounting',  label:'Acct. Supervisor', count:profiles.filter(p=>p.role==='accounting').length },
     { key:'accounting_officer', label:'Acct. Officer', count:profiles.filter(p=>p.role==='accounting_officer').length },
+    { key:'pattern_maker', label:'Pattern Maker', count:profiles.filter(p=>p.role==='pattern_maker').length },
+    { key:'cutting_dept', label:'Cutting Dept', count:profiles.filter(p=>p.role==='cutting_dept').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
@@ -13012,7 +13018,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','graphic','printing','purchasing','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','graphic','printing','purchasing','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -13050,6 +13056,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option disabled>──────────</option>
               <option value="production">Production Team</option>
               <option value="production_supervisor">Production Supervisor</option>
+              <option value="pattern_maker">Pattern Maker</option>
+              <option value="cutting_dept">Cutting Department</option>
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
@@ -13146,6 +13154,8 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option disabled>──────────</option>
                   <option value="production">Production Team</option>
                   <option value="production_supervisor">Production Supervisor</option>
+                  <option value="pattern_maker">Pattern Maker</option>
+                  <option value="cutting_dept">Cutting Department</option>
                   <option value="graphic">Graphic Design</option>
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
@@ -28192,6 +28202,12 @@ function App(){
     } else if(profile.role==='manager'){
       allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
       fallback = 'pipeline';
+    } else if(profile.role==='pattern_maker'){
+      allowed = new Set(['pattern']);
+      fallback = 'pattern';
+    } else if(profile.role==='cutting_dept'){
+      allowed = new Set(['cutting']);
+      fallback = 'cutting';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
@@ -28625,6 +28641,8 @@ function App(){
   const isProdSupervisor=profile.role==='production_supervisor';
   const isHR=profile.role==='hr';
   const isLogistics=profile.role==='logistics';
+  const isPatternMaker=profile.role==='pattern_maker';
+  const isCuttingDept=profile.role==='cutting_dept';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -28682,6 +28700,16 @@ function App(){
     // Logistics Team — only the Daily Schedule. No inbox, no profile.
     NAV = [
       { items:[ ['logistics','Daily Schedule','🚚'] ] },
+    ];
+  } else if(isPatternMaker){
+    // Pattern Maker — only the Pattern board.
+    NAV = [
+      { items:[ ['pattern','Pattern','✂'] ] },
+    ];
+  } else if(isCuttingDept){
+    // Cutting Department — only the In House Cutting board.
+    NAV = [
+      { items:[ ['cutting','In House Cutting','🔪'] ] },
     ];
   } else if(isHR){
     // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
