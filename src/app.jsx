@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 271 · Trip Ticket stops now show a tappable '📍 View pin' that opens the exact captured GPS spot on Google Maps (with accuracy in metres).";
+const BUILD = "Live build 272 · Estimates & invoices now have a 'Prices are VAT-inclusive' checkbox. Tick it and the 12% is neither added nor shown (total = the entered prices); leave it unticked and VAT 12% is added and displayed as before — per client preference.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1342,6 +1342,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const [lines,setLines]=useState([]);
   const [discount,setDiscount]=useState('');
   const [discountNote,setDiscountNote]=useState('');
+  const [vatInclusive,setVatInclusive]=useState(false); // prices already include 12% → don't add / show VAT
   const [paymentTerms,setPaymentTerms]=useState(lead.payment_terms||'');
   const [validUntil,setValidUntil]=useState('');
   const [notes,setNotes]=useState('');
@@ -1355,7 +1356,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     if(ex){
       setEstimate(ex); setNumber(ex.number); setStatus(ex.status||'draft');
       setLines((ex.items||[]).map((it,i)=>({ id:'e'+i, itemType:it.itemType||'', description:it.description||it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
-      setDiscount(ex.discount?String(ex.discount):''); setDiscountNote(ex.discount_note||'');
+      setDiscount(ex.discount?String(ex.discount):''); setDiscountNote(ex.discount_note||''); setVatInclusive(!!ex.vat_inclusive);
       setPaymentTerms(ex.payment_terms||lead.payment_terms||''); setValidUntil(ex.valid_until||''); setNotes(ex.notes||'');
     } else {
       setLines(estLinesFromLead(lead));
@@ -1366,7 +1367,9 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   })(); return ()=>{ alive=false; }; },[lead.id, purpose]);
 
   const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
-  const vat = lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*EST_VAT_RATE:0); },0);
+  // When prices are VAT-inclusive, we neither add nor display the 12% — the
+  // entered prices already contain it, so total = subtotal (− discount).
+  const vat = vatInclusive ? 0 : lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*EST_VAT_RATE:0); },0);
   const disc = Number(discount)||0;
   const total = Math.max(0, subtotal + vat - disc);
   const hasValidLine = lines.some(it=>it.itemType&&(Number(it.quantity)||0)>0);
@@ -1376,13 +1379,13 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   function removeLine(idx){ setLines(lines.filter((_,i)=>i!==idx)); }
 
   function buildPayload(nextStatus){
-    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*EST_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
+    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=(it.withVat&&!vatInclusive)?sub*EST_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
     return {
       number, lead_id:lead.id, client_id:lead.client_id||null, purpose,
       client_name: client?.company || lead.client_name || '',
       title: lead.title||'', status: nextStatus||status,
       items, subtotal, discount:disc, discount_note:discountNote||null,
-      vat_amount:vat, total, payment_terms:paymentTerms||null,
+      vat_amount:vat, vat_inclusive:vatInclusive, total, payment_terms:paymentTerms||null,
       valid_until:validUntil||null, notes:notes||null, prepared_by:profile.id,
     };
   }
@@ -1530,7 +1533,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
                 {printableLines.map((it,i)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*EST_VAT_RATE:0); return (
                   <tr key={i}>
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{it.withVat?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
+                    <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{(it.withVat&&!vatInclusive)?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
                     <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
@@ -1543,7 +1546,9 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
               </tbody>
               <tfoot>
                 <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Subtotal</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(subtotal)}</td></tr>
-                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">VAT (12%)</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(vat)}</td></tr>
+                {vatInclusive
+                  ? <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right text-[9px] text-slate-500 uppercase tracking-wider">VAT inclusive</td><td className="border border-slate-400 px-2 py-1 text-right text-[9px] text-slate-500">—</td></tr>
+                  : <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">VAT (12%)</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(vat)}</td></tr>}
                 {disc>0 && <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Discount{discountNote?` (${discountNote})`:''}</td><td className="border border-slate-400 px-2 py-1 text-right">−{peso(disc)}</td></tr>}
                 <tr className="bg-slate-100"><td colSpan="4" className="border-0"></td><td className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Total</td><td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(total)}</td></tr>
               </tfoot>
@@ -1649,8 +1654,14 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             </div>
           </div>
           <div className="bg-slate-50 border rounded-lg p-4 h-fit">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer mb-2 pb-2 border-b">
+              <input type="checkbox" checked={vatInclusive} onChange={e=>setVatInclusive(e.target.checked)} disabled={!canEdit} />
+              <span className={vatInclusive?'font-semibold text-emerald-700':'text-slate-600'}>Prices are VAT-inclusive (don’t add 12%)</span>
+            </label>
             <div className="flex justify-between text-sm py-1"><span className="text-slate-500">Subtotal</span><span className="font-medium">{peso(subtotal)}</span></div>
-            <div className="flex justify-between text-sm py-1"><span className="text-slate-500">VAT (12%)</span><span className="font-medium">{peso(vat)}</span></div>
+            {vatInclusive
+              ? <div className="flex justify-between text-xs py-1"><span className="text-slate-400">VAT</span><span className="text-slate-400">Inclusive</span></div>
+              : <div className="flex justify-between text-sm py-1"><span className="text-slate-500">VAT (12%)</span><span className="font-medium">{peso(vat)}</span></div>}
             {disc>0 && <div className="flex justify-between text-sm py-1"><span className="text-slate-500">Discount</span><span className="font-medium text-rose-600">−{peso(disc)}</span></div>}
             <div className="flex justify-between text-base py-2 mt-1 border-t font-bold"><span>Total</span><span>{peso(total)}</span></div>
           </div>
@@ -1744,6 +1755,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const [issueDate,setIssueDate]=useState(existing?.issue_date||new Date().toISOString().slice(0,10));
   const [dueDate,setDueDate]=useState(existing?.due_date||'');
   const [notes,setNotes]=useState(existing?.notes||'');
+  const [vatInclusive,setVatInclusive]=useState(!!existing?.vat_inclusive); // prices already include 12%
   const [qbNum,setQbNum]=useState(existing?.qb_invoice_number||so?.qb_invoice_number||'');
   const [qbUrl,setQbUrl]=useState(existing?.qb_invoice_url||so?.qb_invoice_url||'');
 
@@ -1760,7 +1772,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   })(); return ()=>{ alive=false; }; },[]);
 
   const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
-  const vat = lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*INV_VAT_RATE:0); },0);
+  const vat = vatInclusive ? 0 : lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*INV_VAT_RATE:0); },0);
   const total = subtotal + vat;
   const paymentsReceived = Number(so?.amount_paid ?? existing?.payments_received ?? 0)||0;
   const orderBalance = Math.max(0, total - paymentsReceived);
@@ -1775,13 +1787,13 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   function removeLine(i){ setLines(lines.filter((_,idx)=>idx!==i)); }
 
   function buildPayload(nextStatus){
-    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const q=Number(it.quantity), p=Number(it.pricePerItem)||0, s=q*p, v=it.withVat?s*INV_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:q, pricePerItem:p, withVat:!!it.withVat, lineTotal:s+v }; });
+    const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const q=Number(it.quantity), p=Number(it.pricePerItem)||0, s=q*p, v=(it.withVat&&!vatInclusive)?s*INV_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:q, pricePerItem:p, withVat:!!it.withVat, lineTotal:s+v }; });
     return {
       number, sales_order_id: so?.id||existing?.sales_order_id||null,
       lead_id: lead?.id || so?.lead_id || existing?.lead_id || null,
       client_id: so?.client_id || client?.id || existing?.client_id || null,
       client_name: client?.company || so?.client_name || existing?.client_name || '',
-      invoice_type: invoiceType, items, subtotal, vat_amount:vat, total,
+      invoice_type: invoiceType, items, subtotal, vat_amount:vat, vat_inclusive:vatInclusive, total,
       dp_percent: invoiceType==='downpayment'?dp:null,
       amount_due: amountDue, payments_received: paymentsReceived, balance_due: orderBalance,
       status: nextStatus||status, issue_date: issueDate||null, due_date: dueDate||null,
@@ -1880,7 +1892,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                 {pl.map((it,i)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*INV_VAT_RATE:0); return (
                   <tr key={i}>
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{it.withVat?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
+                    <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{(it.withVat&&!vatInclusive)?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
                     <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
@@ -1893,7 +1905,9 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
               </tbody>
               <tfoot>
                 <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Subtotal</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(subtotal)}</td></tr>
-                <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">VAT (12%)</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(vat)}</td></tr>
+                {vatInclusive
+                  ? <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right text-[9px] text-slate-500 uppercase tracking-wider">VAT inclusive</td><td className="border border-slate-400 px-2 py-1 text-right text-[9px] text-slate-500">—</td></tr>
+                  : <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">VAT (12%)</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(vat)}</td></tr>}
                 <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Order Total</td><td className="border border-slate-400 px-2 py-1 text-right font-bold">{peso(total)}</td></tr>
                 {paymentsReceived>0 && <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold text-emerald-700">Less: Payments received</td><td className="border border-slate-400 px-2 py-1 text-right text-emerald-700">−{peso(paymentsReceived)}</td></tr>}
                 <tr><td colSpan="4" className="border-0"></td><td className="border border-slate-400 px-2 py-1 text-right font-semibold">Balance of order</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(orderBalance)}</td></tr>
@@ -1919,8 +1933,11 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   // ---------- EDIT / VIEW ----------
   const MoneyBox = () => (
     <div className="bg-slate-50 border rounded-lg p-4 h-fit text-sm">
+      {canEdit && <label className="flex items-center gap-1.5 text-xs cursor-pointer mb-2 pb-2 border-b"><input type="checkbox" checked={vatInclusive} onChange={e=>setVatInclusive(e.target.checked)} /><span className={vatInclusive?'font-semibold text-emerald-700':'text-slate-600'}>Prices are VAT-inclusive (don’t add 12%)</span></label>}
       <div className="flex justify-between py-1"><span className="text-slate-500">Subtotal</span><span className="font-medium">{peso(subtotal)}</span></div>
-      <div className="flex justify-between py-1"><span className="text-slate-500">VAT (12%)</span><span className="font-medium">{peso(vat)}</span></div>
+      {vatInclusive
+        ? <div className="flex justify-between py-1 text-xs"><span className="text-slate-400">VAT</span><span className="text-slate-400">Inclusive</span></div>
+        : <div className="flex justify-between py-1"><span className="text-slate-500">VAT (12%)</span><span className="font-medium">{peso(vat)}</span></div>}
       <div className="flex justify-between py-1 border-t mt-1 font-semibold"><span>Order total</span><span>{peso(total)}</span></div>
       {paymentsReceived>0 && <div className="flex justify-between py-1 text-emerald-700"><span>Less: payments received</span><span>−{peso(paymentsReceived)}</span></div>}
       <div className="flex justify-between py-1"><span className="text-slate-500">Balance of order</span><span className="font-medium">{peso(orderBalance)}</span></div>
