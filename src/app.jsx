@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 263 · Fix: supplier bank details now carry from the PO to the RFP — when purchasing submits a PO for payment, the bank (PO override or supplier record) is snapshotted onto the RFP, and Finance now sees a 🏦 Supplier bank details block when opening the RFP. Backfilled existing open RFPs.";
+const BUILD = "Live build 264 · Removed the Production module (boards + pattern/cutting/sampling/graphic/printing/embroidery/knitting/subcon) from the Purchasing team's nav and access — they keep Operations, Purchasing, Logistics and Finance (RFP/budgets).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28283,7 +28283,7 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -28803,10 +28803,10 @@ function App(){
       PERSONAL_GROUP,
     ];
   } else if(isPurchasing){
-    // Purchasing team — Production + Operations + Purchasing + Logistics + RFP visibility + inbox.
+    // Purchasing team — Operations + Purchasing + Logistics + RFP visibility + inbox.
+    // (Production module removed from Purchasing's nav.)
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_PURCHASING,
