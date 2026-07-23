@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 264 · Removed the Production module (boards + pattern/cutting/sampling/graphic/printing/embroidery/knitting/subcon) from the Purchasing team's nav and access — they keep Operations, Purchasing, Logistics and Finance (RFP/budgets).";
+const BUILD = "Live build 265 · Estimates & invoices: the per-line amount is now Qty × Unit price (VAT no longer baked into each line). Totals read: line amount → Subtotal → VAT (12%) → Total, on both the editor and the printed document.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1534,7 +1534,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
                     <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
-                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(lt)}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(ln)}</td>
                   </tr>
                 ); })}
                 {Array.from({length: Math.max(0, 5-printableLines.length)}).map((_,i)=>(
@@ -1611,7 +1611,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
                     <td className="px-2 py-1 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} /></td>
-                    <td className="px-2 py-1 text-right font-medium">{peso(lt)}</td>
+                    <td className="px-2 py-1 text-right font-medium">{peso(ln)}</td>
                     <td className="px-2 py-1 text-center"><button onClick={()=>removeLine(idx)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
                   </tr>
                 ); })}
@@ -1884,7 +1884,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                     <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
-                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(lt)}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(ln)}</td>
                   </tr>
                 ); })}
                 {Array.from({length: Math.max(0, 4-pl.length)}).map((_,i)=>(
@@ -1995,7 +1995,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                       <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
                       <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
                       <td className="px-2 py-1 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} /></td>
-                      <td className="px-2 py-1 text-right font-medium">{peso(lt)}</td>
+                      <td className="px-2 py-1 text-right font-medium">{peso(ln)}</td>
                       <td className="px-2 py-1 text-center"><button onClick={()=>removeLine(idx)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
                     </> : <>
                       <td className="px-2 py-1.5">{it.itemType}</td>
@@ -2003,7 +2003,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                       <td className="px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                       <td className="px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
                       <td className="px-2 py-1.5 text-center">{it.withVat?'✓':''}</td>
-                      <td className="px-2 py-1.5 text-right font-medium">{peso(lt)}</td>
+                      <td className="px-2 py-1.5 text-right font-medium">{peso(ln)}</td>
                     </>}
                   </tr>
                 ); })}
@@ -19696,7 +19696,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
                     <input type="number" inputMode="numeric" className="input text-xs col-span-2 text-right" placeholder="0" value={l.quantity} onChange={e=>setLine(i,'quantity',e.target.value)} />
                     <input type="number" inputMode="decimal" className="input text-xs col-span-2 text-right" placeholder="0" value={l.pricePerItem} onChange={e=>setLine(i,'pricePerItem',e.target.value)} />
                     <label className="col-span-1 flex items-center justify-center" title="Add 12% VAT to this line"><input type="checkbox" checked={!!l.withVat} onChange={e=>setLine(i,'withVat',e.target.checked)} /></label>
-                    <div className="col-span-2 text-right text-xs font-semibold">{peso(lt)}</div>
+                    <div className="col-span-2 text-right text-xs font-semibold">{peso(sub)}</div>
                     <button type="button" onClick={()=>removeLine(i)} className="col-span-1 text-rose-400 text-sm text-center" title="Remove line">✕</button>
                   </div>
                 ); })}
