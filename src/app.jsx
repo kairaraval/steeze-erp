@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 265 · Estimates & invoices: the per-line amount is now Qty × Unit price (VAT no longer baked into each line). Totals read: line amount → Subtotal → VAT (12%) → Total, on both the editor and the printed document.";
+const BUILD = "Live build 266 · Manual purchase requests now drop a notification in the Purchasing team's Inbox (🛒 with the item + requester); clicking it opens the Purchase Requests board. Real-time toast remains.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6920,6 +6920,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   function dedupKey(m){
     if(m.source==='lead') return 'lead:'+(m.lead_id||'');
     if(m.source==='sales_order') return 'sales_order:'+(m.sales_order_id||'');
+    if(m.source==='pr') return 'pr:'+(m.id||'');
     return m.source+':'+(m.job_id||'');
   }
   // Map an inbox mention's source → activity table name. Single place to
@@ -6927,6 +6928,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   function inboxTableFor(src){
     if(src==='lead') return 'lead_activity';
     if(src==='sales_order') return 'sales_order_activity';
+    if(src==='pr') return 'pr_activity';
     return 'dept_job_activity';
   }
   const groupedCounts = {};     // key -> total count of mentions in that thread
@@ -6960,6 +6962,9 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
       const company = so?.client_name || '';
       const title = so?.number || 'a sales order';
       return { company, title, label: company ? `${title} · ${company}` : title, tag:'Sales Order', icon:'📜', color:'text-emerald-600' };
+    }
+    if(m.source==='pr'){
+      return { company:'', title:'Purchase Request', label:'Manual purchase request', tag:'Purchasing', icon:'🛒', color:'text-indigo-600' };
     }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
@@ -17908,8 +17913,18 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
         justification:`Manual request by ${profile.name||profile.email}${f.needed_by?` · needed by ${f.needed_by}`:''}${f.details?` — ${f.details}`:''}`,
         approver_note:'', lines:[line], attachments,
       };
-      const { error }=await sb.from('purchase_requests').insert(payload);
+      const { data:prRow, error }=await sb.from('purchase_requests').insert(payload).select().single();
       if(error) throw error;
+      // Notify the Purchasing team in their inbox.
+      try {
+        const { data:purchasers }=await sb.from('profiles').select('id').eq('role','purchasing');
+        const mentionIds=(purchasers||[]).map(p=>p.id).filter(id=>id!==profile.id);
+        if(mentionIds.length){
+          await sb.from('pr_activity').insert({ pr_id: prRow?.id||null, actor_id: profile.id, type:'system',
+            text:`🛒 New manual request ${prRow?.number||''} — ${f.item.trim()}${f.qty?` (${f.qty}${f.unit?' '+f.unit:''})`:''} from ${profile.name||profile.email}`,
+            mentions: mentionIds });
+        }
+      } catch(_){}
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -28166,7 +28181,10 @@ function App(){
     // Sales-order mentions: same shape, source='sales_order'. Graceful-fail
     // if the activity table hasn't been created yet (SQL hasn't been run).
     const soMentions = (soam && !soam.error ? (soam.data||[]) : []).map(r=>({ ...r, source:'sales_order' }));
-    setMentions([...leadMentions,...deptMentions,...soMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
+    // Purchase-request inbox notifications (e.g. manual requests to Purchasing).
+    let prMentions=[];
+    try { const pram = await sb.from('pr_activity').select('*').contains('mentions',[me]).order('created_at',{ascending:false}).limit(100); prMentions = (pram && !pram.error ? (pram.data||[]) : []).map(r=>({ ...r, source:'pr' })); } catch(_){}
+    setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
     const counts={}; (ac.data||[]).forEach(r=>{ counts[r.lead_id]=(counts[r.lead_id]||0)+1; }); setActivityCounts(counts);
     // Same pattern but for dept-job activity. Key is job_id (uuid) so it
     // works across production / graphic / printing / sampling boards.
@@ -28626,6 +28644,7 @@ function App(){
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
   function openInboxItem(m){
+    if(m.source==='pr'){ setView('requests'); return; }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
       // Open the SO directly — the Edit modal has the Activity tab built in.
@@ -28646,6 +28665,7 @@ function App(){
   //   • Sampling / Production mention → board view + dept-job activity (no
   //     LeadInfoModal exists for those yet — they go to the board).
   function openInboxTask(m){
+    if(m.source==='pr'){ setView('requests'); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
       if(l) setDetailLead(l);
