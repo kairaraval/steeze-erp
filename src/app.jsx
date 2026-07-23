@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 270 · Trip Tickets now visible to Admin and HR (Logistics → Trip Tickets) so they can review driver mileage, fuel, and the monthly per-vehicle km/L report.";
+const BUILD = "Live build 271 · Trip Ticket stops now show a tappable '📍 View pin' that opens the exact captured GPS spot on Google Maps (with accuracy in metres).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14707,6 +14707,11 @@ function TripTicketsView({ profile }){
 
   function shiftDate(n){ const d=new Date(date+'T00:00:00'); d.setDate(d.getDate()+n); setDate(tripYmd(d)); }
   const stampTime=(s)=> s?.arrived_at ? fmtTime(s.arrived_at) : '';
+  // The captured GPS point becomes a tappable link that opens the EXACT spot on
+  // Google Maps. Shows accuracy in metres so you know how tight the fix was.
+  const pinLink=(s)=> (s && s.lat!=null && s.lng!=null)
+    ? <a href={`https://www.google.com/maps?q=${s.lat},${s.lng}`} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} className="text-cyan-600 hover:underline font-medium">📍 View pin{s.gps_accuracy?` (±${Math.round(s.gps_accuracy)}m)`:''}</a>
+    : null;
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -14779,7 +14784,7 @@ function TripTicketsView({ profile }){
                   <div key={d.id} className="border-t px-3 py-2.5 flex items-center gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium truncate">{d.client_name||d.item||'Delivery'}</div>
-                      <div className="text-[11px] text-slate-500 truncate">{d.address||''}{arrived?` · ✓ ${stampTime(s)}${s.lat?' · 📍':''}`:''}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{d.address||''}{arrived && <> · ✓ {stampTime(s)} {pinLink(s)}</>}</div>
                     </div>
                     {arrived
                       ? <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40">Undo</button>
@@ -14789,7 +14794,7 @@ function TripTicketsView({ profile }){
                 {/* Ad-hoc stops */}
                 {stops.filter(s=>!s.delivery_id).map(s=>(
                   <div key={s.id} className="border-t px-3 py-2.5 flex items-center gap-2 bg-amber-50/40">
-                    <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{s.label}</div><div className="text-[11px] text-slate-500 truncate">Ad-hoc · ✓ {stampTime(s)}{s.lat?' · 📍':''}</div></div>
+                    <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{s.label}</div><div className="text-[11px] text-slate-500 truncate">Ad-hoc · ✓ {stampTime(s)} {pinLink(s)}</div></div>
                     <button onClick={()=>delStop(s)} disabled={!isOpen} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 disabled:opacity-40">✕</button>
                   </div>
                 ))}
