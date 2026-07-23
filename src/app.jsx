@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 262 · Accounting Officer can now create/edit sample + production estimates and invoices (front-end + database RLS updated). Estimate accept→Sample SO and the rest of the estimate/invoice flow now work for the Officer.";
+const BUILD = "Live build 263 · Fix: supplier bank details now carry from the PO to the RFP — when purchasing submits a PO for payment, the bank (PO override or supplier record) is snapshotted onto the RFP, and Finance now sees a 🏦 Supplier bank details block when opening the RFP. Backfilled existing open RFPs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18777,6 +18777,11 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
         amount: netPayable, particulars,
         payment_method: f.payment_method||null, payment_method_detail: f.payment_method_detail||null,
         payment_terms: f.payment_terms||null,
+        // Snapshot the bank details for Finance — the PO's one-off override wins,
+        // otherwise the supplier's saved receiving bank.
+        bank_name: f.transfer_bank_name || supplier?.bank_name || null,
+        bank_account_name: f.transfer_bank_account_name || supplier?.bank_account_name || null,
+        bank_account_number: f.transfer_bank_account_number || supplier?.bank_account_number || null,
         status: 'pending_finance', requested_by: profile.id,
       }).select().single();
       if(rErr) throw rErr;
@@ -21232,6 +21237,23 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
         </div>
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
+
+        {/* Supplier bank details — snapshot on the RFP, falling back to the
+            supplier record so Finance always knows where to send the transfer. */}
+        {(()=>{ const bn=rfp.bank_name||supplier?.bank_name; const ban=rfp.bank_account_name||supplier?.bank_account_name; const bno=rfp.bank_account_number||supplier?.bank_account_number; const hasBank=bn||ban||bno; return (
+          <div className="border rounded-lg p-3 bg-blue-50 border-blue-200">
+            <div className="text-xs font-semibold uppercase text-blue-700 mb-1">🏦 Supplier bank details</div>
+            {hasBank ? (
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div><div className="text-[10px] uppercase text-slate-400">Bank</div><div className="font-semibold">{bn||'—'}</div></div>
+                <div><div className="text-[10px] uppercase text-slate-400">Account name</div><div className="font-semibold">{ban||'—'}</div></div>
+                <div><div className="text-[10px] uppercase text-slate-400">Account #</div><div className="font-mono">{bno||'—'}</div></div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500">No bank details on file{rfp.payment_method && rfp.payment_method!=='bank_transfer' ? ` — paid via ${rfp.payment_method}.` : ' — ask Purchasing to add the supplier bank on the PO.'}</div>
+            )}
+          </div>
+        ); })()}
 
         {/* Audit trail */}
         <div className="border rounded-lg p-3 space-y-2 bg-slate-50">
