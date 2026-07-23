@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 266 · Manual purchase requests now drop a notification in the Purchasing team's Inbox (🛒 with the item + requester); clicking it opens the Purchase Requests board. Real-time toast remains.";
+const BUILD = "Live build 267 · Pattern & In-House Cutting worklists are now re-orderable — use the ▲/▼ arrows on each item to rank them by priority. The order is saved and shared across the team.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6066,8 +6066,10 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
     if(add.length){ const { error }=await sb.from('pattern_worklist').insert(add); if(!error) reload(); }
   })(); },[prodJobs, sampleJobs, patternWorklist]);
 
-  const open=(patternWorklist||[]).filter(w=>w.status!=='done');
+  const open=(patternWorklist||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
   const done=(patternWorklist||[]).filter(w=>w.status==='done');
+  async function reorderWorklist(list){ await Promise.all(list.map((w,i)=> sb.from('pattern_worklist').update({ position:i }).eq('id',w.id))); reload(); }
+  function moveWork(w,dir){ const arr=open.slice(); const i=arr.findIndex(x=>x.id===w.id); const j=i+dir; if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; reorderWorklist(arr); }
   const matchLib=(p)=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase());
   const prodLib=(patterns||[]).filter(p=> (p.library||'production')==='production').filter(matchLib);
   const sampleLib=(patterns||[]).filter(p=> p.library==='sample').filter(matchLib);
@@ -6083,9 +6085,14 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
   function logFromWorklist(w){ setPrefill({ worklist_id:w.id, name: w.item||w.title||'', item_type: w.item||'', source_job_id: w.source_job_id||null, source_type: w.source_type||'manual', lead_id: w.lead_id||null, library: w.source_type==='sampling'?'sample':'production' }); setEditing({}); }
   const srcBadge=(src)=> src==='sampling'?['Sample','bg-purple-100 text-purple-700']:src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
 
-  const worklistRow=(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
+  const worklistRow=(w,idx)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
     <div key={w.id} className="border-t px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-col shrink-0 -my-1">
+          <button onClick={()=>moveWork(w,-1)} disabled={idx===0} className={`text-[11px] leading-none px-1 ${idx===0?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move up">▲</button>
+          <button onClick={()=>moveWork(w,1)} disabled={idx===open.length-1} className={`text-[11px] leading-none px-1 ${idx===open.length-1?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move down">▼</button>
+        </div>
+        <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div>
@@ -6156,7 +6163,7 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
         <div className="space-y-4">
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🧵 To work on</div>
-            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing on the worklist. Items appear here when a Production or Sample job hits the "For Pattern" stage.</div> : open.map(worklistRow)}
+            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing on the worklist. Items appear here when a Production or Sample job hits the "For Pattern" stage.</div> : open.map((w,i)=>worklistRow(w,i))}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
@@ -6276,9 +6283,11 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
     if(add.length){ const { error }=await sb.from('cutting_worklist').insert(add); if(!error) reload(); }
   })(); },[prodJobs, cuttingWorklist]);
 
-  const open=(cuttingWorklist||[]).filter(w=>w.status!=='done');
+  const open=(cuttingWorklist||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
   const done=(cuttingWorklist||[]).filter(w=>w.status==='done');
   const lib=(patterns||[]).filter(p=> (p.library||'production')==='production').filter(p=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase()));
+  async function reorderWorklist(list){ await Promise.all(list.map((w,i)=> sb.from('cutting_worklist').update({ position:i }).eq('id',w.id))); reload(); }
+  function moveWork(w,dir){ const arr=open.slice(); const i=arr.findIndex(x=>x.id===w.id); const j=i+dir; if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; reorderWorklist(arr); }
 
   async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('cutting_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function markDone(w){ const { error }=await sb.from('cutting_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
@@ -6287,9 +6296,14 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
 
-  const worklistRow=(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (
+  const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (
     <div key={w.id} className="border-t px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-col shrink-0 -my-1">
+          <button onClick={()=>moveWork(w,-1)} disabled={idx===0} className={`text-[11px] leading-none px-1 ${idx===0?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move up">▲</button>
+          <button onClick={()=>moveWork(w,1)} disabled={idx===open.length-1} className={`text-[11px] leading-none px-1 ${idx===open.length-1?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move down">▼</button>
+        </div>
+        <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
         <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
           <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div>
@@ -6332,7 +6346,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
         <div className="space-y-4">
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🔪 To cut</div>
-            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to cut. Items appear here when a Production job hits the "Cutting - In House" stage.</div> : open.map(worklistRow)}
+            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to cut. Items appear here when a Production job hits the "Cutting - In House" stage.</div> : open.map((w,i)=>worklistRow(w,i))}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
