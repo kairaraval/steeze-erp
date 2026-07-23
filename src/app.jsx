@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 268 · New role: Purchasing Admin (Jay-Ann Valdez) — same access as the Purchasing team plus Subcon Payroll from Production. Selectable in Settings.";
+const BUILD = "Live build 269 · New Logistics → Trip Tickets. Drivers log daily mileage + gas from their phone; stops pre-fill from the schedule (one-tap Arrived with optional GPS), and km/L + ₱/km compute automatically. Monthly per-vehicle Mileage & Fuel report + a Vehicles registry (2 motorcycles + L300 seeded).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14545,6 +14545,414 @@ function PayrollSettings({ pSettings, updateSettings }){
 }
 
 /* ============================================================================
+   LOGISTICS — Daily Trip Tickets (driver mileage + fuel log)
+   Drivers self-serve on their phone. The ticket pre-fills stops from the day's
+   delivery schedule; each stop is stamped with a one-tap "Arrived" (+ optional
+   GPS). Only start/end odometer + gas fills are typed, so the km-per-liter and
+   cost-per-km compute automatically. Gas stays in Logistics (not posted to
+   Finance).
+   ============================================================================ */
+function tripYmd(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+// One-tap GPS. Resolves null if unavailable / denied / times out — never throws,
+// so a stop can still be stamped without a coordinate.
+function captureTripGeo(){
+  return new Promise((resolve)=>{
+    if(!(typeof navigator!=='undefined' && navigator.geolocation)){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      p=>resolve({ lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy }),
+      ()=>resolve(null),
+      { enableHighAccuracy:true, timeout:10000, maximumAge:0 }
+    );
+  });
+}
+function tripMetrics(ticket, gas){
+  const start=ticket?.start_odometer, end=ticket?.end_odometer;
+  const km=(start!=null && end!=null) ? Math.max(0, Number(end)-Number(start)) : null;
+  const liters=(gas||[]).reduce((s,g)=>s+(Number(g.liters)||0),0);
+  const cost=(gas||[]).reduce((s,g)=>s+(Number(g.amount)||0),0);
+  const kmPerL=(km!=null && liters>0) ? km/liters : null;
+  const costPerKm=(km!=null && km>0 && cost>0) ? cost/km : null;
+  return { km, liters, cost, kmPerL, costPerKm };
+}
+
+function TripTicketsView({ profile }){
+  const isAdmin=profile.role==='admin';
+  const isLogisticsRole=profile.role==='logistics';
+  const canManageVehicles = isAdmin || profile.role==='hr' || isLogisticsRole;
+  const [tab,setTab]=useState('ticket');
+  const [date,setDate]=useState(tripYmd(new Date()));
+  const [vehicles,setVehicles]=useState([]);
+  const [drivers,setDrivers]=useState([]);
+  const [driverId,setDriverId]=useState('');
+  const [vehicleId,setVehicleId]=useState('');
+  const [ticket,setTicket]=useState(null);
+  const [deliveries,setDeliveries]=useState([]);
+  const [stops,setStops]=useState([]);
+  const [gas,setGas]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [busyStop,setBusyStop]=useState(null);
+  const [adhoc,setAdhoc]=useState('');
+  const [gasForm,setGasForm]=useState({ liters:'', amount:'', odometer:'', station:'' });
+  const [endOdo,setEndOdo]=useState('');
+
+  const vehicleFor=(id)=> (vehicles||[]).find(v=>v.id===id);
+  const driverFor=(id)=> (drivers||[]).find(d=>d.id===id);
+
+  async function loadBase(){
+    const [vRes,dRes]=await Promise.all([
+      sb.from('vehicles').select('*').eq('active',true).order('name',{ascending:true}),
+      sb.from('logistics_drivers').select('*').eq('active',true).order('name',{ascending:true}),
+    ]);
+    const vs=vRes.data||[], ds=dRes.data||[];
+    setVehicles(vs); setDrivers(ds);
+    // Auto-pick the driver whose name matches this profile (so a driver lands on
+    // their own ticket immediately). Otherwise leave the picker open.
+    if(!driverId && ds.length){
+      const mine=ds.find(x=>(x.name||'').trim().toLowerCase()===(profile.name||'').trim().toLowerCase());
+      if(mine) setDriverId(mine.id);
+    }
+  }
+  useEffect(()=>{ loadBase(); },[]);
+
+  async function loadTicket(){
+    if(!driverId){ setTicket(null); setStops([]); setGas([]); setDeliveries([]); return; }
+    setLoading(true);
+    try{
+      const [tRes,delRes]=await Promise.all([
+        sb.from('trip_tickets').select('*').eq('date',date).eq('driver_id',driverId).order('created_at',{ascending:false}).limit(1),
+        sb.from('logistics_deliveries').select('*').eq('date',date).eq('driver_id',driverId).order('position',{ascending:true}).order('created_at',{ascending:true}),
+      ]);
+      const tk=(tRes.data||[])[0]||null;
+      setTicket(tk); setDeliveries(delRes.data||[]);
+      setEndOdo(tk?.end_odometer!=null ? String(tk.end_odometer) : '');
+      if(tk?.vehicle_id) setVehicleId(tk.vehicle_id);
+      if(tk){
+        const [sRes,gRes]=await Promise.all([
+          sb.from('trip_ticket_stops').select('*').eq('ticket_id',tk.id).order('arrived_at',{ascending:true}).order('position',{ascending:true}),
+          sb.from('trip_ticket_gas').select('*').eq('ticket_id',tk.id).order('filled_at',{ascending:true}),
+        ]);
+        setStops(sRes.data||[]); setGas(gRes.data||[]);
+      } else { setStops([]); setGas([]); }
+    } finally { setLoading(false); }
+  }
+  useEffect(()=>{ loadTicket(); },[date,driverId]);
+
+  async function startTicket(){
+    if(!driverId){ alert('Pick which driver you are first.'); return; }
+    if(!vehicleId){ alert('Pick the vehicle you are using today.'); return; }
+    const veh=vehicleFor(vehicleId);
+    const { error }=await sb.from('trip_tickets').insert({
+      date, driver_id:driverId, vehicle_id:vehicleId,
+      start_odometer: veh?.odometer!=null ? Number(veh.odometer) : null,
+      status:'open', created_by:profile.id,
+    });
+    if(error){ alert(error.message); return; }
+    loadTicket();
+  }
+  async function saveStartOdo(val){
+    if(!ticket) return; const n=val===''?null:Number(val);
+    const { error }=await sb.from('trip_tickets').update({ start_odometer:n }).eq('id',ticket.id);
+    if(error){ alert(error.message); return; } loadTicket();
+  }
+  async function changeVehicle(vid){
+    setVehicleId(vid);
+    if(ticket){ const veh=vehicleFor(vid); await sb.from('trip_tickets').update({ vehicle_id:vid, ...(ticket.start_odometer==null?{ start_odometer: veh?.odometer!=null?Number(veh.odometer):null }:{}) }).eq('id',ticket.id); loadTicket(); }
+  }
+  const stopFor=(deliveryId)=> (stops||[]).find(s=>s.delivery_id===deliveryId);
+  async function markArrived(delivery){
+    if(!ticket) return; setBusyStop(delivery.id);
+    const geo=await captureTripGeo();
+    const ex=stopFor(delivery.id);
+    if(ex){
+      await sb.from('trip_ticket_stops').update({ arrived_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null }).eq('id',ex.id);
+    } else {
+      await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, arrived_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
+    }
+    setBusyStop(null); loadTicket();
+  }
+  async function undoArrived(delivery){ const ex=stopFor(delivery.id); if(!ex) return; await sb.from('trip_ticket_stops').delete().eq('id',ex.id); loadTicket(); }
+  async function addAdhocStop(){
+    if(!ticket || !adhoc.trim()) return; setBusyStop('adhoc');
+    const geo=await captureTripGeo();
+    await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, label:adhoc.trim(), arrived_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:999 });
+    setAdhoc(''); setBusyStop(null); loadTicket();
+  }
+  async function delStop(s){ await sb.from('trip_ticket_stops').delete().eq('id',s.id); loadTicket(); }
+  async function addGas(){
+    if(!ticket) return;
+    const liters=gasForm.liters===''?null:Number(gasForm.liters);
+    const amount=gasForm.amount===''?null:Number(gasForm.amount);
+    if(liters==null && amount==null){ alert('Enter at least the liters or the peso amount.'); return; }
+    const { error }=await sb.from('trip_ticket_gas').insert({ ticket_id:ticket.id, liters, amount, odometer:gasForm.odometer===''?null:Number(gasForm.odometer), station:gasForm.station.trim()||null, filled_at:new Date().toISOString() });
+    if(error){ alert(error.message); return; }
+    setGasForm({ liters:'', amount:'', odometer:'', station:'' }); loadTicket();
+  }
+  async function delGas(g){ await sb.from('trip_ticket_gas').delete().eq('id',g.id); loadTicket(); }
+  async function closeTicket(){
+    if(!ticket) return;
+    const end=endOdo===''?null:Number(endOdo);
+    if(end==null){ alert('Enter the end-of-day odometer before closing.'); return; }
+    if(ticket.start_odometer!=null && end<Number(ticket.start_odometer)){ alert('End odometer can’t be lower than the start odometer.'); return; }
+    const { error }=await sb.from('trip_tickets').update({ end_odometer:end, status:'closed', closed_at:new Date().toISOString() }).eq('id',ticket.id);
+    if(error){ alert(error.message); return; }
+    // Roll the vehicle’s last-known odometer forward for tomorrow’s pre-fill.
+    if(ticket.vehicle_id) await sb.from('vehicles').update({ odometer:end }).eq('id',ticket.vehicle_id);
+    loadTicket();
+  }
+  async function reopenTicket(){ if(!ticket) return; await sb.from('trip_tickets').update({ status:'open', closed_at:null }).eq('id',ticket.id); loadTicket(); }
+  async function saveEndOdoLive(val){ if(!ticket) return; const n=val===''?null:Number(val); await sb.from('trip_tickets').update({ end_odometer:n }).eq('id',ticket.id); loadTicket(); }
+
+  const m=tripMetrics(ticket ? { ...ticket, end_odometer: endOdo!=='' ? Number(endOdo) : ticket.end_odometer } : null, gas);
+  const isOpen = ticket && ticket.status!=='closed';
+
+  function shiftDate(n){ const d=new Date(date+'T00:00:00'); d.setDate(d.getDate()+n); setDate(tripYmd(d)); }
+  const stampTime=(s)=> s?.arrived_at ? fmtTime(s.arrived_at) : '';
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <h1 className="text-2xl font-bold">🎫 Trip Tickets</h1>
+        <p className="text-slate-500 text-sm">Log your daily mileage + gas. Stops fill in from the schedule — just tap Arrived.</p>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
+          <button onClick={()=>setTab('ticket')} className={`px-3 py-1.5 rounded-md ${tab==='ticket'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Daily Ticket</button>
+          <button onClick={()=>setTab('report')} className={`px-3 py-1.5 rounded-md ${tab==='report'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Mileage & Fuel</button>
+          {canManageVehicles && <button onClick={()=>setTab('vehicles')} className={`px-3 py-1.5 rounded-md ${tab==='vehicles'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🚗 Vehicles</button>}
+        </div>
+      </div>
+
+      {tab==='ticket' && (
+        <div className="space-y-4">
+          {/* Who / when / what vehicle */}
+          <div className="bg-white border rounded-xl p-3 flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button onClick={()=>shiftDate(-1)} className="px-2 py-1.5 rounded-lg border bg-white text-slate-600">‹</button>
+              <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+              <button onClick={()=>shiftDate(1)} className="px-2 py-1.5 rounded-lg border bg-white text-slate-600">›</button>
+            </div>
+            <select value={driverId} onChange={e=>setDriverId(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200">
+              <option value="">— I am… (driver) —</option>
+              {drivers.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <select value={vehicleId} onChange={e=>changeVehicle(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200">
+              <option value="">— Vehicle —</option>
+              {vehicles.map(v=><option key={v.id} value={v.id}>{v.name}{v.plate?` · ${v.plate}`:''}</option>)}
+            </select>
+          </div>
+
+          {!driverId ? (
+            <div className="bg-white border rounded-xl px-4 py-8 text-center text-slate-400 text-sm">Pick your name above to open your ticket.</div>
+          ) : loading ? (
+            <div className="bg-white border rounded-xl px-4 py-8 text-center text-slate-400 text-sm">Loading…</div>
+          ) : !ticket ? (
+            <div className="bg-white border rounded-xl p-5 text-center">
+              <div className="text-sm text-slate-600 mb-3">No ticket yet for {driverFor(driverId)?.name} on this day.</div>
+              {vehicleId && vehicleFor(vehicleId)?.odometer!=null && <div className="text-xs text-slate-500 mb-3">Start odometer will pre-fill from <b>{vehicleFor(vehicleId)?.name}</b>: <b>{Number(vehicleFor(vehicleId)?.odometer).toLocaleString()} km</b> (you can adjust).</div>}
+              <button onClick={startTicket} className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-700">▶ Start today’s ticket</button>
+            </div>
+          ) : (
+            <>
+              {/* Live summary */}
+              <div className="bg-gradient-to-br from-cyan-600 to-teal-600 text-white rounded-xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div><div className="text-[11px] uppercase opacity-80">Distance</div><div className="text-xl font-bold">{m.km!=null?`${m.km.toLocaleString()} km`:'—'}</div></div>
+                <div><div className="text-[11px] uppercase opacity-80">Fuel</div><div className="text-xl font-bold">{m.liters?`${m.liters.toFixed(1)} L`:'—'}</div></div>
+                <div><div className="text-[11px] uppercase opacity-80">Km / Liter</div><div className="text-xl font-bold">{m.kmPerL!=null?m.kmPerL.toFixed(1):'—'}</div></div>
+                <div><div className="text-[11px] uppercase opacity-80">₱ / Km</div><div className="text-xl font-bold">{m.costPerKm!=null?`₱${m.costPerKm.toFixed(1)}`:'—'}</div></div>
+              </div>
+
+              {/* Odometers */}
+              <div className="bg-white border rounded-xl p-3 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide text-slate-500">Start odometer (km)</label>
+                  <input type="number" defaultValue={ticket.start_odometer??''} onBlur={e=>saveStartOdo(e.target.value)} disabled={!isOpen} className="w-full text-sm px-2 py-1.5 rounded-lg border border-slate-200 disabled:bg-slate-50" />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide text-slate-500">End odometer (km)</label>
+                  <input type="number" value={endOdo} onChange={e=>setEndOdo(e.target.value)} onBlur={e=>isOpen&&saveEndOdoLive(e.target.value)} disabled={!isOpen} placeholder="enter at day end" className="w-full text-sm px-2 py-1.5 rounded-lg border border-slate-200 disabled:bg-slate-50" />
+                </div>
+              </div>
+
+              {/* Stops from the schedule */}
+              <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📍 Delivery stops ({deliveries.length})</div>
+                {deliveries.length===0 && <div className="px-4 py-5 text-center text-slate-400 text-sm">No deliveries assigned to you on the schedule for this day. Add ad-hoc stops below.</div>}
+                {deliveries.map(d=>{ const s=stopFor(d.id); const arrived=!!(s&&s.arrived_at); return (
+                  <div key={d.id} className="border-t px-3 py-2.5 flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate">{d.client_name||d.item||'Delivery'}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{d.address||''}{arrived?` · ✓ ${stampTime(s)}${s.lat?' · 📍':''}`:''}</div>
+                    </div>
+                    {arrived
+                      ? <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40">Undo</button>
+                      : <button onClick={()=>markArrived(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0 disabled:opacity-50">{busyStop===d.id?'📍…':'Arrived ✓'}</button>}
+                  </div>
+                ); })}
+                {/* Ad-hoc stops */}
+                {stops.filter(s=>!s.delivery_id).map(s=>(
+                  <div key={s.id} className="border-t px-3 py-2.5 flex items-center gap-2 bg-amber-50/40">
+                    <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{s.label}</div><div className="text-[11px] text-slate-500 truncate">Ad-hoc · ✓ {stampTime(s)}{s.lat?' · 📍':''}</div></div>
+                    <button onClick={()=>delStop(s)} disabled={!isOpen} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 disabled:opacity-40">✕</button>
+                  </div>
+                ))}
+                {isOpen && (
+                  <div className="border-t p-2 flex gap-1.5">
+                    <input value={adhoc} onChange={e=>setAdhoc(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addAdhocStop(); }} placeholder="Add an unscheduled stop…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+                    <button onClick={addAdhocStop} disabled={busyStop==='adhoc'} className="px-3 rounded-lg bg-cyan-600 text-white text-sm font-semibold disabled:opacity-50">{busyStop==='adhoc'?'📍…':'+ Stop'}</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Gas */}
+              <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">⛽ Gas fills</div>
+                {gas.map(g=>(
+                  <div key={g.id} className="border-t px-3 py-2 flex items-center gap-2 text-sm">
+                    <div className="min-w-0 flex-1"><span className="font-medium">{g.liters?`${Number(g.liters).toFixed(1)} L`:'—'}</span>{g.amount!=null?` · ${peso(g.amount)}`:''}{g.station?` · ${g.station}`:''}{g.odometer!=null?` · @${Number(g.odometer).toLocaleString()} km`:''}</div>
+                    <span className="text-[11px] text-slate-400 shrink-0">{fmtTime(g.filled_at)}</span>
+                    <button onClick={()=>delGas(g)} disabled={!isOpen} className="text-slate-300 hover:text-rose-500 shrink-0 disabled:opacity-40">✕</button>
+                  </div>
+                ))}
+                {isOpen && (
+                  <div className="border-t p-2 grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                    <input type="number" value={gasForm.liters} onChange={e=>setGasForm({...gasForm,liters:e.target.value})} placeholder="Liters" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+                    <input type="number" value={gasForm.amount} onChange={e=>setGasForm({...gasForm,amount:e.target.value})} placeholder="₱ Amount" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+                    <input type="number" value={gasForm.odometer} onChange={e=>setGasForm({...gasForm,odometer:e.target.value})} placeholder="Odometer" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+                    <input value={gasForm.station} onChange={e=>setGasForm({...gasForm,station:e.target.value})} placeholder="Station" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+                    <button onClick={addGas} className="text-sm px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold">+ Add</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Close / reopen */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-slate-500">{ticket.status==='closed' ? `Closed ${ticket.closed_at?fmtDate(ticket.closed_at):''}` : 'Ticket open'}</div>
+                {isOpen
+                  ? <button onClick={closeTicket} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">✔ Close ticket</button>
+                  : <button onClick={reopenTicket} className="px-4 py-2 rounded-lg border text-sm font-semibold text-slate-600 hover:bg-slate-50">Reopen</button>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab==='report' && <TripReport vehicles={vehicles} drivers={drivers} />}
+      {tab==='vehicles' && canManageVehicles && <VehicleManager vehicles={vehicles} onChanged={loadBase} />}
+    </div>
+  );
+}
+
+// Monthly mileage + fuel roll-up per vehicle, plus the underlying ticket list.
+function TripReport({ vehicles, drivers }){
+  const [month,setMonth]=useState(tripYmd(new Date()).slice(0,7));
+  const [rows,setRows]=useState([]);   // { ticket, gas:[] }
+  const [loading,setLoading]=useState(true);
+  async function load(){
+    setLoading(true);
+    const start=month+'-01';
+    const d=new Date(start+'T00:00:00'); d.setMonth(d.getMonth()+1);
+    const end=tripYmd(d);
+    const { data:tks }=await sb.from('trip_tickets').select('*').gte('date',start).lt('date',end).order('date',{ascending:false});
+    const tickets=tks||[];
+    let gasAll=[];
+    if(tickets.length){ const { data:g }=await sb.from('trip_ticket_gas').select('*').in('ticket_id',tickets.map(t=>t.id)); gasAll=g||[]; }
+    setRows(tickets.map(t=>({ ticket:t, gas:gasAll.filter(x=>x.ticket_id===t.id) })));
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[month]);
+  const vName=(id)=> (vehicles||[]).find(v=>v.id===id)?.name || '—';
+  const dName=(id)=> (drivers||[]).find(d=>d.id===id)?.name || '—';
+  // Per-vehicle aggregate
+  const byVehicle={};
+  rows.forEach(({ticket,gas})=>{
+    const mm=tripMetrics(ticket,gas); const key=ticket.vehicle_id||'none';
+    const a=byVehicle[key]||(byVehicle[key]={ km:0, liters:0, cost:0 });
+    if(mm.km) a.km+=mm.km; a.liters+=mm.liters; a.cost+=mm.cost;
+  });
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-slate-600">Month</label>
+        <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">Per-vehicle efficiency</div>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Vehicle</th><th className="text-right px-3 py-2">Km</th><th className="text-right px-3 py-2">Liters</th><th className="text-right px-3 py-2">Gas ₱</th><th className="text-right px-3 py-2">Km/L</th><th className="text-right px-3 py-2">₱/Km</th></tr></thead>
+          <tbody>
+            {Object.keys(byVehicle).length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-6">No tickets this month.</td></tr>}
+            {Object.entries(byVehicle).map(([vid,a])=>(
+              <tr key={vid} className="border-t">
+                <td className="px-3 py-2 font-medium">{vid==='none'?'Unassigned':vName(vid)}</td>
+                <td className="px-3 py-2 text-right">{a.km.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right">{a.liters.toFixed(1)}</td>
+                <td className="px-3 py-2 text-right">{peso(a.cost)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{a.liters>0?(a.km/a.liters).toFixed(1):'—'}</td>
+                <td className="px-3 py-2 text-right">{a.km>0&&a.cost>0?`₱${(a.cost/a.km).toFixed(1)}`:'—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">Tickets ({rows.length})</div>
+        {loading ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Loading…</div> : (
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Driver</th><th className="text-left px-3 py-2">Vehicle</th><th className="text-right px-3 py-2">Km</th><th className="text-right px-3 py-2">L</th><th className="text-right px-3 py-2">Km/L</th><th className="text-center px-3 py-2">Status</th></tr></thead>
+          <tbody>
+            {rows.map(({ticket,gas})=>{ const mm=tripMetrics(ticket,gas); return (
+              <tr key={ticket.id} className="border-t">
+                <td className="px-3 py-2">{fmtDate(ticket.date)}</td>
+                <td className="px-3 py-2">{dName(ticket.driver_id)}</td>
+                <td className="px-3 py-2">{vName(ticket.vehicle_id)}</td>
+                <td className="px-3 py-2 text-right">{mm.km!=null?mm.km.toLocaleString():'—'}</td>
+                <td className="px-3 py-2 text-right">{mm.liters?mm.liters.toFixed(1):'—'}</td>
+                <td className="px-3 py-2 text-right font-semibold">{mm.kmPerL!=null?mm.kmPerL.toFixed(1):'—'}</td>
+                <td className="px-3 py-2 text-center">{ticket.status==='closed'?<span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">closed</span>:<span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">open</span>}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VehicleManager({ vehicles, onChanged }){
+  const [form,setForm]=useState({ name:'', type:'motorcycle', plate:'', odometer:'' });
+  async function add(){ if(!form.name.trim()) return; const { error }=await sb.from('vehicles').insert({ name:form.name.trim(), type:form.type, plate:form.plate.trim()||null, odometer:form.odometer===''?0:Number(form.odometer) }); if(error){ alert(error.message); return; } setForm({ name:'', type:'motorcycle', plate:'', odometer:'' }); onChanged&&onChanged(); }
+  async function save(v,patch){ const { error }=await sb.from('vehicles').update(patch).eq('id',v.id); if(error){ alert(error.message); return; } onChanged&&onChanged(); }
+  async function retire(v){ if(!confirm(`Retire ${v.name}? It stays in history but won’t appear in dropdowns.`)) return; await sb.from('vehicles').update({ active:false }).eq('id',v.id); onChanged&&onChanged(); }
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">Fleet</div>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Plate</th><th className="text-right px-3 py-2">Odometer</th><th></th></tr></thead>
+          <tbody>
+            {vehicles.map(v=>(
+              <tr key={v.id} className="border-t">
+                <td className="px-3 py-2 font-medium">{v.name}</td>
+                <td className="px-3 py-2">{v.type||'—'}</td>
+                <td className="px-3 py-2"><input defaultValue={v.plate||''} onBlur={e=>e.target.value!==(v.plate||'')&&save(v,{plate:e.target.value.trim()||null})} placeholder="—" className="w-24 text-sm px-1.5 py-1 rounded border border-slate-200" /></td>
+                <td className="px-3 py-2 text-right"><input type="number" defaultValue={v.odometer??0} onBlur={e=>Number(e.target.value)!==Number(v.odometer)&&save(v,{odometer:Number(e.target.value)})} className="w-28 text-sm px-1.5 py-1 rounded border border-slate-200 text-right" /></td>
+                <td className="px-3 py-2 text-right"><button onClick={()=>retire(v)} className="text-xs text-rose-500 hover:underline">Retire</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="bg-white border rounded-xl p-3 grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+        <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Vehicle name" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+        <select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200"><option value="motorcycle">Motorcycle</option><option value="van">Van</option><option value="truck">Truck</option><option value="car">Car</option><option value="other">Other</option></select>
+        <input value={form.plate} onChange={e=>setForm({...form,plate:e.target.value})} placeholder="Plate" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+        <input type="number" value={form.odometer} onChange={e=>setForm({...form,odometer:e.target.value})} placeholder="Odometer" className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" />
+        <button onClick={add} className="text-sm px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold">+ Add vehicle</button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
    LOGISTICS — Daily delivery scheduling (simple, two drivers)
    ============================================================================ */
 function DailyLogistics({ profile, clients }){
@@ -28349,12 +28757,15 @@ function App(){
       allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','hr-recruit','hr-templates','payroll','budgets','profile']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
-      // Logistics Team — only the Daily Schedule.
-      allowed = new Set(['logistics']);
+      // Logistics Team — Daily Schedule + their Trip Tickets.
+      allowed = new Set(['logistics','trip-tickets']);
       fallback = 'logistics';
     } else {
       return; // admin / manager — no restrictions
     }
+    // Trip Tickets ride alongside the Daily Schedule — anyone who can see the
+    // Logistics module can open them (drivers log, HR/finance review).
+    if(allowed.has('logistics')) allowed.add('trip-tickets');
     // Manual Purchase Request intake lives in the Sales module — only sales
     // managers + sales assistants (and admin, who is unrestricted) may open it.
     if(profile.role==='manager' || profile.role==='assistant') allowed.add('pr-request');
@@ -28753,7 +29164,7 @@ function App(){
   // Logistics — daily schedule + Delivery Receipts (DRs are deliveries, so
   // they live here logically. Visibility on the page is gated by role at
   // create-time, but read-only viewing is available to everyone with this nav).
-  const LOGISTICS_GROUP = { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['delivery-receipts','Delivery Receipts','📄'] ] };
+  const LOGISTICS_GROUP = { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] };
   // Finance group — full module for Admin + Accounting. Purchasing gets a
   // single RFP entry so they can track their submissions. Sales Manager gets
   // SOs + Customer Ledger (read-only feel for them).
@@ -29095,6 +29506,7 @@ function App(){
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
+        {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
