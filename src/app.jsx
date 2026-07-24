@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 292 · Employee Movement now prints a Notice of Personnel Action (NPA) — 🖨 on each movement row (or 'Print NPA' in the form). Auto-ticks the Employment Action, fills the FROM → TO table from the record + employee (rank, status, dept, position, basic pay, date hired/effectivity), with optional NPA fields for allowances/commission/monthly comp.";
+const BUILD = "Live build 293 · The Expense Log now has a '+ New expense' button (opens the expense form with receipt upload) — you can add expenses directly from there again.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25638,7 +25638,9 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
      • Approved budget requests (planned spend)
    Aggregated to today / week / month / year tiles + a filterable feed.
 */
-function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances }){
+function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances, bankAccounts, reload }){
+  const [creatingExpense,setCreatingExpense]=useState(false);
+  const canAddExpense = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Build a normalized list of money-out items.
   const rows = useMemo(()=>{
     const out = [];
@@ -25773,9 +25775,15 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
-        <h1 className="text-2xl font-bold">📚 Expense Log</h1>
-        <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📚 Expense Log</h1>
+            <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
+          </div>
+          {canAddExpense && reload && <button onClick={()=>setCreatingExpense(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ New expense</button>}
+        </div>
       </div>
+      {creatingExpense && <ExpenseFormModal existing={null} profile={profile} bankAccounts={bankAccounts} onClose={()=>setCreatingExpense(false)} onSaved={()=>{ setCreatingExpense(false); reload && reload(); }} />}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Today</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.today)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.today} item{cnt.today===1?'':'s'} · {fmtDate(today)}</div></div>
@@ -30608,7 +30616,7 @@ function App(){
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
+        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
