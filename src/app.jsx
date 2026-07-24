@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 288 · Receipt photos: you can now attach a receipt photo/scan to every petty cash expense and to each receipt line when liquidating a cash advance (standalone expenses already had this). Petty cash history shows a 📎 to view the receipt.";
+const BUILD = "Live build 289 · RFP partial payments: paying less than the full amount now marks the RFP 'Partially Paid' and shows the remaining balance (list + detail). The A/P voucher reflects paid-to-date + balance and stays 'For payment' until fully settled; a 'Pay balance' button settles the rest. Fixed RFP-2026-07-024 (₱10,000 of ₱13,320).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21614,9 +21614,12 @@ const RFP_STATUSES = [
   { key:'pending_finance', label:'Pending Finance',  color:'bg-amber-100 text-amber-700' },
   { key:'pending_admin',   label:'Pending Admin',    color:'bg-orange-100 text-orange-700' },
   { key:'approved',        label:'Approved (Pay)',   color:'bg-blue-100 text-blue-700' },
+  { key:'partial',         label:'Partially Paid',   color:'bg-amber-100 text-amber-800' },
   { key:'paid',            label:'Paid',             color:'bg-emerald-100 text-emerald-700' },
   { key:'rejected',        label:'Rejected',         color:'bg-rose-100 text-rose-700' },
 ];
+// Remaining balance on an RFP after any partial payment.
+function rfpBalance(r){ return Math.max(0, Number(r?.amount||0) - Number(r?.amount_paid||0)); }
 function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 
 function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, reload }){
@@ -21665,7 +21668,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-5 gap-2 mb-4">{RFP_STATUSES.map(s=>(
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">{RFP_STATUSES.map(s=>(
         <button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-3 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
           <div className={`text-[10px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div>
           <div className="text-xl font-bold">{counts[s.key]||0}</div>
@@ -21686,16 +21689,16 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
             <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
             <td className="px-3 py-2">{r.supplier_name||'—'}</td>
             <td className="px-3 py-2 text-xs font-mono">{po?po.number:'—'}</td>
-            <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}</td>
+            <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-            <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{(()=>{ const ap=apForRfp(r.id); if(!ap) return <span className="text-[11px] text-slate-400">—</span>; const am=apMeta(ap.status); return (
+            <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{(()=>{ const ap=apForRfp(r.id); if(!ap) return <span className="text-[11px] text-slate-400">—</span>; const am=(Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status); return (
               <div className="flex items-center gap-1.5">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded ${am.color}`}>{am.label}</span>
                 <button onClick={()=>setViewingAp(ap)} className="text-[11px] text-indigo-600 hover:underline" title={`Preview ${ap.number}`}>👁 Preview</button>
               </div>
             ); })()}</td>
             <td className="px-3 py-2 text-right">
-              {r.status==='approved' && canPay && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Pay</button>}
+              {(r.status==='approved'||r.status==='partial') && canPay && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 {r.status==='partial'?'Pay balance':'Pay'}</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteRFP(r);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
@@ -21788,7 +21791,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div><div className="text-[10px] uppercase text-slate-400">Linked PO</div><div className="font-mono text-xs">{po?po.number:'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Supplier</div><div>{rfp.supplier_name}</div></div>
-          <div><div className="text-[10px] uppercase text-slate-400">Amount</div><div className="font-bold text-lg">{peso(rfp.amount)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Amount</div><div className="font-bold text-lg">{peso(rfp.amount)}</div>{Number(rfp.amount_paid||0)>0 && rfp.status!=='paid' && <div className="text-[11px] text-amber-700">Paid {peso(rfp.amount_paid)} · Balance {peso(rfpBalance(rfp))}</div>}</div>
           <div><div className="text-[10px] uppercase text-slate-400">Method</div><div>{rfp.payment_method||'—'}{rfp.payment_method_detail?' · '+rfp.payment_method_detail:''}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Terms</div><div>{rfp.payment_terms||'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
@@ -21820,6 +21823,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
           <div className="text-xs"><span className="font-semibold">Admin approved:</span> {adminBy?(adminBy.name||adminBy.email)+' · '+fmtTime(rfp.admin_approved_at):<span className="text-slate-400">pending</span>}{rfp.admin_notes?' · '+rfp.admin_notes:''}</div>
           {rfp.status==='rejected' && <div className="text-xs text-rose-700"><span className="font-semibold">Rejected:</span> {fmtTime(rfp.rejected_at)} · {rfp.rejected_reason}</div>}
           {rfp.status==='paid' && rfp.paid_at && <div className="text-xs text-emerald-700"><span className="font-semibold">Paid:</span> {fmtTime(rfp.paid_at)}</div>}
+          {rfp.status==='partial' && <div className="text-xs text-amber-700"><span className="font-semibold">Partially paid:</span> {peso(rfp.amount_paid)} of {peso(rfp.amount)} · Balance {peso(rfpBalance(rfp))}</div>}
         </div>
 
         {(rfp.status==='pending_finance' || rfp.status==='pending_admin') && (isAdmin||isAccounting) && (
@@ -21842,8 +21846,8 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
               <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
             </>
           )}
-          {rfp.status==='approved' && (isAccounting||isAdmin) && (
-            <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 Create Voucher & Pay</button>
+          {(rfp.status==='approved'||rfp.status==='partial') && (isAccounting||isAdmin) && (
+            <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 {rfp.status==='partial'?`Pay balance (${peso(rfpBalance(rfp))})`:'Create Voucher & Pay'}</button>
           )}
         </div>
       </div>
@@ -21866,7 +21870,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
     type: initType,
     date: today,
     payee: rfp.supplier_name||supplier?.company||'',
-    amount: rfp.amount,
+    amount: rfpBalance(rfp) || rfp.amount,
     particulars: rfp.particulars||'',
     expense_category: EXPENSE_CATEGORIES[0],
     // check_number doubles as the bank-transfer reference number — both
@@ -21932,14 +21936,32 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
       if(bankTxId && vdata?.id){
         await sb.from('bank_transactions').update({ ref_id: vdata.id }).eq('id', bankTxId);
       }
-      // Mark RFP as paid
-      const { error: rErr } = await sb.from('rfps').update({ status:'paid', voucher_id:vdata.id, paid_at:new Date().toISOString() }).eq('id', rfp.id);
+      // Partial payments: accumulate what's been paid. Only flip to fully "paid"
+      // once the running total covers the RFP amount — otherwise it's "partial"
+      // and the remaining balance stays visible/payable.
+      const nowIso = new Date().toISOString();
+      const newPaid = Number(rfp.amount_paid||0) + Number(f.amount||0);
+      const fullyPaid = newPaid >= Number(rfp.amount||0) - 0.005;
+      const { error: rErr } = await sb.from('rfps').update({
+        amount_paid: newPaid,
+        status: fullyPaid ? 'paid' : 'partial',
+        voucher_id: vdata.id,
+        paid_at: fullyPaid ? nowIso : null,
+      }).eq('id', rfp.id);
       if(rErr) throw rErr;
-      // Close out the linked Accounts Payable Voucher.
-      try { await sb.from('ap_vouchers').update({ status:'paid', paid_at:new Date().toISOString(), voucher_id:vdata.id, bank_transaction_id:bankTxId||null }).eq('rfp_id', rfp.id).is('deleted_at',null); } catch(_){}
-      // Mark linked PO as paid
+      // Keep the linked A/P Voucher in step — only "paid" when fully settled.
+      try { await sb.from('ap_vouchers').update({
+        amount_paid: newPaid,
+        status: fullyPaid ? 'paid' : 'for_payment',
+        paid_at: fullyPaid ? nowIso : null,
+        voucher_id: vdata.id, bank_transaction_id: bankTxId||null,
+      }).eq('rfp_id', rfp.id).is('deleted_at',null); } catch(_){}
+      // Reflect the same on the linked PO.
       if(rfp.po_id){
-        await sb.from('purchase_orders').update({ payment_status:'paid', paid_at:new Date().toISOString(), paid_by:profile.id, amount_paid:Number(f.amount) }).eq('id', rfp.po_id);
+        await sb.from('purchase_orders').update({
+          payment_status: fullyPaid ? 'paid' : 'partial',
+          paid_at: fullyPaid ? nowIso : null, paid_by: profile.id, amount_paid: newPaid,
+        }).eq('id', rfp.po_id);
       }
       setBusy(false); onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -21951,7 +21973,8 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
     <Modal title={`New ${voucherTitle} — for ${rfp.number}`} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
-          Disbursing <strong>{peso(rfp.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. This deducts from the chosen bank's balance and marks the PO + RFP as paid.
+          {Number(rfp.amount_paid||0)>0 && <div className="mb-1">Already paid <strong>{peso(rfp.amount_paid)}</strong> of {peso(rfp.amount)} · Balance <strong>{peso(rfpBalance(rfp))}</strong>.</div>}
+          Paying <strong>{peso(f.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. You can change the amount below to pay partially — the RFP stays “Partially Paid” with the balance shown until it's fully settled.
         </div>
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Voucher type">
@@ -22701,7 +22724,7 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
           </tr></thead>
           <tbody>
             {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No AP vouchers {tab==='all'?'yet':'in this status'}.</td></tr>}
-            {rows.map(a=>{ const m=apMeta(a.status); return (
+            {rows.map(a=>{ const m=(Number(a.amount_paid||0)>0 && a.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(a.status); return (
               <tr key={a.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(a)}>
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{a.number}</td>
                 <td className="px-3 py-2">{a.supplier_name||'—'}</td>
@@ -22726,7 +22749,7 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
 function APVoucherModal({ ap, profiles, onClose }){
   const finBy = (profiles||[]).find(p=>p.id===ap.finance_approved_by);
   const admBy = (profiles||[]).find(p=>p.id===ap.admin_approved_by);
-  const m = apMeta(ap.status);
+  const m = (Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status);
   return (
     <Modal title={`Accounts Payable Voucher — ${ap.number}`} onClose={onClose} wide>
       <style>{`@media print { body * { visibility:hidden !important; } .apv-sheet, .apv-sheet * { visibility:visible !important; } .apv-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
@@ -22743,6 +22766,10 @@ function APVoucherModal({ ap, profiles, onClose }){
             <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Payment method</td><td className="px-2 py-1.5">{ap.payment_method||'—'}{ap.payment_method_detail?` · ${ap.payment_method_detail}`:''}</td></tr>
             {(ap.bank_name||ap.bank_account_number) && <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Deposit to</td><td className="px-2 py-1.5">🏦 {ap.bank_name||''}{ap.bank_account_name?` · ${ap.bank_account_name}`:''}{ap.bank_account_number?` · ${ap.bank_account_number}`:''}</td></tr>}
             <tr><td className="px-2 py-2 bg-slate-50 font-semibold">Amount payable</td><td className="px-2 py-2 text-lg font-extrabold">{peso(ap.amount)}</td></tr>
+            {Number(ap.amount_paid||0)>0 && ap.status!=='paid' && <>
+              <tr className="border-t"><td className="px-2 py-1.5 bg-slate-50 font-semibold text-emerald-700">Paid to date</td><td className="px-2 py-1.5 text-emerald-700">{peso(ap.amount_paid)}</td></tr>
+              <tr className="border-t"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Balance due</td><td className="px-2 py-1.5 font-bold text-amber-800">{peso(Math.max(0, Number(ap.amount||0)-Number(ap.amount_paid||0)))}</td></tr>
+            </>}
           </tbody>
         </table>
         <div className="text-sm italic text-slate-600 mb-4">{amountInWords(ap.amount)}</div>
