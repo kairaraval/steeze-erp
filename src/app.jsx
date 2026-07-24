@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 285 · Accounting Officer now has full access to all new Finance builds — A/P Vouchers, Asset Register, Journal Entries, and the Add-bank button (banks were the only remaining gap).";
+const BUILD = "Live build 286 · Fix crash ('amountInWords is not defined') — the A/P voucher used a helper that wasn't in scope. Hoisted it to module level so the app loads again.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22629,6 +22629,27 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
   );
 }
 
+
+// Module-level peso-to-words (mirrors the helper inside the voucher print modal)
+// so other components (e.g. the A/P voucher) can call it too.
+function amountInWords(n){
+  n = Number(n||0);
+  if(!isFinite(n) || n < 0) return '';
+  const cents = Math.round((n - Math.floor(n)) * 100);
+  const whole = Math.floor(n);
+  const ones=['Zero','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+  const tens=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+  function two(x){ if(x<20) return ones[x]; const t=Math.floor(x/10), o=x%10; return tens[t]+(o?' '+ones[o]:''); }
+  function three(x){ const h=Math.floor(x/100), r=x%100; return (h?ones[h]+' Hundred'+(r?' ':''):'') + (r?two(r):''); }
+  if(whole===0) return 'Zero pesos and '+String(cents).padStart(2,'0')+'/100 only';
+  let parts=[]; let n2=whole;
+  const scales=[['Million',1e6],['Thousand',1e3],['',1]];
+  for(const [name,scale] of scales){
+    const chunk = Math.floor(n2/scale); n2 = n2 % scale;
+    if(chunk>0) parts.push(three(chunk)+(name?' '+name:''));
+  }
+  return parts.join(' ')+' pesos and '+String(cents).padStart(2,'0')+'/100 only';
+}
 
 /* ─────────── ACCOUNTS PAYABLE VOUCHERS ─────────── */
 const AP_STATUSES = [
