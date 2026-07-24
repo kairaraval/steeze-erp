@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 293 · The Expense Log now has a '+ New expense' button (opens the expense form with receipt upload) — you can add expenses directly from there again.";
+const BUILD = "Live build 294 · Receipts now attach to the VOUCHER itself — open any Check/Cash/BT voucher and use '+ Add receipt' to attach the official receipt / proof of payment (shown with a 📎 count in the voucher list). Reverted the Expense Log add-expense button.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22737,6 +22737,33 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
   const preparedBy = (profiles||[]).find(p=>p.id===v.prepared_by);
   const approvedBy = (profiles||[]).find(p=>p.id===v.approved_by);
   const [approving,setApproving]=useState(false);
+  // Receipts / proof of payment attached to THIS voucher. Persisted immediately.
+  const [atts,setAtts]=useState(Array.isArray(v.attachments)?v.attachments:[]);
+  const [upBusy,setUpBusy]=useState(false);
+  async function addReceipts(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean); if(!files.length) return;
+    setUpBusy(true);
+    try {
+      const next=[...atts];
+      for(const file of files){
+        const ext=(file.name.split('.').pop()||'bin').toLowerCase();
+        const key=`vouchers/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        const { data: pu }=await sb.storage.from(BUCKET).getPublicUrl(key);
+        next.push({ name:file.name, url:pu.publicUrl, path:key, type:file.type||'' });
+      }
+      const { error }=await sb.from('vouchers').update({ attachments: next }).eq('id', v.id);
+      if(error) throw error;
+      setAtts(next);
+    } catch(e){ alert('Upload failed: '+(e.message||e)); }
+    setUpBusy(false);
+  }
+  async function removeReceipt(i){
+    const next=atts.filter((_,x)=>x!==i);
+    const { error }=await sb.from('vouchers').update({ attachments: next }).eq('id', v.id);
+    if(error){ alert(error.message); return; } setAtts(next);
+  }
   // Approve & Sign — stamps approved_by + approved_at + signed_at with the
   // current user. The signature comes from their profile.signature_data and
   // is rendered automatically. Admin or Manager only.
@@ -22898,6 +22925,21 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
         </div>
 
         {v.notes && <div className="mt-4 text-[10px] text-slate-500 border-t pt-2"><strong>Notes:</strong> {v.notes}</div>}
+      </div>
+
+      {/* Receipts / proof of payment (hidden in print) */}
+      <div className="no-print mt-3 border-t pt-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold uppercase text-slate-500">📎 Receipts / proof of payment ({atts.length})</div>
+          <label className="text-xs px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold cursor-pointer hover:bg-indigo-700">{upBusy?'Uploading…':'+ Add receipt'}<input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={e=>{ addReceipts(e.target.files); e.target.value=''; }} /></label>
+        </div>
+        {atts.length===0 ? <div className="text-xs text-slate-400">No receipts attached yet. After paying, attach the official receipt / proof of payment here.</div>
+         : <div className="flex flex-wrap gap-2">{atts.map((a,i)=>(
+             <div key={i} className="flex items-center gap-1.5 border rounded-lg px-2 py-1 bg-slate-50">
+               <a href={a.url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">{/pdf/i.test((a.type||'')+' '+(a.name||''))?'📄':'🖼'} {a.name}</a>
+               <button onClick={()=>removeReceipt(i)} className="text-rose-400 hover:text-rose-600 text-xs" title="Remove">✕</button>
+             </div>
+           ))}</div>}
       </div>
 
       {/* Action bar (hidden in print) */}
@@ -23165,7 +23207,7 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
             <td className="px-3 py-2 font-mono text-xs">{v.number}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(v.date)}</td>
             <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${v.type==='check'?'bg-blue-100 text-blue-700':v.type==='bank_transfer'?'bg-violet-100 text-violet-700':'bg-amber-100 text-amber-700'}`}>{v.type==='check'?'CV':v.type==='bank_transfer'?'BT':'Cash'}</span></td>
-            <td className="px-3 py-2">{v.payee}</td>
+            <td className="px-3 py-2">{v.payee}{Array.isArray(v.attachments)&&v.attachments.length>0 && <span className="ml-1 text-slate-400" title={`${v.attachments.length} receipt(s) attached`}>📎{v.attachments.length}</span>}</td>
             <td className="px-3 py-2 font-mono text-xs">{v.check_number||'—'}</td>
             <td className="px-3 py-2 text-xs">{bank?bank.bank_name:'—'}</td>
             <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(v.amount)}</td>
@@ -25638,9 +25680,7 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
      • Approved budget requests (planned spend)
    Aggregated to today / week / month / year tiles + a filterable feed.
 */
-function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances, bankAccounts, reload }){
-  const [creatingExpense,setCreatingExpense]=useState(false);
-  const canAddExpense = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances }){
   // Build a normalized list of money-out items.
   const rows = useMemo(()=>{
     const out = [];
@@ -25775,15 +25815,9 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">📚 Expense Log</h1>
-            <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
-          </div>
-          {canAddExpense && reload && <button onClick={()=>setCreatingExpense(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ New expense</button>}
-        </div>
+        <h1 className="text-2xl font-bold">📚 Expense Log</h1>
+        <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
       </div>
-      {creatingExpense && <ExpenseFormModal existing={null} profile={profile} bankAccounts={bankAccounts} onClose={()=>setCreatingExpense(false)} onSaved={()=>{ setCreatingExpense(false); reload && reload(); }} />}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Today</div><div className="text-2xl font-bold mt-1 text-rose-700">{peso(tot.today)}</div><div className="text-xs text-slate-400 mt-0.5">{cnt.today} item{cnt.today===1?'':'s'} · {fmtDate(today)}</div></div>
@@ -30616,7 +30650,7 @@ function App(){
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
