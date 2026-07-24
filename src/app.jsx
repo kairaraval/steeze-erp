@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 284 · Subcon Weekly payroll now has filters: pick a week (or all weeks) and filter by For payment / Paid, with a running total for the filtered set.";
+const BUILD = "Live build 285 · Accounting Officer now has full access to all new Finance builds — A/P Vouchers, Asset Register, Journal Entries, and the Add-bank button (banks were the only remaining gap).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19594,7 +19594,7 @@ function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
   const [detail,setDetail]=useState(null);    // bank to see transaction history for
   const [adding,setAdding]=useState(false);    // adding a brand-new bank account
   const isAdmin = profile.role==='admin';
-  const isAccounting = profile.role==='accounting';
+  const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canEdit = isAdmin || isAccounting;
 
   if(!bankAccounts || bankAccounts.length===0){
