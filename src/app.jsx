@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 282 · In-house sewing payroll payouts now stay only in the Sewing Payroll module — no Expense Log, no P&L, no bank deduction. (Subcon payouts still create their weekly voucher + bank deduction.)";
+const BUILD = "Live build 283 · RFP list now shows each RFP's A/P Voucher status with a 👁 Preview button to open the printable A/P voucher (finance + admin signatures). Applies to RFPs that have an A/P voucher raised on approval.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21619,10 +21619,12 @@ const RFP_STATUSES = [
 ];
 function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 
-function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, reload }){
+function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, reload }){
   const [editing,setEditing]=useState(null);
   const [paying,setPaying]=useState(null);   // RFP to disburse via voucher
+  const [viewingAp,setViewingAp]=useState(null); // A/P voucher preview
   const [batchPaying,setBatchPaying]=useState(null); // array of RFPs → one voucher
+  const apForRfp = (rfpId)=> (apVouchers||[]).find(a=>a.rfp_id===rfpId && !a.deleted_at);
   const [selected,setSelected]=useState({}); // { rfpId: true } for approved RFPs to batch-pay
   const [filter,setFilter]=useState('');
   const isAdmin = profile.role==='admin';
@@ -21676,7 +21678,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
         </div>
       )}
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{canPay && <th className="px-2 py-2 w-8"></th>}<th className="text-left px-3 py-2">RFP#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">PO</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{canPay && <th className="px-2 py-2 w-8"></th>}<th className="text-left px-3 py-2">RFP#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">PO</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">A/P Voucher</th><th></th></tr></thead>
         <tbody>{rows.map(r=>{ const meta=rfpMeta(r.status); const po=orders.find(o=>o.id===r.po_id); const selectable = r.status==='approved' && canPay; return (
           <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(r)}>
             {canPay && <td className="px-2 py-2 text-center" onClick={(e)=>e.stopPropagation()}>{selectable ? <input type="checkbox" checked={!!selected[r.id]} onChange={()=>toggleSel(r.id)} /> : null}</td>}
@@ -21686,13 +21688,19 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
             <td className="px-3 py-2 text-xs font-mono">{po?po.number:'—'}</td>
             <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+            <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{(()=>{ const ap=apForRfp(r.id); if(!ap) return <span className="text-[11px] text-slate-400">—</span>; const am=apMeta(ap.status); return (
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${am.color}`}>{am.label}</span>
+                <button onClick={()=>setViewingAp(ap)} className="text-[11px] text-indigo-600 hover:underline" title={`Preview ${ap.number}`}>👁 Preview</button>
+              </div>
+            ); })()}</td>
             <td className="px-3 py-2 text-right">
               {r.status==='approved' && canPay && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 Pay</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteRFP(r);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan={canPay?8:7} className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan={canPay?9:8} className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
       </table></div></div>
       {selectedRfps.length > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-white shadow-2xl border-2 border-emerald-500 rounded-xl px-4 py-3 flex items-center gap-4 text-sm">
@@ -21707,6 +21715,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
       {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
+      {viewingAp && <APVoucherModal ap={viewingAp} profiles={profiles} onClose={()=>setViewingAp(null)} />}
     </div>
   );
 }
@@ -30229,7 +30238,7 @@ function App(){
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
+        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
