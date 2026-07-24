@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 291 · HR → Employee Relations now has two sections: ⚖️ Disciplinary (the existing case log) and 🔀 Employee Movement — log promotions, salary increases/adjustments, transfers, regularization, etc. (previous → new position/dept/salary, effective date, reason, attachments; auto-computes the increase %).";
+const BUILD = "Live build 292 · Employee Movement now prints a Notice of Personnel Action (NPA) — 🖨 on each movement row (or 'Print NPA' in the form). Auto-ticks the Employment Action, fills the FROM → TO table from the record + employee (rank, status, dept, position, basic pay, date hired/effectivity), with optional NPA fields for allowances/commission/monthly comp.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9739,6 +9739,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
   const [movCreating,setMovCreating]=useState(false);
   const [movEditing,setMovEditing]=useState(null);
   const [movSearch,setMovSearch]=useState('');
+  const [printingMov,setPrintingMov]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
   const all=(hrCases||[]);
   const active=all.filter(c=>!caseIsClosed(c));
@@ -9806,6 +9807,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
                 <td className="px-3 py-2 text-xs">{m.effective_date?fmtDate(m.effective_date):'—'}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <button onClick={()=>setPrintingMov(m)} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print Notice of Personnel Action (NPA)">🖨</button>
                   <button onClick={()=>setMovEditing(m)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
                   <button onClick={()=>delMov(m)} className="text-xs text-rose-500 hover:underline">Delete</button>
                 </td>
@@ -9852,7 +9854,8 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
       )}
       {(creating||editing) && <CaseFormModal caseRow={editing} employees={employees} profile={profile} onPrint={(c)=>{ setEditing(null); setPrinting(c); }} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {printing && <CaseNTEPrintView caseRow={printing} employees={employees} profile={profile} onClose={()=>setPrinting(null)} />}
-      {(movCreating||movEditing) && <MovementFormModal movement={movEditing} employees={employees} profile={profile} onClose={()=>{ setMovCreating(false); setMovEditing(null); }} onSaved={()=>{ setMovCreating(false); setMovEditing(null); reload(); }} />}
+      {(movCreating||movEditing) && <MovementFormModal movement={movEditing} employees={employees} profile={profile} onPrint={(m)=>{ setMovEditing(null); setMovCreating(false); setPrintingMov(m); }} onClose={()=>{ setMovCreating(false); setMovEditing(null); }} onSaved={()=>{ setMovCreating(false); setMovEditing(null); reload(); }} />}
+      {printingMov && <NPAPrintView movement={printingMov} employees={employees} profile={profile} onClose={()=>setPrintingMov(null)} />}
     </div>
   );
 }
@@ -9871,13 +9874,16 @@ function movTypeMeta(t){
   if(/demot|separation/i.test(t||'')) return { color:'bg-rose-100 text-rose-700' };
   return { color:'bg-slate-100 text-slate-600' };
 }
-function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
+function MovementFormModal({ movement, employees, profile, onPrint, onClose, onSaved }){
   const isEdit=!!movement;
-  const [f,setF]=useState(movement || { employee_id:'', movement_type:'Salary Increase', effective_date:new Date().toISOString().slice(0,10), previous_position:'', new_position:'', previous_department:'', new_department:'', previous_salary:'', new_salary:'', reason:'', remarks:'', status:'proposed' });
+  const [f,setF]=useState(movement || { employee_id:'', movement_type:'Salary Increase', effective_date:new Date().toISOString().slice(0,10), date_prepared:new Date().toISOString().slice(0,10), previous_position:'', new_position:'', previous_department:'', new_department:'', previous_salary:'', new_salary:'', reason:'', remarks:'', status:'proposed' });
+  const [npa,setNpa]=useState(movement?.npa_details || {});
+  const [showNpa,setShowNpa]=useState(false);
   const [attachments,setAttachments]=useState(Array.isArray(movement?.attachments)?movement.attachments:[]);
   const [uploading,setUploading]=useState(false);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const upN=(k,v)=>setNpa(p=>({...p,[k]:v}));
   const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   // When an employee is picked on a NEW record, pre-fill "previous" from their
   // current record so HR only fills the new values.
@@ -9910,16 +9916,21 @@ function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
     if(!f.movement_type){ setMsg('Pick a movement type.'); return; }
     setBusy(true); setMsg('');
     const num=(v)=> v===''||v==null ? null : Number(v);
-    const payload={ employee_id:f.employee_id, movement_type:f.movement_type, effective_date:f.effective_date||null,
+    const payload={ employee_id:f.employee_id, movement_type:f.movement_type, effective_date:f.effective_date||null, date_prepared:f.date_prepared||null,
       previous_position:f.previous_position||null, new_position:f.new_position||null,
       previous_department:f.previous_department||null, new_department:f.new_department||null,
       previous_salary:num(f.previous_salary), new_salary:num(f.new_salary),
-      reason:f.reason||null, remarks:f.remarks||null, status:f.status||'proposed', attachments };
+      reason:f.reason||null, remarks:f.remarks||null, status:f.status||'proposed', npa_details:npa, attachments };
     if(!isEdit) payload.created_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_movements').update(payload).eq('id',movement.id) : await sb.from('hr_movements').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
+  const npaRows=[
+    ['rank','Rank'],['status','Employment status'],['work','Work schedule'],
+    ['transport','Transportation allowance'],['deminimis','De minimis'],['car','Car allowance'],
+    ['commission','Commission structure'],['monthly','Monthly compensation'],
+  ];
   const isSalary=/salary|increase|merit|adjust/i.test(f.movement_type||'');
   const diff = (f.new_salary!==''&&f.previous_salary!=='') ? (Number(f.new_salary)-Number(f.previous_salary)) : null;
   return (
@@ -9929,8 +9940,9 @@ function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
           <TpLbl t="Employee *"><select className="input" value={f.employee_id} onChange={e=>pickEmp(e.target.value)}><option value="">— select —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select></TpLbl>
           <TpLbl t="Movement type *"><select className="input" value={f.movement_type} onChange={e=>up('movement_type',e.target.value)}>{MOVEMENT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Effective date"><input type="date" className="input" value={f.effective_date||''} onChange={e=>up('effective_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Date prepared"><input type="date" className="input" value={f.date_prepared||''} onChange={e=>up('date_prepared',e.target.value)} /></TpLbl>
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{MOVEMENT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -9948,6 +9960,24 @@ function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
         {isSalary && diff!=null && <div className={`text-xs rounded p-2 ${diff>=0?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-rose-50 text-rose-700 border border-rose-200'}`}>{diff>=0?'Increase':'Decrease'} of <strong>{peso(Math.abs(diff))}</strong>{f.previous_salary>0?` (${((diff/Number(f.previous_salary))*100).toFixed(1)}%)`:''}</div>}
         <TpLbl t="Reason / justification"><textarea className="input min-h-[50px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder="e.g. Merit increase after annual review; promotion to line leader" /></TpLbl>
         <TpLbl t="Remarks / notes"><textarea className="input min-h-[40px]" value={f.remarks} onChange={e=>up('remarks',e.target.value)} /></TpLbl>
+
+        {/* Extra details for the printable Notice of Personnel Action (NPA). */}
+        <div className="border rounded-lg">
+          <button type="button" onClick={()=>setShowNpa(v=>!v)} className="w-full flex items-center justify-between px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            <span>📄 NPA letter details (allowances, commission, etc.)</span><span>{showNpa?'▲':'▼'}</span>
+          </button>
+          {showNpa && <div className="p-3 pt-0 space-y-2">
+            <div className="text-[11px] text-slate-500">Position, department and basic pay pull from the fields above. Fill the FROM → TO below only for what the NPA needs; blanks print as “N/A”.</div>
+            <div className="grid grid-cols-[130px_1fr_1fr] gap-2 text-[10px] uppercase text-slate-400 font-semibold px-1"><div></div><div>From</div><div>To</div></div>
+            {npaRows.map(([k,label])=>(
+              <div key={k} className="grid grid-cols-[130px_1fr_1fr] gap-2 items-center">
+                <div className="text-xs font-medium text-slate-600">{label}</div>
+                <input className="input !py-1 text-xs" value={npa[k+'_from']||''} onChange={e=>upN(k+'_from',e.target.value)} placeholder="—" />
+                <input className="input !py-1 text-xs" value={npa[k+'_to']||''} onChange={e=>upN(k+'_to',e.target.value)} placeholder="—" />
+              </div>
+            ))}
+          </div>}
+        </div>
         <TpLbl t="Attachments (approval memo, signed form, etc.)">
           <div className="flex items-center gap-2">
             <input type="file" multiple accept="image/*,application/pdf" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} className="text-xs flex-1" />
@@ -9956,7 +9986,90 @@ function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
           {attachments.length>0 && <div className="flex flex-wrap gap-1.5 mt-2">{attachments.map((a,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 rounded px-2 py-1"><a href={a.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">📎 {a.name}</a><button onClick={()=>setAttachments(p=>p.filter((_,x)=>x!==i))} className="text-rose-400">✕</button></span>))}</div>}
         </TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save movement':'Add movement'}</button>
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save movement':'Add movement'}</button>
+          {isEdit && onPrint && <button onClick={()=>onPrint({ ...movement, ...f, npa_details:npa, attachments })} className="py-2 px-4 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900" title="Print Notice of Personnel Action">🖨 Print NPA</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Notice of Personnel Action — printable letter generated from a movement record.
+function NPAPrintView({ movement, employees, profile, onClose }){
+  const emp=(employees||[]).find(e=>e.id===movement.employee_id);
+  const npa=movement.npa_details||{};
+  const cell=(v)=> (v===null||v===undefined||v==='') ? 'N/A' : (typeof v==='number' ? peso(v) : String(v));
+  // Which "Employment Action" box to tick, based on movement type.
+  const t=(movement.movement_type||'').toLowerCase();
+  const action = /promot/.test(t)?'PROMOTION'
+    : /salary|increase|merit|adjust/.test(t)?'SALARY ADJUSTMENT'
+    : /regular/.test(t)?'REGULARIZATION'
+    : /transfer|reassign|lateral/.test(t)?'LATERAL'
+    : /demot/.test(t)?'DEMOTION'
+    : /renewal|rehire/.test(t)?'REHIRE'
+    : /trainee|intern/.test(t)?'TRAINEE / INTERN'
+    : 'OTHERS';
+  const chk=(label)=> action===label ? '☑' : '☐';
+  const rows=[
+    ['Rank', npa.rank_from ?? emp?.rank, npa.rank_to ?? emp?.rank],
+    ['Status', npa.status_from ?? emp?.status, npa.status_to ?? emp?.status],
+    ['Department', movement.previous_department ?? emp?.department, movement.new_department ?? movement.previous_department ?? emp?.department],
+    ['Position', movement.previous_position ?? emp?.position, movement.new_position ?? emp?.position],
+    ['Work Schedule', npa.work_from, npa.work_to],
+    ['Basic Pay', movement.previous_salary, movement.new_salary],
+    ['Transportation Allowance', npa.transport_from, npa.transport_to],
+    ['De minimis', npa.deminimis_from, npa.deminimis_to],
+    ['Car Allowance', npa.car_from, npa.car_to],
+    ['Commission Structure', npa.commission_from, npa.commission_to],
+    ['Monthly Compensation', npa.monthly_from, npa.monthly_to],
+    ['Date Effectivity', emp?.hire_date ? fmtDate(emp.hire_date) : (npa.effectivity_from||''), movement.effective_date ? fmtDate(movement.effective_date) : ''],
+  ];
+  const curPos = movement.previous_position || emp?.position || '';
+  return (
+    <Modal title="Notice of Personnel Action (NPA)" onClose={onClose} xwide>
+      <style>{`@media print { body * { visibility:hidden !important; } .npa-sheet, .npa-sheet * { visibility:visible !important; } .npa-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
+      <div className="npa-sheet bg-white p-6 text-[13px]">
+        <SteezeLetterhead docTitle="NOTICE OF PERSONNEL ACTION (NPA)" />
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-3 mb-4">
+          <div><strong>Employee's Name:</strong> {emp?fullName(emp):'—'}</div>
+          <div><strong>Date Hired:</strong> {emp?.hire_date?fmtDate(emp.hire_date):'—'}</div>
+          <div><strong>Position:</strong> {curPos||'—'}</div>
+          <div><strong>Date Prepared:</strong> {movement.date_prepared?fmtDate(movement.date_prepared):'—'}</div>
+        </div>
+        <div className="font-bold mb-1">Employment Action:</div>
+        <div className="grid grid-cols-3 gap-x-6 gap-y-0.5 mb-4">
+          {['LATERAL','SALARY ADJUSTMENT','DEMOTION','REGULARIZATION','REHIRE','OTHERS','PROMOTION','TRAINEE / INTERN'].map(l=>(
+            <div key={l} className={action===l?'font-bold':''}>{chk(l)} {l}</div>
+          ))}
+        </div>
+        <table className="w-full border border-slate-800 border-collapse text-[12px]">
+          <thead><tr className="bg-slate-900 text-white">
+            <th className="border border-slate-800 px-2 py-1.5 text-left w-56">APPOINTMENT</th>
+            <th className="border border-slate-800 px-2 py-1.5 text-left">FROM</th>
+            <th className="border border-slate-800 px-2 py-1.5 text-left">TO</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(([label,from,to],i)=>(
+              <tr key={label} className={i%2?'bg-slate-50':''}>
+                <td className="border border-slate-400 px-2 py-1.5 font-bold">{label}</td>
+                <td className="border border-slate-400 px-2 py-1.5 whitespace-pre-line">{cell(from)}</td>
+                <td className="border border-slate-400 px-2 py-1.5 whitespace-pre-line">{cell(to)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {movement.reason && <div className="mt-3 text-[12px]"><strong>Reason / Justification:</strong> {movement.reason}</div>}
+        {movement.remarks && <div className="mt-1 text-[12px]"><strong>Remarks:</strong> {movement.remarks}</div>}
+        <div className="grid grid-cols-3 gap-6 mt-10 text-center text-[11px]">
+          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Prepared by</div></div>
+          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Approved by</div></div>
+          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Conforme (Employee)</div></div>
+        </div>
+      </div>
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print NPA</button>
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
   );
