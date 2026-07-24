@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 283 · RFP list now shows each RFP's A/P Voucher status with a 👁 Preview button to open the printable A/P voucher (finance + admin signatures). Applies to RFPs that have an A/P voucher raised on approval.";
+const BUILD = "Live build 284 · Subcon Weekly payroll now has filters: pick a week (or all weeks) and filter by For payment / Paid, with a running total for the filtered set.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28676,6 +28676,8 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   const [editingProject,setEditingProject]=useState(null);
   const [viewingProject,setViewingProject]=useState(null);
   const [summaryWeek,setSummaryWeek]=useState('');
+  const [payrollWeek,setPayrollWeek]=useState('');       // '' = all weeks
+  const [payrollStatus,setPayrollStatus]=useState('');   // '' | 'for_payment' | 'paid'
   const canEditPayrollRow = profile.role==='admin' || profile.role==='production_supervisor';
 
   const sendRows = (subconSends||[])
@@ -28888,8 +28890,31 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
         </div>
       )}
 
-      {tab==='payroll' && (
-        <div className="bg-white rounded-xl border overflow-x-auto">
+      {tab==='payroll' && (()=>{
+        const pweeks = Array.from(new Set((subconPayrolls||[]).map(p=>p.week_ending).filter(Boolean))).sort().reverse();
+        const filtered = (subconPayrolls||[])
+          .filter(p=> !payrollWeek || p.week_ending===payrollWeek)
+          .filter(p=> payrollStatus==='' ? true
+            : payrollStatus==='paid' ? p.status==='paid'
+            : /* for_payment */ (p.status!=='paid' && p.status!=='cancelled'));
+        const fTotal = filtered.reduce((s,p)=>s+Number(p.total_amount||0),0);
+        return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl px-3 py-2">
+            <label className="text-xs font-semibold text-slate-500">Week ending</label>
+            <select value={payrollWeek} onChange={e=>setPayrollWeek(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+              <option value="">All weeks</option>
+              {pweeks.map(w=><option key={w} value={w}>{fmtDate(w)}</option>)}
+            </select>
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs ml-1">
+              {[['','All'],['for_payment','For payment'],['paid','Paid']].map(([k,l])=>(
+                <button key={k} onClick={()=>setPayrollStatus(k)} className={`px-2.5 py-1 rounded-md ${payrollStatus===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+              ))}
+            </div>
+            <div className="flex-1"></div>
+            <div className="text-xs text-slate-500">{filtered.length} payroll{filtered.length===1?'':'s'} · <strong className="text-slate-700">{peso(fTotal)}</strong></div>
+          </div>
+          <div className="bg-white rounded-xl border overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
               <tr>
@@ -28902,9 +28927,9 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                 <th className="text-right px-3 py-2">Actions</th>
               </tr>
             </thead>
-            <tbody>{(subconPayrolls||[]).length === 0 ? (
-              <tr><td colSpan="7" className="px-3 py-10 text-center text-slate-400">No payrolls yet. Click + Generate weekly payroll to roll up this week's returns.</td></tr>
-            ) : (subconPayrolls||[]).map(p => {
+            <tbody>{filtered.length === 0 ? (
+              <tr><td colSpan="7" className="px-3 py-10 text-center text-slate-400">{(subconPayrolls||[]).length===0 ? "No payrolls yet. Click + Generate weekly payroll to roll up this week's returns." : 'No payrolls match this filter.'}</td></tr>
+            ) : filtered.map(p => {
               const subcon = (subcons||[]).find(x => x.id === p.subcon_id);
               const statusCls = p.status==='paid' ? 'bg-emerald-100 text-emerald-700'
                 : p.status==='finalized' ? 'bg-indigo-100 text-indigo-700'
@@ -28932,8 +28957,10 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
               );
             })}</tbody>
           </table>
+          </div>
         </div>
-      )}
+        );
+      })()}
 
       {tab==='summary' && (()=>{
         const weeks = Array.from(new Set((subconPayrolls||[]).filter(p=>!p.deleted_at).map(p=>p.week_ending).filter(Boolean))).sort().reverse();
