@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 276 · Petty cash & cash advances now liquidate first: nothing hits the Expense Log until you liquidate, and only the amount actually SPENT is logged (returned cash goes back to the source bank, never counted as expense). Added a Liquidate button for petty cash floats.";
+const BUILD = "Live build 277 · New Finance → Asset Register. Track every company asset with category, who's using it, department, cost and useful life; straight-line depreciation (annual/monthly, accumulated, net book value) computes automatically.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24182,6 +24182,166 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
 }
 
 
+/* ─────────── ASSET REGISTER ─────────── */
+const ASSET_CATEGORIES = ['Equipment','Machinery','Computer & IT','Furniture & Fixtures','Vehicle','Tools','Building','Leasehold Improvement','Other'];
+const ASSET_STATUSES = [
+  { key:'in_use',      label:'In use',       color:'bg-emerald-100 text-emerald-700' },
+  { key:'idle',        label:'Idle',         color:'bg-slate-200 text-slate-600' },
+  { key:'maintenance', label:'Maintenance',  color:'bg-amber-100 text-amber-700' },
+  { key:'disposed',    label:'Disposed',     color:'bg-rose-100 text-rose-700' },
+];
+const assetStatusMeta = (k)=> ASSET_STATUSES.find(s=>s.key===k) || ASSET_STATUSES[0];
+// Straight-line depreciation. Book value never drops below salvage.
+function assetDep(a){
+  const cost=Number(a.cost||0), salvage=Number(a.salvage_value||0), life=Number(a.useful_life_years||0);
+  const depreciable=Math.max(0, cost-salvage);
+  const annual = life>0 ? depreciable/life : 0;
+  const monthly = annual/12;
+  let months=0;
+  if(a.purchase_date){ const p=new Date(a.purchase_date+'T00:00:00'); const now=new Date(); months=Math.max(0,(now.getFullYear()-p.getFullYear())*12 + (now.getMonth()-p.getMonth())); }
+  const accumulated = a.status==='disposed' ? depreciable : Math.min(depreciable, monthly*months);
+  const bookValue = cost - accumulated;
+  return { depreciable, annual, monthly, months, accumulated, bookValue };
+}
+function AssetsView({ profile, assets, profiles, reload }){
+  const [search,setSearch]=useState('');
+  const [catFilter,setCatFilter]=useState('');
+  const [editing,setEditing]=useState(null);   // asset row or {} for new
+  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const live = (assets||[]).filter(a=>!a.deleted_at);
+  const rows = live
+    .filter(a=> !catFilter || a.category===catFilter)
+    .filter(a=> !search || `${a.asset_code||''} ${a.name||''} ${a.assigned_to_name||''} ${a.department||''} ${a.serial_number||''}`.toLowerCase().includes(search.toLowerCase()));
+  const totalCost = live.reduce((s,a)=>s+Number(a.cost||0),0);
+  const totalAccum = live.reduce((s,a)=>s+assetDep(a).accumulated,0);
+  const totalBook = live.reduce((s,a)=>s+assetDep(a).bookValue,0);
+  const nameFor=(a)=> a.assigned_to_id ? ((profiles||[]).find(p=>p.id===a.assigned_to_id)?.name || a.assigned_to_name || '—') : (a.assigned_to_name||'—');
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🏷 Asset Register</h1>
+            <p className="text-slate-500 text-sm">{live.length} assets · Cost <strong>{peso(totalCost)}</strong> · Accum. dep. <strong className="text-amber-700">{peso(totalAccum)}</strong> · Net book value <strong className="text-emerald-700">{peso(totalBook)}</strong></p>
+          </div>
+          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add asset</button>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200">
+            <option value="">All categories</option>
+            {ASSET_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name / code / assignee / dept…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Code</th><th className="text-left px-3 py-2">Asset</th>
+          <th className="text-left px-3 py-2">Category</th><th className="text-left px-3 py-2">Assigned to</th>
+          <th className="text-left px-3 py-2">Dept</th><th className="text-right px-3 py-2">Cost</th>
+          <th className="text-right px-3 py-2">Monthly dep.</th><th className="text-right px-3 py-2">Accum.</th>
+          <th className="text-right px-3 py-2">Book value</th><th className="text-center px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No assets {search||catFilter?'match':'yet'}. {canEdit && 'Click “+ Add asset”.'}</td></tr>}
+          {rows.map(a=>{ const d=assetDep(a); const m=assetStatusMeta(a.status); return (
+            <tr key={a.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(a)}>
+              <td className="px-3 py-2 font-mono text-xs">{a.asset_code||'—'}</td>
+              <td className="px-3 py-2"><div className="font-medium">{a.name}</div>{a.serial_number && <div className="text-[11px] text-slate-400">SN: {a.serial_number}</div>}</td>
+              <td className="px-3 py-2 text-xs">{a.category||'—'}</td>
+              <td className="px-3 py-2">{nameFor(a)}</td>
+              <td className="px-3 py-2 text-xs">{a.department||'—'}</td>
+              <td className="px-3 py-2 text-right">{peso(a.cost)}</td>
+              <td className="px-3 py-2 text-right text-slate-500">{peso(d.monthly)}</td>
+              <td className="px-3 py-2 text-right text-amber-700">{peso(d.accumulated)}</td>
+              <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(d.bookValue)}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <AssetFormModal asset={editing} profile={profile} profiles={profiles} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
+    </div>
+  );
+}
+function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
+  const isEdit = !!asset?.id;
+  const [f,setF]=useState({
+    asset_code: asset.asset_code||'', name: asset.name||'', category: asset.category||ASSET_CATEGORIES[0],
+    description: asset.description||'', serial_number: asset.serial_number||'',
+    assigned_to_id: asset.assigned_to_id||'', assigned_to_name: asset.assigned_to_name||'',
+    department: asset.department||'', location: asset.location||'',
+    purchase_date: asset.purchase_date||new Date().toISOString().slice(0,10),
+    cost: asset.cost??'', salvage_value: asset.salvage_value??0, useful_life_years: asset.useful_life_years??5,
+    status: asset.status||'in_use', notes: asset.notes||'',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const preview = assetDep({ cost:f.cost, salvage_value:f.salvage_value, useful_life_years:f.useful_life_years, purchase_date:f.purchase_date, status:f.status });
+  async function save(){
+    if(!f.name.trim()){ setMsg('Asset name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload = {
+      asset_code: f.asset_code.trim()||null, name: f.name.trim(), category: f.category,
+      description: f.description.trim()||null, serial_number: f.serial_number.trim()||null,
+      assigned_to_id: f.assigned_to_id||null, assigned_to_name: f.assigned_to_id? null : (f.assigned_to_name.trim()||null),
+      department: f.department.trim()||null, location: f.location.trim()||null,
+      purchase_date: f.purchase_date||null, cost: Number(f.cost)||0,
+      salvage_value: Number(f.salvage_value)||0, useful_life_years: Number(f.useful_life_years)||0,
+      status: f.status, notes: f.notes.trim()||null,
+    };
+    let error;
+    if(isEdit){ ({ error } = await sb.from('assets').update(payload).eq('id', asset.id)); }
+    else { payload.created_by = profile.id; ({ error } = await sb.from('assets').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function del(){
+    if(!confirm(`Delete asset "${asset.name}"? It goes to Trash.`)) return;
+    const { error } = await sb.from('assets').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', asset.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={isEdit?`Asset · ${asset.name}`:'+ Add asset'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Asset code"><input className="input" value={f.asset_code} onChange={e=>up('asset_code',e.target.value)} placeholder="e.g. AST-001" /></TpLbl>
+          <TpLbl t="Name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. Juki sewing machine" /></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{ASSET_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Assigned to (staff)"><select className="input" value={f.assigned_to_id} onChange={e=>up('assigned_to_id',e.target.value)}><option value="">— external / none —</option>{(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></TpLbl>
+          {!f.assigned_to_id && <TpLbl t="…or name"><input className="input" value={f.assigned_to_name} onChange={e=>up('assigned_to_name',e.target.value)} placeholder="If not a Steeze profile" /></TpLbl>}
+          <TpLbl t="Department"><input className="input" value={f.department} onChange={e=>up('department',e.target.value)} placeholder="e.g. Production" /></TpLbl>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Serial no."><input className="input" value={f.serial_number} onChange={e=>up('serial_number',e.target.value)} /></TpLbl>
+          <TpLbl t="Location"><input className="input" value={f.location} onChange={e=>up('location',e.target.value)} placeholder="e.g. Main office" /></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{ASSET_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          <TpLbl t="Purchase date"><input type="date" className="input" value={f.purchase_date} onChange={e=>up('purchase_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Cost *"><input type="number" className="input" value={f.cost} onChange={e=>up('cost',e.target.value)} placeholder="0.00" /></TpLbl>
+          <TpLbl t="Salvage value"><input type="number" className="input" value={f.salvage_value} onChange={e=>up('salvage_value',e.target.value)} /></TpLbl>
+          <TpLbl t="Useful life (yrs)"><input type="number" className="input" value={f.useful_life_years} onChange={e=>up('useful_life_years',e.target.value)} /></TpLbl>
+        </div>
+        <div className="bg-slate-50 border rounded-lg p-3 grid grid-cols-4 gap-2 text-center text-sm">
+          <div><div className="text-[10px] uppercase text-slate-500">Annual dep.</div><div className="font-bold">{peso(preview.annual)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-500">Monthly dep.</div><div className="font-bold">{peso(preview.monthly)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-500">Accum. to date</div><div className="font-bold text-amber-700">{peso(preview.accumulated)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-500">Book value</div><div className="font-bold text-emerald-700">{peso(preview.bookValue)}</div></div>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save asset':'Add asset'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ─────────── CASH POSITION ─────────── */
 function CashPositionView({ bankAccounts, bankTransactions, salesOrders, rfps, budgetRequests, cashAdvances }){
   const totalBanks = bankAccounts.reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
@@ -29474,6 +29634,7 @@ function App(){
     ['cash-advances','Cash Advances','🧾'],
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
+    ['assets','Asset Register','🏷'],
     ['pnl','P&L Summary','📊'],
     ['bir','BIR Tax Helpers','🧾'],
   ] };
@@ -29825,6 +29986,7 @@ function App(){
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
+        {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
