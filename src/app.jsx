@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 277 · New Finance → Asset Register. Track every company asset with category, who's using it, department, cost and useful life; straight-line depreciation (annual/monthly, accumulated, net book value) computes automatically.";
+const BUILD = "Live build 278 · New Finance → Journal Entries. Double-entry journal vouchers (JV-…) that must balance before posting, printable with signatures, plus a managed Chart of Accounts pre-loaded with common PH SME accounts.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24342,6 +24342,243 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
   );
 }
 
+/* ─────────── JOURNAL ENTRIES / JOURNAL VOUCHERS ─────────── */
+const ACCOUNT_TYPES = ['Asset','Liability','Equity','Income','Expense'];
+function jeTotals(lines){
+  const d=(lines||[]).reduce((s,l)=>s+(Number(l.debit)||0),0);
+  const c=(lines||[]).reduce((s,l)=>s+(Number(l.credit)||0),0);
+  return { debit:d, credit:c, balanced: Math.abs(d-c)<0.005 && d>0 };
+}
+function JournalView({ profile, journalEntries, chartAccounts, reload }){
+  const [tab,setTab]=useState('journal');
+  const [editing,setEditing]=useState(null);   // entry or {} for new
+  const [viewing,setViewing]=useState(null);
+  const [addingAcct,setAddingAcct]=useState(false);
+  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const entries = (journalEntries||[]).filter(j=>!j.deleted_at);
+  const monthKey = new Date().toISOString().slice(0,7);
+  const monthTotal = entries.filter(j=>(j.date||'').startsWith(monthKey)).reduce((s,j)=>s+Number(j.total_debit||0),0);
+  const accounts = (chartAccounts||[]).slice().sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📓 Journal Entries</h1>
+            <p className="text-slate-500 text-sm">{entries.length} journal vouchers · {peso(monthTotal)} posted this month · {accounts.length} accounts</p>
+          </div>
+          {canEdit && tab==='journal' && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New journal entry</button>}
+          {canEdit && tab==='coa' && <button onClick={()=>setAddingAcct(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add account</button>}
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
+          <button onClick={()=>setTab('journal')} className={`px-3 py-1.5 rounded-md ${tab==='journal'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Journal Entries</button>
+          <button onClick={()=>setTab('coa')} className={`px-3 py-1.5 rounded-md ${tab==='coa'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Chart of Accounts</button>
+        </div>
+      </div>
+
+      {tab==='journal' && (
+        <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+            <th className="text-left px-3 py-2">JV No.</th><th className="text-left px-3 py-2">Date</th>
+            <th className="text-left px-3 py-2">Memo</th><th className="text-left px-3 py-2">Reference</th>
+            <th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th>
+          </tr></thead>
+          <tbody>
+            {entries.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No journal entries yet. {canEdit && 'Click “+ New journal entry”.'}</td></tr>}
+            {entries.map(j=>(
+              <tr key={j.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(j)}>
+                <td className="px-3 py-2 font-mono text-xs font-semibold">{j.number}</td>
+                <td className="px-3 py-2 text-xs">{fmtDate(j.date)}</td>
+                <td className="px-3 py-2 truncate max-w-[280px]">{j.memo||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{j.reference||'—'}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(j.total_debit)}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${j.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{j.status==='draft'?'Draft':'Posted'}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+      )}
+
+      {tab==='coa' && (
+        <div className="space-y-4">
+          {ACCOUNT_TYPES.map(t=>{ const list=accounts.filter(a=>a.type===t); if(!list.length) return null; return (
+            <div key={t} className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-4 py-2 bg-slate-50 border-b font-semibold text-sm">{t}</div>
+              <table className="w-full text-sm"><tbody>
+                {list.map(a=>(
+                  <tr key={a.id} className="border-t">
+                    <td className="px-3 py-2 font-mono text-xs w-20">{a.code}</td>
+                    <td className="px-3 py-2">{a.name}</td>
+                    <td className="px-3 py-2 text-right">{!a.active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-500">inactive</span>}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </div>
+          ); })}
+        </div>
+      )}
+
+      {editing && <JournalFormModal entry={editing} chartAccounts={accounts} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
+      {viewing && <JournalViewModal entry={viewing} profile={profile} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
+      {addingAcct && <ChartAccountModal profile={profile} onClose={()=>setAddingAcct(false)} onSaved={()=>{ setAddingAcct(false); reload && reload(); }} />}
+    </div>
+  );
+}
+function JournalFormModal({ entry, chartAccounts, profile, onClose, onSaved }){
+  const isEdit = !!entry?.id;
+  const [date,setDate]=useState(entry.date||new Date().toISOString().slice(0,10));
+  const [reference,setReference]=useState(entry.reference||'');
+  const [memo,setMemo]=useState(entry.memo||'');
+  const blank=()=>({ account_code:'', description:'', debit:'', credit:'' });
+  const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const acctFor=(code)=> (chartAccounts||[]).find(a=>a.code===code);
+  const t = jeTotals(lines);
+  function setLine(i,k,v){ setLines(ls=>ls.map((l,j)=>j===i?{...l,[k]:v}:l)); }
+  function addLine(){ setLines(ls=>[...ls, blank()]); }
+  function removeLine(i){ setLines(ls=>ls.filter((_,j)=>j!==i)); }
+  async function save(status){
+    const clean = lines.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
+      .map(l=>({ account_code:l.account_code, account_name:acctFor(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+    if(clean.length<2){ setMsg('A journal entry needs at least two lines.'); return; }
+    const tt=jeTotals(clean);
+    if(status==='posted' && !tt.balanced){ setMsg(`Debits (${peso(tt.debit)}) must equal Credits (${peso(tt.credit)}) to post.`); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
+      if(isEdit){ const { error } = await sb.from('journal_entries').update(payload).eq('id', entry.id); if(error) throw error; }
+      else {
+        const monthKey = date.slice(0,7);
+        const { data: rows } = await sb.from('journal_entries').select('number').like('number', `JV-${monthKey}-%`);
+        let max=0; (rows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+        payload.number = `JV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        payload.created_by = profile.id;
+        const { error } = await sb.from('journal_entries').insert(payload); if(error) throw error;
+      }
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?`Journal entry · ${entry.number}`:'+ New journal entry'} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+          <TpLbl t="Reference"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="e.g. Adjusting entry / OR no." /></TpLbl>
+          <TpLbl t="Memo"><input className="input" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="What is this entry for?" /></TpLbl>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+              <th className="text-left px-2 py-1.5 w-64">Account</th><th className="text-left px-2 py-1.5">Description</th>
+              <th className="text-right px-2 py-1.5 w-32">Debit</th><th className="text-right px-2 py-1.5 w-32">Credit</th><th className="w-8"></th>
+            </tr></thead>
+            <tbody>
+              {lines.map((l,i)=>(
+                <tr key={i} className="border-t">
+                  <td className="px-2 py-1">
+                    <select className="input !py-1" value={l.account_code} onChange={e=>setLine(i,'account_code',e.target.value)}>
+                      <option value="">— account —</option>
+                      {chartAccounts.filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setLine(i,'description',e.target.value)} placeholder="line memo" /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setLine(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setLine(i,'credit',''); }} /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setLine(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setLine(i,'debit',''); }} /></td>
+                  <td className="px-2 py-1 text-center"><button onClick={()=>removeLine(i)} className="text-slate-400 hover:text-rose-600">✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-slate-50 font-semibold">
+                <td className="px-2 py-1.5" colSpan="2"><button onClick={addLine} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td>
+                <td className="px-2 py-1.5 text-right">{peso(t.debit)}</td>
+                <td className="px-2 py-1.5 text-right">{peso(t.credit)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div className={`text-sm text-center py-1.5 rounded-lg ${t.balanced?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>
+          {t.balanced ? '✓ Balanced — debits equal credits' : `Out of balance by ${peso(Math.abs(t.debit-t.credit))} — a journal entry must balance to post`}
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={()=>save('posted')} disabled={busy||!t.balanced} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'✓ Post entry'}</button>
+          <button onClick={()=>save('draft')} disabled={busy} className="py-2 px-4 rounded-lg border font-semibold text-slate-600 hover:bg-slate-50">Save draft</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function JournalViewModal({ entry, profile, canEdit, onEdit, onClose, onSaved }){
+  const t = jeTotals(entry.lines);
+  async function del(){
+    if(!confirm(`Delete journal entry ${entry.number}?`)) return;
+    const { error } = await sb.from('journal_entries').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', entry.id);
+    if(error){ alert(error.message); return; } onSaved();
+  }
+  return (
+    <Modal title={`Journal Voucher — ${entry.number}`} onClose={onClose} wide>
+      <style>{`@media print { body * { visibility:hidden !important; } .jv-sheet, .jv-sheet * { visibility:visible !important; } .jv-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
+      <div className="jv-sheet bg-white border rounded p-5">
+        <SteezeLetterhead docTitle="JOURNAL VOUCHER" />
+        <div className="flex justify-between text-xs text-slate-600 mb-3">
+          <div><div><strong>JV No.:</strong> {entry.number}</div><div><strong>Date:</strong> {fmtDate(entry.date)}</div></div>
+          <div className="text-right">{entry.reference && <div><strong>Ref:</strong> {entry.reference}</div>}<span className={`text-[10px] px-2 py-0.5 rounded ${entry.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{entry.status==='draft'?'DRAFT':'POSTED'}</span></div>
+        </div>
+        {entry.memo && <div className="text-sm mb-3"><strong>Memo:</strong> {entry.memo}</div>}
+        <table className="w-full text-sm border">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase"><tr>
+            <th className="text-left px-2 py-1.5 border">Account</th><th className="text-left px-2 py-1.5 border">Description</th>
+            <th className="text-right px-2 py-1.5 border w-32">Debit</th><th className="text-right px-2 py-1.5 border w-32">Credit</th>
+          </tr></thead>
+          <tbody>
+            {(entry.lines||[]).map((l,i)=>(
+              <tr key={i} className="border-t"><td className="px-2 py-1.5 border">{l.account_code} · {l.account_name}</td><td className="px-2 py-1.5 border text-slate-600">{l.description||''}</td><td className="px-2 py-1.5 border text-right">{Number(l.debit)?peso(l.debit):''}</td><td className="px-2 py-1.5 border text-right">{Number(l.credit)?peso(l.credit):''}</td></tr>
+            ))}
+            <tr className="bg-slate-50 font-bold"><td className="px-2 py-1.5 border" colSpan="2">TOTAL</td><td className="px-2 py-1.5 border text-right">{peso(t.debit)}</td><td className="px-2 py-1.5 border text-right">{peso(t.credit)}</td></tr>
+          </tbody>
+        </table>
+        <div className="grid grid-cols-3 gap-6 mt-8 text-center text-[10px] text-slate-500">
+          <div><div className="border-b border-slate-800 h-8"></div><div className="mt-1">Prepared by</div></div>
+          <div><div className="border-b border-slate-800 h-8"></div><div className="mt-1">Checked by</div></div>
+          <div><div className="border-b border-slate-800 h-8"></div><div className="mt-1">Approved by</div></div>
+        </div>
+      </div>
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print</button>
+        {canEdit && <button onClick={onEdit} className="py-2 px-4 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">Edit</button>}
+        {canEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+      </div>
+    </Modal>
+  );
+}
+function ChartAccountModal({ profile, onClose, onSaved }){
+  const [f,setF]=useState({ code:'', name:'', type:'Expense' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    if(!f.code.trim()||!f.name.trim()){ setMsg('Code and name are required.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('chart_accounts').insert({ code:f.code.trim(), name:f.name.trim(), type:f.type });
+    setBusy(false); if(error){ setMsg(/duplicate/i.test(error.message)?'That account code already exists.':error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="+ Add account" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Code *"><input className="input" value={f.code} onChange={e=>setF({...f,code:e.target.value})} placeholder="e.g. 5250" /></TpLbl>
+          <TpLbl t="Type"><select className="input" value={f.type} onChange={e=>setF({...f,type:e.target.value})}>{ACCOUNT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Account name *"><input className="input" value={f.name} onChange={e=>setF({...f,name:e.target.value})} placeholder="e.g. Marketing Expense" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Add account'}</button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ─────────── CASH POSITION ─────────── */
 function CashPositionView({ bankAccounts, bankTransactions, salesOrders, rfps, budgetRequests, cashAdvances }){
   const totalBanks = bankAccounts.reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
@@ -29635,6 +29872,7 @@ function App(){
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
     ['assets','Asset Register','🏷'],
+    ['journal','Journal Entries','📓'],
     ['pnl','P&L Summary','📊'],
     ['bir','BIR Tax Helpers','🧾'],
   ] };
@@ -29987,6 +30225,7 @@ function App(){
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
+        {view==='journal' && <JournalView profile={profile} journalEntries={journalEntries} chartAccounts={chartAccounts} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
