@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 280 · Fix: Add bank account now auto-generates the required short bank code (e.g. BDO), so saving a new bank works.";
+const BUILD = "Live build 281 · Fix: Add bank account now also fills the required 'name' column (plus the auto bank code), so saving a new bank works.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19677,7 +19677,7 @@ function BankAccountCreateModal({ profile, onClose, onSaved }){
       while(taken.has(code)){ code = `${base}${n}`; n++; }
       const maxPos = (existing||[]).reduce((m,b)=>Math.max(m, Number(b.position||0)), 0);
       const { error } = await sb.from('bank_accounts').insert({
-        code, position: maxPos+1,
+        code, position: maxPos+1, name,
         bank_name:name, account_name:f.account_name.trim()||null,
         account_number:f.account_number.trim()||null, opening_balance:Number(f.opening_balance)||0,
         notes:f.notes.trim()||null,
