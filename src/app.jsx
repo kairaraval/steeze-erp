@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 278 · New Finance → Journal Entries. Double-entry journal vouchers (JV-…) that must balance before posting, printable with signatures, plus a managed Chart of Accounts pre-loaded with common PH SME accounts.";
+const BUILD = "Live build 279 · Subcon payroll now produces ONE cash voucher per weekly payout (listing every subcon) instead of a raw expense line or per-subcon vouchers — it shows in the Expense Log as a voucher, single-counted. P&L now also defers petty cash until the float is liquidated.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13684,19 +13684,38 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
       const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
         bank_id: bankId, date: today, direction:'out', amount: total,
         description: `${label} — ${lines.length} ${peopleWord}`.slice(0,200),
-        ref_type:'expense', ref_id:null, created_by: profile.id,
+        ref_type: kind==='subcon' ? 'voucher' : 'expense', ref_id:null, created_by: profile.id,
       }).select('id').single();
       if(btErr) throw btErr;
-      const { data: exp, error: exErr } = await sb.from('expenses').insert({
-        date: today, category, vendor: kind==='sewing'?'In-house Sewing Payroll':'Subcon Payroll',
-        description: `${label} — ${lines.length} ${peopleWord}: ${namesSummary}`.slice(0,900),
-        amount: total, paid_via:'bank', bank_id: bankId, bank_transaction_id: btx.id, created_by: profile.id,
-      }).select('id').single();
-      if(exErr) throw exErr;
-      await sb.from('bank_transactions').update({ ref_id: exp.id }).eq('id', btx.id);
+      // Subcon payroll is disbursed via ONE cash voucher for the whole weekly
+      // batch, listing every subcon — it shows in the Expense Log as a voucher
+      // (not a raw expense) and is single-counted. In-house sewing keeps its
+      // plain expense record.
+      let expId = null;
+      if(kind === 'subcon'){
+        const num = await nextFinanceNumberFromDb('CASH', today.slice(0,7));
+        const particulars = `Subcon payroll payout · ${fmtDate(periodStart)}–${fmtDate(periodEnd)} — ${lines.map(l=>`${l.name}: ${peso(l.amount)}`).join('; ')}`.slice(0,1200);
+        const { data: v, error: vErr } = await sb.from('vouchers').insert({
+          number: num, type:'cash', date: today, payee:`Subcon Payroll (${lines.length} subcon${lines.length===1?'':'s'})`,
+          amount: total, particulars, expense_category: category, bank_id: bankId, bank_transaction_id: btx.id,
+          approval_status:'approved', approved_by: profile.id, approved_at: new Date().toISOString(), released_at: new Date().toISOString(),
+          prepared_by: profile.id,
+        }).select('id').single();
+        if(vErr) throw vErr;
+        await sb.from('bank_transactions').update({ ref_id: v.id }).eq('id', btx.id);
+      } else {
+        const { data: exp, error: exErr } = await sb.from('expenses').insert({
+          date: today, category, vendor: 'In-house Sewing Payroll',
+          description: `${label} — ${lines.length} ${peopleWord}: ${namesSummary}`.slice(0,900),
+          amount: total, paid_via:'bank', bank_id: bankId, bank_transaction_id: btx.id, created_by: profile.id,
+        }).select('id').single();
+        if(exErr) throw exErr;
+        expId = exp.id;
+        await sb.from('bank_transactions').update({ ref_id: exp.id }).eq('id', btx.id);
+      }
       const { data: pay, error: pErr } = await sb.from('payroll_payouts').insert({
         kind, period_start: periodStart, period_end: periodEnd, headcount: lines.length, total_amount: total,
-        lines, expense_category: category, bank_id: bankId, expense_id: exp.id, bank_transaction_id: btx.id,
+        lines, expense_category: category, bank_id: bankId, expense_id: expId, bank_transaction_id: btx.id,
         notes: notes||null, created_by: profile.id,
       }).select('id').single();
       if(pErr) throw pErr;
@@ -13709,7 +13728,7 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
       <style>{`@media print { body * { visibility:hidden !important; } .payout-sheet, .payout-sheet * { visibility:visible !important; } .payout-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
       <div className="space-y-3 text-sm">
         <div className="no-print bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
-          One payout of <strong>{peso(total)}</strong> for <strong>{lines.length}</strong> {peopleWord}. This creates <strong>one</strong> expense entry + one bank deduction for the whole batch (not per person).
+          One payout of <strong>{peso(total)}</strong> for <strong>{lines.length}</strong> {peopleWord}. This creates <strong>one</strong> {kind==='subcon'?'cash voucher':'expense entry'} + one bank deduction for the whole batch (not per person){kind==='subcon'?' — the voucher lists every subcon and appears in the Expense Log':''}.
         </div>
         <div className="no-print grid grid-cols-2 gap-2">
           <div><label className="text-xs font-semibold text-slate-500">Expense category *</label>
@@ -25052,7 +25071,7 @@ function CalendarEventModal({ profile, defaultDate, onClose, onSaved }){
 
 
 /* ─────────── P&L SUMMARY ─────────── */
-function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTransactions }){
+function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTransactions, cashAdvances }){
   const today = new Date();
   const [year,setYear]=useState(today.getFullYear());
   const [mode,setMode]=useState('month'); // 'month' | 'ytd'
@@ -25088,7 +25107,13 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
   //   "COGS — …"  → Cost of Goods Sold (adds to material/PO COGS)
   //   "CAPEX — …" → Capitalized below the line (doesn't expense this period)
   //   everything else → Operating Expenses
-  const inPeriodExpenses = (expenses||[]).filter(e => inRange(e.date) && isApprovedFin(e));
+  // Petty cash spend is deferred until the float is LIQUIDATED — an un-liquidated
+  // float is still an advance (asset), not an expense. So an expense charged to a
+  // petty cash that hasn't been liquidated yet is held out of the P&L.
+  const unliquidatedPC = new Set((cashAdvances||[]).filter(c=>c.status!=='liquidated').map(c=>c.id));
+  const inPeriodExpenses = (expenses||[]).filter(e =>
+    inRange(e.date) && isApprovedFin(e) && !(e.petty_cash_id && unliquidatedPC.has(e.petty_cash_id))
+  );
   // VOUCHERS are real disbursements too (rent, gov fees, transport paid via
   // Check / BT / Cash directly — outside the PO chain). Skip:
   //   • deleted vouchers (deleted_at set)
@@ -28238,29 +28263,10 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
     return `SPR-${monthKey}-${String(max+1).padStart(3,'0')}`;
   }
 
-  // Every subcon payroll gets a matching cash voucher in the Vouchers module
-  // for signatures/printing. It is a DOCUMENT ONLY (document_only=true): the
-  // actual cash-out + expense still flow through the Pay flow, so this voucher
-  // is deliberately excluded from every financial roll-up to avoid double
-  // counting. Created pre-approved so it never clutters the approvals queue.
-  async function syncSubconVoucher(payrollId, sprNumber, subcon, garments, amount){
-    try {
-      const particulars = `Sewing subcontract payroll ${sprNumber} — week ending ${fmtDate(weekEnding)} · ${garments} garment${garments===1?'':'s'}`;
-      const { data: existingV } = await sb.from('vouchers').select('id').eq('subcon_payroll_id', payrollId).is('deleted_at', null).limit(1);
-      if(existingV && existingV[0]){
-        await sb.from('vouchers').update({ amount, particulars, payee: subcon?.name||'Subcon' }).eq('id', existingV[0].id);
-      } else {
-        const num = await nextFinanceNumberFromDb('CASH', weekEnding.slice(0,7));
-        await sb.from('vouchers').insert({
-          number: num, type: 'cash', date: weekEnding, payee: subcon?.name||'Subcon',
-          amount, particulars, expense_category: 'Subcon Payroll',
-          subcon_payroll_id: payrollId, document_only: true,
-          approval_status: 'approved', approved_by: profile.id, approved_at: new Date().toISOString(),
-          prepared_by: profile.id,
-        });
-      }
-    } catch(e){ console.warn('subcon voucher sync failed:', e?.message||e); }
-  }
+  // Note: the disbursement voucher for subcon payroll is created ONCE for the
+  // whole weekly payout (listing every subcon) at the moment you Record the
+  // payout — see PayoutModal. We deliberately do NOT create per-subcon vouchers
+  // at generation time.
   async function generate(){
     setBusy(true); setMsg('');
     try {
@@ -28277,7 +28283,6 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
             if(e2) throw e2;
           }
           await sb.from('subcon_payrolls').update({ total_garments: p.totalGarments, total_amount: p.totalAmount }).eq('id', p.existing.id);
-          await syncSubconVoucher(p.existing.id, p.existing.number, p.subcon, p.totalGarments, p.totalAmount);
           refreshed++;
         } else if(p.action === 'create' || p.action === 'supplementary'){
           const number = await allocateNumber(monthKey);
@@ -28293,7 +28298,6 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
             const { error: e2 } = await sb.from('subcon_payroll_items').insert(items);
             if(e2) throw e2;
           }
-          await syncSubconVoucher(payroll.id, number, p.subcon, p.totalGarments, p.totalAmount);
           if(p.action === 'supplementary') supplementary++; else created++;
         }
       }
@@ -28440,8 +28444,6 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
         const { error: e3 } = await sb.from('subcon_payroll_items').insert(fresh);
         if(e3) throw e3;
       }
-      // Keep the linked document voucher's amount in sync with the edit.
-      try { await sb.from('vouchers').update({ amount: totalAmount, date: weekEnding }).eq('subcon_payroll_id', payroll.id).is('deleted_at', null); } catch(_){}
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -28539,8 +28541,6 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
     if(!confirm(`Void payroll ${payroll.number}? It will be soft-deleted from the list (recoverable by un-setting deleted_at in Supabase).`)) return;
     setBusy(true);
     const { error } = await sb.from('subcon_payrolls').update({ deleted_at: new Date().toISOString(), deleted_by: profile.id, status:'cancelled' }).eq('id', payroll.id);
-    // Void the linked document voucher too, so it doesn't linger.
-    try { await sb.from('vouchers').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, void_reason:`Subcon payroll ${payroll.number} voided` }).eq('subcon_payroll_id', payroll.id); } catch(_){}
     setBusy(false);
     if(error){ setMsg(error.message); return; }
     onSaved && onSaved();
@@ -28906,7 +28906,6 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                     {canEditPayrollRow && <button onClick={async()=>{
                       if(!confirm(`Void payroll ${p.number}? Soft delete — recoverable from Supabase.`)) return;
                       const { error } = await sb.from('subcon_payrolls').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, status:'cancelled' }).eq('id', p.id);
-                      try { await sb.from('vouchers').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, void_reason:`Subcon payroll ${p.number} voided` }).eq('subcon_payroll_id', p.id); } catch(_){}
                       if(error){ alert(error.message); return; }
                       reload && reload();
                     }} className="text-xs px-2 py-1 rounded bg-rose-100 text-rose-700 hover:bg-rose-200">Void</button>}
@@ -30214,7 +30213,7 @@ function App(){
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
         {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
-        {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} />}
+        {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} cashAdvances={cashAdvances} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
