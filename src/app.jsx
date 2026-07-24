@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 274 · Subcon payroll now generates a matching cash voucher (in the Vouchers module) for signatures/printing — one per subcon, kept in sync. It's a document only: the actual cash-out still flows through the Pay button, so nothing is double-counted.";
+const BUILD = "Live build 275 · New Finance → A/P Vouchers register. When an RFP is approved by BOTH Finance and Admin, an Accounts Payable Voucher (APV-…) is raised automatically — printable, carrying both signatures, viewable before payment; it flips to Paid when the RFP is paid.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21705,8 +21705,32 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
   async function approveAdmin(){
     if(!isAdmin){ setMsg('Only Admin (Kaira) can approve at this step.'); return; }
     setBusy(true);
-    const { error } = await sb.from('rfps').update({ status:'approved', admin_approved_by:profile.id, admin_approved_at:new Date().toISOString(), admin_notes:notes||null }).eq('id', rfp.id);
-    setBusy(false); if(error){ setMsg(error.message); return; }
+    const adminAt = new Date().toISOString();
+    const { error } = await sb.from('rfps').update({ status:'approved', admin_approved_by:profile.id, admin_approved_at:adminAt, admin_notes:notes||null }).eq('id', rfp.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    // Now that BOTH Finance and Admin have approved, raise the Accounts Payable
+    // Voucher (APV-…) — the payable document that carries both signatures and is
+    // viewable before payment. Idempotent: skip if one already exists.
+    try {
+      const { data: existingAp } = await sb.from('ap_vouchers').select('id').eq('rfp_id', rfp.id).is('deleted_at',null).limit(1);
+      if(!existingAp || !existingAp[0]){
+        const monthKey = new Date().toISOString().slice(0,7);
+        const { data: apRows } = await sb.from('ap_vouchers').select('number').like('number', `APV-${monthKey}-%`);
+        let max=0; (apRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+        const number = `APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        await sb.from('ap_vouchers').insert({
+          number, rfp_id: rfp.id, po_id: rfp.po_id||null, supplier_name: rfp.supplier_name||null,
+          amount: Number(rfp.amount||0), particulars: rfp.particulars||null,
+          payment_method: rfp.payment_method||null, payment_method_detail: rfp.payment_method_detail||null,
+          due_date: rfp.due_date||null, bank_name: rfp.bank_name||null,
+          bank_account_name: rfp.bank_account_name||null, bank_account_number: rfp.bank_account_number||null,
+          finance_approved_by: rfp.finance_approved_by||null, finance_approved_at: rfp.finance_approved_at||null,
+          admin_approved_by: profile.id, admin_approved_at: adminAt,
+          status:'for_payment', created_by: profile.id,
+        });
+      }
+    } catch(e){ console.warn('AP voucher creation failed:', e?.message||e); }
+    setBusy(false);
     onSaved();
   }
   async function reject(){
@@ -21874,6 +21898,8 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
       // Mark RFP as paid
       const { error: rErr } = await sb.from('rfps').update({ status:'paid', voucher_id:vdata.id, paid_at:new Date().toISOString() }).eq('id', rfp.id);
       if(rErr) throw rErr;
+      // Close out the linked Accounts Payable Voucher.
+      try { await sb.from('ap_vouchers').update({ status:'paid', paid_at:new Date().toISOString(), voucher_id:vdata.id, bank_transaction_id:bankTxId||null }).eq('rfp_id', rfp.id).is('deleted_at',null); } catch(_){}
       // Mark linked PO as paid
       if(rfp.po_id){
         await sb.from('purchase_orders').update({ payment_status:'paid', paid_at:new Date().toISOString(), paid_by:profile.id, amount_paid:Number(f.amount) }).eq('id', rfp.po_id);
@@ -22031,6 +22057,8 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
       const nowIso = new Date().toISOString();
       const { error: rErr } = await sb.from('rfps').update({ status:'paid', voucher_id:vdata.id, paid_at:nowIso }).in('id', ids);
       if(rErr) throw rErr;
+      // Close out every linked Accounts Payable Voucher.
+      try { await sb.from('ap_vouchers').update({ status:'paid', paid_at:nowIso, voucher_id:vdata.id }).in('rfp_id', ids).is('deleted_at',null); } catch(_){}
       // Mark every covered PO paid.
       const poIds = list.map(r=>r.po_id).filter(Boolean);
       for(const r of list){
@@ -22558,6 +22586,130 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
           <div className="text-xs text-emerald-700 self-center px-3 py-2 bg-emerald-50 rounded-lg border border-emerald-200">✓ Approved by <strong>{approvedBy.name||approvedBy.email}</strong> on {fmtDate((v.signed_at||v.approved_at||'').slice(0,10))}</div>
         )}
         <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this voucher</button>
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ─────────── ACCOUNTS PAYABLE VOUCHERS ─────────── */
+const AP_STATUSES = [
+  { key:'for_payment', label:'For Payment', color:'bg-amber-100 text-amber-700' },
+  { key:'paid',        label:'Paid',        color:'bg-emerald-100 text-emerald-700' },
+  { key:'void',        label:'Void',        color:'bg-rose-100 text-rose-700' },
+];
+const apMeta = (k)=> AP_STATUSES.find(s=>s.key===k) || AP_STATUSES[0];
+
+function APVouchersView({ profile, profiles, apVouchers, reload }){
+  const [tab,setTab]=useState('for_payment');
+  const [search,setSearch]=useState('');
+  const [viewing,setViewing]=useState(null);
+  const canManage = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const rows = (apVouchers||[])
+    .filter(a=> tab==='all' ? true : a.status===tab)
+    .filter(a=> !search || `${a.number} ${a.supplier_name||''} ${a.particulars||''}`.toLowerCase().includes(search.toLowerCase()));
+  const forPay = (apVouchers||[]).filter(a=>a.status==='for_payment');
+  const forPayTotal = forPay.reduce((s,a)=>s+Number(a.amount||0),0);
+  async function voidAp(a){
+    if(!confirm(`Void AP Voucher ${a.number}? It stays on record but is marked void.`)) return;
+    const { error } = await sb.from('ap_vouchers').update({ status:'void', deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', a.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">📄 Accounts Payable Vouchers</h1>
+            <p className="text-slate-500 text-sm">{forPay.length} awaiting payment · <strong className="text-amber-700">{peso(forPayTotal)}</strong> payable. Raised automatically when Finance + Admin approve an RFP.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+            {[['for_payment','For Payment'],['paid','Paid'],['void','Void'],['all','All']].map(([k,l])=>(
+              <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+            ))}
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search number / supplier…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+            <th className="text-left px-3 py-2">APV No.</th><th className="text-left px-3 py-2">Supplier</th>
+            <th className="text-left px-3 py-2">Particulars</th><th className="text-right px-3 py-2">Amount</th>
+            <th className="text-left px-3 py-2">Due</th><th className="text-center px-3 py-2">Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No AP vouchers {tab==='all'?'yet':'in this status'}.</td></tr>}
+            {rows.map(a=>{ const m=apMeta(a.status); return (
+              <tr key={a.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(a)}>
+                <td className="px-3 py-2 font-mono text-xs font-semibold">{a.number}</td>
+                <td className="px-3 py-2">{a.supplier_name||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[240px]">{a.particulars||'—'}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(a.amount)}</td>
+                <td className="px-3 py-2 text-xs">{a.due_date?fmtDate(a.due_date):'—'}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <button onClick={(e)=>{e.stopPropagation(); setViewing(a);}} className="text-xs text-indigo-600 hover:underline mr-2">View</button>
+                  {canManage && a.status==='for_payment' && <button onClick={(e)=>{e.stopPropagation(); voidAp(a);}} className="text-xs text-rose-500 hover:underline">Void</button>}
+                </td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+      {viewing && <APVoucherModal ap={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
+    </div>
+  );
+}
+
+function APVoucherModal({ ap, profiles, onClose }){
+  const finBy = (profiles||[]).find(p=>p.id===ap.finance_approved_by);
+  const admBy = (profiles||[]).find(p=>p.id===ap.admin_approved_by);
+  const m = apMeta(ap.status);
+  return (
+    <Modal title={`Accounts Payable Voucher — ${ap.number}`} onClose={onClose} wide>
+      <style>{`@media print { body * { visibility:hidden !important; } .apv-sheet, .apv-sheet * { visibility:visible !important; } .apv-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
+      <div className="apv-sheet bg-white border rounded p-5">
+        <SteezeLetterhead docTitle="ACCOUNTS PAYABLE VOUCHER" />
+        <div className="flex justify-between items-start text-xs text-slate-600 mb-3">
+          <div><div><strong>APV No.:</strong> {ap.number}</div><div><strong>Date:</strong> {fmtDate((ap.admin_approved_at||ap.created_at||'').slice(0,10))}</div>{ap.due_date && <div><strong>Due:</strong> {fmtDate(ap.due_date)}</div>}</div>
+          <div className="text-right"><span className={`text-[10px] px-2 py-0.5 rounded ${m.color}`}>{m.label.toUpperCase()}</span>{ap.paid_at && <div className="mt-1">Paid {fmtDate(ap.paid_at.slice(0,10))}</div>}</div>
+        </div>
+        <table className="w-full text-sm border mb-3">
+          <tbody>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold w-40">Payee / Supplier</td><td className="px-2 py-1.5">{ap.supplier_name||'—'}</td></tr>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Particulars</td><td className="px-2 py-1.5">{ap.particulars||'—'}</td></tr>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Payment method</td><td className="px-2 py-1.5">{ap.payment_method||'—'}{ap.payment_method_detail?` · ${ap.payment_method_detail}`:''}</td></tr>
+            {(ap.bank_name||ap.bank_account_number) && <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Deposit to</td><td className="px-2 py-1.5">🏦 {ap.bank_name||''}{ap.bank_account_name?` · ${ap.bank_account_name}`:''}{ap.bank_account_number?` · ${ap.bank_account_number}`:''}</td></tr>}
+            <tr><td className="px-2 py-2 bg-slate-50 font-semibold">Amount payable</td><td className="px-2 py-2 text-lg font-extrabold">{peso(ap.amount)}</td></tr>
+          </tbody>
+        </table>
+        <div className="text-sm italic text-slate-600 mb-4">{amountInWords(ap.amount)}</div>
+        <div className="grid grid-cols-2 gap-6 mt-6">
+          <div className="text-center">
+            <div className="text-[10px] uppercase text-slate-500 mb-6">Approved by Finance</div>
+            <div className="border-b border-slate-800 h-8 flex items-end justify-center pb-1 font-semibold">{finBy?(finBy.name||finBy.email):''}</div>
+            <div className="text-[10px] text-slate-500 mt-1">{ap.finance_approved_at?fmtDate(ap.finance_approved_at.slice(0,10)):''}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-[10px] uppercase text-slate-500 mb-6">Approved by Admin</div>
+            <div className="border-b border-slate-800 h-8 flex items-end justify-center pb-1 font-semibold">{admBy?(admBy.name||admBy.email):''}</div>
+            <div className="text-[10px] text-slate-500 mt-1">{ap.admin_approved_at?fmtDate(ap.admin_approved_at.slice(0,10)):''}</div>
+          </div>
+        </div>
+        <div className="mt-6 border-t pt-3 text-xs">
+          <div className="font-semibold uppercase text-slate-500 mb-1">Received payment in full</div>
+          <div className="grid grid-cols-2 gap-6 mt-4">
+            <div className="text-center"><div className="border-b border-slate-800 h-8"></div><div className="text-[10px] text-slate-600 mt-1">Signature over printed name</div></div>
+            <div className="text-center"><div className="border-b border-slate-800 h-8"></div><div className="text-[10px] text-slate-600 mt-1">Date</div></div>
+          </div>
+        </div>
+      </div>
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print voucher</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
@@ -28448,6 +28600,10 @@ function App(){
   const [invoices,setInvoices]=useState([]);   // admin/accounting all, managers own (RLS); loaded separately
   const [bankAccounts,setBankAccounts]=useState([]); const [bankTransactions,setBankTransactions]=useState([]);
   const [rfps,setRfps]=useState([]); const [vouchers,setVouchers]=useState([]);
+  const [apVouchers,setApVouchers]=useState([]);
+  const [assets,setAssets]=useState([]);
+  const [journalEntries,setJournalEntries]=useState([]);
+  const [chartAccounts,setChartAccounts]=useState([]);
   const [budgetRequests,setBudgetRequests]=useState([]);
   // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
@@ -28726,6 +28882,10 @@ function App(){
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
     try { const pat = await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPatterns(pat && !pat.error ? (pat.data||[]) : []); } catch(_){ setPatterns([]); }
     try { const pts = await sb.from('pattern_tasks').select('*').order('created_at',{ascending:false}); setPatternTasks(pts && !pts.error ? (pts.data||[]) : []); } catch(_){ setPatternTasks([]); }
+    try { const apv = await sb.from('ap_vouchers').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setApVouchers(apv && !apv.error ? (apv.data||[]) : []); } catch(_){ setApVouchers([]); }
+    try { const ast = await sb.from('assets').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setAssets(ast && !ast.error ? (ast.data||[]) : []); } catch(_){ setAssets([]); }
+    try { const je = await sb.from('journal_entries').select('*').is('deleted_at',null).order('date',{ascending:false}); setJournalEntries(je && !je.error ? (je.data||[]) : []); } catch(_){ setJournalEntries([]); }
+    try { const coa = await sb.from('chart_accounts').select('*').order('code',{ascending:true}); setChartAccounts(coa && !coa.error ? (coa.data||[]) : []); } catch(_){ setChartAccounts([]); }
     try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const cwl = await sb.from('cutting_worklist').select('*').order('start_date',{ascending:false}); setCuttingWorklist(cwl && !cwl.error ? (cwl.data||[]) : []); } catch(_){ setCuttingWorklist([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
@@ -28828,7 +28988,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -29269,6 +29429,7 @@ function App(){
     ['ledger','Customer Ledger','👥'],
     ['commissions','Commissions','💰'],
     ['rfps','Request for Payment','📝'],
+    ['ap-vouchers','A/P Vouchers','📄'],
     ['vouchers','Check / Cash Vouchers','💳'],
     ['expense-log','Expense Log','📚'],
     ['petty-cash','Petty Cash','💵'],
@@ -29625,6 +29786,7 @@ function App(){
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
+        {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
