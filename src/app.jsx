@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 272 · Estimates & invoices now have a 'Prices are VAT-inclusive' checkbox. Tick it and the 12% is neither added nor shown (total = the entered prices); leave it unticked and VAT 12% is added and displayed as before — per client preference.";
+const BUILD = "Live build 273 · Bank Accounts: '+ Add bank' button so you can add other company bank accounts manually (name, account no., opening balance).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19579,6 +19579,7 @@ function soOpen(sos){ return (sos||[]).filter(s=>s.status!=='paid' && s.status!=
 function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
   const [editing,setEditing]=useState(null);  // bank to edit (account name/number/opening balance)
   const [detail,setDetail]=useState(null);    // bank to see transaction history for
+  const [adding,setAdding]=useState(false);    // adding a brand-new bank account
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
   const canEdit = isAdmin || isAccounting;
@@ -19605,6 +19606,7 @@ function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
             <h1 className="text-2xl font-bold">🏦 Bank Accounts</h1>
             <p className="text-slate-500 text-sm">{bankAccounts.length} accounts · Total cash on hand: <strong className="text-emerald-700">{peso(totalCash)}</strong></p>
           </div>
+          {canEdit && <button onClick={()=>setAdding(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add bank</button>}
         </div>
       </div>
 
@@ -19629,9 +19631,39 @@ function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
         })}
       </div>
 
+      {adding && <BankAccountCreateModal profile={profile} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload(); }} />}
       {editing && <BankAccountEditModal bank={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} />}
       {detail && <BankAccountDetailModal bank={detail} txns={(bankTransactions||[]).filter(t=>t.bank_id===detail.id)} onClose={()=>setDetail(null)} reload={reload} canEdit={canEdit} />}
     </div>
+  );
+}
+
+function BankAccountCreateModal({ profile, onClose, onSaved }){
+  const [f,setF]=useState({ bank_name:'', account_name:'', account_number:'', opening_balance:0, notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    if(!f.bank_name.trim()){ setMsg('Bank name is required.'); return; }
+    setBusy(true); setMsg('');
+    const { error } = await sb.from('bank_accounts').insert({
+      bank_name:f.bank_name.trim(), account_name:f.account_name.trim()||null,
+      account_number:f.account_number.trim()||null, opening_balance:Number(f.opening_balance)||0,
+      notes:f.notes.trim()||null,
+    });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="+ Add bank account" onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Bank name *"><input className="input" value={f.bank_name} onChange={e=>setF({...f, bank_name:e.target.value})} placeholder="e.g. Metrobank, BDO, Security Bank" /></TpLbl>
+        <TpLbl t="Account name"><input className="input" value={f.account_name} onChange={e=>setF({...f, account_name:e.target.value})} placeholder="Steeze Corporation" /></TpLbl>
+        <TpLbl t="Account number"><input className="input" value={f.account_number} onChange={e=>setF({...f, account_number:e.target.value})} placeholder="0000-0000-0000" /></TpLbl>
+        <TpLbl t="Opening balance"><input type="number" className="input" value={f.opening_balance} onChange={e=>setF({...f, opening_balance:e.target.value})} /></TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>setF({...f, notes:e.target.value})} placeholder="Optional — branch, purpose, etc." /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Add bank account'}</button>
+      </div>
+    </Modal>
   );
 }
 
