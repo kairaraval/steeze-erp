@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 289 · RFP partial payments: paying less than the full amount now marks the RFP 'Partially Paid' and shows the remaining balance (list + detail). The A/P voucher reflects paid-to-date + balance and stays 'For payment' until fully settled; a 'Pay balance' button settles the rest. Fixed RFP-2026-07-024 (₱10,000 of ₱13,320).";
+const BUILD = "Live build 290 · A/P Vouchers list now tracks the OUTSTANDING balance — the 'awaiting payment' total and the Amount column show what's still owed (with the original amount underneath) for partially-paid vouchers.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22690,8 +22690,9 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
   const rows = (apVouchers||[])
     .filter(a=> tab==='all' ? true : a.status===tab)
     .filter(a=> !search || `${a.number} ${a.supplier_name||''} ${a.particulars||''}`.toLowerCase().includes(search.toLowerCase()));
+  const apBalance = (a)=> Math.max(0, Number(a.amount||0) - Number(a.amount_paid||0));
   const forPay = (apVouchers||[]).filter(a=>a.status==='for_payment');
-  const forPayTotal = forPay.reduce((s,a)=>s+Number(a.amount||0),0);
+  const forPayTotal = forPay.reduce((s,a)=>s+apBalance(a),0);
   async function voidAp(a){
     if(!confirm(`Void AP Voucher ${a.number}? It stays on record but is marked void.`)) return;
     const { error } = await sb.from('ap_vouchers').update({ status:'void', deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', a.id);
@@ -22703,7 +22704,7 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📄 Accounts Payable Vouchers</h1>
-            <p className="text-slate-500 text-sm">{forPay.length} awaiting payment · <strong className="text-amber-700">{peso(forPayTotal)}</strong> payable. Raised automatically when Finance + Admin approve an RFP.</p>
+            <p className="text-slate-500 text-sm">{forPay.length} awaiting payment · <strong className="text-amber-700">{peso(forPayTotal)}</strong> balance outstanding. Raised automatically when Finance + Admin approve an RFP.</p>
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -22729,7 +22730,7 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{a.number}</td>
                 <td className="px-3 py-2">{a.supplier_name||'—'}</td>
                 <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[240px]">{a.particulars||'—'}</td>
-                <td className="px-3 py-2 text-right font-semibold">{peso(a.amount)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{a.status==='for_payment' ? peso(apBalance(a)) : peso(a.amount)}{Number(a.amount_paid||0)>0 && a.status==='for_payment' && <div className="text-[10px] font-normal text-slate-400">of {peso(a.amount)}</div>}</td>
                 <td className="px-3 py-2 text-xs">{a.due_date?fmtDate(a.due_date):'—'}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
