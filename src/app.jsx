@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 290 · A/P Vouchers list now tracks the OUTSTANDING balance — the 'awaiting payment' total and the Amount column show what's still owed (with the original amount underneath) for partially-paid vouchers.";
+const BUILD = "Live build 291 · HR → Employee Relations now has two sections: ⚖️ Disciplinary (the existing case log) and 🔀 Employee Movement — log promotions, salary increases/adjustments, transfers, regularization, etc. (previous → new position/dept/salary, effective date, reason, attachments; auto-computes the increase %).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9728,16 +9728,24 @@ function caseSeverityMeta(k){ return CASE_SEVERITIES.find(s=>s.key===k); }
 // Disciplinary sanctions (stored as the label string)
 const SANCTION_TYPES = ['Verbal Warning','Written Reprimand','Final Warning','1-Day Suspension','2–3 Days Suspension','4–5 Days Suspension','6–10 Days Suspension','Preventive Suspension','Dismissal'];
 
-function HRRelationsView({ profile, employees, hrCases, reload }){
+function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
+  const [section,setSection]=useState('disciplinary'); // 'disciplinary' | 'movement'
   const [tab,setTab]=useState('active');
   const [search,setSearch]=useState('');
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [printing,setPrinting]=useState(null);
+  // Employee Movement state
+  const [movCreating,setMovCreating]=useState(false);
+  const [movEditing,setMovEditing]=useState(null);
+  const [movSearch,setMovSearch]=useState('');
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
   const all=(hrCases||[]);
   const active=all.filter(c=>!caseIsClosed(c));
   const closed=all.filter(c=>caseIsClosed(c));
+  const movements=(hrMovements||[]).slice().sort((a,b)=>String(b.effective_date||'').localeCompare(String(a.effective_date||'')));
+  const movShown=movements.filter(m=> !movSearch || `${empName(m.employee_id)} ${m.movement_type||''} ${m.new_position||''} ${m.new_department||''} ${m.reason||''}`.toLowerCase().includes(movSearch.toLowerCase()));
+  async function delMov(m){ if(!confirm('Delete this movement record?')) return; const { error }=await sb.from('hr_movements').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
   const shown=(tab==='active'?active:tab==='closed'?closed:all)
     .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.case_type} ${c.sanction_type||''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
@@ -9753,20 +9761,59 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">⚖️ Employee Relations</h1>
-            <p className="text-slate-500 text-sm">Case log per employee — {active.length} active · {closed.length} closed.</p>
+            <p className="text-slate-500 text-sm">{section==='disciplinary' ? `Disciplinary case log — ${active.length} active · ${closed.length} closed.` : `Employee movement log — ${movements.length} record${movements.length===1?'':'s'} (promotions, salary changes, transfers).`}</p>
           </div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New case</button>
+          {section==='disciplinary'
+            ? <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New case</button>
+            : <button onClick={()=>setMovCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New movement</button>}
         </div>
-        <div className="flex items-center gap-2 flex-wrap mt-3">
+        {/* Section switch: Disciplinary vs Employee Movement */}
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
+          <button onClick={()=>setSection('disciplinary')} className={`px-3 py-1.5 rounded-md ${section==='disciplinary'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>⚖️ Disciplinary</button>
+          <button onClick={()=>setSection('movement')} className={`px-3 py-1.5 rounded-md ${section==='movement'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔀 Employee Movement</button>
+        </div>
+        {section==='disciplinary' && <div className="flex items-center gap-2 flex-wrap mt-3">
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
             <button onClick={()=>setTab('active')} className={`px-3 py-1.5 rounded-md ${tab==='active'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Active ({active.length})</button>
             <button onClick={()=>setTab('closed')} className={`px-3 py-1.5 rounded-md ${tab==='closed'?'bg-white shadow-sm font-semibold text-slate-700':'text-slate-600'}`}>Closed ({closed.length})</button>
             <button onClick={()=>setTab('all')} className={`px-3 py-1.5 rounded-md ${tab==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({all.length})</button>
           </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee / case…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white" />
-        </div>
+        </div>}
+        {section==='movement' && <div className="mt-3"><input value={movSearch} onChange={e=>setMovSearch(e.target.value)} placeholder="Search employee / type / position…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white w-full max-w-md" /></div>}
       </div>
-      {shown.length===0 ? (
+
+      {section==='movement' ? (
+        movShown.length===0 ? (
+          <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No movement records yet. Click "+ New movement" to log a promotion, salary increase, transfer, or regularization.</div>
+        ) : (
+          <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              <th className="text-left px-3 py-2">Employee</th>
+              <th className="text-left px-3 py-2">Movement</th>
+              <th className="text-left px-3 py-2">Change</th>
+              <th className="text-right px-3 py-2">Salary</th>
+              <th className="text-left px-3 py-2">Effective</th>
+              <th className="text-center px-3 py-2">Status</th>
+              <th></th>
+            </tr></thead>
+            <tbody>{movShown.map(m=>{ const mt=movTypeMeta(m.movement_type); const sm=movStatusMeta(m.status); const atts=Array.isArray(m.attachments)?m.attachments:[]; const posChange=(m.previous_position||m.new_position)?`${m.previous_position||'—'} → ${m.new_position||'—'}`:''; const deptChange=(m.previous_department||m.new_department)&&(m.previous_department!==m.new_department)?`${m.previous_department||'—'} → ${m.new_department||'—'}`:''; return (
+              <tr key={m.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-medium">{empName(m.employee_id)}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${mt.color}`}>{m.movement_type}</span></td>
+                <td className="px-3 py-2 text-xs text-slate-600">{posChange}{posChange&&deptChange?<br/>:''}{deptChange}{!posChange&&!deptChange?'—':''}</td>
+                <td className="px-3 py-2 text-right text-xs">{(m.previous_salary!=null||m.new_salary!=null) ? <span>{m.previous_salary!=null?peso(m.previous_salary):'—'} → <strong className="text-emerald-700">{m.new_salary!=null?peso(m.new_salary):'—'}</strong></span> : '—'}</td>
+                <td className="px-3 py-2 text-xs">{m.effective_date?fmtDate(m.effective_date):'—'}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <button onClick={()=>setMovEditing(m)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
+                  <button onClick={()=>delMov(m)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ); })}</tbody>
+          </table></div></div>
+        )
+      ) : shown.length===0 ? (
         <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No {tab==='all'?'':tab} cases. Click "+ New case" to log one.</div>
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
@@ -9805,7 +9852,113 @@ function HRRelationsView({ profile, employees, hrCases, reload }){
       )}
       {(creating||editing) && <CaseFormModal caseRow={editing} employees={employees} profile={profile} onPrint={(c)=>{ setEditing(null); setPrinting(c); }} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {printing && <CaseNTEPrintView caseRow={printing} employees={employees} profile={profile} onClose={()=>setPrinting(null)} />}
+      {(movCreating||movEditing) && <MovementFormModal movement={movEditing} employees={employees} profile={profile} onClose={()=>{ setMovCreating(false); setMovEditing(null); }} onSaved={()=>{ setMovCreating(false); setMovEditing(null); reload(); }} />}
     </div>
+  );
+}
+
+const MOVEMENT_TYPES = ['Promotion','Salary Increase','Salary Adjustment','Merit Increase','Regularization','Transfer','Reassignment','Demotion','Contract Renewal','Separation','Other'];
+const MOVEMENT_STATUSES = [
+  { key:'proposed',  label:'Proposed',  color:'bg-amber-100 text-amber-700' },
+  { key:'approved',  label:'Approved',  color:'bg-blue-100 text-blue-700' },
+  { key:'effective', label:'Effective', color:'bg-emerald-100 text-emerald-700' },
+];
+function movStatusMeta(k){ return MOVEMENT_STATUSES.find(s=>s.key===k) || MOVEMENT_STATUSES[0]; }
+function movTypeMeta(t){
+  if(/salary|increase|merit|adjust/i.test(t||'')) return { color:'bg-emerald-100 text-emerald-700' };
+  if(/promot|regular/i.test(t||'')) return { color:'bg-indigo-100 text-indigo-700' };
+  if(/transfer|reassign/i.test(t||'')) return { color:'bg-sky-100 text-sky-700' };
+  if(/demot|separation/i.test(t||'')) return { color:'bg-rose-100 text-rose-700' };
+  return { color:'bg-slate-100 text-slate-600' };
+}
+function MovementFormModal({ movement, employees, profile, onClose, onSaved }){
+  const isEdit=!!movement;
+  const [f,setF]=useState(movement || { employee_id:'', movement_type:'Salary Increase', effective_date:new Date().toISOString().slice(0,10), previous_position:'', new_position:'', previous_department:'', new_department:'', previous_salary:'', new_salary:'', reason:'', remarks:'', status:'proposed' });
+  const [attachments,setAttachments]=useState(Array.isArray(movement?.attachments)?movement.attachments:[]);
+  const [uploading,setUploading]=useState(false);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  // When an employee is picked on a NEW record, pre-fill "previous" from their
+  // current record so HR only fills the new values.
+  function pickEmp(id){
+    up('employee_id', id);
+    if(!isEdit){
+      const e=(employees||[]).find(x=>x.id===id);
+      if(e){ setF(p=>({ ...p, employee_id:id,
+        previous_position: p.previous_position || e.position || '',
+        previous_department: p.previous_department || e.department || '',
+        previous_salary: (p.previous_salary===''||p.previous_salary==null) ? (e.basic_salary ?? '') : p.previous_salary,
+      })); }
+    }
+  }
+  async function uploadFiles(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean); if(!files.length) return;
+    setUploading(true); setMsg('');
+    try { for(const file of files){
+      const ext=(file.name.split('.').pop()||'bin').toLowerCase();
+      const key=`hr-movements/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+      if(upErr) throw upErr;
+      const { data: pu }=await sb.storage.from(BUCKET).getPublicUrl(key);
+      setAttachments(prev=>[...prev,{ name:file.name, url:pu.publicUrl, path:key, type:file.type||'' }]);
+    } } catch(e){ setMsg('Upload failed: '+(e.message||String(e))); }
+    setUploading(false);
+  }
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    if(!f.movement_type){ setMsg('Pick a movement type.'); return; }
+    setBusy(true); setMsg('');
+    const num=(v)=> v===''||v==null ? null : Number(v);
+    const payload={ employee_id:f.employee_id, movement_type:f.movement_type, effective_date:f.effective_date||null,
+      previous_position:f.previous_position||null, new_position:f.new_position||null,
+      previous_department:f.previous_department||null, new_department:f.new_department||null,
+      previous_salary:num(f.previous_salary), new_salary:num(f.new_salary),
+      reason:f.reason||null, remarks:f.remarks||null, status:f.status||'proposed', attachments };
+    if(!isEdit) payload.created_by=profile.id;
+    const { error } = isEdit ? await sb.from('hr_movements').update(payload).eq('id',movement.id) : await sb.from('hr_movements').insert(payload);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  const isSalary=/salary|increase|merit|adjust/i.test(f.movement_type||'');
+  const diff = (f.new_salary!==''&&f.previous_salary!=='') ? (Number(f.new_salary)-Number(f.previous_salary)) : null;
+  return (
+    <Modal title={isEdit?'Employee movement':'+ New employee movement'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Employee *"><select className="input" value={f.employee_id} onChange={e=>pickEmp(e.target.value)}><option value="">— select —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select></TpLbl>
+          <TpLbl t="Movement type *"><select className="input" value={f.movement_type} onChange={e=>up('movement_type',e.target.value)}>{MOVEMENT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Effective date"><input type="date" className="input" value={f.effective_date||''} onChange={e=>up('effective_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{MOVEMENT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Previous position"><input className="input" value={f.previous_position} onChange={e=>up('previous_position',e.target.value)} placeholder="e.g. Sewer" /></TpLbl>
+          <TpLbl t="New position"><input className="input" value={f.new_position} onChange={e=>up('new_position',e.target.value)} placeholder="e.g. Line Leader" /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Previous department"><input className="input" value={f.previous_department} onChange={e=>up('previous_department',e.target.value)} /></TpLbl>
+          <TpLbl t="New department"><input className="input" value={f.new_department} onChange={e=>up('new_department',e.target.value)} /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Previous salary"><input type="number" className="input" value={f.previous_salary} onChange={e=>up('previous_salary',e.target.value)} placeholder="₱" /></TpLbl>
+          <TpLbl t="New salary"><input type="number" className="input" value={f.new_salary} onChange={e=>up('new_salary',e.target.value)} placeholder="₱" /></TpLbl>
+        </div>
+        {isSalary && diff!=null && <div className={`text-xs rounded p-2 ${diff>=0?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-rose-50 text-rose-700 border border-rose-200'}`}>{diff>=0?'Increase':'Decrease'} of <strong>{peso(Math.abs(diff))}</strong>{f.previous_salary>0?` (${((diff/Number(f.previous_salary))*100).toFixed(1)}%)`:''}</div>}
+        <TpLbl t="Reason / justification"><textarea className="input min-h-[50px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder="e.g. Merit increase after annual review; promotion to line leader" /></TpLbl>
+        <TpLbl t="Remarks / notes"><textarea className="input min-h-[40px]" value={f.remarks} onChange={e=>up('remarks',e.target.value)} /></TpLbl>
+        <TpLbl t="Attachments (approval memo, signed form, etc.)">
+          <div className="flex items-center gap-2">
+            <input type="file" multiple accept="image/*,application/pdf" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} className="text-xs flex-1" />
+            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+          </div>
+          {attachments.length>0 && <div className="flex flex-wrap gap-1.5 mt-2">{attachments.map((a,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 rounded px-2 py-1"><a href={a.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">📎 {a.name}</a><button onClick={()=>setAttachments(p=>p.filter((_,x)=>x!==i))} className="text-rose-400">✕</button></span>))}</div>}
+        </TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save movement':'Add movement'}</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -29224,7 +29377,7 @@ function App(){
   const [hrReviewCriteria,setHrReviewCriteria]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
-  const [hrCases,setHrCases]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
+  const [hrCases,setHrCases]=useState([]); const [hrMovements,setHrMovements]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
   const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]); const [hrLoanInstallments,setHrLoanInstallments]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
@@ -29452,6 +29605,7 @@ function App(){
     try { const hm = await sb.from('hr_memos').select('*').is('deleted_at',null).order('pinned',{ascending:false}).order('memo_date',{ascending:false}); setHrMemos(hm && !hm.error ? (hm.data||[]) : []); } catch(_){ setHrMemos([]); }
     try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
     try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
+    try { const hmv = await sb.from('hr_movements').select('*').is('deleted_at',null).order('effective_date',{ascending:false}); setHrMovements(hmv && !hmv.error ? (hmv.data||[]) : []); } catch(_){ setHrMovements([]); }
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
     try { const pat = await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPatterns(pat && !pat.error ? (pat.data||[]) : []); } catch(_){ setPatterns([]); }
     try { const pts = await sb.from('pattern_tasks').select('*').order('created_at',{ascending:false}); setPatternTasks(pts && !pts.error ? (pts.data||[]) : []); } catch(_){ setPatternTasks([]); }
@@ -30291,7 +30445,7 @@ function App(){
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
-        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} reload={loadAll} />}
+        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
