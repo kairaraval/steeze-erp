@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 287 · A/P voucher now shows the actual e-signatures of the Finance + Admin approvers (from their profile signature) above their printed names, when they've set one up.";
+const BUILD = "Live build 288 · Receipt photos: you can now attach a receipt photo/scan to every petty cash expense and to each receipt line when liquidating a cash advance (standalone expenses already had this). Petty cash history shows a 📎 to view the receipt.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23793,11 +23793,24 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
   // Local state for the add-expense inline form. Pre-fill today's date.
   const today = new Date().toISOString().slice(0,10);
   const [addOpen,setAddOpen]=useState(false);
-  const [exp,setExp]=useState({ date: today, category: 'Transport', vendor:'', description:'', amount:0 });
+  const [exp,setExp]=useState({ date: today, category: 'Transport', vendor:'', description:'', amount:0, receipt_url:'' });
   const [busy,setBusy]=useState(false);
+  const [uploading,setUploading]=useState(false);
   const [msg,setMsg]=useState('');
   function up(k,v){ setExp(p=>({...p,[k]:v})); }
-  function resetForm(){ setExp({ date: today, category: 'Transport', vendor:'', description:'', amount:0 }); setMsg(''); }
+  function resetForm(){ setExp({ date: today, category: 'Transport', vendor:'', description:'', amount:0, receipt_url:'' }); setMsg(''); }
+  async function handleReceipt(file){
+    if(!file) return; setUploading(true);
+    try {
+      const ext = (file.name.split('.').pop()||'jpg');
+      const key = `expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      up('receipt_url', pu.publicUrl);
+    } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
   async function addExpense(){
     const amt = Number(exp.amount)||0;
     if(amt <= 0){ setMsg('Enter an amount > 0.'); return; }
@@ -23815,7 +23828,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
         amount: amt,
         paid_via: 'petty_cash',     // critical: don't deduct from a bank (the float was already withdrawn)
         bank_id: null,
-        receipt_url: null,
+        receipt_url: exp.receipt_url || null,
         tax_deductible: true,
         petty_cash_id: pc.id,
         created_by: profile.id,
@@ -23874,6 +23887,13 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
               <TpLbl t="Vendor / Payee"><input className="input" value={exp.vendor} onChange={e=>up('vendor',e.target.value)} placeholder="e.g. Shell, hardware store" /></TpLbl>
             </div>
             <TpLbl t="Description *"><input className="input" value={exp.description} onChange={e=>up('description',e.target.value)} placeholder="e.g. Gas for delivery van" /></TpLbl>
+            <TpLbl t="Receipt photo / scan">
+              <div className="flex items-center gap-2">
+                <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceipt(e.target.files?.[0]); e.target.value=''; }} className="text-xs flex-1" />
+                {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
+                {exp.receipt_url && <a href={exp.receipt_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline shrink-0">✓ View</a>}
+              </div>
+            </TpLbl>
             {msg && <div className="text-xs text-rose-600">{msg}</div>}
             <div className="flex gap-2">
               <button onClick={addExpense} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save expense'}</button>
@@ -23908,7 +23928,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
                 return withBal.slice().reverse().map(e => (
                   <tr key={e.id} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
-                    <td className="px-3 py-2">{e.description||'—'}</td>
+                    <td className="px-3 py-2">{e.description||'—'}{e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="ml-1.5 text-indigo-600 hover:underline" title="View receipt">📎</a>}</td>
                     <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{e.category||'—'}</span></td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.vendor||'—'}</td>
                     <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
@@ -24189,11 +24209,24 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
   const issued = Number(ca.amount)||0;
   const [receipts,setReceipts]=useState(ca.receipts||[]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [upIdx,setUpIdx]=useState(null);
   const total = receipts.reduce((s,r)=>s+Number(r.amount||0), 0);
   const returned = Math.max(0, issued - total);
-  function addReceipt(){ setReceipts(rs=>[...rs, { description:'', amount:0 }]); }
+  function addReceipt(){ setReceipts(rs=>[...rs, { description:'', amount:0, receipt_url:'' }]); }
   function setReceipt(i, patch){ setReceipts(rs=>rs.map((r,j)=>j===i?{...r,...patch}:r)); }
   function removeReceipt(i){ setReceipts(rs=>rs.filter((_,j)=>j!==i)); }
+  async function handleReceiptPhoto(i, file){
+    if(!file) return; setUpIdx(i);
+    try {
+      const ext = (file.name.split('.').pop()||'jpg');
+      const key = `expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+      if(upErr) throw upErr;
+      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
+      setReceipt(i, { receipt_url: pu.publicUrl });
+    } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUpIdx(null);
+  }
   async function save(){
     if(receipts.length===0){ setMsg('Add at least one receipt.'); return; }
     if(total > issued + 0.01){ if(!confirm(`Receipts total (${peso(total)}) exceeds CA amount (${peso(issued)}). Save anyway?`)) return; }
@@ -24224,10 +24257,18 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
         <div className="bg-slate-50 border rounded-lg p-3">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Receipts</div><button onClick={addReceipt} className="text-xs text-indigo-600 font-semibold">+ Add receipt</button></div>
           <div className="space-y-2">{receipts.map((r,i)=>(
-            <div key={i} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-8"><label className="text-[10px] uppercase text-slate-500">Description</label><input className="input mt-0.5 text-xs" value={r.description} onChange={e=>setReceipt(i,{description:e.target.value})} placeholder="e.g. Bond paper x5 reams · National Bookstore" /></div>
-              <div className="col-span-3"><label className="text-[10px] uppercase text-slate-500">Amount</label><input type="number" className="input mt-0.5 text-xs" value={r.amount} onChange={e=>setReceipt(i,{amount:e.target.value})} /></div>
-              <div className="col-span-1 text-right"><button onClick={()=>removeReceipt(i)} className="text-rose-400 text-sm">✕</button></div>
+            <div key={i} className="bg-white border rounded p-2">
+              <div className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-8"><label className="text-[10px] uppercase text-slate-500">Description</label><input className="input mt-0.5 text-xs" value={r.description} onChange={e=>setReceipt(i,{description:e.target.value})} placeholder="e.g. Bond paper x5 reams · National Bookstore" /></div>
+                <div className="col-span-3"><label className="text-[10px] uppercase text-slate-500">Amount</label><input type="number" className="input mt-0.5 text-xs" value={r.amount} onChange={e=>setReceipt(i,{amount:e.target.value})} /></div>
+                <div className="col-span-1 text-right"><button onClick={()=>removeReceipt(i)} className="text-rose-400 text-sm">✕</button></div>
+              </div>
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="text-[10px] uppercase text-slate-400">Receipt photo</span>
+                <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceiptPhoto(i, e.target.files?.[0]); e.target.value=''; }} className="text-[11px] flex-1" />
+                {upIdx===i && <span className="text-[11px] text-slate-500">Uploading…</span>}
+                {r.receipt_url && <a href={r.receipt_url} target="_blank" rel="noreferrer" className="text-[11px] text-indigo-600 hover:underline shrink-0">📎 View</a>}
+              </div>
             </div>
           ))}{receipts.length===0 && <div className="text-xs text-slate-400 text-center py-3">No receipts yet. Click "Add receipt".</div>}</div>
         </div>
