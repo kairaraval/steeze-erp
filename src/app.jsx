@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 281 · Fix: Add bank account now also fills the required 'name' column (plus the auto bank code), so saving a new bank works.";
+const BUILD = "Live build 282 · In-house sewing payroll payouts now stay only in the Sewing Payroll module — no Expense Log, no P&L, no bank deduction. (Subcon payouts still create their weekly voucher + bank deduction.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13675,47 +13675,39 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function confirm(){
     if(!(lines||[]).length){ setMsg('Nothing to pay in this period.'); return; }
-    if(!bankId){ setMsg('Pick the bank this batch is paid from.'); return; }
+    if(kind!=='sewing' && !bankId){ setMsg('Pick the bank this batch is paid from.'); return; }
     setBusy(true); setMsg('');
     try {
       const today = new Date().toISOString().slice(0,10);
       const label = `${title} · ${fmtDate(periodStart)}–${fmtDate(periodEnd)}`;
-      const namesSummary = lines.map(l=>`${l.name} ${peso(l.amount)}`).join('; ');
-      const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
-        bank_id: bankId, date: today, direction:'out', amount: total,
-        description: `${label} — ${lines.length} ${peopleWord}`.slice(0,200),
-        ref_type: kind==='subcon' ? 'voucher' : 'expense', ref_id:null, created_by: profile.id,
-      }).select('id').single();
-      if(btErr) throw btErr;
-      // Subcon payroll is disbursed via ONE cash voucher for the whole weekly
-      // batch, listing every subcon — it shows in the Expense Log as a voucher
-      // (not a raw expense) and is single-counted. In-house sewing keeps its
-      // plain expense record.
-      let expId = null;
+      // Finance footprint by kind:
+      //   • subcon  → one bank deduction + ONE cash voucher (listed in Expense Log)
+      //   • sewing  → NO finance footprint at all — lives only in the Sewing
+      //     Payroll module (no bank txn, no expense, no P&L). Per company setup.
+      let expId = null, btxId = null;
       if(kind === 'subcon'){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id: bankId, date: today, direction:'out', amount: total,
+          description: `${label} — ${lines.length} ${peopleWord}`.slice(0,200),
+          ref_type:'voucher', ref_id:null, created_by: profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr;
+        btxId = btx.id;
         const num = await nextFinanceNumberFromDb('CASH', today.slice(0,7));
         const particulars = `Subcon payroll payout · ${fmtDate(periodStart)}–${fmtDate(periodEnd)} — ${lines.map(l=>`${l.name}: ${peso(l.amount)}`).join('; ')}`.slice(0,1200);
         const { data: v, error: vErr } = await sb.from('vouchers').insert({
           number: num, type:'cash', date: today, payee:`Subcon Payroll (${lines.length} subcon${lines.length===1?'':'s'})`,
-          amount: total, particulars, expense_category: category, bank_id: bankId, bank_transaction_id: btx.id,
+          amount: total, particulars, expense_category: category, bank_id: bankId, bank_transaction_id: btxId,
           approval_status:'approved', approved_by: profile.id, approved_at: new Date().toISOString(), released_at: new Date().toISOString(),
           prepared_by: profile.id,
         }).select('id').single();
         if(vErr) throw vErr;
-        await sb.from('bank_transactions').update({ ref_id: v.id }).eq('id', btx.id);
-      } else {
-        const { data: exp, error: exErr } = await sb.from('expenses').insert({
-          date: today, category, vendor: 'In-house Sewing Payroll',
-          description: `${label} — ${lines.length} ${peopleWord}: ${namesSummary}`.slice(0,900),
-          amount: total, paid_via:'bank', bank_id: bankId, bank_transaction_id: btx.id, created_by: profile.id,
-        }).select('id').single();
-        if(exErr) throw exErr;
-        expId = exp.id;
-        await sb.from('bank_transactions').update({ ref_id: exp.id }).eq('id', btx.id);
+        await sb.from('bank_transactions').update({ ref_id: v.id }).eq('id', btxId);
       }
+      // kind === 'sewing' intentionally creates no bank/expense/voucher records.
       const { data: pay, error: pErr } = await sb.from('payroll_payouts').insert({
         kind, period_start: periodStart, period_end: periodEnd, headcount: lines.length, total_amount: total,
-        lines, expense_category: category, bank_id: bankId, expense_id: expId, bank_transaction_id: btx.id,
+        lines, expense_category: category, bank_id: bankId||null, expense_id: expId, bank_transaction_id: btxId,
         notes: notes||null, created_by: profile.id,
       }).select('id').single();
       if(pErr) throw pErr;
@@ -13728,16 +13720,18 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
       <style>{`@media print { body * { visibility:hidden !important; } .payout-sheet, .payout-sheet * { visibility:visible !important; } .payout-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
       <div className="space-y-3 text-sm">
         <div className="no-print bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
-          One payout of <strong>{peso(total)}</strong> for <strong>{lines.length}</strong> {peopleWord}. This creates <strong>one</strong> {kind==='subcon'?'cash voucher':'expense entry'} + one bank deduction for the whole batch (not per person){kind==='subcon'?' — the voucher lists every subcon and appears in the Expense Log':''}.
+          One payout of <strong>{peso(total)}</strong> for <strong>{lines.length}</strong> {peopleWord}. {kind==='subcon'
+            ? <>This creates <strong>one</strong> cash voucher + one bank deduction for the whole batch (the voucher lists every subcon and appears in the Expense Log).</>
+            : <>This is recorded <strong>only in the Sewing Payroll module</strong> — no bank deduction, expense, or P&amp;L entry.</>}
         </div>
-        <div className="no-print grid grid-cols-2 gap-2">
+        {kind==='subcon' && <div className="no-print grid grid-cols-2 gap-2">
           <div><label className="text-xs font-semibold text-slate-500">Expense category *</label>
             <select value={category} onChange={e=>setCategory(e.target.value)} className="w-full border rounded px-2 py-1.5">{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
           </div>
           <div><label className="text-xs font-semibold text-slate-500">Paid from bank *</label>
             <select value={bankId} onChange={e=>setBankId(e.target.value)} className="w-full border rounded px-2 py-1.5"><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
           </div>
-        </div>
+        </div>}
         <div className="no-print"><label className="text-xs font-semibold text-slate-500">Notes (optional)</label><input value={notes} onChange={e=>setNotes(e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
 
         {/* Printable payout sheet with a signature column */}
