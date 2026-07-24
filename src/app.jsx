@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 279 · Subcon payroll now produces ONE cash voucher per weekly payout (listing every subcon) instead of a raw expense line or per-subcon vouchers — it shows in the Expense Log as a voucher, single-counted. P&L now also defers petty cash until the float is liquidated.";
+const BUILD = "Live build 280 · Fix: Add bank account now auto-generates the required short bank code (e.g. BDO), so saving a new bank works.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19663,13 +19663,28 @@ function BankAccountCreateModal({ profile, onClose, onSaved }){
   async function save(){
     if(!f.bank_name.trim()){ setMsg('Bank name is required.'); return; }
     setBusy(true); setMsg('');
-    const { error } = await sb.from('bank_accounts').insert({
-      bank_name:f.bank_name.trim(), account_name:f.account_name.trim()||null,
-      account_number:f.account_number.trim()||null, opening_balance:Number(f.opening_balance)||0,
-      notes:f.notes.trim()||null,
-    });
-    setBusy(false); if(error){ setMsg(error.message); return; }
-    onSaved();
+    try {
+      // The table needs a short unique `code` (e.g. PNB, BPI). Derive one from
+      // the bank name — initials for multi-word names, else the first letters —
+      // then disambiguate against existing codes + set the next position.
+      const name = f.bank_name.trim();
+      const words = name.split(/\s+/).filter(Boolean);
+      let base = (words.length>1 ? words.map(w=>w[0]).join('') : name.slice(0,4)).toUpperCase().replace(/[^A-Z0-9]/g,'');
+      if(!base) base = 'BANK';
+      const { data: existing } = await sb.from('bank_accounts').select('code, position');
+      const taken = new Set((existing||[]).map(b=>String(b.code||'').toUpperCase()));
+      let code = base, n = 2;
+      while(taken.has(code)){ code = `${base}${n}`; n++; }
+      const maxPos = (existing||[]).reduce((m,b)=>Math.max(m, Number(b.position||0)), 0);
+      const { error } = await sb.from('bank_accounts').insert({
+        code, position: maxPos+1,
+        bank_name:name, account_name:f.account_name.trim()||null,
+        account_number:f.account_number.trim()||null, opening_balance:Number(f.opening_balance)||0,
+        notes:f.notes.trim()||null,
+      });
+      setBusy(false); if(error){ setMsg(error.message); return; }
+      onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
     <Modal title="+ Add bank account" onClose={onClose}>
