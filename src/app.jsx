@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 286 · Fix crash ('amountInWords is not defined') — the A/P voucher used a helper that wasn't in scope. Hoisted it to module level so the app loads again.";
+const BUILD = "Live build 287 · A/P voucher now shows the actual e-signatures of the Finance + Admin approvers (from their profile signature) above their printed names, when they've set one up.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22748,14 +22748,18 @@ function APVoucherModal({ ap, profiles, onClose }){
         <div className="text-sm italic text-slate-600 mb-4">{amountInWords(ap.amount)}</div>
         <div className="grid grid-cols-2 gap-6 mt-6">
           <div className="text-center">
-            <div className="text-[10px] uppercase text-slate-500 mb-6">Approved by Finance</div>
-            <div className="border-b border-slate-800 h-8 flex items-end justify-center pb-1 font-semibold">{finBy?(finBy.name||finBy.email):''}</div>
-            <div className="text-[10px] text-slate-500 mt-1">{ap.finance_approved_at?fmtDate(ap.finance_approved_at.slice(0,10)):''}</div>
+            <div className="text-[10px] uppercase text-slate-500 mb-1">Approved by Finance</div>
+            <div className="h-12 flex items-end justify-center overflow-hidden">{finBy?.signature_data ? <img src={finBy.signature_data} alt="signature" className="max-h-12 object-contain" /> : null}</div>
+            <div className="border-b border-slate-800"></div>
+            <div className="font-semibold text-sm mt-1">{finBy?(finBy.name||finBy.email):'—'}</div>
+            <div className="text-[10px] text-slate-500">{ap.finance_approved_at?fmtDate(ap.finance_approved_at.slice(0,10)):''}</div>
           </div>
           <div className="text-center">
-            <div className="text-[10px] uppercase text-slate-500 mb-6">Approved by Admin</div>
-            <div className="border-b border-slate-800 h-8 flex items-end justify-center pb-1 font-semibold">{admBy?(admBy.name||admBy.email):''}</div>
-            <div className="text-[10px] text-slate-500 mt-1">{ap.admin_approved_at?fmtDate(ap.admin_approved_at.slice(0,10)):''}</div>
+            <div className="text-[10px] uppercase text-slate-500 mb-1">Approved by Admin</div>
+            <div className="h-12 flex items-end justify-center overflow-hidden">{admBy?.signature_data ? <img src={admBy.signature_data} alt="signature" className="max-h-12 object-contain" /> : null}</div>
+            <div className="border-b border-slate-800"></div>
+            <div className="font-semibold text-sm mt-1">{admBy?(admBy.name||admBy.email):'—'}</div>
+            <div className="text-[10px] text-slate-500">{ap.admin_approved_at?fmtDate(ap.admin_approved_at.slice(0,10)):''}</div>
           </div>
         </div>
         <div className="mt-6 border-t pt-3 text-xs">
