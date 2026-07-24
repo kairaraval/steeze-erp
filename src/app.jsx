@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 275 · New Finance → A/P Vouchers register. When an RFP is approved by BOTH Finance and Admin, an Accounts Payable Voucher (APV-…) is raised automatically — printable, carrying both signatures, viewable before payment; it flips to Paid when the RFP is paid.";
+const BUILD = "Live build 276 · Petty cash & cash advances now liquidate first: nothing hits the Expense Log until you liquidate, and only the amount actually SPENT is logged (returned cash goes back to the source bank, never counted as expense). Added a Liquidate button for petty cash floats.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23897,6 +23897,29 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  // Liquidate a petty cash float: close it out, recognise the SPENT amount as
+  // expense (it now enters the Expense Log), and return the unspent cash to the
+  // source bank. Nothing was counted as an expense before this step.
+  async function liquidatePetty(c){
+    const spent = spentOn(c);
+    const outstanding = Math.max(0, Number(c.amount||0) - spent - Number(c.amount_returned||0));
+    if(!confirm(`Liquidate ${c.number||'petty cash'}?\n\n• Spent (logged receipts): ${peso(spent)}\n• Cash returned to bank: ${peso(outstanding)}\n\nThe spent amount now posts to the Expense Log; the returned cash goes back to the source bank.`)) return;
+    try {
+      if(outstanding > 0.01 && c.bank_id){
+        await sb.from('bank_transactions').insert({
+          bank_id: c.bank_id, date: new Date().toISOString().slice(0,10), direction:'in', amount: outstanding,
+          description: `Return from ${c.number||'petty cash'} · ${c.custodian_name||''}`,
+          ref_type:'cash_advance', ref_id: c.id, created_by: profile.id,
+        });
+      }
+      const { error } = await sb.from('cash_advances').update({
+        status:'liquidated', liquidated_at:new Date().toISOString().slice(0,10),
+        amount_liquidated: spent, amount_returned: Number(c.amount_returned||0)+outstanding,
+      }).eq('id', c.id);
+      if(error) throw error;
+      reload && reload();
+    } catch(e){ alert(e.message||String(e)); }
+  }
 
   const STATUSES = [
     { key:'open',       label:'Open',       color:'bg-amber-100 text-amber-700' },
@@ -23992,7 +24015,10 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 {isPetty ? (
-                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline mr-2">+ Add expense</button>
+                  c.status==='open' && canEdit && <>
+                    <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline mr-2">+ Add expense</button>
+                    <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Close the float — post spent to Expense Log, return unspent to bank">Liquidate →</button>
+                  </>
                 ) : (
                   c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
                 )}
@@ -24868,13 +24894,25 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
       label: `${b.department||''} · ${b.purpose||'(budget)'}`,
       category: 'Budget Request', ref: b.id?.slice(0,6) || '', raw:b,
     }));
-    (cashAdvances||[]).forEach(c=> out.push({
-      date: c.date, source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
-      amount: Number(c.amount||0),
-      label: c.purpose || c.custodian_name || '(CA)',
-      category: c.kind==='petty_cash' ? 'Petty Cash' : 'Cash Advance',
-      ref: c.number, raw:c,
-    }));
+    // Advances (petty cash / cash advance) are cash OUT of the bank but not yet
+    // an EXPENSE — they're a float. We recognise the expense only once the float
+    // is LIQUIDATED, and only for the amount actually SPENT (not the cash that
+    // was returned). Before liquidation, nothing is logged here.
+    (cashAdvances||[]).forEach(c=>{
+      if(c.status !== 'liquidated') return;
+      const spent = c.kind==='petty_cash'
+        ? (expenses||[]).filter(e=>e.petty_cash_id===c.id).reduce((s,e)=>s+Number(e.amount||0),0)
+        : Number(c.amount_liquidated||0);
+      if(spent <= 0) return;
+      out.push({
+        date: c.liquidated_at || c.date,
+        source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
+        amount: spent,
+        label: c.purpose || c.custodian_name || '(CA)',
+        category: c.kind==='petty_cash' ? 'Petty Cash' : 'Cash Advance',
+        ref: c.number, raw:c,
+      });
+    });
     return out.filter(r => r.date).sort((a,b)=> String(b.date).localeCompare(String(a.date)));
   },[vouchers,expenses,budgetRequests,cashAdvances]);
 
