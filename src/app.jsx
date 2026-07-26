@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 294 · Receipts now attach to the VOUCHER itself — open any Check/Cash/BT voucher and use '+ Add receipt' to attach the official receipt / proof of payment (shown with a 📎 count in the voucher list). Reverted the Expense Log add-expense button.";
+const BUILD = "Live build 295 · My Tasks now has a '🗒️ My Notes' scratchpad — a private, free-form note box that auto-saves (per user, synced across devices).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5894,13 +5894,22 @@ function MyTasksView({ profile }){
   const [showWelcome,setShowWelcome]=useState(()=>{ try{ return localStorage.getItem(welcomeKey)!=='1'; }catch(e){ return true; } });
   function dismissWelcome(){ setShowWelcome(false); try{ localStorage.setItem(welcomeKey,'1'); }catch(e){} }
 
+  const [note,setNote]=useState('');
+  const [noteSaved,setNoteSaved]=useState(true);
   async function load(){
     setLoading(true);
     const { data } = await sb.from('personal_tasks').select('*').eq('user_id', profile.id)
       .order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
     setTasks(data||[]); setLoading(false);
   }
-  useEffect(()=>{ load(); },[]);
+  async function loadNote(){
+    try { const { data } = await sb.from('personal_notes').select('content').eq('user_id', profile.id).maybeSingle(); setNote(data?.content||''); } catch(_){}
+  }
+  async function saveNote(){
+    setNoteSaved(true);
+    try { await sb.from('personal_notes').upsert({ user_id:profile.id, content:note||null, updated_at:new Date().toISOString() }, { onConflict:'user_id' }); } catch(_){}
+  }
+  useEffect(()=>{ load(); loadNote(); },[]);
   // One-time welcome: on the very first open ever, play a triumphant chord +
   // confetti and mark it seen so neither the note nor the sound return.
   useEffect(()=>{
@@ -6031,6 +6040,21 @@ function MyTasksView({ profile }){
         })}
       </div>
       )}
+
+      {/* Personal notes — a free-form scratchpad, private to you */}
+      <div className="mt-5 bg-gradient-to-br from-amber-50 to-yellow-100 border border-amber-300/60 rounded-2xl shadow-sm overflow-hidden">
+        <div className="px-4 py-2.5 flex items-center justify-between border-b border-amber-200/70">
+          <div className="font-semibold text-amber-900 flex items-center gap-2">🗒️ My Notes <span className="text-[11px] font-normal text-amber-700/70">private to you</span></div>
+          <span className="text-[11px] text-amber-700/70">{noteSaved?'Saved':'Editing…'}</span>
+        </div>
+        <textarea
+          value={note}
+          onChange={e=>{ setNote(e.target.value); setNoteSaved(false); }}
+          onBlur={saveNote}
+          placeholder="Jot anything down — reminders, ideas, things to follow up on… (saves automatically when you click away)"
+          className="w-full min-h-[140px] bg-transparent px-4 py-3 text-sm text-amber-900 placeholder-amber-600/50 outline-none resize-y"
+        />
+      </div>
 
       {/* Completed drawer */}
       {done.length>0 && (
