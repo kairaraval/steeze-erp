@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 303 · Trip Tickets now time every leg: 🚗 Start driving → 📍 Arrived shows travel duration per stop; ☕/🍽 break timer; 🏁 Done for the day; live Time & Efficiency summary (driving time, avg/leg, break time, work span). Monthly report adds a per-driver efficiency table.";
+const BUILD = "Live build 304 · Verify payment: accounting can now correct the method, reference, date and bank before verifying (fixes cases where sales picked the wrong bank/method) — the bank transaction posts with the corrected details.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21329,6 +21329,9 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
 function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onClose, onSaved }){
   const loggedAmount = Number(payment.amount||0);
   const [verifyAmount,setVerifyAmount]=useState(loggedAmount);
+  const [method,setMethod]=useState(payment.method||'gcash');
+  const [reference,setReference]=useState(payment.reference||'');
+  const [payDate,setPayDate]=useState(payment.date||new Date().toISOString().slice(0,10));
   const [bankId,setBankId]=useState(payment.bank_id || (payment.method==='cash' ? null : (bankAccounts[0]?.id||null)));
   const [verifyNotes,setVerifyNotes]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -21359,17 +21362,17 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
   async function verify(){
     const amt = Number(verifyAmount)||0;
     if(amt<=0){ setMsg('Verified amount must be > 0. To reject this payment, use Void instead.'); return; }
-    if(payment.method !== 'cash' && !bankId){ setMsg('Pick which bank/wallet received it.'); return; }
+    if(method !== 'cash' && !bankId){ setMsg('Pick which bank/wallet received it.'); return; }
     setBusy(true); setMsg('');
     try {
       // 1) Create bank transaction (for non-cash). Cash deposits won't create a bank txn here.
       let bankTxId = null;
-      if(payment.method !== 'cash' && bankId){
+      if(method !== 'cash' && bankId){
         const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
-          bank_id: bankId, date: payment.date, direction: 'in', amount: amt,
+          bank_id: bankId, date: payDate, direction: 'in', amount: amt,
           description: `Payment from ${so.client_name||''} for ${so.number}`,
           ref_type: 'sales_order', ref_id: so.id,
-          reference_number: payment.reference||null, created_by: profile.id,
+          reference_number: reference||null, created_by: profile.id,
         }).select('id').single();
         if(btErr) throw btErr;
         bankTxId = btx.id;
@@ -21393,7 +21396,8 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
       // 3) Mark the payment Verified — store BOTH the verified amount (what counts) and the bank charge.
       const { error: pErr } = await sb.from('sales_order_payments').update({
         amount: amt,
-        bank_id: payment.method==='cash' ? null : bankId,
+        method, reference: reference||null, date: payDate,
+        bank_id: method==='cash' ? null : bankId,
         bank_transaction_id: bankTxId,
         bank_charge_amount: diff > 0 ? diff : 0,
         status: 'verified',
@@ -21470,11 +21474,19 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
         )}
 
         <div className="border-t pt-3">
-          <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Verification — confirm what actually landed</div>
+          <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Verification — confirm/correct what actually landed</div>
+          <div className="text-[11px] text-slate-500 mb-2">You can fix any detail below before verifying (e.g. wrong bank/method the sales team picked).</div>
           <div className="grid grid-cols-2 gap-2">
             <TpLbl t="Verified amount (what hit the bank) *"><input type="number" className="input font-bold" value={verifyAmount} onChange={e=>setVerifyAmount(e.target.value)} /></TpLbl>
-            <TpLbl t={`Destination ${payment.method==='cash'?'(N/A for cash)':'*'}`}>
-              <select className="input" value={bankId||''} disabled={payment.method==='cash'} onChange={e=>setBankId(e.target.value||null)}>
+            <TpLbl t="Date received"><input type="date" className="input" value={payDate} onChange={e=>setPayDate(e.target.value)} /></TpLbl>
+            <TpLbl t="Payment method">
+              <select className="input" value={method} onChange={e=>{ setMethod(e.target.value); if(e.target.value==='cash') setBankId(null); }}>
+                {PAYMENT_METHOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </TpLbl>
+            <TpLbl t="Reference #"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder={method==='check'?'Check #':method==='gcash'?'GCash ref #':'Deposit slip / Ref #'} /></TpLbl>
+            <TpLbl t={`Destination bank ${method==='cash'?'(N/A for cash)':'*'}`}>
+              <select className="input" value={bankId||''} disabled={method==='cash'} onChange={e=>setBankId(e.target.value||null)}>
                 <option value="">—</option>
                 {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
               </select>
