@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 296 · Fix: employee profile photos (and finance receipts) now display — the storage bucket is private, so images/links are now served through signed URLs instead of broken public links.";
+const BUILD = "Live build 297 · New HR → Salary Report: every employee's basic pay + allowances + monthly total, with a grand total, per-department breakdown, filters, and CSV export.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7789,6 +7789,84 @@ function daysToRegular(e){
   if(!dl) return null;
   const t = new Date(); t.setHours(0,0,0,0);
   return Math.round((new Date(dl+'T00:00:00') - t) / 86400000);
+}
+
+function SalaryReportView({ profile, employees }){
+  const [search,setSearch]=useState('');
+  const [dept,setDept]=useState('');
+  const [activeOnly,setActiveOnly]=useState(true);
+  const depts = Array.from(new Set((employees||[]).map(e=>e.department).filter(Boolean))).sort();
+  const rows = (employees||[])
+    .filter(e=> !activeOnly || (e.status!=='resigned' && e.status!=='terminated' && e.is_active!==false))
+    .filter(e=> !dept || e.department===dept)
+    .filter(e=> !search || `${fullName(e)} ${e.position||''} ${e.department||''}`.toLowerCase().includes(search.toLowerCase()))
+    .map(e=>({ e, basic:Number(e.basic_salary||0), allow:Number(e.allowances||0) }))
+    .map(r=>({ ...r, monthly: r.basic + r.allow }))
+    .sort((a,b)=> String(a.e.department||'').localeCompare(String(b.e.department||'')) || fullName(a.e).localeCompare(fullName(b.e)));
+  const tBasic=rows.reduce((s,r)=>s+r.basic,0);
+  const tAllow=rows.reduce((s,r)=>s+r.allow,0);
+  const tMonthly=rows.reduce((s,r)=>s+r.monthly,0);
+  // Per-department subtotals
+  const byDept={};
+  rows.forEach(r=>{ const d=r.e.department||'—'; byDept[d]=(byDept[d]||0)+r.monthly; });
+  function exportCsv(){
+    const head=['Employee','Position','Department','Rank','Basic Salary','Allowances','Monthly Total'];
+    const lines=rows.map(r=>[fullName(r.e), r.e.position||'', r.e.department||'', r.e.rank||'', r.basic, r.allow, r.monthly]);
+    lines.push(['','','','','TOTAL', tBasic+' / '+tAllow, tMonthly]);
+    const csv=[head,...lines].map(row=>row.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`salary-report-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">💰 Salary Report</h1>
+            <p className="text-slate-500 text-sm">{rows.length} employee{rows.length===1?'':'s'} · Total monthly payroll: <strong className="text-emerald-700">{peso(tMonthly)}</strong></p>
+          </div>
+          <button onClick={exportCsv} className="px-4 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">⬇ Export CSV</button>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={dept} onChange={e=>setDept(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200"><option value="">All departments</option>{depts.map(d=><option key={d} value={d}>{d}</option>)}</select>
+          <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={activeOnly} onChange={e=>setActiveOnly(e.target.checked)} /> Active only</label>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name / position…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total basic pay</div><div className="text-xl font-bold mt-1">{peso(tBasic)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total allowances</div><div className="text-xl font-bold mt-1">{peso(tAllow)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-emerald-700">Total monthly payroll</div><div className="text-2xl font-extrabold mt-1 text-emerald-700">{peso(tMonthly)}</div></div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Position</th>
+          <th className="text-left px-3 py-2">Department</th><th className="text-right px-3 py-2">Basic Salary</th>
+          <th className="text-right px-3 py-2">Allowances</th><th className="text-right px-3 py-2">Monthly Total</th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No employees match.</td></tr>}
+          {rows.map(r=>(
+            <tr key={r.e.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-medium">{fullName(r.e)}</td>
+              <td className="px-3 py-2 text-xs">{r.e.position||'—'}</td>
+              <td className="px-3 py-2 text-xs">{r.e.department||'—'}</td>
+              <td className="px-3 py-2 text-right">{peso(r.basic)}</td>
+              <td className="px-3 py-2 text-right text-slate-500">{r.allow?peso(r.allow):'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(r.monthly)}</td>
+            </tr>
+          ))}
+        </tbody>
+        {rows.length>0 && <tfoot><tr className="border-t-2 bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="3">TOTAL ({rows.length})</td><td className="px-3 py-2 text-right">{peso(tBasic)}</td><td className="px-3 py-2 text-right">{peso(tAllow)}</td><td className="px-3 py-2 text-right text-emerald-700">{peso(tMonthly)}</td></tr></tfoot>}
+      </table></div></div>
+      {Object.keys(byDept).length>1 && <div className="mt-4 bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2 bg-slate-50 border-b font-semibold text-sm">By department</div>
+        <table className="w-full text-sm"><tbody>
+          {Object.entries(byDept).sort((a,b)=>b[1]-a[1]).map(([d,v])=>(<tr key={d} className="border-t"><td className="px-3 py-2">{d}</td><td className="px-3 py-2 text-right font-semibold">{peso(v)}</td></tr>))}
+        </tbody></table>
+      </div>}
+    </div>
+  );
 }
 
 function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, hrTemplates, hrChecklists, hrTrainings, reload }){
@@ -29941,7 +30019,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','hr-recruit','hr-templates','payroll','budgets','profile','trip-tickets']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','hr-recruit','hr-templates','payroll','budgets','profile','trip-tickets']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -30421,7 +30499,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       FINANCE_DEPT_ONLY,
@@ -30541,7 +30619,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -30650,6 +30728,7 @@ function App(){
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
+        {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} reload={loadAll} />}
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
