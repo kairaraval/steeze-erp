@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 307 · Production Plan is now easier to monitor: editable Start date, batch Release + batch Receive logs per step (multiple returns, with dates) that auto-mark a step Done when fully received, and clickable stage cards (Printing/Pressing/Sewing) that filter the steps + preset the Add-step stage.";
+const BUILD = "Live build 308 · Techpack: when a manager signs, the sales assistant who prepared it + the production supervisor get notified in their Inbox. Production board: new 'Endorsed' column (topmost — all closed-won deals land here first) + a 'DTF Printing' status.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -92,6 +92,7 @@ const PAYMENT_OPTS = [
 const payMeta = (k) => PAYMENT_OPTS.find(p=>p.key===(k||'unpaid')) || PAYMENT_OPTS[0];
 
 const PRODUCTION_STATUSES = [
+  { key:'endorsed',              label:'Endorsed',              color:'bg-slate-800 text-white' },
   { key:'materials to purchase', label:'Materials to Purchase', color:'bg-rose-100 text-rose-700' },
   { key:'graphic design',        label:'Graphic Design',        color:'bg-pink-100 text-pink-700' },
   { key:'for pattern',           label:'For Pattern',           color:'bg-violet-100 text-violet-700' },
@@ -99,6 +100,7 @@ const PRODUCTION_STATUSES = [
   { key:'cutting - in house',    label:'Cutting - In House',    color:'bg-amber-100 text-amber-700' },
   { key:'cutting - subcon',      label:'Cutting - Subcon',      color:'bg-yellow-100 text-yellow-700' },
   { key:'sublimation printing',  label:'Sublimation Printing',  color:'bg-purple-100 text-purple-700' },
+  { key:'dtf printing',          label:'DTF Printing',          color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'heat press',            label:'Heat Press',            color:'bg-orange-100 text-orange-700' },
   { key:'embroidery',            label:'Embroidery',            color:'bg-cyan-100 text-cyan-700' },
   { key:'out to sewing subcon',  label:'Out to Sewing Subcon',  color:'bg-blue-100 text-blue-700' },
@@ -16460,6 +16462,24 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       );
       return;
     }
+    // If a MANAGER/ADMIN just added their signature (wasn't there before this
+    // save), notify the sales assistant who prepared it + the production
+    // supervisor(s) so production knows the techpack is signed and ready.
+    try {
+      const isMgr = profile.role==='manager' || profile.role==='admin';
+      const prevSignedByMe = (((lead.techpack||{}).signatures||{}).rows||[]).some(r=>r.signedByUserId===profile.id);
+      const nowSignedByMe  = ((payload.signatures||{}).rows||[]).some(r=>r.signedByUserId===profile.id);
+      if(isMgr && nowSignedByMe && !prevSignedByMe){
+        const supers = (profiles||[]).filter(p=>p.role==='production_supervisor').map(p=>p.id);
+        const assistant = (lead.created_by && lead.created_by!==profile.id) ? [lead.created_by] : [];
+        const mentions = [...new Set([...assistant, ...supers])].filter(id=>id && id!==profile.id);
+        if(mentions.length){
+          await sb.from('lead_activity').insert({ lead_id: lead.id, actor_id: profile.id, type:'system',
+            text: `✍ ${profile.name||profile.email} signed the techpack${lead.techpack_number?` ${lead.techpack_number}`:''} — ${lead.title||''}. Ready for production.`,
+            mentions });
+        }
+      }
+    } catch(e){ console.warn('techpack sign notify failed:', e?.message||e); }
     reload&&reload();
     alert('Techpack saved.');
   }
@@ -18584,7 +18604,9 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
       item: lead.title,
       items,
       quantity: qty,
-      status: 'materials to purchase',
+      // Closed-won deals land in "Endorsed" first so the production supervisor
+      // sees + triages them before they enter the workflow proper.
+      status: 'endorsed',
       // Production targets the client's DUE DATE (lead.expected_close in the
       // form's UI). Sample Due Date (lead.delivery_date) is for the sample —
       // production should ship the finished order on Due Date. Fall back to
@@ -30809,7 +30831,7 @@ function App(){
     const qty=items.reduce((s,it)=>s+it.quantity,0);
     // Production targets the client's Due Date; Sample Due Date is a fallback.
     const dueDate = lead.expected_close || lead.delivery_date || null;
-    const { data: newJob, error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'materials to purchase', due_date:dueDate, sales_owner_id: lead.manager_id||null }).select().single();
+    const { data: newJob, error }=await sb.from('production_jobs').insert({ number:'PROD-'+Date.now().toString().slice(-5), lead_id:lead.id, client_id:lead.client_id, client_name:client?.company||'', item:lead.title, items, quantity:qty, status:'endorsed', due_date:dueDate, sales_owner_id: lead.manager_id||null }).select().single();
     if(error){
       // DB-level UNIQUE index (steeze-erp-dedupe-by-lead.sql) returns 23505 on conflict.
       // Treat that as "duplicate" — open the existing instead.
