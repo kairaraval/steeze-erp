@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 309 · Techpack sign notification now goes to whoever e-signed the 'Prepared by' row (the sales assistant) plus the production supervisor — falls back to the lead creator only if that row isn't e-signed.";
+const BUILD = "Live build 310 · Inbox filters: 💬 Mentions (real @mentions from teammates) vs 🔔 Notifications (automated system alerts), alongside All / Unread — so real mentions are easy to track.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7093,9 +7093,18 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   // the cleared row simply never shows in this user's inbox again. The
   // underlying comment stays on the lead / job for everyone else.
   const isArchived = (m) => (m.archived_by||[]).includes(profile.id);
+  // A "real mention" is a person typing @you in a comment/message; an
+  // "automated notification" is a system event (techpack signed, payment to
+  // verify, etc.). Activity rows carry type='system' for the automated ones.
+  const isAuto = (m)=> m.type==='system';
   const nonArchivedMentions = mentions.filter(m => !isArchived(m));
   const unread = nonArchivedMentions.filter(m=>!(m.read_by||[]).includes(profile.id));
-  const rawVisible = filter==='unread'?unread:nonArchivedMentions;
+  const realCount = nonArchivedMentions.filter(m=>!isAuto(m)).length;
+  const autoCount = nonArchivedMentions.filter(m=>isAuto(m)).length;
+  const rawVisible = filter==='unread' ? unread
+    : filter==='mention' ? nonArchivedMentions.filter(m=>!isAuto(m))
+    : filter==='auto' ? nonArchivedMentions.filter(m=>isAuto(m))
+    : nonArchivedMentions;
   // Collapse multiple mentions in the same lead / job into a single inbox row
   // so the inbox doesn't get cluttered when a lead has a long conversation.
   // Most recent mention wins (mentions arrive sorted by created_at desc).
@@ -7235,6 +7244,8 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
             <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({mentions.length})</button>
             <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
+            <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 Mentions ({realCount})</button>
+            <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 Notifications ({autoCount})</button>
           </div>
           {unread.length>0 && (
             <button onClick={clearAll} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium">
