@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 302 · Log Payment now accepts MULTIPLE proof photos — attach or paste several receipts/slips per payment; accounting sees all of them on the verify screen.";
+const BUILD = "Live build 303 · Trip Tickets now time every leg: 🚗 Start driving → 📍 Arrived shows travel duration per stop; ☕/🍽 break timer; 🏁 Done for the day; live Time & Efficiency summary (driving time, avg/leg, break time, work span). Monthly report adds a per-driver efficiency table.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15242,6 +15242,32 @@ function tripMetrics(ticket, gas){
   const costPerKm=(km!=null && km>0 && cost>0) ? cost/km : null;
   return { km, liters, cost, kmPerL, costPerKm };
 }
+// Human-friendly duration from a millisecond span.
+function fmtDur(ms){
+  if(ms==null || !isFinite(ms) || ms<0) return '—';
+  const mins=Math.round(ms/60000);
+  if(mins<1) return '<1m';
+  const h=Math.floor(mins/60), m=mins%60;
+  return h? `${h}h ${m}m` : `${m}m`;
+}
+const durBetween=(a,b)=> (a&&b) ? (new Date(b)-new Date(a)) : null;
+// Efficiency roll-up for a ticket's stops + breaks.
+function tripTimeMetrics(stops, breaks, ticket, nowMs){
+  const now = nowMs || Date.now();
+  const legs=(stops||[]).filter(s=>s.departed_at); // any leg that has started
+  let driveMs=0; let legCount=0;
+  legs.forEach(s=>{ const end=s.arrived_at?new Date(s.arrived_at).getTime():null; if(end){ driveMs+=Math.max(0,end-new Date(s.departed_at).getTime()); legCount++; } });
+  const stopsDone=(stops||[]).filter(s=>s.arrived_at).length;
+  let breakMs=0; (breaks||[]).forEach(b=>{ if(b.start){ const e=b.end?new Date(b.end).getTime():now; breakMs+=Math.max(0,e-new Date(b.start).getTime()); } });
+  const departs=(stops||[]).filter(s=>s.departed_at).map(s=>new Date(s.departed_at).getTime());
+  const arrivals=(stops||[]).filter(s=>s.arrived_at).map(s=>new Date(s.arrived_at).getTime());
+  const firstDepart=departs.length?Math.min(...departs):null;
+  const lastActivity=ticket?.ended_at ? new Date(ticket.ended_at).getTime() : (arrivals.length?Math.max(...arrivals):null);
+  const spanMs=(firstDepart!=null && lastActivity!=null) ? Math.max(0,lastActivity-firstDepart) : null;
+  const avgLegMs=legCount?driveMs/legCount:null;
+  const openBreak=(breaks||[]).find(b=>b.start && !b.end);
+  return { driveMs, legCount, stopsDone, breakMs, firstDepart, lastActivity, spanMs, avgLegMs, openBreak };
+}
 
 function TripTicketsView({ profile }){
   const isAdmin=profile.role==='admin';
@@ -15262,6 +15288,8 @@ function TripTicketsView({ profile }){
   const [adhoc,setAdhoc]=useState('');
   const [gasForm,setGasForm]=useState({ liters:'', amount:'', odometer:'', station:'' });
   const [endOdo,setEndOdo]=useState('');
+  const [nowMs,setNowMs]=useState(Date.now());
+  useEffect(()=>{ const t=setInterval(()=>setNowMs(Date.now()),30000); return ()=>clearInterval(t); },[]);
 
   const vehicleFor=(id)=> (vehicles||[]).find(v=>v.id===id);
   const driverFor=(id)=> (drivers||[]).find(d=>d.id===id);
@@ -15327,6 +15355,19 @@ function TripTicketsView({ profile }){
     if(ticket){ const veh=vehicleFor(vid); await sb.from('trip_tickets').update({ vehicle_id:vid, ...(ticket.start_odometer==null?{ start_odometer: veh?.odometer!=null?Number(veh.odometer):null }:{}) }).eq('id',ticket.id); loadTicket(); }
   }
   const stopFor=(deliveryId)=> (stops||[]).find(s=>s.delivery_id===deliveryId);
+  // Start driving toward a stop (from the office for the first leg, or from the
+  // previous drop-off). Stamps departed_at + GPS so we can time the leg.
+  async function markDeparted(delivery){
+    if(!ticket) return; setBusyStop(delivery.id);
+    const geo=await captureTripGeo();
+    const ex=stopFor(delivery.id);
+    if(ex){
+      await sb.from('trip_ticket_stops').update({ departed_at:new Date().toISOString() }).eq('id',ex.id);
+    } else {
+      await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, departed_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
+    }
+    setBusyStop(null); loadTicket();
+  }
   async function markArrived(delivery){
     if(!ticket) return; setBusyStop(delivery.id);
     const geo=await captureTripGeo();
@@ -15338,7 +15379,31 @@ function TripTicketsView({ profile }){
     }
     setBusyStop(null); loadTicket();
   }
-  async function undoArrived(delivery){ const ex=stopFor(delivery.id); if(!ex) return; await sb.from('trip_ticket_stops').delete().eq('id',ex.id); loadTicket(); }
+  async function undoArrived(delivery){ const ex=stopFor(delivery.id); if(!ex) return;
+    if(ex.departed_at){ await sb.from('trip_ticket_stops').update({ arrived_at:null }).eq('id',ex.id); }
+    else { await sb.from('trip_ticket_stops').delete().eq('id',ex.id); }
+    loadTicket();
+  }
+  async function undoDeparted(delivery){ const ex=stopFor(delivery.id); if(!ex) return; await sb.from('trip_ticket_stops').delete().eq('id',ex.id); loadTicket(); }
+  // Breaks (lunch / rest) — stored on the ticket so they're excluded from driving time.
+  async function startBreak(type){
+    if(!ticket) return;
+    const arr=Array.isArray(ticket.breaks)?ticket.breaks:[];
+    if(arr.some(b=>b.start&&!b.end)){ alert('End the current break first.'); return; }
+    await sb.from('trip_tickets').update({ breaks:[...arr, { type, start:new Date().toISOString(), end:null }] }).eq('id',ticket.id); loadTicket();
+  }
+  async function endBreak(){
+    if(!ticket) return;
+    const arr=(Array.isArray(ticket.breaks)?ticket.breaks:[]).map(b=> (b.start&&!b.end)?{...b,end:new Date().toISOString()}:b);
+    await sb.from('trip_tickets').update({ breaks:arr }).eq('id',ticket.id); loadTicket();
+  }
+  async function removeBreak(i){
+    if(!ticket) return;
+    const arr=(Array.isArray(ticket.breaks)?ticket.breaks:[]).filter((_,x)=>x!==i);
+    await sb.from('trip_tickets').update({ breaks:arr }).eq('id',ticket.id); loadTicket();
+  }
+  async function doneForDay(){ if(!ticket) return; await sb.from('trip_tickets').update({ ended_at:new Date().toISOString() }).eq('id',ticket.id); loadTicket(); }
+  async function undoDone(){ if(!ticket) return; await sb.from('trip_tickets').update({ ended_at:null }).eq('id',ticket.id); loadTicket(); }
   async function addAdhocStop(){
     if(!ticket || !adhoc.trim()) return; setBusyStop('adhoc');
     const geo=await captureTripGeo();
@@ -15385,7 +15450,7 @@ function TripTicketsView({ profile }){
     <div className="p-6 max-w-3xl mx-auto">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <h1 className="text-2xl font-bold">🎫 Trip Tickets</h1>
-        <p className="text-slate-500 text-sm">Log your daily mileage + gas. Stops fill in from the schedule — just tap Arrived.</p>
+        <p className="text-slate-500 text-sm">Per stop: tap 🚗 Start driving, then 📍 Arrived — it times each leg. Log breaks + mileage + gas, then 🏁 Done for the day.</p>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
           <button onClick={()=>setTab('ticket')} className={`px-3 py-1.5 rounded-md ${tab==='ticket'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Daily Ticket</button>
           <button onClick={()=>setTab('report')} className={`px-3 py-1.5 rounded-md ${tab==='report'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Mileage & Fuel</button>
@@ -15444,19 +15509,71 @@ function TripTicketsView({ profile }){
                 </div>
               </div>
 
+              {/* Time & efficiency */}
+              {(()=>{ const tm=tripTimeMetrics(stops, ticket.breaks, ticket, nowMs); const brk=Array.isArray(ticket.breaks)?ticket.breaks:[]; return (
+              <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">⏱ Time & efficiency</div>
+                <div className="p-3 grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                  <div><div className="text-[10px] uppercase text-slate-400">Stops done</div><div className="text-lg font-bold">{tm.stopsDone}<span className="text-xs text-slate-400">/{deliveries.length}</span></div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Driving time</div><div className="text-lg font-bold text-cyan-700">{fmtDur(tm.driveMs)}</div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Avg / leg</div><div className="text-lg font-bold">{tm.avgLegMs!=null?fmtDur(tm.avgLegMs):'—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Break time</div><div className="text-lg font-bold text-amber-600">{tm.breakMs?fmtDur(tm.breakMs):'—'}</div></div>
+                  <div><div className="text-[10px] uppercase text-slate-400">Work span</div><div className="text-lg font-bold">{tm.spanMs!=null?fmtDur(tm.spanMs):'—'}</div></div>
+                </div>
+                {/* Breaks */}
+                <div className="border-t px-3 py-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {tm.openBreak
+                      ? <button onClick={endBreak} disabled={!isOpen} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">⏹ End {tm.openBreak.type} ({fmtDur(nowMs-new Date(tm.openBreak.start).getTime())})</button>
+                      : <>
+                        <span className="text-[11px] uppercase text-slate-400 font-semibold mr-1">Break:</span>
+                        <button onClick={()=>startBreak('lunch')} disabled={!isOpen} className="text-xs px-3 py-1.5 rounded-lg border font-semibold hover:bg-slate-50 disabled:opacity-40">🍽 Lunch</button>
+                        <button onClick={()=>startBreak('break')} disabled={!isOpen} className="text-xs px-3 py-1.5 rounded-lg border font-semibold hover:bg-slate-50 disabled:opacity-40">☕ Break</button>
+                      </>}
+                  </div>
+                  {brk.length>0 && <div className="mt-2 space-y-0.5">{brk.map((b,i)=>(
+                    <div key={i} className="text-[11px] text-slate-500 flex items-center gap-2">
+                      <span className="capitalize">{b.type==='lunch'?'🍽':'☕'} {b.type}</span>
+                      <span>{fmtTime(b.start)}{b.end?` → ${fmtTime(b.end)}`:' → …'}</span>
+                      <span className="text-slate-400">{b.end?fmtDur(durBetween(b.start,b.end)):`${fmtDur(nowMs-new Date(b.start).getTime())} (running)`}</span>
+                      {isOpen && <button onClick={()=>removeBreak(i)} className="text-slate-300 hover:text-rose-500 ml-auto">✕</button>}
+                    </div>
+                  ))}</div>}
+                </div>
+                {/* Done for the day */}
+                <div className="border-t px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="text-xs text-slate-500">{ticket.ended_at ? <>🏁 Finished work at <b>{fmtTime(ticket.ended_at)}</b></> : (tm.firstDepart? <>Started driving {fmtTime(new Date(tm.firstDepart).toISOString())}</> : 'Not started yet')}</div>
+                  {ticket.ended_at
+                    ? <button onClick={undoDone} disabled={!isOpen} className="text-xs text-slate-400 hover:text-slate-700">Undo</button>
+                    : <button onClick={doneForDay} disabled={!isOpen} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900 disabled:opacity-40">🏁 Done for the day</button>}
+                </div>
+              </div>
+              ); })()}
+
               {/* Stops from the schedule */}
               <div className="bg-white border rounded-xl overflow-hidden">
                 <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📍 Delivery stops ({deliveries.length})</div>
                 {deliveries.length===0 && <div className="px-4 py-5 text-center text-slate-400 text-sm">No deliveries assigned to you on the schedule for this day. Add ad-hoc stops below.</div>}
-                {deliveries.map(d=>{ const s=stopFor(d.id); const arrived=!!(s&&s.arrived_at); return (
+                {deliveries.map((d,idx)=>{ const s=stopFor(d.id); const departed=!!(s&&s.departed_at); const arrived=!!(s&&s.arrived_at);
+                  const travelMs=(departed&&arrived)?durBetween(s.departed_at,s.arrived_at):(departed&&!arrived?(nowMs-new Date(s.departed_at).getTime()):null);
+                  return (
                   <div key={d.id} className="border-t px-3 py-2.5 flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium truncate">{d.client_name||d.item||'Delivery'}</div>
-                      <div className="text-[11px] text-slate-500 truncate">{d.address||''}{arrived && <> · ✓ {stampTime(s)} {pinLink(s)}</>}</div>
+                      <div className="text-[11px] text-slate-500 truncate">
+                        {d.address||''}
+                        {departed && <> · 🚗 {fmtTime(s.departed_at)}</>}
+                        {arrived && <> → 📍 {fmtTime(s.arrived_at)} · <span className="text-cyan-700 font-semibold">🕒 {fmtDur(travelMs)}</span> {pinLink(s)}</>}
+                        {departed && !arrived && <> · <span className="text-amber-600 font-semibold">en route {fmtDur(travelMs)}…</span></>}
+                      </div>
                     </div>
-                    {arrived
-                      ? <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40">Undo</button>
-                      : <button onClick={()=>markArrived(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0 disabled:opacity-50">{busyStop===d.id?'📍…':'Arrived ✓'}</button>}
+                    {!departed && <button onClick={()=>markDeparted(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold hover:bg-cyan-700 shrink-0 disabled:opacity-50" title="Start driving to this stop">{busyStop===d.id?'…':'🚗 Start driving'}</button>}
+                    {departed && !arrived && <>
+                      <button onClick={()=>markArrived(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0 disabled:opacity-50">{busyStop===d.id?'📍…':'Arrived ✓'}</button>
+                      <button onClick={()=>undoDeparted(d)} disabled={!isOpen} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Cancel departure">✕</button>
+                    </>}
+                    {arrived && <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40">Undo</button>}
                   </div>
                 ); })}
                 {/* Ad-hoc stops */}
@@ -15525,9 +15642,13 @@ function TripReport({ vehicles, drivers }){
     const end=tripYmd(d);
     const { data:tks }=await sb.from('trip_tickets').select('*').gte('date',start).lt('date',end).order('date',{ascending:false});
     const tickets=tks||[];
-    let gasAll=[];
-    if(tickets.length){ const { data:g }=await sb.from('trip_ticket_gas').select('*').in('ticket_id',tickets.map(t=>t.id)); gasAll=g||[]; }
-    setRows(tickets.map(t=>({ ticket:t, gas:gasAll.filter(x=>x.ticket_id===t.id) })));
+    let gasAll=[], stopsAll=[];
+    if(tickets.length){
+      const ids=tickets.map(t=>t.id);
+      const { data:g }=await sb.from('trip_ticket_gas').select('*').in('ticket_id',ids); gasAll=g||[];
+      try { const { data:st }=await sb.from('trip_ticket_stops').select('*').in('ticket_id',ids); stopsAll=st||[]; } catch(_){}
+    }
+    setRows(tickets.map(t=>({ ticket:t, gas:gasAll.filter(x=>x.ticket_id===t.id), stops:stopsAll.filter(x=>x.ticket_id===t.id) })));
     setLoading(false);
   }
   useEffect(()=>{ load(); },[month]);
@@ -15539,6 +15660,14 @@ function TripReport({ vehicles, drivers }){
     const mm=tripMetrics(ticket,gas); const key=ticket.vehicle_id||'none';
     const a=byVehicle[key]||(byVehicle[key]={ km:0, liters:0, cost:0 });
     if(mm.km) a.km+=mm.km; a.liters+=mm.liters; a.cost+=mm.cost;
+  });
+  // Per-driver efficiency: driving time, stops done, avg per stop.
+  const byDriver={};
+  rows.forEach(({ticket,stops})=>{
+    const tm=tripTimeMetrics(stops, ticket.breaks, ticket);
+    const key=ticket.driver_id||'none';
+    const a=byDriver[key]||(byDriver[key]={ driveMs:0, stops:0, legs:0, breakMs:0, days:0 });
+    a.driveMs+=tm.driveMs; a.stops+=tm.stopsDone; a.legs+=tm.legCount; a.breakMs+=tm.breakMs; a.days+=1;
   });
   return (
     <div className="space-y-4">
@@ -15560,6 +15689,25 @@ function TripReport({ vehicles, drivers }){
                 <td className="px-3 py-2 text-right">{peso(a.cost)}</td>
                 <td className="px-3 py-2 text-right font-semibold">{a.liters>0?(a.km/a.liters).toFixed(1):'—'}</td>
                 <td className="px-3 py-2 text-right">{a.km>0&&a.cost>0?`₱${(a.cost/a.km).toFixed(1)}`:'—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🚗 Per-driver efficiency</div>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Driver</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Stops</th><th className="text-right px-3 py-2">Driving time</th><th className="text-right px-3 py-2">Avg / stop</th><th className="text-right px-3 py-2">Break time</th></tr></thead>
+          <tbody>
+            {Object.keys(byDriver).length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-6">No timed trips this month.</td></tr>}
+            {Object.entries(byDriver).sort((a,b)=>b[1].stops-a[1].stops).map(([did,a])=>(
+              <tr key={did} className="border-t">
+                <td className="px-3 py-2 font-medium">{did==='none'?'Unassigned':dName(did)}</td>
+                <td className="px-3 py-2 text-right">{a.days}</td>
+                <td className="px-3 py-2 text-right">{a.stops}</td>
+                <td className="px-3 py-2 text-right text-cyan-700 font-semibold">{fmtDur(a.driveMs)}</td>
+                <td className="px-3 py-2 text-right">{a.legs?fmtDur(a.driveMs/a.legs):'—'}</td>
+                <td className="px-3 py-2 text-right text-amber-600">{a.breakMs?fmtDur(a.breakMs):'—'}</td>
               </tr>
             ))}
           </tbody>
