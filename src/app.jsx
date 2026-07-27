@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 300 · Employee Relations cases now have a per-case Activity log + a '📤 Send to Admin for checking' button (Admin marks it ✓ Checked). List shows 📤/✅ review markers.";
+const BUILD = "Live build 301 · Memo Board now has '⬆ Upload past memos' — bulk-upload memo files made before the OS (PDF/Word/images); each becomes a memo on the board with the file attached (📎).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9557,6 +9557,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [viewing,setViewing]=useState(null);
+  const [uploading,setUploading]=useState(false);
   const [cat,setCat]=useState('');
   const [search,setSearch]=useState('');
   const isAdmin = profile.role==='admin';
@@ -9587,7 +9588,10 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
             <h1 className="text-2xl font-bold">📢 Memo Board</h1>
             <p className="text-slate-500 text-sm">Company announcements, reminders &amp; policies — all in one place.</p>
           </div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New memo</button>
+          <div className="flex gap-2">
+            <button onClick={()=>setUploading(true)} className="px-4 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50" title="Upload memo files created before the OS">⬆ Upload past memos</button>
+            <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New memo</button>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap mt-3">
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search memos…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white" />
@@ -9610,6 +9614,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
               <div className="font-bold text-slate-800">{m.title}</div>
               <div className="text-[11px] text-slate-500 mt-0.5">👥 For: <span className="font-medium">{memoAudienceLabel(m)}</span></div>
               {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap line-clamp-4">{m.body}</div>}
+              {Array.isArray(m.attachments)&&m.attachments.length>0 && <div className="flex flex-wrap gap-1.5 mt-2">{m.attachments.map((a,i)=>(<button key={i} onClick={()=>openSignedAttachment(a.path||a.url)} className="text-[11px] text-indigo-600 hover:underline bg-indigo-50 rounded px-2 py-0.5">📎 {a.name}</button>))}</div>}
               {m.status==='approved' && m.approved_by && <div className="text-[11px] text-emerald-700 font-medium mt-2">✓ Approved &amp; signed by {who(m.approved_by)}</div>}
               <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400 flex-wrap">
                 <span>Prepared by {who(m.posted_by)}</span>
@@ -9630,7 +9635,66 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
       )}
       {(creating||editing) && <MemoForm memo={editing} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {viewing && <MemoViewModal memo={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
+      {uploading && <MemoUploadModal profile={profile} onClose={()=>setUploading(false)} onSaved={()=>{ setUploading(false); reload(); }} />}
     </div>
+  );
+}
+
+// Bulk-upload historical memo files (made before the OS). One memo per file.
+function MemoUploadModal({ profile, onClose, onSaved }){
+  const [files,setFiles]=useState([]);       // {name, url, path, type}
+  const [category,setCategory]=useState((MEMO_CATEGORIES[0]||{}).key||'general');
+  const [memoDate,setMemoDate]=useState(new Date().toISOString().slice(0,10));
+  const [uploading,setUploading]=useState(false);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function addFiles(fileList){
+    const list=Array.from(fileList||[]).filter(Boolean); if(!list.length) return;
+    setUploading(true); setMsg('');
+    try { for(const file of list){
+      const ext=(file.name.split('.').pop()||'bin').toLowerCase();
+      const key=`hr-memos/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+      if(upErr) throw upErr;
+      const { data: pu }=await sb.storage.from(BUCKET).getPublicUrl(key);
+      setFiles(prev=>[...prev,{ name:file.name, url:pu.publicUrl, path:key, type:file.type||'' }]);
+    } } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
+  async function save(){
+    if(!files.length){ setMsg('Add at least one memo file.'); return; }
+    setBusy(true); setMsg('');
+    // One memo record per uploaded file — archived historical memos.
+    const rows=files.map(a=>({
+      title: a.name.replace(/\.[^.]+$/,''), body:'Uploaded historical memo file.',
+      category, memo_date:memoDate||null, status:'approved',
+      posted_by:profile.id, attachments:[a],
+    }));
+    const { error }=await sb.from('hr_memos').insert(rows);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="⬆ Upload past memos" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Upload memo files you made before the OS (PDF, Word, images). Each file becomes its own memo on the board so all your records live here.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Category"><select className="input" value={category} onChange={e=>setCategory(e.target.value)}>{MEMO_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select></TpLbl>
+          <TpLbl t="Memo date"><input type="date" className="input" value={memoDate} onChange={e=>setMemoDate(e.target.value)} /></TpLbl>
+        </div>
+        <div className="border-2 border-dashed rounded-lg p-4 text-center">
+          <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.txt" onChange={e=>{ addFiles(e.target.files); e.target.value=''; }} className="text-xs" />
+          {uploading && <div className="text-xs text-slate-500 mt-1">Uploading…</div>}
+        </div>
+        {files.length>0 && <div className="space-y-1">{files.map((a,i)=>(
+          <div key={i} className="flex items-center gap-2 text-xs bg-slate-50 border rounded px-2 py-1.5">
+            <span className="flex-1 truncate">📎 {a.name}</span>
+            <button onClick={()=>setFiles(p=>p.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-500">✕</button>
+          </div>
+        ))}</div>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy||!files.length} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':`Add ${files.length||''} memo${files.length===1?'':'s'} to board`}</button>
+      </div>
+    </Modal>
   );
 }
 
