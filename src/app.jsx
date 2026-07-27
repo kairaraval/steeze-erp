@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 301 · Memo Board now has '⬆ Upload past memos' — bulk-upload memo files made before the OS (PDF/Word/images); each becomes a memo on the board with the file attached (📎).";
+const BUILD = "Live build 302 · Log Payment now accepts MULTIPLE proof photos — attach or paste several receipts/slips per payment; accounting sees all of them on the verify screen.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21062,28 +21062,26 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
     reference: '',
     notes: '',
   });
-  const [proofFile,setProofFile]=useState(null);
-  const [proofPreview,setProofPreview]=useState(null);
+  const [proofs,setProofs]=useState([]);   // [{ file, preview }]
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
-  function onProofChange(file){
-    if(!file){ setProofFile(null); setProofPreview(null); return; }
-    setProofFile(file);
-    const reader = new FileReader();
-    reader.onload = e => setProofPreview(e.target.result);
-    reader.readAsDataURL(file);
+  function addProofs(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean);
+    files.forEach(file=>{
+      const reader=new FileReader();
+      reader.onload=e=> setProofs(prev=>[...prev, { file, preview:e.target.result }]);
+      reader.readAsDataURL(file);
+    });
   }
-  // Allow pasting a screenshot / photo (Cmd/Ctrl+V) anywhere while the modal is
-  // open — grabs the first image off the clipboard as the proof of payment.
+  function removeProof(i){ setProofs(prev=>prev.filter((_,x)=>x!==i)); }
+  // Allow pasting screenshots / photos (Cmd/Ctrl+V) anywhere while the modal is
+  // open — each pasted image is added as another proof of payment.
   useEffect(()=>{
     function onPaste(e){
       const items = (e.clipboardData && e.clipboardData.items) || [];
-      for(const it of items){
-        if(it.type && it.type.indexOf('image')===0){
-          const file = it.getAsFile();
-          if(file){ onProofChange(file); e.preventDefault(); break; }
-        }
-      }
+      const imgs=[];
+      for(const it of items){ if(it.type && it.type.indexOf('image')===0){ const file=it.getAsFile(); if(file) imgs.push(file); } }
+      if(imgs.length){ addProofs(imgs); e.preventDefault(); }
     }
     document.addEventListener('paste', onPaste);
     return ()=>document.removeEventListener('paste', onPaste);
@@ -21094,24 +21092,26 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
     if(f.method==='bank_transfer' && !f.bank_id){ setMsg('Pick which bank the client deposited to.'); return; }
     setBusy(true); setMsg('');
     try {
-      // Upload proof first (if provided). Keep path under sopay/SO/UUID.
-      let attachment_url = null, attachment_path = null;
-      if(proofFile){
-        // Pasted images often have no filename — fall back to the MIME subtype.
-        const nameExt = (proofFile.name||'').includes('.') ? (proofFile.name.split('.').pop()||'') : '';
-        const ext = (nameExt || (proofFile.type||'').split('/')[1] || 'png').toLowerCase();
+      // Upload every proof photo. Keep path under sopay/SO/UUID.
+      const atts=[];
+      for(const p of proofs){
+        const file=p.file;
+        const nameExt = (file.name||'').includes('.') ? (file.name.split('.').pop()||'') : '';
+        const ext = (nameExt || (file.type||'').split('/')[1] || 'png').toLowerCase();
         const key = `sopay/${so.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-        const { error: upErr } = await sb.storage.from(BUCKET).upload(key, proofFile, { upsert:false, contentType: proofFile.type||undefined });
+        const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType: file.type||undefined });
         if(upErr) throw upErr;
-        attachment_path = key;
-        try { attachment_url = await signedUrl(key); } catch(_){}
+        atts.push({ name:file.name||'receipt.'+ext, path:key, type:file.type||'' });
       }
+      // Keep attachment_url/path (first proof) for backward compatibility.
+      let attachment_url = null, attachment_path = atts[0]?.path || null;
+      if(attachment_path){ try { attachment_url = await signedUrl(attachment_path); } catch(_){} }
       // Insert as PENDING. No bank txn, no SO total change — accounting handles that on verify.
       const { error } = await sb.from('sales_order_payments').insert({
         sales_order_id: so.id, date: f.date, amount: amt,
         method: f.method, reference: f.reference||null, notes: f.notes||null,
         bank_id: f.method==='bank_transfer' ? (f.bank_id||null) : null,
-        attachment_url, attachment_path,
+        attachment_url, attachment_path, attachments: atts,
         status: 'pending', received_by: profile.id,
       });
       if(error) throw error;
@@ -21161,12 +21161,13 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
         )}
         <TpLbl t="Notes (optional)"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. partial DP, collected by Joy at client office" /></TpLbl>
         <div>
-          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1">Proof of payment (photo)</div>
-          {/* capture="environment" pops the phone camera directly on iOS/Android.
-              No accept filter (per earlier macOS HEIC fix) — browser shows all images. */}
-          <input type="file" accept="image/*" capture="environment" onChange={e=>onProofChange(e.target.files&&e.target.files[0])} className="text-xs w-full" />
-          <div className="text-[11px] text-indigo-600 mt-1">📋 …or just <strong>paste a screenshot</strong> — copy the receipt image and press <strong>{navigator.platform&&navigator.platform.indexOf('Mac')===0?'⌘V':'Ctrl+V'}</strong> here.</div>
-          {proofPreview && <div className="mt-2"><img src={proofPreview} alt="proof" className="max-h-40 rounded border" /><button type="button" onClick={()=>onProofChange(null)} className="block text-[10px] text-rose-500 hover:underline mt-1">Remove photo</button></div>}
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1">Proof of payment (photos)</div>
+          {/* Multiple photos allowed — snap or attach several receipts/slips. */}
+          <input type="file" accept="image/*" multiple capture="environment" onChange={e=>{ addProofs(e.target.files); e.target.value=''; }} className="text-xs w-full" />
+          <div className="text-[11px] text-indigo-600 mt-1">📋 …or just <strong>paste screenshots</strong> — copy each receipt image and press <strong>{navigator.platform&&navigator.platform.indexOf('Mac')===0?'⌘V':'Ctrl+V'}</strong> here (add as many as you need).</div>
+          {proofs.length>0 && <div className="mt-2 flex flex-wrap gap-2">{proofs.map((p,i)=>(
+            <div key={i} className="relative"><img src={p.preview} alt="proof" className="h-24 w-24 object-cover rounded border" /><button type="button" onClick={()=>removeProof(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-rose-500 text-white text-xs leading-none flex items-center justify-center shadow" title="Remove">✕</button></div>
+          ))}</div>}
           <div className="text-[10px] text-slate-400 mt-1">Snap or paste the GCash receipt / deposit slip / check photo. Optional but accounting can verify faster with it.</div>
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -21183,19 +21184,26 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
   const [bankId,setBankId]=useState(payment.bank_id || (payment.method==='cash' ? null : (bankAccounts[0]?.id||null)));
   const [verifyNotes,setVerifyNotes]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const [proofUrl,setProofUrl]=useState(payment.attachment_url||null);
-  const [showLightbox,setShowLightbox]=useState(false);
-  // Stored attachment_url is a SIGNED url that expires after 1h, so for any
-  // payment older than an hour it 404s (broken image). Always regenerate a
-  // fresh signed url from the durable storage path when we have one; only fall
-  // back to the stored url if no path was saved.
+  const [proofUrls,setProofUrls]=useState([]);
+  const [lightboxUrl,setLightboxUrl]=useState(null);
+  // Signed URLs expire after 1h, so always regenerate fresh from the durable
+  // storage paths. Supports multiple proofs (payment.attachments), falling back
+  // to the legacy single attachment_path/url.
   useEffect(()=>{
     let on=true;
-    if(payment.attachment_path){
-      signedUrl(payment.attachment_path).then(u=>{ if(on) setProofUrl(u); }).catch(()=>{});
-    }
+    (async()=>{
+      const atts = (Array.isArray(payment.attachments)&&payment.attachments.length)
+        ? payment.attachments
+        : (payment.attachment_path ? [{ path:payment.attachment_path }] : (payment.attachment_url ? [{ url:payment.attachment_url }] : []));
+      const urls=[];
+      for(const a of atts){
+        if(a.path){ try { urls.push(await signedUrl(a.path)); } catch(_){ if(a.url) urls.push(a.url); } }
+        else if(a.url){ urls.push(a.url); }
+      }
+      if(on) setProofUrls(urls);
+    })();
     return ()=>{ on=false; };
-  }, [payment.attachment_path]);
+  }, [payment.id]);
 
   const diff = Math.round((loggedAmount - Number(verifyAmount||0)) * 100) / 100;
   // diff > 0 = sales logged more than actually arrived → log as Bank Charges / shortfall expense.
@@ -21306,10 +21314,10 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
           {payment.notes && <div className="mt-2 text-[11px] text-slate-600"><strong>Sales notes:</strong> {payment.notes}</div>}
         </div>
 
-        {proofUrl && (
+        {proofUrls.length>0 && (
           <div>
-            <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">📷 Proof of payment</div>
-            <img src={proofUrl} onClick={()=>setShowLightbox(true)} alt="proof" className="max-h-56 rounded border cursor-zoom-in" />
+            <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">📷 Proof of payment ({proofUrls.length})</div>
+            <div className="flex flex-wrap gap-2">{proofUrls.map((u,i)=>(<img key={i} src={u} onClick={()=>setLightboxUrl(u)} alt="proof" className="max-h-40 rounded border cursor-zoom-in" />))}</div>
           </div>
         )}
 
@@ -21341,9 +21349,9 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
           <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
         </div>
 
-        {showLightbox && proofUrl && (
-          <div onClick={()=>setShowLightbox(false)} className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-6 cursor-zoom-out">
-            <img src={proofUrl} className="max-w-full max-h-full object-contain" alt="" />
+        {lightboxUrl && (
+          <div onClick={()=>setLightboxUrl(null)} className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-6 cursor-zoom-out">
+            <img src={lightboxUrl} className="max-w-full max-h-full object-contain" alt="" />
           </div>
         )}
       </div>
