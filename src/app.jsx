@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 308 · Techpack: when a manager signs, the sales assistant who prepared it + the production supervisor get notified in their Inbox. Production board: new 'Endorsed' column (topmost — all closed-won deals land here first) + a 'DTF Printing' status.";
+const BUILD = "Live build 309 · Techpack sign notification now goes to whoever e-signed the 'Prepared by' row (the sales assistant) plus the production supervisor — falls back to the lead creator only if that row isn't e-signed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16471,7 +16471,12 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       const nowSignedByMe  = ((payload.signatures||{}).rows||[]).some(r=>r.signedByUserId===profile.id);
       if(isMgr && nowSignedByMe && !prevSignedByMe){
         const supers = (profiles||[]).filter(p=>p.role==='production_supervisor').map(p=>p.id);
-        const assistant = (lead.created_by && lead.created_by!==profile.id) ? [lead.created_by] : [];
+        // The assistant to notify = whoever e-signed the "Prepared by" row in the
+        // techpack. Fall back to the lead creator if that row isn't e-signed.
+        const sigRows = ((payload.signatures||{}).rows)||[];
+        const preparer = sigRows.find(r=>/prepar/i.test(r.role||'') && r.signedByUserId);
+        const assistantId = preparer?.signedByUserId || lead.created_by || null;
+        const assistant = (assistantId && assistantId!==profile.id) ? [assistantId] : [];
         const mentions = [...new Set([...assistant, ...supers])].filter(id=>id && id!==profile.id);
         if(mentions.length){
           await sb.from('lead_activity').insert({ lead_id: lead.id, actor_id: profile.id, type:'system',
