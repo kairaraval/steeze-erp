@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 299 · Employee Engagements now has a 📝 Planned events tab (trainings, general assemblies) that stays off the calendar until you hit Finalize — only finalized events show on the calendar.";
+const BUILD = "Live build 300 · Employee Relations cases now have a per-case Activity log + a '📤 Send to Admin for checking' button (Admin marks it ✓ Checked). List shows 📤/✅ review markers.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9968,7 +9968,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
                 <tr key={c.id} className={`border-t hover:bg-slate-50 ${isClosed?'opacity-70':''}`}>
                   <td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td>
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ct.color}`}>{ct.label}</span></td>
-                  <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]" title={c.title}>{c.title}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}</td>
+                  <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]" title={c.title}>{c.title}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}{c.review_status==='pending_admin_review' && <span className="ml-1" title="Sent to Admin for checking">📤</span>}{c.review_status==='checked' && <span className="ml-1" title="Checked by Admin">✅</span>}</td>
                   <td className="px-3 py-2 text-center">{sev ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sev.color}`}>{sev.label}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-xs">{c.sanction_type || <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(c.opened_date)}</td>
@@ -10215,7 +10215,33 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
   const [uploading,setUploading]=useState(false); const [drag,setDrag]=useState(false);
   const fileInput=useRef(null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Per-case activity log + "send to Admin for checking" workflow.
+  const [activity,setActivity]=useState(Array.isArray(caseRow?.activity)?caseRow.activity:[]);
+  const [note,setNote]=useState('');
+  const [reviewStatus,setReviewStatus]=useState(caseRow?.review_status||null);
+  const isAdmin=profile.role==='admin';
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function persistActivity(nextActivity, patch){
+    if(!isEdit) return;
+    setActivity(nextActivity);
+    const { error }=await sb.from('hr_cases').update({ activity:nextActivity, ...(patch||{}) }).eq('id',caseRow.id);
+    if(error) alert(error.message);
+  }
+  async function addNote(){
+    if(!note.trim()||!isEdit) return;
+    const entry={ by:profile.id, by_name:profile.name||profile.email, at:new Date().toISOString(), text:note.trim(), type:'note' };
+    await persistActivity([...activity, entry]); setNote('');
+  }
+  async function sendForReview(){
+    const entry={ by:profile.id, by_name:profile.name||profile.email, at:new Date().toISOString(), text:'Sent to Admin for checking', type:'review_request' };
+    setReviewStatus('pending_admin_review');
+    await persistActivity([...activity, entry], { review_status:'pending_admin_review', review_requested_at:new Date().toISOString() });
+  }
+  async function markChecked(){
+    const entry={ by:profile.id, by_name:profile.name||profile.email, at:new Date().toISOString(), text:'Reviewed & checked by Admin', type:'checked' };
+    setReviewStatus('checked');
+    await persistActivity([...activity, entry], { review_status:'checked' });
+  }
   const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   async function uploadFiles(fileList){
     const files=Array.from(fileList||[]).filter(Boolean);
@@ -10281,13 +10307,41 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
             {attachments.map((a,i)=>(
               <div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5">
                 <span>{attIcon(a)}</span>
-                <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-indigo-600 hover:underline" onClick={e=>e.stopPropagation()}>{a.name}</a>
+                <button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name}</button>
                 <button type="button" onClick={()=>removeAtt(i)} className="text-slate-400 hover:text-rose-500">✕</button>
               </div>
             ))}
           </div>}
         </div>
         {f.status==='closed_case' && <TpLbl t="Resolution / Decision"><textarea className="input min-h-[60px]" value={f.resolution||''} onChange={e=>up('resolution',e.target.value)} placeholder="Final decision / how it was resolved" /></TpLbl>}
+
+        {/* Activity log + send-to-admin (existing cases only) */}
+        {isEdit && (
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-semibold uppercase text-slate-500">🗒️ Activity log</span>
+              <div className="flex items-center gap-2">
+                {reviewStatus==='pending_admin_review' && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Awaiting Admin check</span>}
+                {reviewStatus==='checked' && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ Checked by Admin</span>}
+                {reviewStatus!=='checked' && !isAdmin && <button type="button" onClick={sendForReview} className="text-xs px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📤 Send to Admin for checking</button>}
+                {reviewStatus==='pending_admin_review' && isAdmin && <button type="button" onClick={markChecked} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Mark checked</button>}
+              </div>
+            </div>
+            <div className="max-h-44 overflow-y-auto p-2 space-y-1.5 bg-white">
+              {activity.length===0 ? <div className="text-xs text-slate-400 text-center py-3">No activity yet. Add a note below to keep a running log.</div>
+               : activity.slice().reverse().map((a,i)=>(
+                <div key={i} className="text-xs flex gap-2">
+                  <span className="shrink-0">{a.type==='review_request'?'📤':a.type==='checked'?'✅':'💬'}</span>
+                  <div><div className="text-slate-700">{a.text}</div><div className="text-[10px] text-slate-400">{a.by_name||'—'} · {a.at?fmtTime(a.at):''}</div></div>
+                </div>
+              ))}
+            </div>
+            <div className="p-2 border-t flex gap-1.5">
+              <input value={note} onChange={e=>setNote(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addNote(); }} placeholder="Add a note to the log…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+              <button type="button" onClick={addNote} className="px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold">Add</button>
+            </div>
+          </div>
+        )}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           {isEdit && onPrint && <button type="button" onClick={()=>onPrint(caseRow)} className="py-2 px-4 rounded-lg bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🖨 Print letter</button>}
