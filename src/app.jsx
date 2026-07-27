@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 306 · Production Plan: the Qty on each forecast step is now editable inline (type a new number, click away to save).";
+const BUILD = "Live build 307 · Production Plan is now easier to monitor: editable Start date, batch Release + batch Receive logs per step (multiple returns, with dates) that auto-mark a step Done when fully received, and clickable stage cards (Printing/Pressing/Sewing) that filter the steps + preset the Add-step stage.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5206,6 +5206,8 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [schedule,setSchedule]=useState(()=> (job.status_schedule && typeof job.status_schedule==='object') ? {...job.status_schedule} : {});
   const [showGantt,setShowGantt]=useState(false);
   const [paint,setPaint]=useState(null); // {key, startDay} — first click armed, waiting for the end click
+  const [stageFilter,setStageFilter]=useState(''); // click a stage card to filter the steps list
+  const [batchEdit,setBatchEdit]=useState(null);    // { entry, kind:'release'|'receive' }
 
   const total = Number(job.quantity)||0;
   const todayISO = new Date().toISOString().slice(0,10);
@@ -5304,6 +5306,11 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(error){ alert(error.message); return; }
     await load(); reload&&reload();
   }
+  async function setStepStart(e, val){
+    const { error } = await sb.from('production_plan_entries').update({ date: val||null }).eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    await load(); reload&&reload();
+  }
   async function setStepDeadline(e, val){
     const { error } = await sb.from('production_plan_entries').update({ deadline: val||null }).eq('id', e.id);
     if(error){ alert(error.message); return; }
@@ -5322,23 +5329,9 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(error){ alert(error.message); return; }
     await load(); reload&&reload();
   }
-  // Plan vs actual for sewing: record what was RELEASED to the sewer and what
-  // came back (RECEIVED) in the office.
-  async function setReleased(e){
-    const who=e.sewing_mode==='subcon'?subconName(e.subcon_id):'in-house sewer';
-    const q=prompt(`Released to ${who} — how many pcs?`, String(e.released_qty ?? e.quantity ?? ''));
-    if(q===null) return;
-    const n=q===''?null:(Number(q)||0);
-    const { error }=await sb.from('production_plan_entries').update({ released_qty:n, released_at: n==null?null:(e.released_at||todayISO) }).eq('id', e.id);
-    if(error){ alert(error.message); return; } await load(); reload&&reload();
-  }
-  async function setReceived(e){
-    const q=prompt('Received back in office — how many good pcs?', String(e.received_qty ?? e.released_qty ?? e.quantity ?? ''));
-    if(q===null) return;
-    const n=q===''?null:(Number(q)||0);
-    const { error }=await sb.from('production_plan_entries').update({ received_qty:n, received_at: n==null?null:(e.received_at||todayISO) }).eq('id', e.id);
-    if(error){ alert(error.message); return; } await load(); reload&&reload();
-  }
+  // Plan vs actual: batches are logged in the PlanBatchModal (release + receive),
+  // which recomputes released_qty / received_qty and auto-marks Done when a step
+  // is fully received.
 
   return (
     <Modal title={`📊 Production Plan · ${job.number||''}`} onClose={onClose} xwide>
@@ -5364,8 +5357,11 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
             const pct=total>0?Math.min(100,Math.round(done/total*100)):0;
             const behind = entries.some(e=>e.stage===st.key && !isDone(e) && e.deadline && e.deadline<todayISO); // a step's deadline passed, not done
             const planShort = planned>0 && planned<total;            // plotted plan doesn't cover the target
+            const releasedStage = entries.filter(e=>e.stage===st.key).reduce((s,e)=>s+(Number(e.released_qty)||0),0);
+            const receivedStage = entries.filter(e=>e.stage===st.key).reduce((s,e)=>s+(Number(e.received_qty)||0),0);
+            const activeFilter = stageFilter===st.key;
             return (
-            <div key={st.key} className={`border rounded-lg p-3 ${behind?'border-rose-300 bg-rose-50/40':''}`}>
+            <div key={st.key} onClick={()=>{ const next=activeFilter?'':st.key; setStageFilter(next); if(next) setStage(next); }} title="Click to filter the steps below to this stage" className={`border rounded-lg p-3 cursor-pointer transition ${activeFilter?'border-indigo-500 ring-2 ring-indigo-200':behind?'border-rose-300 bg-rose-50/40':'hover:border-indigo-300'}`}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${st.color}`}>{st.label}</span>
                 <span className="text-xs font-bold">{done.toLocaleString()}/{total.toLocaleString()}</span>
@@ -5373,7 +5369,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
               <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${st.bar}`} style={{width:pct+'%'}}></div></div>
               <div className="text-[10px] text-slate-400 mt-1">{pct}% done{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}{planned>0?` · ${planned.toLocaleString()} planned`:''}</div>
               {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-0.5">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
-              {st.key==='sewing' && (sewReleased>0||sewReceived>0) && <div className="text-[10px] mt-0.5"><span className="text-cyan-700">🚚 Released {sewReleased.toLocaleString()}</span> · <span className={sewReceived<sewReleased?'text-amber-700':'text-emerald-700'}>📥 Received {sewReceived.toLocaleString()}</span>{sewReleased>sewReceived?<span className="text-slate-400"> · {(sewReleased-sewReceived).toLocaleString()} out</span>:''}</div>}
+              {releasedStage>0 && <div className="text-[10px] mt-0.5"><span className="text-cyan-700">🚚 Released {releasedStage.toLocaleString()}</span> · <span className={receivedStage<releasedStage?'text-amber-700':'text-emerald-700'}>📥 Received {receivedStage.toLocaleString()}</span>{releasedStage>receivedStage?<span className="text-slate-400"> · {(releasedStage-receivedStage).toLocaleString()} out</span>:''}</div>}
               {behind && <div className="text-[10px] text-rose-600 font-semibold mt-1">⚠ A step's deadline passed — still open</div>}
               {!behind && planShort && <div className="text-[10px] text-amber-600 mt-1">Plan covers {planned.toLocaleString()}/{total.toLocaleString()} — plot {Math.max(0,total-planned).toLocaleString()} more to hit target</div>}
             </div>
@@ -5459,7 +5455,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
 
         {/* Output log */}
         <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Forecast steps ({entries.filter(e=>isDone(e)).length}/{entries.length} done) — tick each one as it's finished</div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1 flex items-center gap-2">Forecast steps ({entries.filter(e=>isDone(e)).length}/{entries.length} done) — tick each one as it's finished {stageFilter && <button onClick={()=>setStageFilter('')} className="normal-case text-[11px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">Showing {planStageMeta(stageFilter).label} ✕</button>}</div>
           {loading ? <div className="py-6 text-center text-slate-400 text-sm">Loading…</div> : entries.length===0 ? (
             <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">No steps yet — forecast a step above, then tick it Done when finished.</div>
           ) : (
@@ -5477,26 +5473,28 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                   <th className="text-left px-3 py-2">By</th>
                   <th></th>
                 </tr></thead>
-                <tbody>{[...entries].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(e=>{ const sm=planStageMeta(e.stage); const done=isDone(e); return (
+                <tbody>{[...entries].filter(e=>!stageFilter||e.stage===stageFilter).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(e=>{ const sm=planStageMeta(e.stage); const done=isDone(e); return (
                   <tr key={e.id} className={`border-t ${done?'bg-emerald-50/50':''}`}>
                     <td className="px-3 py-2 text-center"><input type="checkbox" checked={done} onChange={()=>toggleDone(e)} title={done?'Done — click to un-mark':'Mark this step done'} className="w-4 h-4 cursor-pointer" /></td>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{canEdit
+                      ? <input type="date" value={e.date||''} onChange={ev=>setStepStart(e, ev.target.value)} className="text-[11px] px-1.5 py-0.5 rounded border border-slate-300 bg-white" />
+                      : <span className="text-xs">{fmtDate(e.date)}</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="date" value={e.deadline||''} onChange={ev=>setStepDeadline(e, ev.target.value)} className={`text-[11px] px-1.5 py-0.5 rounded border bg-white ${(!done && e.deadline && e.deadline<todayISO)?'border-rose-400 text-rose-700 font-semibold':'border-slate-300'}`} /></td>
                     <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
                     <td className="px-3 py-2 text-right">{canEdit
                       ? <input type="number" defaultValue={Number(e.quantity)||0} onBlur={ev=>setStepQty(e, ev.target.value)} className={`w-20 text-right text-sm px-1.5 py-0.5 rounded border border-slate-300 bg-white font-semibold ${done?'text-emerald-700':'text-slate-600'}`} />
                       : <span className={`font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</span>}</td>
-                    {/* Released → Received (sewing plan vs actual). Other stages: — */}
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{e.stage!=='sewing' ? <span className="text-slate-300">—</span> : (
-                      e.released_qty!=null
-                        ? <button onClick={()=>canEdit&&setReleased(e)} className="text-cyan-700 font-semibold hover:underline" title={canEdit?'Edit released':''}>🚚 {Number(e.released_qty).toLocaleString()}{e.released_at?` · ${fmtDate(e.released_at)}`:''}</button>
-                        : (canEdit ? <button onClick={()=>setReleased(e)} className="text-[11px] px-2 py-0.5 rounded border text-cyan-700 hover:bg-cyan-50">🚚 Release</button> : <span className="text-slate-300">—</span>)
-                    )}</td>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{e.stage!=='sewing' ? <span className="text-slate-300">—</span> : (
-                      e.received_qty!=null
-                        ? <button onClick={()=>canEdit&&setReceived(e)} className={`font-semibold hover:underline ${Number(e.received_qty)<Number(e.released_qty||e.quantity||0)?'text-amber-700':'text-emerald-700'}`} title={canEdit?'Edit received':''}>📥 {Number(e.received_qty).toLocaleString()}{e.received_at?` · ${fmtDate(e.received_at)}`:''}</button>
-                        : (canEdit ? <button onClick={()=>setReceived(e)} className="text-[11px] px-2 py-0.5 rounded border text-emerald-700 hover:bg-emerald-50">📥 Receive</button> : <span className="text-slate-300">—</span>)
-                    )}</td>
+                    {/* Released / Received — batch logs (plan vs actual). Click to open. */}
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{(()=>{ const rb=Array.isArray(e.release_batches)?e.release_batches:[]; const rel=Number(e.released_qty)||0;
+                      return rel>0
+                        ? <button onClick={()=>canEdit&&setBatchEdit({entry:e,kind:'release'})} className="text-cyan-700 font-semibold hover:underline">🚚 {rel.toLocaleString()}{rb.length>1?` · ${rb.length} batches`:''}</button>
+                        : (canEdit ? <button onClick={()=>setBatchEdit({entry:e,kind:'release'})} className="text-[11px] px-2 py-0.5 rounded border text-cyan-700 hover:bg-cyan-50">🚚 Release</button> : <span className="text-slate-300">—</span>);
+                    })()}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{(()=>{ const cb=Array.isArray(e.receive_batches)?e.receive_batches:[]; const rec=Number(e.received_qty)||0; const planq=Number(e.quantity)||0;
+                      return rec>0
+                        ? <button onClick={()=>canEdit&&setBatchEdit({entry:e,kind:'receive'})} className={`font-semibold hover:underline ${planq>0&&rec<planq?'text-amber-700':'text-emerald-700'}`}>📥 {rec.toLocaleString()}{planq>0?`/${planq.toLocaleString()}`:''}{cb.length>1?` · ${cb.length} batches`:''}</button>
+                        : (canEdit ? <button onClick={()=>setBatchEdit({entry:e,kind:'receive'})} className="text-[11px] px-2 py-0.5 rounded border text-emerald-700 hover:bg-emerald-50">📥 Receive</button> : <span className="text-slate-300">—</span>);
+                    })()}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
                     <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
                     <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete step">✕</button>}</td>
@@ -5506,6 +5504,61 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
             </div>
           )}
         </div>
+      </div>
+      {batchEdit && <PlanBatchModal entry={batchEdit.entry} kind={batchEdit.kind} subconName={subconName} onClose={()=>{ setBatchEdit(null); load(); reload&&reload(); }} />}
+    </Modal>
+  );
+}
+
+// Batch log for a production step — release batches (sent out) or receive
+// batches (came back). Recomputes released_qty / received_qty and auto-marks
+// the step Done once fully received.
+function PlanBatchModal({ entry, kind, subconName, onClose }){
+  const isRelease = kind==='release';
+  const field = isRelease?'release_batches':'receive_batches';
+  const qtyField = isRelease?'released_qty':'received_qty';
+  const atField = isRelease?'released_at':'received_at';
+  const [batches,setBatches]=useState(Array.isArray(entry[field])?entry[field]:[]);
+  const [q,setQ]=useState(''); const [d,setD]=useState(new Date().toISOString().slice(0,10));
+  const [busy,setBusy]=useState(false);
+  const planq=Number(entry.quantity)||0;
+  const total=batches.reduce((s,b)=>s+(Number(b.qty)||0),0);
+  async function persist(next){
+    const sum=next.reduce((s,b)=>s+(Number(b.qty)||0),0);
+    const dates=next.map(b=>b.date).filter(Boolean).sort();
+    const patch={ [field]:next, [qtyField]: next.length?sum:null, [atField]: dates[0]||null };
+    if(!isRelease && planq>0 && sum>=planq){ patch.done=true; patch.done_at=new Date().toISOString(); }
+    setBusy(true);
+    const { error }=await sb.from('production_plan_entries').update(patch).eq('id',entry.id);
+    setBusy(false); if(error){ alert(error.message); return; }
+    setBatches(next);
+  }
+  async function add(){ const n=Number(q)||0; if(n<=0) return; await persist([...batches, { qty:n, date:d }]); setQ(''); }
+  async function remove(i){ await persist(batches.filter((_,x)=>x!==i)); }
+  const who = entry.sewing_mode==='subcon' ? subconName(entry.subcon_id) : (entry.sewing_mode==='inhouse'?'in-house':'');
+  return (
+    <Modal title={`${isRelease?'🚚 Release':'📥 Receive'} batches — ${planStageMeta(entry.stage).label}${who?` · ${who}`:''}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded-lg p-2 text-xs flex items-center justify-between">
+          <span>Planned: <b>{planq.toLocaleString()}</b> pcs</span>
+          <span>{isRelease?'Released':'Received'} so far: <b className={!isRelease&&planq>0&&total<planq?'text-amber-700':'text-emerald-700'}>{total.toLocaleString()}</b>{planq>0?` / ${planq.toLocaleString()}`:''}</span>
+          {!isRelease && planq>0 && total>=planq && <span className="text-emerald-700 font-semibold">✓ Fully received — step marked Done</span>}
+        </div>
+        {batches.length>0 && <div className="border rounded-lg divide-y">
+          {batches.map((b,i)=>(
+            <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+              <span className="font-semibold w-24">{Number(b.qty).toLocaleString()} pcs</span>
+              <span className="text-slate-500 flex-1">{b.date?fmtDate(b.date):'—'}</span>
+              <button onClick={()=>remove(i)} className="text-slate-300 hover:text-rose-500">✕</button>
+            </div>
+          ))}
+        </div>}
+        <div className="flex gap-1.5 items-end">
+          <div className="flex-1"><label className="text-[10px] uppercase text-slate-500">Qty (pcs)</label><input type="number" value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="0" className="w-full text-sm px-2 py-1.5 rounded-lg border border-slate-200" /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" value={d} onChange={e=>setD(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200" /></div>
+          <button onClick={add} disabled={busy||!(Number(q)>0)} className={`px-4 py-1.5 rounded-lg text-white text-sm font-semibold disabled:opacity-40 ${isRelease?'bg-cyan-600 hover:bg-cyan-700':'bg-emerald-600 hover:bg-emerald-700'}`}>+ Add {isRelease?'release':'batch'}</button>
+        </div>
+        <button onClick={onClose} className="w-full py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Done</button>
       </div>
     </Modal>
   );
