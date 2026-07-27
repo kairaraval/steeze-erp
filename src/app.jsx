@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 304 · Verify payment: accounting can now correct the method, reference, date and bank before verifying (fixes cases where sales picked the wrong bank/method) — the bank transaction posts with the corrected details.";
+const BUILD = "Live build 305 · Production Plan (sewing): each step now tracks 🚚 Released (sent to sewer) and 📥 Received (back in office) with dates — plan vs actual. The Sewing card shows total released/received and how many are still out.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5227,6 +5227,8 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const plannedStage = (k) => entries.filter(e=>e.stage===k).reduce((s,e)=>s+(Number(e.quantity)||0),0); // total plotted for the stage
   const sewInhouse = entries.filter(e=>e.stage==='sewing'&&isDone(e)&&e.sewing_mode==='inhouse').reduce((s,e)=>s+(Number(e.quantity)||0),0);
   const sewSubcon  = entries.filter(e=>e.stage==='sewing'&&isDone(e)&&e.sewing_mode==='subcon').reduce((s,e)=>s+(Number(e.quantity)||0),0);
+  const sewReleased = entries.filter(e=>e.stage==='sewing').reduce((s,e)=>s+(Number(e.released_qty)||0),0);
+  const sewReceived = entries.filter(e=>e.stage==='sewing').reduce((s,e)=>s+(Number(e.received_qty)||0),0);
   async function saveStageDue(stKey, val){
     const next = {...stageDue}; if(val) next[stKey]=val; else delete next[stKey];
     setStageDue(next);
@@ -5313,6 +5315,23 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(error){ alert(error.message); return; }
     await load(); reload&&reload();
   }
+  // Plan vs actual for sewing: record what was RELEASED to the sewer and what
+  // came back (RECEIVED) in the office.
+  async function setReleased(e){
+    const who=e.sewing_mode==='subcon'?subconName(e.subcon_id):'in-house sewer';
+    const q=prompt(`Released to ${who} — how many pcs?`, String(e.released_qty ?? e.quantity ?? ''));
+    if(q===null) return;
+    const n=q===''?null:(Number(q)||0);
+    const { error }=await sb.from('production_plan_entries').update({ released_qty:n, released_at: n==null?null:(e.released_at||todayISO) }).eq('id', e.id);
+    if(error){ alert(error.message); return; } await load(); reload&&reload();
+  }
+  async function setReceived(e){
+    const q=prompt('Received back in office — how many good pcs?', String(e.received_qty ?? e.released_qty ?? e.quantity ?? ''));
+    if(q===null) return;
+    const n=q===''?null:(Number(q)||0);
+    const { error }=await sb.from('production_plan_entries').update({ received_qty:n, received_at: n==null?null:(e.received_at||todayISO) }).eq('id', e.id);
+    if(error){ alert(error.message); return; } await load(); reload&&reload();
+  }
 
   return (
     <Modal title={`📊 Production Plan · ${job.number||''}`} onClose={onClose} xwide>
@@ -5347,6 +5366,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
               <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${st.bar}`} style={{width:pct+'%'}}></div></div>
               <div className="text-[10px] text-slate-400 mt-1">{pct}% done{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}{planned>0?` · ${planned.toLocaleString()} planned`:''}</div>
               {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-0.5">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
+              {st.key==='sewing' && (sewReleased>0||sewReceived>0) && <div className="text-[10px] mt-0.5"><span className="text-cyan-700">🚚 Released {sewReleased.toLocaleString()}</span> · <span className={sewReceived<sewReleased?'text-amber-700':'text-emerald-700'}>📥 Received {sewReceived.toLocaleString()}</span>{sewReleased>sewReceived?<span className="text-slate-400"> · {(sewReleased-sewReceived).toLocaleString()} out</span>:''}</div>}
               {behind && <div className="text-[10px] text-rose-600 font-semibold mt-1">⚠ A step's deadline passed — still open</div>}
               {!behind && planShort && <div className="text-[10px] text-amber-600 mt-1">Plan covers {planned.toLocaleString()}/{total.toLocaleString()} — plot {Math.max(0,total-planned).toLocaleString()} more to hit target</div>}
             </div>
@@ -5444,6 +5464,8 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                   <th className="text-left px-3 py-2">Deadline</th>
                   <th className="text-left px-3 py-2">Stage</th>
                   <th className="text-right px-3 py-2">Qty</th>
+                  <th className="text-left px-3 py-2">Released</th>
+                  <th className="text-left px-3 py-2">Received</th>
                   <th className="text-left px-3 py-2">Notes</th>
                   <th className="text-left px-3 py-2">By</th>
                   <th></th>
@@ -5455,6 +5477,17 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                     <td className="px-3 py-2 whitespace-nowrap"><input type="date" value={e.deadline||''} onChange={ev=>setStepDeadline(e, ev.target.value)} className={`text-[11px] px-1.5 py-0.5 rounded border bg-white ${(!done && e.deadline && e.deadline<todayISO)?'border-rose-400 text-rose-700 font-semibold':'border-slate-300'}`} /></td>
                     <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
                     <td className={`px-3 py-2 text-right font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</td>
+                    {/* Released → Received (sewing plan vs actual). Other stages: — */}
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{e.stage!=='sewing' ? <span className="text-slate-300">—</span> : (
+                      e.released_qty!=null
+                        ? <button onClick={()=>canEdit&&setReleased(e)} className="text-cyan-700 font-semibold hover:underline" title={canEdit?'Edit released':''}>🚚 {Number(e.released_qty).toLocaleString()}{e.released_at?` · ${fmtDate(e.released_at)}`:''}</button>
+                        : (canEdit ? <button onClick={()=>setReleased(e)} className="text-[11px] px-2 py-0.5 rounded border text-cyan-700 hover:bg-cyan-50">🚚 Release</button> : <span className="text-slate-300">—</span>)
+                    )}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{e.stage!=='sewing' ? <span className="text-slate-300">—</span> : (
+                      e.received_qty!=null
+                        ? <button onClick={()=>canEdit&&setReceived(e)} className={`font-semibold hover:underline ${Number(e.received_qty)<Number(e.released_qty||e.quantity||0)?'text-amber-700':'text-emerald-700'}`} title={canEdit?'Edit received':''}>📥 {Number(e.received_qty).toLocaleString()}{e.received_at?` · ${fmtDate(e.received_at)}`:''}</button>
+                        : (canEdit ? <button onClick={()=>setReceived(e)} className="text-[11px] px-2 py-0.5 rounded border text-emerald-700 hover:bg-emerald-50">📥 Receive</button> : <span className="text-slate-300">—</span>)
+                    )}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
                     <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
                     <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete step">✕</button>}</td>
