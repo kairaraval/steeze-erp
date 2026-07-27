@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 295 · My Tasks now has a '🗒️ My Notes' scratchpad — a private, free-form note box that auto-saves (per user, synced across devices).";
+const BUILD = "Live build 296 · Fix: employee profile photos (and finance receipts) now display — the storage bucket is private, so images/links are now served through signed URLs instead of broken public links.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -365,6 +365,37 @@ function getPastedImage(e){
   return null;
 }
 
+// The Attachments bucket is PRIVATE, but some uploads saved a getPublicUrl()
+// link (which 403s). Pull the storage key out of any of our URLs (or accept a
+// bare key) so we can mint a working signed URL for display.
+function storageKeyFromUrl(u){
+  if(!u) return null;
+  const s=String(u);
+  const m=s.match(/\/object\/(?:public|sign|authenticated)\/Attachments\/(.+?)(?:\?|$)/);
+  if(m) return decodeURIComponent(m[1]);
+  if(!/^https?:/i.test(s)) return s;   // already a bare key/path
+  return null;
+}
+// Open a stored attachment (URL or path) in a new tab via a fresh signed URL.
+async function openSignedAttachment(urlOrPath){
+  try {
+    const key = storageKeyFromUrl(urlOrPath);
+    if(key){ const u = await signedUrl(key); window.open(u,'_blank'); return; }
+  } catch(_){}
+  if(urlOrPath) window.open(urlOrPath,'_blank');
+}
+// <img> that resolves a private-bucket signed URL from a stored URL/path.
+function SignedImg({ url, path, className, alt }){
+  const [src,setSrc]=useState(null);
+  useEffect(()=>{ let on=true;
+    const key = path || storageKeyFromUrl(url);
+    if(key){ signedUrl(key).then(u=>{ if(on) setSrc(u); }).catch(()=>{ if(on) setSrc(url||null); }); }
+    else setSrc(url||null);
+    return ()=>{ on=false; };
+  },[url,path]);
+  if(!src) return null;
+  return <img src={src} alt={alt||''} className={className} />;
+}
 const AVA_COLORS=['bg-blue-500','bg-emerald-500','bg-amber-500','bg-purple-500','bg-rose-500','bg-cyan-500','bg-indigo-500','bg-pink-500','bg-teal-500','bg-orange-500'];
 function avaColor(id){ if(!id) return 'bg-slate-400'; let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return AVA_COLORS[h%AVA_COLORS.length]; }
 function Avatar({ profile, size='md' }){
@@ -7928,7 +7959,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
         {/* Header card */}
         <div className="flex items-start gap-4 bg-gradient-to-r from-indigo-50 to-slate-50 border rounded-xl p-4">
           {e.photo_url ? (
-            <img src={e.photo_url} alt="" className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-md" />
+            <SignedImg url={e.photo_url} className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-md" />
           ) : (
             <div className="w-20 h-20 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-2xl font-bold shadow-md">
               {(e.first_name||'').charAt(0)}{(e.last_name||'').charAt(0)}
@@ -8311,7 +8342,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
             <TpLbl t="Date of birth"><input type="date" className="input" value={f.date_of_birth||''} onChange={e=>up('date_of_birth',e.target.value||null)} /></TpLbl>
             <TpLbl t="Profile photo">
               <div className="flex items-center gap-2">
-                {f.photo_url && <img src={f.photo_url} alt="" className="w-10 h-10 rounded-full object-cover" />}
+                {f.photo_url && <SignedImg url={f.photo_url} className="w-10 h-10 rounded-full object-cover" />}
                 <input type="file" accept="image/*" onChange={e=>uploadPhoto(e.target.files?.[0])} className="text-xs" />
                 {uploadingPhoto && <span className="text-xs text-slate-500">Uploading…</span>}
               </div>
@@ -10970,7 +11001,7 @@ function HROrgChartView({ profile, employees }){
       <div className="ml-0">
         <div className={`flex items-center gap-2 py-1.5 ${depth>0?'border-l-2 border-slate-200 pl-3 ml-3':''}`}>
           {e.photo_url ? (
-            <img src={e.photo_url} alt="" className="w-8 h-8 rounded-full object-cover border border-slate-200" />
+            <SignedImg url={e.photo_url} className="w-8 h-8 rounded-full object-cover border border-slate-200" />
           ) : (
             <div className="w-8 h-8 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">{(e.first_name||'').charAt(0)}{(e.last_name||'').charAt(0)}</div>
           )}
@@ -22960,7 +22991,7 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
         {atts.length===0 ? <div className="text-xs text-slate-400">No receipts attached yet. After paying, attach the official receipt / proof of payment here.</div>
          : <div className="flex flex-wrap gap-2">{atts.map((a,i)=>(
              <div key={i} className="flex items-center gap-1.5 border rounded-lg px-2 py-1 bg-slate-50">
-               <a href={a.url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">{/pdf/i.test((a.type||'')+' '+(a.name||''))?'📄':'🖼'} {a.name}</a>
+               <button onClick={()=>openSignedAttachment(a.path||a.url)} className="text-xs text-indigo-600 hover:underline">{/pdf/i.test((a.type||'')+' '+(a.name||''))?'📄':'🖼'} {a.name}</button>
                <button onClick={()=>removeReceipt(i)} className="text-rose-400 hover:text-rose-600 text-xs" title="Remove">✕</button>
              </div>
            ))}</div>}
@@ -23752,7 +23783,7 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
             <td className="px-3 py-2 text-center">{e.tax_deductible? '✓':'—'}</td>
             <td className="px-3 py-2">{pending ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${am.cls}`}>{am.label}</span> : <span className="text-[10px] text-slate-400">—</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
-              {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" onClick={ev=>ev.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎</a>}
+              {e.receipt_url && <button onClick={ev=>{ev.stopPropagation(); openSignedAttachment(e.receipt_url);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View receipt">📎</button>}
               {e.approval_status==='pending_supervisor' && canSupervisorApprove(profile) && <button onClick={(ev)=>{ev.stopPropagation(); supApprove(e);}} className="text-xs text-emerald-600 hover:underline font-medium mr-2">✔ Approve (Sup.)</button>}
               {e.approval_status==='pending_admin' && canAdminApprove(profile) && <button onClick={(ev)=>{ev.stopPropagation(); adminApprove(e);}} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">✔ Final approve</button>}
               {pending && (canSupervisorApprove(profile)) && <button onClick={(ev)=>{ev.stopPropagation(); reject(e);}} className="text-xs text-rose-500 hover:underline mr-2">Reject</button>}
@@ -23873,7 +23904,7 @@ function ExpenseFormModal({ existing, profile, bankAccounts, onClose, onSaved })
           <div className="flex items-center gap-2">
             <input type="file" accept="image/*,application/pdf" onChange={e=>handleReceipt(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.receipt_url && <a href={f.receipt_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View →</a>}
+            {f.receipt_url && <button onClick={()=>openSignedAttachment(f.receipt_url)} className="text-xs text-indigo-600 hover:underline">View →</button>}
           </div>
         </TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -24251,7 +24282,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
               <div className="flex items-center gap-2">
                 <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceipt(e.target.files?.[0]); e.target.value=''; }} className="text-xs flex-1" />
                 {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-                {exp.receipt_url && <a href={exp.receipt_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline shrink-0">✓ View</a>}
+                {exp.receipt_url && <button onClick={()=>openSignedAttachment(exp.receipt_url)} className="text-xs text-indigo-600 hover:underline shrink-0">✓ View</button>}
               </div>
             </TpLbl>
             {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -24288,7 +24319,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
                 return withBal.slice().reverse().map(e => (
                   <tr key={e.id} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
-                    <td className="px-3 py-2">{e.description||'—'}{e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noreferrer" className="ml-1.5 text-indigo-600 hover:underline" title="View receipt">📎</a>}</td>
+                    <td className="px-3 py-2">{e.description||'—'}{e.receipt_url && <button onClick={()=>openSignedAttachment(e.receipt_url)} className="ml-1.5 text-indigo-600 hover:underline" title="View receipt">📎</button>}</td>
                     <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{e.category||'—'}</span></td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.vendor||'—'}</td>
                     <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
@@ -24627,7 +24658,7 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
                 <span className="text-[10px] uppercase text-slate-400">Receipt photo</span>
                 <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceiptPhoto(i, e.target.files?.[0]); e.target.value=''; }} className="text-[11px] flex-1" />
                 {upIdx===i && <span className="text-[11px] text-slate-500">Uploading…</span>}
-                {r.receipt_url && <a href={r.receipt_url} target="_blank" rel="noreferrer" className="text-[11px] text-indigo-600 hover:underline shrink-0">📎 View</a>}
+                {r.receipt_url && <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-indigo-600 hover:underline shrink-0">📎 View</button>}
               </div>
             </div>
           ))}{receipts.length===0 && <div className="text-xs text-slate-400 text-center py-3">No receipts yet. Click "Add receipt".</div>}</div>
