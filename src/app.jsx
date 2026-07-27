@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 305 · Production Plan (sewing): each step now tracks 🚚 Released (sent to sewer) and 📥 Received (back in office) with dates — plan vs actual. The Sewing card shows total released/received and how many are still out.";
+const BUILD = "Live build 306 · Production Plan: the Qty on each forecast step is now editable inline (type a new number, click away to save).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5309,6 +5309,13 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(error){ alert(error.message); return; }
     await load(); reload&&reload();
   }
+  async function setStepQty(e, val){
+    const n = val===''?0:(Number(val)||0);
+    if(n===Number(e.quantity||0)) return;
+    const { error } = await sb.from('production_plan_entries').update({ quantity: n }).eq('id', e.id);
+    if(error){ alert(error.message); return; }
+    await load(); reload&&reload();
+  }
   async function delEntry(id){
     if(!confirm('Delete this step?')) return;
     const { error } = await sb.from('production_plan_entries').delete().eq('id', id);
@@ -5476,7 +5483,9 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="date" value={e.deadline||''} onChange={ev=>setStepDeadline(e, ev.target.value)} className={`text-[11px] px-1.5 py-0.5 rounded border bg-white ${(!done && e.deadline && e.deadline<todayISO)?'border-rose-400 text-rose-700 font-semibold':'border-slate-300'}`} /></td>
                     <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
-                    <td className={`px-3 py-2 text-right font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right">{canEdit
+                      ? <input type="number" defaultValue={Number(e.quantity)||0} onBlur={ev=>setStepQty(e, ev.target.value)} className={`w-20 text-right text-sm px-1.5 py-0.5 rounded border border-slate-300 bg-white font-semibold ${done?'text-emerald-700':'text-slate-600'}`} />
+                      : <span className={`font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</span>}</td>
                     {/* Released → Received (sewing plan vs actual). Other stages: — */}
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{e.stage!=='sewing' ? <span className="text-slate-300">—</span> : (
                       e.released_qty!=null
