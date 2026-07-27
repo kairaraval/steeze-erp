@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 297 · New HR → Salary Report: every employee's basic pay + allowances + monthly total, with a grand total, per-department breakdown, filters, and CSV export.";
+const BUILD = "Live build 298 · Employee Loans now have an approval workflow: new loans are 'Pending Admin' → Admin approves → routes to Accounting Supervisor to 'Mark processed & released' → active. Plus a printable Loan Authorization form (🖨) with schedule + signatures.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10596,13 +10596,27 @@ function loanCompute(loan, allInstallments){
   return { principal, rate, term, monthlyInterest, interest, totalPayable, totalDue: totalPayable, cutoffs:n, perCutoff, paid, outstanding, installments:inst, paidCount:paidInst.length };
 }
 
-function EmployeeLoansView({ profile, employees, hrLoans, hrLoanInstallments, reload }){
+const LOAN_STATUSES=[
+  { key:'pending_admin', label:'Pending Admin',           color:'bg-amber-100 text-amber-700' },
+  { key:'approved',      label:'Approved · For Processing',color:'bg-blue-100 text-blue-700' },
+  { key:'active',        label:'Active',                   color:'bg-indigo-100 text-indigo-700' },
+  { key:'paid',          label:'Paid',                     color:'bg-emerald-100 text-emerald-700' },
+  { key:'rejected',      label:'Rejected',                 color:'bg-rose-100 text-rose-700' },
+  { key:'cancelled',     label:'Cancelled',                color:'bg-slate-200 text-slate-600' },
+];
+function loanStatusMeta(k){ return LOAN_STATUSES.find(s=>s.key===(k||'active')) || LOAN_STATUSES[2]; }
+const LOAN_OPEN_STATUSES=['pending_admin','approved','active'];
+function canApproveLoan(p){ return p?.role==='admin'; }                                  // Admin approves
+function canProcessLoan(p){ return p?.role==='admin' || p?.role==='accounting'; }        // Accounting Supervisor processes
+
+function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, reload }){
   const [filter,setFilter]=useState('active'); // 'active' | 'paid' | 'all'
   const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null);
+  const [printing,setPrinting]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
-  const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : (l.status!=='paid'&&l.status!=='cancelled'));
-  const active=(hrLoans||[]).filter(l=>l.status!=='paid'&&l.status!=='cancelled');
+  const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : LOAN_OPEN_STATUSES.includes(l.status||'active'));
+  const active=(hrLoans||[]).filter(l=>LOAN_OPEN_STATUSES.includes(l.status||'active'));
   const aC=(l)=>loanCompute(l, hrLoanInstallments);
   const totalOut = active.reduce((s,l)=> s + aC(l).outstanding, 0);
   const totalPrincipal = active.reduce((s,l)=> s + aC(l).principal, 0);
@@ -10642,8 +10656,9 @@ function EmployeeLoansView({ profile, employees, hrLoans, hrLoanInstallments, re
           <th className="text-right px-3 py-2">Total deduction</th>
           <th className="text-right px-3 py-2">Remaining</th>
           <th className="text-left px-3 py-2">Status</th>
+          <th></th>
         </tr></thead>
-        <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanInstallments); const paidUp=l.status==='paid'; return (
+        <tbody>{rows.map(l=>{ const c=loanCompute(l, hrLoanInstallments); const sm=loanStatusMeta(l.status); return (
           <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setDetail(l)}>
             <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
             <td className="px-3 py-2 text-right">{peso(c.principal)}</td>
@@ -10655,12 +10670,14 @@ function EmployeeLoansView({ profile, employees, hrLoans, hrLoanInstallments, re
             <td className="px-3 py-2 text-right text-indigo-700">{peso(c.perCutoff)}</td>
             <td className="px-3 py-2 text-right text-emerald-700">{peso(c.paid)}</td>
             <td className="px-3 py-2 text-right font-semibold text-rose-700">{peso(c.outstanding)}</td>
-            <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${paidUp?'bg-emerald-100 text-emerald-700':l.status==='cancelled'?'bg-slate-200 text-slate-600':'bg-amber-100 text-amber-700'}`}>{paidUp?'Paid':l.status==='cancelled'?'Cancelled':'Active'}</span></td>
+            <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
+            <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setPrinting(l);}} className="text-xs text-slate-500 hover:text-slate-800" title="Print loan form">🖨</button></td>
           </tr>
-        ); })}{rows.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
+        ); })}{rows.length===0 && <tr><td colSpan="12" className="text-center text-slate-400 py-8">No loans here. Click “+ New loan” to record one.</td></tr>}</tbody>
       </table></div></div>
       {creating && <LoanFormModal profile={profile} employees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
-      {detail && <LoanDetailModal profile={profile} loan={detail} employees={employees} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===detail.id)} reload={reload} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {detail && <LoanDetailModal profile={profile} profiles={profiles} loan={detail} employees={employees} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===detail.id)} reload={reload} onClose={()=>setDetail(null)} onPrint={(l)=>{ setDetail(null); setPrinting(l); }} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {printing && <LoanFormPrintView loan={printing} employees={employees} profiles={profiles} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===printing.id)} onClose={()=>setPrinting(null)} />}
     </div>
   );
 }
@@ -10692,7 +10709,7 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
       const { count }=await sb.from('employee_loan_installments').select('id',{count:'exact',head:true}).eq('loan_id', existing.id).eq('paid', true);
       if(!count){ await regenLoanSchedule(loanRow); }
     } else {
-      const { data, error }=await sb.from('employee_loans').insert({ ...payload, status:'active', created_by:profile.id }).select().single();
+      const { data, error }=await sb.from('employee_loans').insert({ ...payload, status:'pending_admin', created_by:profile.id }).select().single();
       if(error){ setBusy(false); setMsg(error.message); return; }
       loanRow=data;
       await regenLoanSchedule(loanRow);
@@ -10740,10 +10757,14 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
   );
 }
 
-function LoanDetailModal({ profile, loan, employees, installments, reload, onClose, onSaved }){
+function LoanDetailModal({ profile, profiles, loan, employees, installments, reload, onClose, onSaved, onPrint }){
   const [editing,setEditing]=useState(false);
   const [busy,setBusy]=useState(false);
   const emp=(employees||[]).find(e=>e.id===loan.employee_id);
+  const sm=loanStatusMeta(loan.status);
+  async function approveLoan(){ if(!confirm('Approve this loan? It then goes to the Accounting Supervisor for processing/release.')) return; await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',loan.id); onSaved(); }
+  async function rejectLoan(){ const r=prompt('Reason for rejecting this loan?'); if(r===null) return; await sb.from('employee_loans').update({ status:'rejected', rejected_reason:r||null }).eq('id',loan.id); onSaved(); }
+  async function processLoan(){ if(!confirm('Mark this loan as processed & released? This confirms Accounting has released the funds; the repayment schedule becomes active.')) return; await sb.from('employee_loans').update({ status:'active', processed_by:profile.id, processed_at:new Date().toISOString() }).eq('id',loan.id); onSaved(); }
   const c=loanCompute(loan, installments);
   const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
   const total=sched.length; const allPaid = total>0 && c.paidCount===total;
@@ -10785,6 +10806,26 @@ function LoanDetailModal({ profile, loan, employees, installments, reload, onClo
           <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Remaining balance</div><div className="font-bold text-rose-800">{peso(c.outstanding)}</div></div>
         </div>
         <div className="text-xs text-slate-500">Granted {fmtDate(loan.date_granted)}{loan.term_months?` · ${loan.term_months} mo`:''} · {loanFreqLabel(loan.repayment_frequency)}{loan.purpose?` · ${loan.purpose}`:''}{allPaid?' · PAID':''}</div>
+
+        {/* Approval workflow banner: HR → Admin approves → Accounting processes */}
+        <div className={`border rounded-lg p-3 ${loan.status==='rejected'?'bg-rose-50 border-rose-200':loan.status==='pending_admin'?'bg-amber-50 border-amber-200':loan.status==='approved'?'bg-blue-50 border-blue-200':'bg-slate-50 border-slate-200'}`}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className={`text-[11px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span>
+            <div className="flex gap-2">
+              {loan.status==='pending_admin' && canApproveLoan(profile) && <>
+                <button onClick={approveLoan} className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700">✓ Approve</button>
+                <button onClick={rejectLoan} className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">✕ Reject</button>
+              </>}
+              {loan.status==='approved' && canProcessLoan(profile) && <button onClick={processLoan} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💰 Mark processed &amp; released</button>}
+            </div>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2 space-y-0.5">
+            {loan.status==='pending_admin' && <div>Awaiting Admin approval. Once approved, it routes to the Accounting Supervisor for processing.</div>}
+            {loan.approved_at && <div>✓ Approved {fmtDate(loan.approved_at.slice(0,10))}{(()=>{const a=(profiles||[]).find(p=>p.id===loan.approved_by);return a?` by ${a.name||a.email}`:'';})()}</div>}
+            {loan.processed_at && <div>💰 Processed / released {fmtDate(loan.processed_at.slice(0,10))}{(()=>{const a=(profiles||[]).find(p=>p.id===loan.processed_by);return a?` by ${a.name||a.email}`:'';})()}</div>}
+            {loan.status==='rejected' && loan.rejected_reason && <div className="text-rose-700">Rejected — {loan.rejected_reason}</div>}
+          </div>
+        </div>
         {loan.notes && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 whitespace-pre-line">{loan.notes}</div>}
 
         <div className="border rounded-lg overflow-hidden">
@@ -10812,6 +10853,7 @@ function LoanDetailModal({ profile, loan, employees, installments, reload, onClo
 
         <div className="flex gap-2 pt-2 border-t flex-wrap">
           <button onClick={()=>setEditing(true)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">✎ Edit loan</button>
+          {onPrint && <button onClick={()=>onPrint(loan)} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Loan form</button>}
           {!allPaid ? <button onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">Mark fully paid</button>
             : <button onClick={reopen} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold">Reopen</button>}
           <div className="flex-1"></div>
@@ -10819,6 +10861,53 @@ function LoanDetailModal({ profile, loan, employees, installments, reload, onClo
         </div>
       </div>
       {editing && <LoanFormModal profile={profile} employees={employees} existing={loan} onClose={()=>setEditing(false)} onSaved={()=>{ setEditing(false); onSaved(); }} />}
+    </Modal>
+  );
+}
+
+// Printable employee loan authorization / salary-deduction agreement.
+function LoanFormPrintView({ loan, employees, profiles, installments, onClose }){
+  const emp=(employees||[]).find(e=>e.id===loan.employee_id);
+  const c=loanCompute(loan, installments);
+  const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const approver=(profiles||[]).find(p=>p.id===loan.approved_by);
+  const processor=(profiles||[]).find(p=>p.id===loan.processed_by);
+  return (
+    <Modal title="Employee Loan Form" onClose={onClose} wide>
+      <style>{`@media print { body * { visibility:hidden !important; } .loan-sheet, .loan-sheet * { visibility:visible !important; } .loan-sheet { position:absolute; left:0; top:0; width:100%; } .no-print { display:none !important; } }`}</style>
+      <div className="loan-sheet bg-white p-6 text-[13px]">
+        <SteezeLetterhead docTitle="EMPLOYEE LOAN AUTHORIZATION" />
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-3 mb-3">
+          <div><strong>Employee:</strong> {emp?fullName(emp):'—'}</div>
+          <div><strong>Position:</strong> {emp?.position||'—'}</div>
+          <div><strong>Department:</strong> {emp?.department||'—'}</div>
+          <div><strong>Date granted:</strong> {loan.date_granted?fmtDate(loan.date_granted):'—'}</div>
+        </div>
+        <table className="w-full border border-slate-400 text-[12px] mb-3">
+          <tbody>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold w-56">Loan amount (principal)</td><td className="px-2 py-1.5 font-bold">{peso(c.principal)}</td></tr>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Interest ({c.rate}% / month × {c.term||0} months)</td><td className="px-2 py-1.5">{peso(c.interest)}</td></tr>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Total payable</td><td className="px-2 py-1.5 font-bold">{peso(c.totalPayable)}</td></tr>
+            <tr className="border-b"><td className="px-2 py-1.5 bg-slate-50 font-semibold">Repayment</td><td className="px-2 py-1.5">{loanFreqLabel(loan.repayment_frequency)} · {peso(c.perCutoff)} per cut-off ({sched.length} payment{sched.length===1?'':'s'})</td></tr>
+            {loan.purpose && <tr><td className="px-2 py-1.5 bg-slate-50 font-semibold">Purpose</td><td className="px-2 py-1.5">{loan.purpose}</td></tr>}
+          </tbody>
+        </table>
+        <div className="text-[11px] text-slate-700 mb-3 leading-snug">I authorize <strong>Steeze Corporation</strong> to deduct the amounts shown in the schedule below from my salary each cut-off until this loan of <strong>{peso(c.totalPayable)}</strong> is fully settled. I understand the interest is fixed at {c.rate}% per month for the {c.term||0}-month term.</div>
+        {sched.length>0 && <table className="w-full border border-slate-400 text-[11px] mb-3">
+          <thead className="bg-slate-100"><tr><th className="border border-slate-300 px-2 py-1 text-left">#</th><th className="border border-slate-300 px-2 py-1 text-left">Due date</th><th className="border border-slate-300 px-2 py-1 text-right">Amount</th></tr></thead>
+          <tbody>{sched.map(it=>(<tr key={it.id}><td className="border border-slate-300 px-2 py-1">{it.seq}</td><td className="border border-slate-300 px-2 py-1">{fmtDate(it.due_date)}</td><td className="border border-slate-300 px-2 py-1 text-right">{peso(it.amount)}</td></tr>))}</tbody>
+        </table>}
+        <div className="grid grid-cols-2 gap-8 mt-8 text-center text-[11px]">
+          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1 font-semibold">{emp?fullName(emp):''}</div><div className="text-slate-500">Borrower (Employee)</div></div>
+          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Prepared by (HR)</div></div>
+          <div><div className="border-b border-slate-800 h-10 flex items-end justify-center pb-1 font-semibold">{approver?(approver.name||approver.email):''}</div><div className="text-slate-500">Approved by (Admin){loan.approved_at?` · ${fmtDate(loan.approved_at.slice(0,10))}`:''}</div></div>
+          <div><div className="border-b border-slate-800 h-10 flex items-end justify-center pb-1 font-semibold">{processor?(processor.name||processor.email):''}</div><div className="text-slate-500">Processed by (Accounting){loan.processed_at?` · ${fmtDate(loan.processed_at.slice(0,10))}`:''}</div></div>
+        </div>
+      </div>
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print loan form</button>
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+      </div>
     </Modal>
   );
 }
@@ -30736,7 +30825,7 @@ function App(){
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
-        {view==='hr-loans' && <EmployeeLoansView profile={profile} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
+        {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
