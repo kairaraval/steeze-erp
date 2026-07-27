@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 298 · Employee Loans now have an approval workflow: new loans are 'Pending Admin' → Admin approves → routes to Accounting Supervisor to 'Mark processed & released' → active. Plus a printable Loan Authorization form (🖨) with schedule + signatures.";
+const BUILD = "Live build 299 · Employee Engagements now has a 📝 Planned events tab (trainings, general assemblies) that stays off the calendar until you hit Finalize — only finalized events show on the calendar.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10382,10 +10382,14 @@ function engTypeMeta(k){ return ENGAGEMENT_TYPES.find(t=>t.key===k) || ENGAGEMEN
 
 function HREngagementsView({ profile, employees, hrEngagements, reload }){
   const now=new Date();
+  const [section,setSection]=useState('calendar'); // 'calendar' | 'planned'
   const [cursor,setCursor]=useState({ y:now.getFullYear(), m:now.getMonth() });
   const [creating,setCreating]=useState(null); // date string to prefill, or true
   const [editing,setEditing]=useState(null);
   const todayISO=new Date().toISOString().slice(0,10);
+  const isFinal=(g)=> (g.status||'finalized')==='finalized';
+  async function finalizeEng(g){ const { error }=await sb.from('hr_engagements').update({ status:'finalized' }).eq('id',g.id); if(error){ alert(error.message); return; } reload(); }
+  const planned=(hrEngagements||[]).filter(g=>!isFinal(g)).slice().sort((a,b)=>String(a.event_date||'').localeCompare(String(b.event_date||'')));
   const first=new Date(cursor.y,cursor.m,1);
   const startWeekday=first.getDay();
   const daysInMonth=new Date(cursor.y,cursor.m+1,0).getDate();
@@ -10397,13 +10401,13 @@ function HREngagementsView({ profile, employees, hrEngagements, reload }){
   const liveEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
   function itemsOn(day){
     const iso=`${cursor.y}-${mm}-${String(day).padStart(2,'0')}`;
-    const evs=(hrEngagements||[]).filter(g=> String(g.event_date)<=iso && String(g.end_date||g.event_date)>=iso);
+    const evs=(hrEngagements||[]).filter(g=> isFinal(g) && String(g.event_date)<=iso && String(g.end_date||g.event_date)>=iso);
     const bdays=liveEmps.filter(e=> e.date_of_birth && String(e.date_of_birth).slice(5)===`${mm}-${String(day).padStart(2,'0')}`);
     return { iso, evs, bdays };
   }
   // Upcoming list (next 60 days) — engagements + birthdays
   const upcoming=[];
-  (hrEngagements||[]).forEach(g=>{ if(String(g.event_date)>=todayISO) upcoming.push({ kind:'eng', date:g.event_date, g }); });
+  (hrEngagements||[]).forEach(g=>{ if(isFinal(g) && String(g.event_date)>=todayISO) upcoming.push({ kind:'eng', date:g.event_date, g }); });
   upcoming.sort((a,b)=>String(a.date).localeCompare(b.date));
   const cells=[]; for(let i=0;i<startWeekday;i++) cells.push(null); for(let d=1;d<=daysInMonth;d++) cells.push(d);
   async function del(g){ if(!confirm('Delete this engagement?')) return; const { error }=await sb.from('hr_engagements').delete().eq('id',g.id); if(error){ alert(error.message); return; } reload(); }
@@ -10413,11 +10417,36 @@ function HREngagementsView({ profile, employees, hrEngagements, reload }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">🎉 Employee Engagements</h1>
-            <p className="text-slate-500 text-sm">Events, trainings &amp; birthdays across the month.</p>
+            <p className="text-slate-500 text-sm">{section==='calendar' ? 'Finalized events, trainings & birthdays across the month.' : 'Ideas & planned events — finalize one to put it on the calendar.'}</p>
           </div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add engagement</button>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ {section==='planned'?'Add planned event':'Add engagement'}</button>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
+          <button onClick={()=>setSection('calendar')} className={`px-3 py-1.5 rounded-md ${section==='calendar'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📅 Calendar</button>
+          <button onClick={()=>setSection('planned')} className={`px-3 py-1.5 rounded-md ${section==='planned'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📝 Planned events{planned.length?` (${planned.length})`:''}</button>
         </div>
       </div>
+
+      {section==='planned' ? (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">Planned events (trainings, general assemblies, etc.)</div>
+          {planned.length===0 ? <div className="px-4 py-10 text-center text-slate-400 text-sm">No planned events yet. Click "+ Add planned event" to jot down trainings or assemblies you want to run — finalize one when the date is set to add it to the calendar.</div>
+           : <table className="w-full text-sm"><tbody>
+            {planned.map(g=>{ const m=engTypeMeta(g.engagement_type); return (
+              <tr key={g.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+                <td className="px-3 py-2 font-medium">{g.title}{g.description?<div className="text-[11px] text-slate-500 font-normal truncate max-w-[320px]">{g.description}</div>:null}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{g.event_date?fmtDate(g.event_date):'no date yet'}{g.location?` · ${g.location}`:''}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <button onClick={()=>finalizeEng(g)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 mr-2" title="Add to the calendar">✓ Finalize</button>
+                  <button onClick={()=>setEditing(g)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                  <button onClick={()=>del(g)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </td>
+              </tr>
+            ); })}
+          </tbody></table>}
+        </div>
+      ) : (<>
 
       <div className="flex items-center gap-2 mb-3">
         <button onClick={prevMonth} className="w-8 h-8 rounded-lg border bg-white hover:bg-slate-50">‹</button>
@@ -10470,22 +10499,24 @@ function HREngagementsView({ profile, employees, hrEngagements, reload }){
         </div>
       </div>
 
-      {(creating||editing) && <EngagementFormModal engagement={editing} prefillDate={typeof creating==='string'?creating:''} profile={profile} onClose={()=>{ setCreating(null); setEditing(null); }} onSaved={()=>{ setCreating(null); setEditing(null); reload(); }} onDelete={editing?()=>{ del(editing); setEditing(null); }:null} />}
+      </>)}
+
+      {(creating||editing) && <EngagementFormModal engagement={editing} prefillDate={typeof creating==='string'?creating:''} defaultStatus={section==='planned'?'planned':'finalized'} profile={profile} onClose={()=>{ setCreating(null); setEditing(null); }} onSaved={()=>{ setCreating(null); setEditing(null); reload(); }} onDelete={editing?()=>{ del(editing); setEditing(null); }:null} />}
     </div>
   );
 }
 
-function EngagementFormModal({ engagement, prefillDate, profile, onClose, onSaved, onDelete }){
+function EngagementFormModal({ engagement, prefillDate, defaultStatus, profile, onClose, onSaved, onDelete }){
   const isEdit=!!engagement;
-  const [f,setF]=useState(engagement || { title:'', engagement_type:'event', event_date:prefillDate||new Date().toISOString().slice(0,10), end_date:'', location:'', description:'' });
+  const [f,setF]=useState(engagement || { title:'', engagement_type:'event', event_date:prefillDate||new Date().toISOString().slice(0,10), end_date:'', location:'', description:'', status: defaultStatus||'finalized' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
     if(!f.title?.trim()){ setMsg('Add a title.'); return; }
-    if(!f.event_date){ setMsg('Pick a date.'); return; }
-    if(f.end_date && f.end_date<f.event_date){ setMsg('End date can\'t be before the start.'); return; }
+    if(f.status!=='planned' && !f.event_date){ setMsg('Pick a date (or set it as a Planned event).'); return; }
+    if(f.end_date && f.event_date && f.end_date<f.event_date){ setMsg('End date can\'t be before the start.'); return; }
     setBusy(true); setMsg('');
-    const payload={ title:f.title.trim(), engagement_type:f.engagement_type, event_date:f.event_date, end_date:f.end_date||null, location:f.location||null, description:f.description||null };
+    const payload={ title:f.title.trim(), engagement_type:f.engagement_type, event_date:f.event_date||null, end_date:f.end_date||null, location:f.location||null, description:f.description||null, status:f.status||'finalized' };
     if(!isEdit) payload.created_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_engagements').update(payload).eq('id',engagement.id) : await sb.from('hr_engagements').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -10502,6 +10533,7 @@ function EngagementFormModal({ engagement, prefillDate, profile, onClose, onSave
         </div>
         <TpLbl t="Location"><input className="input" value={f.location||''} onChange={e=>up('location',e.target.value)} placeholder="Optional" /></TpLbl>
         <TpLbl t="Details"><textarea className="input min-h-[70px]" value={f.description||''} onChange={e=>up('description',e.target.value)} placeholder="Optional" /></TpLbl>
+        <TpLbl t="Status"><select className="input" value={f.status||'finalized'} onChange={e=>up('status',e.target.value)}><option value="planned">Planned (idea — not on calendar)</option><option value="finalized">Finalized (show on calendar)</option></select></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           {isEdit && onDelete && <button onClick={onDelete} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50">Delete</button>}
