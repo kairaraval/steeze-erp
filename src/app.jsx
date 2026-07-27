@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 310 · Inbox filters: 💬 Mentions (real @mentions from teammates) vs 🔔 Notifications (automated system alerts), alongside All / Unread — so real mentions are easy to track.";
+const BUILD = "Live build 311 · Journal entries now carry a Bank — pick which bank account the entry relates to; it shows in the journal list and on the printed Journal Voucher.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25461,7 +25461,8 @@ function jeTotals(lines){
   const c=(lines||[]).reduce((s,l)=>s+(Number(l.credit)||0),0);
   return { debit:d, credit:c, balanced: Math.abs(d-c)<0.005 && d>0 };
 }
-function JournalView({ profile, journalEntries, chartAccounts, reload }){
+function JournalView({ profile, journalEntries, chartAccounts, bankAccounts, reload }){
+  const bankName=(id)=> (bankAccounts||[]).find(b=>b.id===id)?.bank_name || '';
   const [tab,setTab]=useState('journal');
   const [editing,setEditing]=useState(null);   // entry or {} for new
   const [viewing,setViewing]=useState(null);
@@ -25492,16 +25493,17 @@ function JournalView({ profile, journalEntries, chartAccounts, reload }){
         <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
             <th className="text-left px-3 py-2">JV No.</th><th className="text-left px-3 py-2">Date</th>
-            <th className="text-left px-3 py-2">Memo</th><th className="text-left px-3 py-2">Reference</th>
+            <th className="text-left px-3 py-2">Memo</th><th className="text-left px-3 py-2">Bank</th><th className="text-left px-3 py-2">Reference</th>
             <th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th>
           </tr></thead>
           <tbody>
-            {entries.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No journal entries yet. {canEdit && 'Click “+ New journal entry”.'}</td></tr>}
+            {entries.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No journal entries yet. {canEdit && 'Click “+ New journal entry”.'}</td></tr>}
             {entries.map(j=>(
               <tr key={j.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(j)}>
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{j.number}</td>
                 <td className="px-3 py-2 text-xs">{fmtDate(j.date)}</td>
-                <td className="px-3 py-2 truncate max-w-[280px]">{j.memo||'—'}</td>
+                <td className="px-3 py-2 truncate max-w-[240px]">{j.memo||'—'}</td>
+                <td className="px-3 py-2 text-xs">{j.bank_id?<span className="inline-flex items-center gap-1">🏦 {bankName(j.bank_id)}</span>:<span className="text-slate-300">—</span>}</td>
                 <td className="px-3 py-2 text-xs text-slate-500">{j.reference||'—'}</td>
                 <td className="px-3 py-2 text-right font-semibold">{peso(j.total_debit)}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${j.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{j.status==='draft'?'Draft':'Posted'}</span></td>
@@ -25530,17 +25532,18 @@ function JournalView({ profile, journalEntries, chartAccounts, reload }){
         </div>
       )}
 
-      {editing && <JournalFormModal entry={editing} chartAccounts={accounts} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
-      {viewing && <JournalViewModal entry={viewing} profile={profile} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
+      {editing && <JournalFormModal entry={editing} chartAccounts={accounts} bankAccounts={bankAccounts} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
+      {viewing && <JournalViewModal entry={viewing} bankAccounts={bankAccounts} profile={profile} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
       {addingAcct && <ChartAccountModal profile={profile} onClose={()=>setAddingAcct(false)} onSaved={()=>{ setAddingAcct(false); reload && reload(); }} />}
     </div>
   );
 }
-function JournalFormModal({ entry, chartAccounts, profile, onClose, onSaved }){
+function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose, onSaved }){
   const isEdit = !!entry?.id;
   const [date,setDate]=useState(entry.date||new Date().toISOString().slice(0,10));
   const [reference,setReference]=useState(entry.reference||'');
   const [memo,setMemo]=useState(entry.memo||'');
+  const [bankId,setBankId]=useState(entry.bank_id||'');
   const blank=()=>({ account_code:'', description:'', debit:'', credit:'' });
   const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -25557,7 +25560,7 @@ function JournalFormModal({ entry, chartAccounts, profile, onClose, onSaved }){
     if(status==='posted' && !tt.balanced){ setMsg(`Debits (${peso(tt.debit)}) must equal Credits (${peso(tt.credit)}) to post.`); return; }
     setBusy(true); setMsg('');
     try {
-      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
+      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, bank_id:bankId||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
       if(isEdit){ const { error } = await sb.from('journal_entries').update(payload).eq('id', entry.id); if(error) throw error; }
       else {
         const monthKey = date.slice(0,7);
@@ -25573,9 +25576,10 @@ function JournalFormModal({ entry, chartAccounts, profile, onClose, onSaved }){
   return (
     <Modal title={isEdit?`Journal entry · ${entry.number}`:'+ New journal entry'} onClose={onClose} xwide>
       <div className="space-y-3">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
-          <TpLbl t="Reference"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="e.g. Adjusting entry / OR no." /></TpLbl>
+          <TpLbl t="Bank"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— none —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+          <TpLbl t="Reference"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="OR no. / adj." /></TpLbl>
           <TpLbl t="Memo"><input className="input" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="What is this entry for?" /></TpLbl>
         </div>
         <div className="border rounded-lg overflow-hidden">
@@ -25622,8 +25626,9 @@ function JournalFormModal({ entry, chartAccounts, profile, onClose, onSaved }){
     </Modal>
   );
 }
-function JournalViewModal({ entry, profile, canEdit, onEdit, onClose, onSaved }){
+function JournalViewModal({ entry, bankAccounts, profile, canEdit, onEdit, onClose, onSaved }){
   const t = jeTotals(entry.lines);
+  const bank = (bankAccounts||[]).find(b=>b.id===entry.bank_id);
   async function del(){
     if(!confirm(`Delete journal entry ${entry.number}?`)) return;
     const { error } = await sb.from('journal_entries').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', entry.id);
@@ -25635,7 +25640,7 @@ function JournalViewModal({ entry, profile, canEdit, onEdit, onClose, onSaved })
       <div className="jv-sheet bg-white border rounded p-5">
         <SteezeLetterhead docTitle="JOURNAL VOUCHER" />
         <div className="flex justify-between text-xs text-slate-600 mb-3">
-          <div><div><strong>JV No.:</strong> {entry.number}</div><div><strong>Date:</strong> {fmtDate(entry.date)}</div></div>
+          <div><div><strong>JV No.:</strong> {entry.number}</div><div><strong>Date:</strong> {fmtDate(entry.date)}</div>{bank && <div><strong>Bank:</strong> 🏦 {bank.bank_name}{bank.account_number?` · ${bank.account_number}`:''}</div>}</div>
           <div className="text-right">{entry.reference && <div><strong>Ref:</strong> {entry.reference}</div>}<span className={`text-[10px] px-2 py-0.5 rounded ${entry.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{entry.status==='draft'?'DRAFT':'POSTED'}</span></div>
         </div>
         {entry.memo && <div className="text-sm mb-3"><strong>Memo:</strong> {entry.memo}</div>}
@@ -31346,7 +31351,7 @@ function App(){
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
-        {view==='journal' && <JournalView profile={profile} journalEntries={journalEntries} chartAccounts={chartAccounts} reload={loadAll} />}
+        {view==='journal' && <JournalView profile={profile} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
