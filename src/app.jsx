@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 324 · Recruitment: applicant resumes now open via a signed URL (the Attachments bucket is private, so the old public link 403'd — this is why HR's uploaded resume wouldn't open for others). New uploads store the storage key; existing resumes work too.";
+const BUILD = "Live build 325 · Recruitment: applicant resume 'View' now opens inline in an embedded PDF/image preview (no new tab) via a signed URL — works for existing resumes too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11443,7 +11443,17 @@ function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
   const [f,setF]=useState(applicant || { job_id:jobId, first_name:'', last_name:'', email:'', phone:'', current_position:'', resume_url:'', current_stage:'applied', source:'', expected_salary:'', applied_date:new Date().toISOString().slice(0,10), notes:'', interview_date:'', rejection_reason:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [uploading,setUploading]=useState(false);
+  const [preview,setPreview]=useState(null); // inline resume viewer
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function viewResume(){
+    const ref=String(f.resume_url||''); if(!ref) return;
+    const key=storageKeyFromUrl(ref);
+    const kind=/\.(jpe?g|png|gif|webp|bmp|heic|heif)(?:$|\?)/i.test(ref)?'image':'pdf';
+    const name=`${(f.first_name||'').trim()} ${(f.last_name||'').trim()}`.trim()+' — Resume / CV';
+    let url=ref;
+    try { if(key) url=await signedUrl(key); } catch(_){}
+    setPreview({ url, path:key||undefined, kind, name });
+  }
   async function uploadResume(file){
     if(!file) return;
     setUploading(true);
@@ -11495,7 +11505,7 @@ function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
           <div className="flex items-center gap-2">
             <input type="file" onChange={e=>uploadResume(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.resume_url && <button type="button" onClick={()=>openSignedAttachment(f.resume_url)} className="text-xs text-emerald-600 hover:underline">✓ View</button>}
+            {f.resume_url && <button type="button" onClick={viewResume} className="text-xs text-emerald-600 hover:underline">✓ View</button>}
           </div>
         </TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[80px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Interview impressions, screening notes, references" /></TpLbl>
@@ -11507,6 +11517,7 @@ function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
           <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Add applicant')}</button>
         </div>
       </div>
+      {preview && <MediaLightbox url={preview.url} path={preview.path} name={preview.name} kind={preview.kind} onClose={()=>setPreview(null)} />}
     </Modal>
   );
 }
