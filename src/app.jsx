@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 326 · Admin For Approval page now includes Employee Loans awaiting approval — approve (routes to Accounting for release) or reject right from the queue, and the sidebar badge counts them.";
+const BUILD = "Live build 327 · New Quality Control module: production jobs & samples auto-land in the QC List when set to 'Quality Check (QC)'. QC logs handlers (staff), findings, sizing notes, rejects (production) or pass/fail + recommendation (samples). Fails/rejects notify the sales assistant + production supervisor. New 'Quality Control' role added.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -117,6 +117,7 @@ const SAMPLING_STATUSES = [
   { key:'for pattern',      label:'For Pattern',      color:'bg-violet-100 text-violet-700' },
   { key:'material request', label:'Material Request', color:'bg-amber-100 text-amber-700' },
   { key:'on going',         label:'On Going',         color:'bg-blue-100 text-blue-700' },
+  { key:'quality check (qc)', label:'Quality Check (QC)', color:'bg-teal-100 text-teal-700' },
   { key:'for delivery',     label:'For Delivery',     color:'bg-purple-100 text-purple-700' },
   { key:'delivered',        label:'Delivered',        color:'bg-emerald-200 text-emerald-800' },
 ];
@@ -6529,6 +6530,192 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
 }
 
 /* ─────────── CUTTING DEPARTMENT ─────────── */
+// ─────────── QUALITY CONTROL (QC) ───────────
+// Mirrors the Cutting worklist: production jobs AND samples auto-seed a QC row
+// when their status is set to "Quality Check (QC)". QC opens each to log
+// handlers, sizing/findings, rejects (production) or pass/fail + recommendation
+// (samples). A fail / any rejects pings the sales assistant + prod supervisor.
+function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcReports, openTechpack, reload }){
+  const [tab,setTab]=useState('worklist');
+  const [detail,setDetail]=useState(null);
+  const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+
+  useEffect(()=>{ (async()=>{
+    const existing=new Set((qcReports||[]).map(w=>w.source_job_id).filter(Boolean));
+    const add=[];
+    (prodJobs||[]).filter(j=> j.status==='quality check (qc)').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'production', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
+    (sampleJobs||[]).filter(j=> j.status==='quality check (qc)').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'sample', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
+    if(add.length){ const { error }=await sb.from('qc_reports').insert(add); if(!error) reload(); }
+  })(); },[prodJobs, sampleJobs, qcReports]);
+
+  const open=(qcReports||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
+  const done=(qcReports||[]).filter(w=>w.status==='done');
+
+  async function markDone(w){ if(!(Array.isArray(w.qc_handlers)&&w.qc_handlers.length)){ if(!confirm('No QC handler recorded yet. Mark as done anyway?')) return; } const { error }=await sb.from('qc_reports').update({ status:'done', done_at:new Date().toISOString(), done_by:profile.id }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function reopenItem(w){ const { error }=await sb.from('qc_reports').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+
+  const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
+  const summaryLine=(w)=>{ const bits=[];
+    if(w.source_type==='sample'){ if(w.sample_result) bits.push(w.sample_result==='passed'?'✅ Passed':w.sample_result==='failed'?'❌ Failed':w.sample_result); if(w.recommendation) bits.push('Rec: '+w.recommendation); }
+    else if(w.reject_count!=null) bits.push(`${w.reject_count} reject${w.reject_count===1?'':'s'}`);
+    if(Array.isArray(w.qc_handlers)&&w.qc_handlers.length) bits.push('QC: '+w.qc_handlers.map(id=>{const e=(employees||[]).find(x=>x.id===id);return e?fullName(e):'—';}).join(', '));
+    return bits.join(' · ');
+  };
+
+  const row=(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=typeBadge(w.source_type); const sm=summaryLine(w); return (
+    <div key={w.id} className="border-t px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
+        <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
+          <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||'—'}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{sm?` · ${sm}`:''}</div>
+        </button>
+        <button onClick={()=>setDetail(w)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold shrink-0">QC report ▸</button>
+        {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
+        {w.status!=='done' && <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>}
+        {w.status==='done' && <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>}
+        <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
+      </div>
+    </div>
+  ); };
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div>
+          <h1 className="text-2xl font-bold">🔍 Quality Control</h1>
+          <p className="text-slate-500 text-sm">{open.length} to check · {done.length} done · Production jobs & samples land here when set to “Quality Check (QC)”.</p>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>To Check ({open.length})</button>
+          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden">
+        {tab==='worklist' ? (open.length?open.map(row):<div className="px-3 py-10 text-center text-slate-400 text-sm">Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.</div>)
+                          : (done.length?done.map(row):<div className="px-3 py-10 text-center text-slate-400 text-sm">No completed QC reports yet.</div>)}
+      </div>
+      {detail && <QCDetailModal w={detail} profile={profile} profiles={profiles} employees={employees} leads={leads} openTechpack={openTechpack} onClose={()=>setDetail(null)} reload={reload} />}
+    </div>
+  );
+}
+
+function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, onClose, reload }){
+  const isSample = w.source_type==='sample';
+  const [handlers,setHandlers]=useState(Array.isArray(w.qc_handlers)?w.qc_handlers:[]);
+  const [comments,setComments]=useState(w.comments||'');
+  const [sizing,setSizing]=useState(w.sizing_notes||'');
+  const [rejectCount,setRejectCount]=useState(w.reject_count!=null?String(w.reject_count):'');
+  const [rejectReason,setRejectReason]=useState(w.reject_reason||'');
+  const [sampleResult,setSampleResult]=useState(w.sample_result||'');
+  const [recommendation,setRecommendation]=useState(w.recommendation||'');
+  const [empSearch,setEmpSearch]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  function toggleHandler(id){ setHandlers(h=> h.includes(id)?h.filter(x=>x!==id):[...h,id]); }
+  const filteredEmps=activeEmps.filter(e=> !empSearch || fullName(e).toLowerCase().includes(empSearch.toLowerCase())).slice(0,60);
+
+  async function save(){
+    setBusy(true); setMsg('');
+    const payload={
+      qc_handlers:handlers, comments:comments||null, sizing_notes:sizing||null, updated_at:new Date().toISOString(),
+      reject_count: isSample?null:(rejectCount===''?null:Number(rejectCount)),
+      reject_reason: isSample?null:(rejectReason||null),
+      sample_result: isSample?(sampleResult||null):null,
+      recommendation: isSample?(recommendation||null):null,
+    };
+    const { error }=await sb.from('qc_reports').update(payload).eq('id',w.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try {
+      const flagged = isSample ? (sampleResult==='failed') : (Number(rejectCount)>0);
+      if(flagged && lead){
+        const supers=(profiles||[]).filter(p=>p.role==='production_supervisor').map(p=>p.id);
+        const assistantId=lead.created_by||lead.manager_id||null;
+        const mentions=[...new Set([assistantId, ...supers])].filter(id=>id && id!==profile.id);
+        if(mentions.length){
+          const what = isSample ? `Sample FAILED QC${recommendation?` — ${recommendation}`:''}` : `${rejectCount} reject${Number(rejectCount)===1?'':'s'} flagged at QC${rejectReason?` — ${rejectReason}`:''}`;
+          await sb.from('lead_activity').insert({ lead_id:lead.id, actor_id:profile.id, type:'system', text:`🔍 QC: ${what} — ${w.item||lead.title||''}`, mentions });
+        }
+      }
+    } catch(e){ console.warn('QC notify failed', e?.message||e); }
+    setBusy(false); setMsg('Saved ✓'); reload && reload();
+  }
+
+  return (
+    <Modal title={`QC Report · ${w.item||'—'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${isSample?'bg-purple-100 text-purple-700':'bg-emerald-100 text-emerald-700'}`}>{isSample?'Sample':'Production'}</span>
+          {w.client_name && <span className="text-slate-500">{w.client_name}</span>}
+          {lead && lead.techpack && openTechpack && <button onClick={()=>{ onClose(); openTechpack(lead); }} className="text-teal-700 hover:underline">📋 View techpack</button>}
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">QC handled by</div>
+          {handlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{handlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{empName(id)}<button onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
+          <input value={empSearch} onChange={e=>setEmpSearch(e.target.value)} placeholder="Search staff to add…" className="input text-sm" />
+          <div className="mt-1 max-h-36 overflow-y-auto border rounded-lg divide-y">
+            {filteredEmps.map(e=>(
+              <label key={e.id} className="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={handlers.includes(e.id)} onChange={()=>toggleHandler(e.id)} />
+                <span>{fullName(e)}</span>
+              </label>
+            ))}
+            {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">No staff match.</div>}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Findings / comments</div>
+          <textarea value={comments} onChange={e=>setComments(e.target.value)} placeholder="General QC findings on the sample / project…" className="input min-h-[70px] whitespace-pre-line" />
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sizing notes</div>
+          <textarea value={sizing} onChange={e=>setSizing(e.target.value)} placeholder="Sizing observations — e.g. runs small, sleeve length off, chest measurement…" className="input min-h-[50px] whitespace-pre-line" />
+        </div>
+
+        {isSample ? (
+          <div className="grid md:grid-cols-2 gap-3 bg-purple-50/50 border border-purple-100 rounded-lg p-3">
+            <div>
+              <div className="text-[10px] uppercase text-purple-500 font-semibold mb-1">Sample result</div>
+              <select value={sampleResult} onChange={e=>setSampleResult(e.target.value)} className="input">
+                <option value="">— Select —</option>
+                <option value="passed">✅ Passed</option>
+                <option value="failed">❌ Failed</option>
+              </select>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-purple-500 font-semibold mb-1">Recommendation</div>
+              <input value={recommendation} onChange={e=>setRecommendation(e.target.value)} placeholder="e.g. Change size, adjust collar…" className="input" />
+            </div>
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-3 gap-3 bg-rose-50/40 border border-rose-100 rounded-lg p-3">
+            <div>
+              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Rejects (qty)</div>
+              <input type="number" min="0" value={rejectCount} onChange={e=>setRejectCount(e.target.value)} placeholder="0" className="input" />
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Reject reason</div>
+              <input value={rejectReason} onChange={e=>setRejectReason(e.target.value)} placeholder="e.g. Stitching defect, wrong size, misprint…" className="input" />
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2 border-t">
+          {msg && <span className={`text-xs ${msg==='Saved ✓'?'text-emerald-600':'text-rose-600'}`}>{msg}</span>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save QC report'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const [search,setSearch]=useState('');
@@ -13787,6 +13974,7 @@ function roleLabel(r){
          r==='accounting_officer'     ? 'Accounting Officer' :
          r==='pattern_maker'          ? 'Pattern Maker' :
          r==='cutting_dept'           ? 'Cutting Department' :
+         r==='qc'                     ? 'Quality Control' :
          r==='graphic'                ? 'Graphic Design' :
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
@@ -13807,6 +13995,7 @@ function RoleBadge({ role }){
     role==='accounting_officer'     ? 'bg-sky-50 text-sky-600' :
     role==='pattern_maker'          ? 'bg-lime-100 text-lime-700' :
     role==='cutting_dept'           ? 'bg-red-100 text-red-700' :
+    role==='qc'                     ? 'bg-teal-100 text-teal-700' :
     role==='graphic'                ? 'bg-pink-100 text-pink-700' :
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
@@ -14045,6 +14234,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'accounting_officer', label:'Acct. Officer', count:profiles.filter(p=>p.role==='accounting_officer').length },
     { key:'pattern_maker', label:'Pattern Maker', count:profiles.filter(p=>p.role==='pattern_maker').length },
     { key:'cutting_dept', label:'Cutting Dept', count:profiles.filter(p=>p.role==='cutting_dept').length },
+    { key:'qc',           label:'Quality Control', count:profiles.filter(p=>p.role==='qc').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
@@ -14052,7 +14242,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','qc','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -14092,6 +14282,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="production_supervisor">Production Supervisor</option>
               <option value="pattern_maker">Pattern Maker</option>
               <option value="cutting_dept">Cutting Department</option>
+              <option value="qc">Quality Control</option>
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
@@ -30395,6 +30586,7 @@ function App(){
   const [patterns,setPatterns]=useState([]); const [patternTasks,setPatternTasks]=useState([]);
   const [patternWorklist,setPatternWorklist]=useState([]);
   const [cuttingWorklist,setCuttingWorklist]=useState([]);
+  const [qcReports,setQcReports]=useState([]);
   const [styles,setStyles]=useState([]);
   const [items,setItems]=useState([]); const [suppliers,setSuppliers]=useState([]); const [departments,setDepartments]=useState([]);
   const [requests,setRequests]=useState([]); const [orders,setOrders]=useState([]);
@@ -30695,6 +30887,7 @@ function App(){
     try { const coa = await sb.from('chart_accounts').select('*').order('code',{ascending:true}); setChartAccounts(coa && !coa.error ? (coa.data||[]) : []); } catch(_){ setChartAccounts([]); }
     try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const cwl = await sb.from('cutting_worklist').select('*').order('start_date',{ascending:false}); setCuttingWorklist(cwl && !cwl.error ? (cwl.data||[]) : []); } catch(_){ setCuttingWorklist([]); }
+    try { const qcr = await sb.from('qc_reports').select('*').order('created_at',{ascending:false}); setQcReports(qcr && !qcr.error ? (qcr.data||[]) : []); } catch(_){ setQcReports([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
@@ -30769,19 +30962,24 @@ function App(){
     } else if(profile.role==='cutting_dept'){
       allowed = new Set(['cutting']);
       fallback = 'cutting';
+    } else if(profile.role==='qc'){
+      // Quality Control team — QC List + techpacks (for reference) + inbox + profile.
+      allowed = new Set(['inbox','my-tasks','qc','techpacks','profile']);
+      fallback = 'qc';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
+      // (QC list is visible to production floor for reference; QC role owns edits.)
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
       fallback = 'prod-home';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
@@ -31216,6 +31414,7 @@ function App(){
   const isLogistics=profile.role==='logistics';
   const isPatternMaker=profile.role==='pattern_maker';
   const isCuttingDept=profile.role==='cutting_dept';
+  const isQc=profile.role==='qc';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -31287,6 +31486,13 @@ function App(){
     NAV = [
       { items:[ ['cutting','In House Cutting','🔪'] ] },
     ];
+  } else if(isQc){
+    // Quality Control team — the QC List + techpacks for reference + inbox.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
+      PERSONAL_GROUP,
+    ];
   } else if(isHR){
     // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
     // Payroll + Budget Requests + their profile (for their e-signature).
@@ -31303,7 +31509,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -31315,7 +31521,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -31393,7 +31599,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -31406,7 +31612,7 @@ function App(){
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
@@ -31545,6 +31751,7 @@ function App(){
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
