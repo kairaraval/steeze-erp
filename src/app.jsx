@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 320 · Resources: PDFs now open in an inline preview (same as images) instead of forcing a new browser tab — with an 'Open original' link if you still want the full tab.";
+const BUILD = "Live build 321 · Purchasing pricelist: Fabrics & Trims now pull live from inventory — each material shown once (colour dropped), grouped by name + unit, with its buying cost (or cost range) and supplier.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3219,6 +3219,20 @@ function PurchasingResourcesView({ profile }){
     setRows(data||[]); setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
+  // Live fabric/trim pricelist pulled straight from inventory. We group by
+  // material name + unit (dropping colour, as requested) so each fabric/trim
+  // shows once with its buying cost — no manual re-entry needed.
+  const [invItems,setInvItems]=useState([]);
+  const [supMap,setSupMap]=useState({});
+  useEffect(()=>{ let alive=true; (async()=>{
+    const [its,sups]=await Promise.all([
+      sb.from('items').select('name,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims']),
+      sb.from('suppliers').select('id,company'),
+    ]);
+    if(!alive) return;
+    setInvItems(its.data||[]);
+    const m={}; (sups.data||[]).forEach(s=>{ if(s.company) m[s.id]=s.company; }); setSupMap(m);
+  })(); return ()=>{ alive=false; }; },[]);
   async function uploadFiles(fileList){
     const files = Array.from(fileList||[]).filter(f => (f.type||'').startsWith('image') || (f.type||'').includes('pdf'));
     if(!files.length) return;
@@ -3253,6 +3267,31 @@ function PurchasingResourcesView({ profile }){
   const matchTxt=(r)=> !q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''} ${r.supplier||''}`.toLowerCase().includes(q);
   const list = rows.filter(r=> r.category===tab && matchTxt(r));
   const priceRows = rows.filter(r=> r.category==='pricelist' && (r.folder===folder || (!r.folder && folder===folders[0])) && matchTxt(r)).slice().sort((a,b)=> String(a.title||'').localeCompare(String(b.title||'')));
+  // Inventory-derived rows for the active folder (Fabrics → bucket 'fabrics',
+  // Trims → 'trims'), grouped by name+unit with colour dropped.
+  const invBucket = isPricelist ? (folder==='Trims' ? 'trims' : 'fabrics') : null;
+  const invRows = (()=>{
+    if(!isPricelist || !invBucket) return [];
+    const map=new Map();
+    for(const it of invItems){
+      if(String(it.bucket||'').toLowerCase()!==invBucket) continue;
+      const nm=String(it.name||'').trim(); if(!nm) continue;
+      const unit=String(it.unit||'').trim();
+      const key=(nm+'|'+unit).toLowerCase();
+      if(!map.has(key)) map.set(key,{ title:nm, unit, costs:[], sup:new Set(), variants:0 });
+      const g=map.get(key);
+      const c=Number(it.cost); if(isFinite(c)&&c>0) g.costs.push(c);
+      if(it.supplier_id && supMap[it.supplier_id]) g.sup.add(supMap[it.supplier_id]);
+      g.variants++;
+    }
+    return [...map.values()].map(g=>({
+      __inv:true, title:g.title, unit:g.unit||'—',
+      min: g.costs.length?Math.min(...g.costs):null,
+      max: g.costs.length?Math.max(...g.costs):null,
+      supplier: [...g.sup].join(', '), variants:g.variants,
+    })).filter(r=> !q || `${r.title} ${r.supplier}`.toLowerCase().includes(q))
+       .sort((a,b)=> a.title.localeCompare(b.title));
+  })();
   const countFor=(k)=> rows.filter(r=>r.category===k).length;
   const folderCount=(fd)=> rows.filter(r=>r.category==='pricelist' && (r.folder===fd || (!r.folder && fd===folders[0]))).length;
   return (
@@ -3311,7 +3350,21 @@ function PurchasingResourcesView({ profile }){
                     </td>}
                   </tr>
                 ))}
-                {priceRows.length===0 && <tr><td colSpan={canEdit?7:6} className="text-center text-slate-400 py-8">No {folder} pricelist items yet.{canEdit?' Click “+ Add” to create one.':''}</td></tr>}
+                {invRows.length>0 && (
+                  <tr className="border-t bg-slate-50"><td colSpan={canEdit?7:6} className="px-3 py-1.5 text-[10px] uppercase tracking-wide font-semibold text-slate-400">📦 From inventory · {folder.toLowerCase()} on hand ({invRows.length})</td></tr>
+                )}
+                {invRows.map((r,i)=>(
+                  <tr key={'inv'+i} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{r.title}<span className="ml-1.5 text-[9px] align-middle px-1 py-0.5 rounded bg-emerald-50 text-emerald-600 font-semibold">INVENTORY</span></td>
+                    <td className="px-3 py-2 text-slate-600">{r.supplier||'—'}</td>
+                    <td className="px-3 py-2 text-slate-600 text-xs">{r.unit||'—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{r.min==null?'—':(r.min===r.max?peso(r.min):`${peso(r.min)} – ${peso(r.max)}`)}</td>
+                    <td className="px-3 py-2 text-right text-slate-600">—</td>
+                    <td className="px-3 py-2 text-slate-600 text-xs">{r.variants} variant{r.variants>1?'s':''} in stock</td>
+                    {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap text-[10px] text-slate-300">auto</td>}
+                  </tr>
+                ))}
+                {priceRows.length===0 && invRows.length===0 && <tr><td colSpan={canEdit?7:6} className="text-center text-slate-400 py-8">No {folder} pricelist items yet.{canEdit?' Click “+ Add” to create one.':''}</td></tr>}
               </tbody>
             </table>
           </div>
