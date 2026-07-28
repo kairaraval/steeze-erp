@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 314 · Accounting report Expenses match the Expense Log (vouchers + expenses + spent budgets + liquidated cash advances). (Re-pushed to refresh the deploy.)";
+const BUILD = "Live build 315 · Trip Tickets now show in the Logistics team's nav. Tapping 'Arrived' on a scheduled stop also ticks that delivery off on the Daily Schedule with the arrival timestamp (and Undo un-ticks it).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15571,17 +15571,22 @@ function TripTicketsView({ profile }){
   async function markArrived(delivery){
     if(!ticket) return; setBusyStop(delivery.id);
     const geo=await captureTripGeo();
+    const nowIso=new Date().toISOString();
     const ex=stopFor(delivery.id);
     if(ex){
-      await sb.from('trip_ticket_stops').update({ arrived_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null }).eq('id',ex.id);
+      await sb.from('trip_ticket_stops').update({ arrived_at:nowIso, lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null }).eq('id',ex.id);
     } else {
-      await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, arrived_at:new Date().toISOString(), lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
+      await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, arrived_at:nowIso, lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
     }
+    // Also tick off the matching row on the Daily Schedule with the arrival time.
+    try { await sb.from('logistics_deliveries').update({ status:'delivered', delivered_at:nowIso }).eq('id', delivery.id); } catch(_){}
     setBusyStop(null); loadTicket();
   }
   async function undoArrived(delivery){ const ex=stopFor(delivery.id); if(!ex) return;
     if(ex.departed_at){ await sb.from('trip_ticket_stops').update({ arrived_at:null }).eq('id',ex.id); }
     else { await sb.from('trip_ticket_stops').delete().eq('id',ex.id); }
+    // Un-tick the Daily Schedule row too.
+    try { await sb.from('logistics_deliveries').update({ status:'pending', delivered_at:null }).eq('id', delivery.id); } catch(_){}
     loadTicket();
   }
   async function undoDeparted(delivery){ const ex=stopFor(delivery.id); if(!ex) return; await sb.from('trip_ticket_stops').delete().eq('id',ex.id); loadTicket(); }
@@ -31117,9 +31122,9 @@ function App(){
     ['profile','My Profile','⭐'],
   ] };
   if(isLogistics){
-    // Logistics Team — only the Daily Schedule. No inbox, no profile.
+    // Logistics Team — Daily Schedule + their Trip Tickets.
     NAV = [
-      { items:[ ['logistics','Daily Schedule','🚚'] ] },
+      { items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'] ] },
     ];
   } else if(isPatternMaker){
     // Pattern Maker — only the Pattern board.
