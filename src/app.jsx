@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 317 · Estimate editor: bigger Qty & Unit price boxes, and the Description is now a multi-line box — press Enter for new lines/bullets, and the line breaks print exactly as typed (on estimate + invoice).";
+const BUILD = "Live build 318 · Estimate editor: the Item field is now a dropdown of every item you've used before — start typing to filter, or just type a brand-new item to add it on the fly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1379,6 +1379,28 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const [paymentTerms,setPaymentTerms]=useState(lead.payment_terms||'');
   const [validUntil,setValidUntil]=useState('');
   const [notes,setNotes]=useState('');
+  // Catalog of item names used across past estimates/leads, for the Item dropdown.
+  const [itemOptions,setItemOptions]=useState([]);
+
+  useEffect(()=>{ let alive=true; (async()=>{
+    // Build a de-duplicated, alphabetised list of every item name we've ever
+    // used — powers the Item <datalist> so staff pick from a dropdown but can
+    // still type a brand-new item that isn't on the list yet.
+    try {
+      const [est,lds] = await Promise.all([
+        sb.from('estimates').select('items'),
+        sb.from('leads').select('items'),
+      ]);
+      const map = new Map(); // lowercase -> display (first-seen casing)
+      for(const row of [...(est.data||[]), ...(lds.data||[])]){
+        for(const it of (row.items||[])){
+          const name=(it&&(it.itemType||it.item_type)||'').trim();
+          if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
+        }
+      }
+      if(alive) setItemOptions([...map.values()].sort((a,b)=>a.localeCompare(b)));
+    } catch(_){}
+  })(); return ()=>{ alive=false; }; },[]);
 
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
@@ -1644,7 +1666,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
               <tbody>
                 {lines.map((it,idx)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*EST_VAT_RATE:0); return (
                   <tr key={it.id} className="border-t align-top">
-                    <td className="px-2 py-1.5"><input className="input" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="e.g. Jersey" /></td>
+                    <td className="px-2 py-1.5"><input className="input" list="est-item-catalog" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /></td>
                     <td className="px-2 py-1.5"><textarea rows={2} value={it.description} onChange={e=>setLine(idx,'description',e.target.value)} placeholder={"Details — press Enter for a new line / bullet, e.g.\n• Full sublimation\n• Dri-fit, sizes S–XL"} className="input w-full min-h-[52px] resize-y leading-snug" /></td>
                     <td className="px-2 py-1.5"><input type="number" className="input text-right text-base font-semibold" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
                     <td className="px-2 py-1.5"><input type="number" className="input text-right text-base font-semibold" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
@@ -1656,6 +1678,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
                 {lines.length===0 && <tr><td colSpan="7" className="px-2 py-3 text-center text-slate-400 text-xs">No items yet — add one above.</td></tr>}
               </tbody>
             </table>
+            <datalist id="est-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist>
           </div>
         </div>
 
