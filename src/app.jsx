@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 311 · Journal entries now carry a Bank — pick which bank account the entry relates to; it shows in the journal list and on the printed Journal Voucher.";
+const BUILD = "Live build 312 · Reports → new 💰 Accounting tab: cash on hand, A/R & A/P outstanding, collected + expenses (month/YTD), an A/R aging breakdown, and a 'Delivered but overdue accounts' table (delivered orders still owing, with days overdue).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11999,7 +11999,7 @@ function YtdSalesPanel({ profile, salesOrders, year }){
   );
 }
 
-function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees }){
+function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees, bankAccounts, bankTransactions, expenses, rfps, apVouchers }){
   const [tab,setTab]=useState('sales');
   const [period,setPeriod]=useState('ytd'); // 'month' | 'quarter' | 'ytd' | 'all'
   const today = new Date();
@@ -12289,6 +12289,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
 
   const TABS = [
     { key:'sales',      label:'Sales',      icon:'📈' },
+    { key:'accounting', label:'Accounting', icon:'💰' },
     { key:'production', label:'Production', icon:'🏭' },
     { key:'customers',  label:'Customers',  icon:'👥' },
     { key:'suppliers',  label:'Suppliers',  icon:'⚒' },
@@ -12365,6 +12366,91 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
           </div>
         </div>
       )}
+
+      {/* ───── ACCOUNTING ───── */}
+      {tab==='accounting' && (()=>{
+        const todayISO = new Date().toISOString().slice(0,10);
+        const mKey = todayISO.slice(0,7), yKey = todayISO.slice(0,4);
+        const cash = (bankAccounts||[]).reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
+        const liveSOs = (salesOrders||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at);
+        const ar = liveSOs.reduce((s,o)=>s+Number(o.balance_due||0), 0);
+        const apOpen = (rfps||[]).filter(r=>!r.deleted_at && ['pending_finance','pending_admin','approved','partial'].includes(r.status));
+        const ap = apOpen.reduce((s,r)=>s+rfpBalance(r), 0);
+        const collectedMonth = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(mKey)).reduce((s,p)=>s+Number(p.amount||0),0);
+        const collectedYear  = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(yKey)).reduce((s,p)=>s+Number(p.amount||0),0);
+        const expLive = (expenses||[]).filter(e=>!e.deleted_at);
+        const expMonth = expLive.filter(e=>(e.date||'').startsWith(mKey)).reduce((s,e)=>s+Number(e.amount||0),0);
+        const expYear  = expLive.filter(e=>(e.date||'').startsWith(yKey)).reduce((s,e)=>s+Number(e.amount||0),0);
+        // Delivered orders that are past due on payment (delivered but balance still owed).
+        const daysSince=(d)=> d ? Math.floor((new Date(todayISO) - new Date(String(d).slice(0,10)))/86400000) : 0;
+        const overdue = liveSOs.filter(o=> o.delivered_at && Number(o.balance_due||0)>0.005)
+          .map(o=>({ o, days: daysSince(o.delivered_at) }))
+          .sort((a,b)=>b.days-a.days);
+        const overdueTotal = overdue.reduce((s,x)=>s+Number(x.o.balance_due||0),0);
+        const clientName=(o)=> o.client_name || (clients||[]).find(c=>c.id===o.client_id)?.company || '—';
+        const aging={ '0-30':0, '31-60':0, '61-90':0, '90+':0 };
+        overdue.forEach(({o,days})=>{ const b=Number(o.balance_due||0); aging[days<=30?'0-30':days<=60?'31-60':days<=90?'61-90':'90+']+=b; });
+        return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Tile label="Cash on hand" value={peso(cash)} sub={`${(bankAccounts||[]).length} bank account${(bankAccounts||[]).length===1?'':'s'}`} color="emerald" />
+            <Tile label="A/R outstanding" value={peso(ar)} sub={`${liveSOs.filter(o=>Number(o.balance_due||0)>0).length} orders owe`} color="amber" />
+            <Tile label="A/P outstanding" value={peso(ap)} sub={`${apOpen.length} RFPs to pay`} color="rose" />
+            <Tile label="Overdue (delivered)" value={peso(overdueTotal)} sub={`${overdue.length} delivered, unpaid`} color="rose" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Tile label="Collected this month" value={peso(collectedMonth)} sub={mKey} color="emerald" />
+            <Tile label="Collected YTD" value={peso(collectedYear)} sub={yKey} color="emerald" />
+            <Tile label="Expenses this month" value={peso(expMonth)} sub={mKey} color="rose" />
+            <Tile label="Expenses YTD" value={peso(expYear)} sub={yKey} color="rose" />
+          </div>
+
+          {/* A/R aging of overdue delivered orders */}
+          <div className="bg-white border rounded-xl p-4">
+            <div className="text-sm font-bold mb-3">Overdue A/R aging — delivered, still owed</div>
+            <div className="grid grid-cols-4 gap-3 text-center">
+              {Object.entries(aging).map(([k,v])=>(
+                <div key={k} className={`border rounded-lg p-3 ${k==='90+'&&v>0?'bg-rose-50 border-rose-200':k==='61-90'&&v>0?'bg-amber-50 border-amber-200':'bg-slate-50'}`}>
+                  <div className="text-[10px] uppercase text-slate-500">{k} days</div>
+                  <div className={`text-lg font-bold mt-0.5 ${k==='90+'?'text-rose-700':k==='61-90'?'text-amber-700':'text-slate-700'}`}>{peso(v)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Delivered & overdue orders table */}
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b flex items-center justify-between">
+              <span className="text-sm font-bold">🚚 Delivered but overdue accounts ({overdue.length})</span>
+              <span className="text-sm">Total owed: <strong className="text-rose-700">{peso(overdueTotal)}</strong></span>
+            </div>
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">SO #</th><th className="text-left px-3 py-2">Client</th>
+                <th className="text-left px-3 py-2">Delivered</th><th className="text-right px-3 py-2">Days</th>
+                <th className="text-right px-3 py-2">Total</th><th className="text-right px-3 py-2">Paid</th>
+                <th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Terms</th>
+              </tr></thead>
+              <tbody>
+                {overdue.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No delivered orders with an outstanding balance. 🎉</td></tr>}
+                {overdue.map(({o,days})=>(
+                  <tr key={o.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-mono text-xs font-semibold">{o.number}</td>
+                    <td className="px-3 py-2">{clientName(o)}</td>
+                    <td className="px-3 py-2 text-xs">{fmtDate(o.delivered_at)}</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${days>90?'text-rose-700':days>60?'text-amber-700':'text-slate-600'}`}>{days}</td>
+                    <td className="px-3 py-2 text-right">{peso(o.total)}</td>
+                    <td className="px-3 py-2 text-right text-emerald-700">{peso(o.amount_paid)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(o.balance_due)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{o.payment_terms||'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* ───── PRODUCTION ───── */}
       {tab==='production' && (
@@ -31271,7 +31357,7 @@ function App(){
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
-        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} />}
+        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} rfps={rfps} apVouchers={apVouchers} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
