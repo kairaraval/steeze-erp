@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 313 · Fix: the Accounting report's Expenses now match the Expense Log (vouchers + expenses + spent budgets + liquidated cash advances), not just the raw expenses table — the figure was understated before.";
+const BUILD = "Live build 314 · Accounting report Expenses match the Expense Log (vouchers + expenses + spent budgets + liquidated cash advances). (Re-pushed to refresh the deploy.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
