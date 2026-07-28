@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 323 · Employee Loans approval routing: Admin approves → loan routes to the Accounting Supervisor (Rose Vista) for processing. Accounting now sees Employee Loans in their nav with a 'For processing' queue (and a 'For approval' queue for Admin), each badged with a count.";
+const BUILD = "Live build 324 · Recruitment: applicant resumes now open via a signed URL (the Attachments bucket is private, so the old public link 403'd — this is why HR's uploaded resume wouldn't open for others). New uploads store the storage key; existing resumes work too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11452,8 +11452,9 @@ function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
       const key = `recruitment/${jobId||'unassigned'}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
       const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
       if(upErr) throw upErr;
-      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
-      up('resume_url', pu.publicUrl);
+      // Store the bare storage key — the Attachments bucket is PRIVATE, so a
+      // getPublicUrl() link would 403. We mint a fresh signed URL on View.
+      up('resume_url', key);
     } catch(e){ alert('Upload failed: '+e.message); }
     setUploading(false);
   }
@@ -11494,7 +11495,7 @@ function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
           <div className="flex items-center gap-2">
             <input type="file" onChange={e=>uploadResume(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.resume_url && <a href={f.resume_url} target="_blank" rel="noreferrer" className="text-xs text-emerald-600">✓ View</a>}
+            {f.resume_url && <button type="button" onClick={()=>openSignedAttachment(f.resume_url)} className="text-xs text-emerald-600 hover:underline">✓ View</button>}
           </div>
         </TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[80px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} placeholder="Interview impressions, screening notes, references" /></TpLbl>
