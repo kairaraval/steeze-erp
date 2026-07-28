@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 315 · Trip Tickets now show in the Logistics team's nav. Tapping 'Arrived' on a scheduled stop also ticks that delivery off on the Daily Schedule with the arrival timestamp (and Undo un-ticks it).";
+const BUILD = "Live build 316 · Employee Relations disciplinary cases now have a Client field (column + form input + searchable) to note the client/project a case relates to.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10053,7 +10053,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
   const movShown=movements.filter(m=> !movSearch || `${empName(m.employee_id)} ${m.movement_type||''} ${m.new_position||''} ${m.new_department||''} ${m.reason||''}`.toLowerCase().includes(movSearch.toLowerCase()));
   async function delMov(m){ if(!confirm('Delete this movement record?')) return; const { error }=await sb.from('hr_movements').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
   const shown=(tab==='active'?active:tab==='closed'?closed:all)
-    .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.case_type} ${c.sanction_type||''}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.client_name||''} ${c.case_type} ${c.sanction_type||''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
   async function toggleClose(c){
     const closing=!caseIsClosed(c);
@@ -10130,6 +10130,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
                 <th className="text-left px-3 py-2">Employee</th>
                 <th className="text-left px-3 py-2">Case</th>
                 <th className="text-left px-3 py-2">Title</th>
+                <th className="text-left px-3 py-2">Client</th>
                 <th className="text-center px-3 py-2">Severity</th>
                 <th className="text-left px-3 py-2">Sanction</th>
                 <th className="text-left px-3 py-2">Opened</th>
@@ -10141,6 +10142,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
                   <td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td>
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${ct.color}`}>{ct.label}</span></td>
                   <td className="px-3 py-2 text-slate-600 truncate max-w-[220px]" title={c.title}>{c.title}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}{c.review_status==='pending_admin_review' && <span className="ml-1" title="Sent to Admin for checking">📤</span>}{c.review_status==='checked' && <span className="ml-1" title="Checked by Admin">✅</span>}</td>
+                  <td className="px-3 py-2 text-xs text-slate-600">{c.client_name || <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-center">{sev ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sev.color}`}>{sev.label}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-xs">{c.sanction_type || <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(c.opened_date)}</td>
@@ -10382,7 +10384,7 @@ function NPAPrintView({ movement, employees, profile, onClose }){
 
 function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved }){
   const isEdit=!!caseRow;
-  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', severity:'', sanction_type:'', status:'issuance_nte', opened_date:new Date().toISOString().slice(0,10), description:'', remarks:'', resolution:'' });
+  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', client_name:'', severity:'', sanction_type:'', status:'issuance_nte', opened_date:new Date().toISOString().slice(0,10), description:'', remarks:'', resolution:'' });
   const [attachments,setAttachments]=useState(Array.isArray(caseRow?.attachments)?caseRow.attachments:[]);
   const [uploading,setUploading]=useState(false); const [drag,setDrag]=useState(false);
   const fileInput=useRef(null);
@@ -10438,7 +10440,7 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
     if(!f.title?.trim()){ setMsg('Add a short title.'); return; }
     setBusy(true); setMsg('');
     const closed = f.status==='closed_case';
-    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
+    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), client_name:f.client_name?.trim()||null, severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
     if(!isEdit) payload.created_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_cases').update(payload).eq('id',caseRow.id) : await sb.from('hr_cases').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -10456,7 +10458,10 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
           </TpLbl>
           <TpLbl t="Case type"><select className="input" value={f.case_type} onChange={e=>up('case_type',e.target.value)}>{CASE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
         </div>
-        <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Tardiness — 3rd offense" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Tardiness — 3rd offense" /></TpLbl>
+          <TpLbl t="Client (if related)"><input className="input" value={f.client_name||''} onChange={e=>up('client_name',e.target.value)} placeholder="e.g. Sunrise Events PH — optional" /></TpLbl>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Severity"><select className="input" value={f.severity||''} onChange={e=>up('severity',e.target.value)}><option value="">—</option>{CASE_SEVERITIES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{CASE_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
