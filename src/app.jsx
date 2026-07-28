@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 318 · Estimate editor: the Item field is now a dropdown of every item you've used before — start typing to filter, or just type a brand-new item to add it on the fly.";
+const BUILD = "Live build 319 · Lead details: the Item field is now a dropdown of every item you've used before — start typing to filter, or just type a brand-new item to add it on the fly (also available on estimates).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -881,6 +881,25 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  // Catalog of item names used across past leads/estimates, for the Item dropdown.
+  // Staff pick from the list but can still type a brand-new item not on it yet.
+  const [itemOptions,setItemOptions]=useState([]);
+  useEffect(()=>{ let alive=true; (async()=>{
+    try {
+      const [lds,est] = await Promise.all([
+        sb.from('leads').select('items'),
+        sb.from('estimates').select('items'),
+      ]);
+      const map=new Map();
+      for(const row of [...(lds.data||[]), ...(est.data||[])]){
+        for(const it of (row.items||[])){
+          const name=(it&&(it.itemType||it.item_type)||'').trim();
+          if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
+        }
+      }
+      if(alive) setItemOptions([...map.values()].sort((a,b)=>a.localeCompare(b)));
+    } catch(_){}
+  })(); return ()=>{ alive=false; }; },[]);
   const subtotal=items.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
   const vat=items.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*0.12:0); },0);
   const total=subtotal+vat; const hasItems=items.some(it=>(Number(it.quantity)||0)>0&&(Number(it.pricePerItem)||0)>0); const value=hasItems?total:(Number(manualValue)||0);
@@ -1052,7 +1071,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
           <div className="space-y-2">{items.map((it,idx)=>(
             <div key={it.id} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="e.g. Jacket" /></div>
+              <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
               <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Category</label><select className="input mt-0.5" value={it.category} onChange={e=>setItem(idx,'category',e.target.value)}><option value="">—</option>{ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
               <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
               <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
