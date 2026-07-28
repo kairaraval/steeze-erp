@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 319 · Lead details: the Item field is now a dropdown of every item you've used before — start typing to filter, or just type a brand-new item to add it on the fly (also available on estimates).";
+const BUILD = "Live build 320 · Resources: PDFs now open in an inline preview (same as images) instead of forcing a new browser tab — with an 'Open original' link if you still want the full tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2770,7 +2770,9 @@ function DesignResourcesBoard({ profile }){
     if(r.file_path){
       try {
         const u=await signedUrl(r.file_path);
-        if((r.file_type||'').startsWith('image')) setLightbox(u);
+        const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase();
+        if(ref.includes('image')||/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'image',name:r.title||r.file_name||''});
+        else if(ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path});
         else window.open(u,'_blank','noopener');
       } catch(_){}
       return;
@@ -2822,12 +2824,7 @@ function DesignResourcesBoard({ profile }){
           </div>
         )}
       {(addingRes||editingRes) && <DesignResourceForm profile={profile} boards={boards} existing={editingRes} defaultBoardId={addDefaultBoard} onClose={()=>{ setAddingRes(false); setEditingRes(null); }} onSaved={()=>{ setAddingRes(false); setEditingRes(null); load(); }} />}
-      {lightbox && (
-        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
-          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
-          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
-        </div>
-      )}
+      {lightbox && <MediaLightbox url={lightbox.url} path={lightbox.path} name={lightbox.name} kind={lightbox.kind} onClose={()=>setLightbox(null)} />}
     </div>
   );
 }
@@ -2993,7 +2990,7 @@ function SalesResourcesView({ profile }){
   }
   async function openRes(r){
     if(r.file_path){
-      try { const u=await signedUrl(r.file_path); if((r.file_type||'').startsWith('image')) setLightbox(u); else window.open(u,'_blank','noopener'); } catch(_){}
+      try { const u=await signedUrl(r.file_path); const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); if(ref.includes('image')||/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'image',name:r.title||r.file_name||''}); else if(ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path}); else window.open(u,'_blank','noopener'); } catch(_){}
       return;
     }
     if(r.url) window.open(r.url,'_blank','noopener');
@@ -3089,12 +3086,7 @@ function SalesResourcesView({ profile }){
       )}
       {(adding||editing) && <SalesResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} defaultFolder={folder} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
       {(addingPrice||editingPrice) && <PricelistRowForm profile={profile} existing={editingPrice} onClose={()=>{ setAddingPrice(false); setEditingPrice(null); }} onSaved={()=>{ setAddingPrice(false); setEditingPrice(null); load(); }} />}
-      {lightbox && (
-        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
-          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
-          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
-        </div>
-      )}
+      {lightbox && <MediaLightbox url={lightbox.url} path={lightbox.path} name={lightbox.name} kind={lightbox.kind} onClose={()=>setLightbox(null)} />}
     </div>
   );
 }
@@ -3254,7 +3246,7 @@ function PurchasingResourcesView({ profile }){
     if(error){ alert(error.message); return; } load();
   }
   async function openRes(r){
-    if(r.file_path){ try { const u=await signedUrl(r.file_path); if((r.file_type||'').startsWith('image')) setLightbox(u); else window.open(u,'_blank','noopener'); } catch(_){} return; }
+    if(r.file_path){ try { const u=await signedUrl(r.file_path); const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); if(ref.includes('image')||/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'image',name:r.title||r.file_name||''}); else if(ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path}); else window.open(u,'_blank','noopener'); } catch(_){} return; }
     if(r.url) window.open(r.url,'_blank','noopener');
   }
   const q=search.toLowerCase();
@@ -3350,12 +3342,7 @@ function PurchasingResourcesView({ profile }){
       )}
       {(adding||editing) && <PurchasingResourceForm profile={profile} category={editing?editing.category:tab} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); load(); }} />}
       {(addingPrice||editingPrice) && <PurchasingPricelistRowForm profile={profile} existing={editingPrice} defaultFolder={folder} onClose={()=>{ setAddingPrice(false); setEditingPrice(null); }} onSaved={()=>{ setAddingPrice(false); setEditingPrice(null); load(); }} />}
-      {lightbox && (
-        <div onClick={()=>setLightbox(null)} className="fixed inset-0 bg-black/80 z-[70] flex items-center justify-center p-6 cursor-zoom-out">
-          <img src={lightbox} onClick={(e)=>e.stopPropagation()} className="max-w-full max-h-full object-contain rounded shadow-2xl" alt="" />
-          <button onClick={()=>setLightbox(null)} className="fixed top-4 right-5 text-white text-3xl leading-none hover:text-slate-300">×</button>
-        </div>
-      )}
+      {lightbox && <MediaLightbox url={lightbox.url} path={lightbox.path} name={lightbox.name} kind={lightbox.kind} onClose={()=>setLightbox(null)} />}
     </div>
   );
 }
