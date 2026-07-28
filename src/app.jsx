@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 316 · Employee Relations disciplinary cases now have a Client field (column + form input + searchable) to note the client/project a case relates to.";
+const BUILD = "Live build 317 · Estimate editor: bigger Qty & Unit price boxes, and the Description is now a multi-line box — press Enter for new lines/bullets, and the line breaks print exactly as typed (on estimate + invoice).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1567,7 +1567,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
                   <tr key={i}>
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
                     <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{(it.withVat&&!vatInclusive)?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 whitespace-pre-line align-top">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(ln)}</td>
@@ -1632,10 +1632,10 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
                 <tr>
-                  <th className="text-left px-2 py-1.5 w-40">Item</th>
+                  <th className="text-left px-2 py-1.5 w-36">Item</th>
                   <th className="text-left px-2 py-1.5">Description</th>
-                  <th className="text-right px-2 py-1.5 w-20">Qty</th>
-                  <th className="text-right px-2 py-1.5 w-28">Unit ₱</th>
+                  <th className="text-right px-2 py-1.5 w-28">Qty</th>
+                  <th className="text-right px-2 py-1.5 w-36">Unit ₱</th>
                   <th className="text-center px-2 py-1.5 w-14">VAT</th>
                   <th className="text-right px-2 py-1.5 w-28">Line ₱</th>
                   <th className="px-2 py-1.5 w-8"></th>
@@ -1643,14 +1643,14 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
               </thead>
               <tbody>
                 {lines.map((it,idx)=>{ const ln=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); const lt=ln+(it.withVat?ln*EST_VAT_RATE:0); return (
-                  <tr key={it.id} className="border-t">
-                    <td className="px-2 py-1"><input className="input !py-1" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="e.g. Jersey" /></td>
-                    <td className="px-2 py-1"><input className="input !py-1" value={it.description} onChange={e=>setLine(idx,'description',e.target.value)} placeholder="Full sublimation, dri-fit, sizes S–XL…" /></td>
-                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
-                    <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
-                    <td className="px-2 py-1 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} /></td>
-                    <td className="px-2 py-1 text-right font-medium">{peso(ln)}</td>
-                    <td className="px-2 py-1 text-center"><button onClick={()=>removeLine(idx)} className="text-slate-400 hover:text-rose-600" title="Remove">✕</button></td>
+                  <tr key={it.id} className="border-t align-top">
+                    <td className="px-2 py-1.5"><input className="input" value={it.itemType} onChange={e=>setLine(idx,'itemType',e.target.value)} placeholder="e.g. Jersey" /></td>
+                    <td className="px-2 py-1.5"><textarea rows={2} value={it.description} onChange={e=>setLine(idx,'description',e.target.value)} placeholder={"Details — press Enter for a new line / bullet, e.g.\n• Full sublimation\n• Dri-fit, sizes S–XL"} className="input w-full min-h-[52px] resize-y leading-snug" /></td>
+                    <td className="px-2 py-1.5"><input type="number" className="input text-right text-base font-semibold" value={it.quantity} onChange={e=>setLine(idx,'quantity',e.target.value)} /></td>
+                    <td className="px-2 py-1.5"><input type="number" className="input text-right text-base font-semibold" value={it.pricePerItem} onChange={e=>setLine(idx,'pricePerItem',e.target.value)} /></td>
+                    <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={it.withVat} onChange={e=>setLine(idx,'withVat',e.target.checked)} className="mt-2" /></td>
+                    <td className="px-2 py-1.5 text-right font-medium">{peso(ln)}</td>
+                    <td className="px-2 py-1.5 text-center"><button onClick={()=>removeLine(idx)} className="text-slate-400 hover:text-rose-600 mt-1" title="Remove">✕</button></td>
                   </tr>
                 ); })}
                 {lines.length===0 && <tr><td colSpan="7" className="px-2 py-3 text-center text-slate-400 text-xs">No items yet — add one above.</td></tr>}
@@ -1926,7 +1926,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                   <tr key={i}>
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
                     <td className="border border-slate-400 px-2 py-1.5">{it.itemType}{(it.withVat&&!vatInclusive)?<span className="text-[8px] text-emerald-600"> +VAT</span>:''}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{it.description||'—'}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 whitespace-pre-line align-top">{it.description||'—'}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{Number(it.quantity)||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(it.pricePerItem)}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(ln)}</td>
