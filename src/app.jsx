@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 322 · Purchasing pricelist: Fabrics/Trims tab & folder counts now include the inventory-derived materials (was showing 0).";
+const BUILD = "Live build 323 · Employee Loans approval routing: Admin approves → loan routes to the Accounting Supervisor (Rose Vista) for processing. Accounting now sees Employee Loans in their nav with a 'For processing' queue (and a 'For approval' queue for Admin), each badged with a count.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10966,12 +10966,23 @@ function canApproveLoan(p){ return p?.role==='admin'; }                         
 function canProcessLoan(p){ return p?.role==='admin' || p?.role==='accounting'; }        // Accounting Supervisor processes
 
 function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, reload }){
-  const [filter,setFilter]=useState('active'); // 'active' | 'paid' | 'all'
+  const isAcct = profile.role==='accounting' || profile.role==='accounting_officer';
+  // Accounting (the processing step) lands on their processing queue first;
+  // everyone else opens on the Active list.
+  const [filter,setFilter]=useState(isAcct ? 'for_processing' : 'active'); // 'active'|'for_approval'|'for_processing'|'paid'|'all'
   const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null);
   const [printing,setPrinting]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
-  const rows=(hrLoans||[]).filter(l=> filter==='all' ? true : filter==='paid' ? l.status==='paid' : LOAN_OPEN_STATUSES.includes(l.status||'active'));
+  const rows=(hrLoans||[]).filter(l=>{ const st=l.status||'active';
+    if(filter==='all') return true;
+    if(filter==='paid') return st==='paid';
+    if(filter==='for_approval') return st==='pending_admin';
+    if(filter==='for_processing') return st==='approved';
+    return LOAN_OPEN_STATUSES.includes(st);
+  });
+  const pendApprovalCount=(hrLoans||[]).filter(l=>l.status==='pending_admin').length;
+  const forProcessingCount=(hrLoans||[]).filter(l=>l.status==='approved').length;
   const active=(hrLoans||[]).filter(l=>LOAN_OPEN_STATUSES.includes(l.status||'active'));
   const aC=(l)=>loanCompute(l, hrLoanInstallments);
   const totalOut = active.reduce((s,l)=> s + aC(l).outstanding, 0);
@@ -10994,10 +11005,12 @@ function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstal
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Per cut-off (weekly)</div><div className="text-xl font-bold mt-1 text-indigo-700">{peso(totalPerCutoff)}</div></div>
         <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Remaining balance</div><div className="text-xl font-bold mt-1 text-rose-700">{peso(totalOut)}</div><div className="text-[11px] text-slate-500">{active.length} active</div></div>
       </div>
-      <div className="flex items-center gap-1 mb-4">
-        {[['active','Active'],['paid','Paid'],['all','All']].map(([k,l])=>(
-          <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
-        ))}
+      <div className="flex items-center gap-1 mb-4 flex-wrap">
+        {[['active','Active'],['for_approval',`For approval${pendApprovalCount?` (${pendApprovalCount})`:''}`],['for_processing',`For processing${forProcessingCount?` (${forProcessingCount})`:''}`],['paid','Paid'],['all','All']].map(([k,l])=>{
+          const isQueue=k==='for_approval'||k==='for_processing'; const cnt=k==='for_approval'?pendApprovalCount:k==='for_processing'?forProcessingCount:0;
+          return (
+          <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':isQueue&&cnt>0?'bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
+        ); })}
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
         <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
@@ -30743,7 +30756,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -31300,7 +31313,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['prod-timeline','Production Timeline','🗓'],['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'] ] },
       LOGISTICS_GROUP,
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isSewingLead){
