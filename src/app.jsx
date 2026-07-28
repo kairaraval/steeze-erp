@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 312 · Reports → new 💰 Accounting tab: cash on hand, A/R & A/P outstanding, collected + expenses (month/YTD), an A/R aging breakdown, and a 'Delivered but overdue accounts' table (delivered orders still owing, with days overdue).";
+const BUILD = "Live build 313 · Fix: the Accounting report's Expenses now match the Expense Log (vouchers + expenses + spent budgets + liquidated cash advances), not just the raw expenses table — the figure was understated before.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11999,7 +11999,7 @@ function YtdSalesPanel({ profile, salesOrders, year }){
   );
 }
 
-function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees, bankAccounts, bankTransactions, expenses, rfps, apVouchers }){
+function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, suppliers, salesOrders, soPayments, items, requests, stockMovements, employees, bankAccounts, bankTransactions, expenses, vouchers, cashAdvances, budgetRequests, rfps, apVouchers }){
   const [tab,setTab]=useState('sales');
   const [period,setPeriod]=useState('ytd'); // 'month' | 'quarter' | 'ytd' | 'all'
   const today = new Date();
@@ -12378,9 +12378,15 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
         const ap = apOpen.reduce((s,r)=>s+rfpBalance(r), 0);
         const collectedMonth = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(mKey)).reduce((s,p)=>s+Number(p.amount||0),0);
         const collectedYear  = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(yKey)).reduce((s,p)=>s+Number(p.amount||0),0);
-        const expLive = (expenses||[]).filter(e=>!e.deleted_at);
-        const expMonth = expLive.filter(e=>(e.date||'').startsWith(mKey)).reduce((s,e)=>s+Number(e.amount||0),0);
-        const expYear  = expLive.filter(e=>(e.date||'').startsWith(yKey)).reduce((s,e)=>s+Number(e.amount||0),0);
+        // Money-out — mirror the Expense Log so the totals match: vouchers +
+        // standalone expenses + spent budgets + liquidated cash advances.
+        const moneyOut = [];
+        (vouchers||[]).forEach(v=>{ if(v.deleted_at||v.document_only||!isApprovedFin(v)) return; moneyOut.push({ date:v.date, amount:Number(v.amount||0) }); });
+        (expenses||[]).forEach(e=>{ if(e.deleted_at||e.petty_cash_id||!isApprovedFin(e)) return; moneyOut.push({ date:e.date, amount:Number(e.amount||0) }); });
+        (budgetRequests||[]).filter(b=>b.status==='spent'&&!b.deleted_at).forEach(b=>{ moneyOut.push({ date: b.spent_at||b.date_needed||(b.approved_at||'').slice(0,10)||b.date||(b.created_at||'').slice(0,10), amount:Number(b.amount||0) }); });
+        (cashAdvances||[]).forEach(c=>{ if(c.deleted_at||c.status!=='liquidated') return; const spent = c.kind==='petty_cash' ? (expenses||[]).filter(e=>e.petty_cash_id===c.id).reduce((s,e)=>s+Number(e.amount||0),0) : Number(c.amount_liquidated||0); if(spent>0) moneyOut.push({ date:c.liquidated_at||c.date, amount:spent }); });
+        const expMonth = moneyOut.filter(x=>(x.date||'').startsWith(mKey)).reduce((s,x)=>s+x.amount,0);
+        const expYear  = moneyOut.filter(x=>(x.date||'').startsWith(yKey)).reduce((s,x)=>s+x.amount,0);
         // Delivered orders that are past due on payment (delivered but balance still owed).
         const daysSince=(d)=> d ? Math.floor((new Date(todayISO) - new Date(String(d).slice(0,10)))/86400000) : 0;
         const overdue = liveSOs.filter(o=> o.delivered_at && Number(o.balance_due||0)>0.005)
@@ -31357,7 +31363,7 @@ function App(){
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
-        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} rfps={rfps} apVouchers={apVouchers} />}
+        {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} vouchers={vouchers} cashAdvances={cashAdvances} budgetRequests={budgetRequests} rfps={rfps} apVouchers={apVouchers} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
