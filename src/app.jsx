@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 321 · Purchasing pricelist: Fabrics & Trims now pull live from inventory — each material shown once (colour dropped), grouped by name + unit, with its buying cost (or cost range) and supplier.";
+const BUILD = "Live build 322 · Purchasing pricelist: Fabrics/Trims tab & folder counts now include the inventory-derived materials (was showing 0).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3292,8 +3292,19 @@ function PurchasingResourcesView({ profile }){
     })).filter(r=> !q || `${r.title} ${r.supplier}`.toLowerCase().includes(q))
        .sort((a,b)=> a.title.localeCompare(b.title));
   })();
-  const countFor=(k)=> rows.filter(r=>r.category===k).length;
-  const folderCount=(fd)=> rows.filter(r=>r.category==='pricelist' && (r.folder===fd || (!r.folder && fd===folders[0]))).length;
+  // Count distinct inventory groups (name+unit, colour dropped) per bucket.
+  const invGroupCount=(bucket)=>{
+    const seen=new Set();
+    for(const it of invItems){
+      if(String(it.bucket||'').toLowerCase()!==bucket) continue;
+      const nm=String(it.name||'').trim(); if(!nm) continue;
+      seen.add((nm+'|'+String(it.unit||'').trim()).toLowerCase());
+    }
+    return seen.size;
+  };
+  const folderInvCount=(fd)=> fd==='Trims' ? invGroupCount('trims') : fd==='Fabrics' ? invGroupCount('fabrics') : 0;
+  const countFor=(k)=> rows.filter(r=>r.category===k).length + (k==='pricelist' ? invGroupCount('fabrics')+invGroupCount('trims') : 0);
+  const folderCount=(fd)=> rows.filter(r=>r.category==='pricelist' && (r.folder===fd || (!r.folder && fd===folders[0]))).length + folderInvCount(fd);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
