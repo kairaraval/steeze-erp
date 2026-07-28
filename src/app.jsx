@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 325 · Recruitment: applicant resume 'View' now opens inline in an embedded PDF/image preview (no new tab) via a signed URL — works for existing resumes too.";
+const BUILD = "Live build 326 · Admin For Approval page now includes Employee Loans awaiting approval — approve (routes to Accounting for release) or reject right from the queue, and the sidebar badge counts them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24149,13 +24149,18 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
-function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, reload }){
+function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
   const [openMemo,setOpenMemo]=useState(null);
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment to verify (accounting/admin)
   const pendingMemos = (hrMemos||[]).filter(m => m.status==='pending');
+  // Employee loans awaiting Admin approval → routes to Accounting for release.
+  const pendingLoans = canApproveLoan(profile) ? (hrLoans||[]).filter(l => l.status==='pending_admin') : [];
+  const loanEmpName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  async function approveLoanA(l){ if(!confirm('Approve this loan? It then routes to the Accounting Supervisor for processing/release.')) return; const { error }=await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',l.id); if(error){ alert(error.message); return; } reload && reload(); }
+  async function rejectLoanA(l){ const r=prompt('Reason for rejecting this loan?'); if(r===null) return; const { error }=await sb.from('employee_loans').update({ status:'rejected', rejected_reason:r||null }).eq('id',l.id); if(error){ alert(error.message); return; } reload && reload(); }
   async function approveMemo(m){
     if(!profile?.signature_data){ if(!confirm("You don't have an e-signature on file yet. Approve without one? Set one up via My Profile to sign.")) return; }
     const now=new Date().toISOString();
@@ -24174,7 +24179,7 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
   // (approved_at IS NULL). Cash / Check / Bank-Transfer all route here so
   // every disbursement goes through Admin sign-off.
   const pendingVouchers = (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at);
-  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length;
+  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length;
   // One-click approve + sign — same logic as the VoucherViewModal's button.
   async function approveVoucher(v){
     if(!profile?.signature_data){
@@ -24216,6 +24221,28 @@ function ApprovalsView({ profile, profiles, rfps, budgetRequests, orders, suppli
                 </div>
                 <button onClick={()=>setOpenMemo(m)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold">👁 View</button>
                 <button onClick={()=>approveMemo(m)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✍️ Approve &amp; sign</button>
+              </div>
+            ); })}
+          </div>
+        </div>
+      )}
+
+      {/* Employee loans awaiting Admin approval → then Accounting processes/releases */}
+      {pendingLoans.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+            <div className="font-semibold text-amber-900">💵 Employee Loans <span className="text-amber-600 font-normal text-xs ml-1">· {pendingLoans.length} pending</span></div>
+            <div className="text-xs text-amber-600">Approve to route to the Accounting Supervisor for release.</div>
+          </div>
+          <div className="divide-y">
+            {pendingLoans.map(l=>{ const principal=Number(l.principal)||0, rate=Number(l.rate_pct)||0, term=Number(l.term_months)||0; const interest=principal*(rate/100)*term; const totalPayable=principal+interest; return (
+              <div key={l.id} className="px-4 py-2.5 flex items-center gap-3 flex-wrap hover:bg-amber-50/40">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{loanEmpName(l.employee_id)}</div>
+                  <div className="text-[11px] text-slate-500">{peso(principal)} principal · {term} mo × {rate}% · Total payable {peso(totalPayable)}{l.purpose?` · ${l.purpose}`:''}</div>
+                </div>
+                <button onClick={()=>approveLoanA(l)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Approve</button>
+                <button onClick={()=>rejectLoanA(l)} className="text-xs px-2.5 py-1 rounded border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">✕ Reject</button>
               </div>
             ); })}
           </div>
@@ -31104,7 +31131,8 @@ function App(){
   const pendingApprovals = (rfps||[]).filter(r=>r.status==='pending_admin').length
     + (budgetRequests||[]).filter(b=>b.status==='pending').length
     + (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at).length
-    + (hrMemos||[]).filter(m => m.status==='pending').length;
+    + (hrMemos||[]).filter(m => m.status==='pending').length
+    + (hrLoans||[]).filter(l => l.status==='pending_admin').length;
 
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
@@ -31543,7 +31571,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
