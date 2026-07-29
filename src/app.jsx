@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 337 · Employee loans: Accounting can Release approved loans in ONE disbursement voucher (Dr Advances to Employees, Cr Cash in Bank) that posts to the bank. New 'Advances to Employees' subledger (acct 101013) lists every released loan with balances; repayments are booked via Journal Entry and marked paid there.";
+const BUILD = "Live build 338 · Finance: RFP/batch vouchers now support compound (debit/credit) split + cost center like the standalone voucher; voucher previews show the accounting entry + cost center; expense/voucher 'category' is now a real Chart-of-Accounts account (posts exactly to the GL); invoice due date auto-computes from delivery + terms and has BIR billing-invoice fields + a 'file for BIR' checkbox; Journal Entries carry a cost center.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23250,7 +23250,7 @@ const RFP_STATUSES = [
 function rfpBalance(r){ return Math.max(0, Number(r?.amount||0) - Number(r?.amount_paid||0)); }
 function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 
-function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, reload }){
+function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, costCenters, chartAccounts, reload }){
   const [editing,setEditing]=useState(null);
   const [paying,setPaying]=useState(null);   // RFP to disburse via voucher
   const [viewingAp,setViewingAp]=useState(null); // A/P voucher preview
@@ -23344,8 +23344,8 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
         </div>
       )}
       {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
-      {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
-      {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
+      {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
       {viewingAp && <APVoucherModal ap={viewingAp} profiles={profiles} onClose={()=>setViewingAp(null)} />}
     </div>
   );
@@ -23483,7 +23483,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
   );
 }
 
-function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onClose, onSaved }){
+function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, costCenters, chartAccounts, onClose, onSaved }){
   const supplier = suppliers.find(s=>s.id===rfp.supplier_id);
   const today = new Date().toISOString().slice(0,10);
   const monthKey = ymdToMonthKey(today);
@@ -23500,7 +23500,8 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
     payee: rfp.supplier_name||supplier?.company||'',
     amount: rfpBalance(rfp) || rfp.amount,
     particulars: rfp.particulars||'',
-    expense_category: EXPENSE_CATEGORIES[0],
+    expense_category: '',
+    gl_account_code: '',
     // check_number doubles as the bank-transfer reference number — both
     // identify the disbursement in the bank statement.
     check_number: (rfp.payment_method==='check' || rfp.payment_method==='bank_transfer') ? (rfp.payment_method_detail||'') : '',
@@ -23508,13 +23509,32 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
     bank_id: bankAccounts[0]?.id||null,
     received_by: '',
     notes: '',
+    cost_center_id: '',
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // Optional compound (debit/credit) breakdown — segregate EWT / Input VAT.
+  const [splitOn,setSplitOn]=useState(false);
+  const [splits,setSplits]=useState([{ account_code:'', description:'', debit:'', credit:'' },{ account_code:'', description:'', debit:'', credit:'' }]);
+  const splitAcct=(code)=> (chartAccounts||[]).find(a=>a.code===code);
+  const splitT = { debit: splits.reduce((s,l)=>s+(Number(l.debit)||0),0), credit: splits.reduce((s,l)=>s+(Number(l.credit)||0),0) };
+  const splitBalanced = Math.abs(splitT.debit - splitT.credit) < 0.01 && splitT.debit>0;
+  function setSplit(i,k,val){ setSplits(ls=>ls.map((l,j)=>j===i?{...l,[k]:val}:l)); }
+  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', description:'', debit:'', credit:'' }]); }
+  function removeSplit(i){ setSplits(ls=>ls.filter((_,j)=>j!==i)); }
   async function save(){
     if(f.type==='check' && !f.bank_id){ setMsg('Pick the bank the check draws from.'); return; }
     if(f.type==='bank_transfer' && !f.bank_id){ setMsg('Pick the bank the transfer comes from.'); return; }
     if(f.type==='cash' && !f.received_by){ setMsg('Who is receiving the cash?'); return; }
+    let splitLines=null;
+    if(splitOn){
+      const cs=splits.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
+        .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+      if(cs.length<2){ setMsg('A split entry needs at least two lines.'); return; }
+      const st={ debit:cs.reduce((s,l)=>s+l.debit,0), credit:cs.reduce((s,l)=>s+l.credit,0) };
+      if(Math.abs(st.debit-st.credit)>=0.01){ setMsg(`Split is out of balance by ${peso(Math.abs(st.debit-st.credit))}.`); return; }
+      splitLines=cs;
+    }
     setBusy(true); setMsg('');
     try {
       // Voucher number — query DB (incl. soft-deleted) + retry on unique-violation.
@@ -23540,6 +23560,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
         const res = await sb.from('vouchers').insert({
           number, type:f.type, date:f.date, rfp_id:rfp.id, po_id:rfp.po_id, supplier_id:rfp.supplier_id,
           payee:f.payee, amount:Number(f.amount), particulars:f.particulars||null, expense_category:f.expense_category||null,
+          cost_center_id:f.cost_center_id||null, split_lines:splitLines, gl_account_code:f.gl_account_code||null,
           // check_number doubles as the bank-transfer reference # since both
           // identify the disbursement in the bank statement.
           check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
@@ -23617,13 +23638,37 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
         </div>
         <TpLbl t="Payee"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} /></TpLbl>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Expense category">
-            <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-              {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
+          <TpLbl t="Expense account (chart of accounts)">
+            <select className="input" value={f.gl_account_code||''} onChange={e=>{ const a=(chartAccounts||[]).find(x=>x.code===e.target.value); up('gl_account_code',e.target.value); up('expense_category', a?a.name:''); }}>
+              <option value="">— select account —</option>
+              {coaExpenseOptions(chartAccounts)}
             </select>
           </TpLbl>
-          <div></div>
+          <TpLbl t="Cost center">
+            <select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}>
+              <option value="">— none —</option>
+              {(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}
+            </select>
+          </TpLbl>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={splitOn} onChange={e=>setSplitOn(e.target.checked)} /> Itemize / split (debit–credit) — segregate EWT / VAT</label>
+        {splitOn && (
+          <div className="border border-indigo-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5 w-56">Account</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-24">Debit</th><th className="text-right px-2 py-1.5 w-24">Credit</th><th className="w-8"></th></tr></thead>
+              <tbody>{splits.map((l,i)=>(
+                <tr key={i} className="border-t">
+                  <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td>
+                  <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setSplit(i,'description',e.target.value)} placeholder="line memo" /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setSplit(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setSplit(i,'credit',''); }} /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setSplit(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setSplit(i,'debit',''); }} /></td>
+                  <td className="px-2 py-1 text-center"><button type="button" onClick={()=>removeSplit(i)} className="text-slate-400 hover:text-rose-600">✕</button></td>
+                </tr>
+              ))}</tbody>
+              <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-2 py-1.5" colSpan="2"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td><td className="px-2 py-1.5 text-right">{peso(splitT.debit)}</td><td className="px-2 py-1.5 text-right">{peso(splitT.credit)}</td><td></td></tr></tfoot>
+            </table>
+            <div className={`text-xs text-center py-1 ${splitBalanced?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{splitBalanced?'✓ Balanced':`Out of balance by ${peso(Math.abs(splitT.debit-splitT.credit))}`}</div>
+          </div>
+        )}
         <TpLbl t="Particulars"><textarea className="input min-h-[50px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="What this payment is for" /></TpLbl>
 
         {f.type==='check' && (
@@ -23674,7 +23719,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
    Consolidates multiple approved RFPs for a single supplier into ONE voucher +
    ONE bank transaction. Each covered RFP + its PO is marked paid; the voucher
    records every covered RFP id in `rfp_ids` so a void reverses them all. */
-function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, orders, onClose, onSaved }){
+function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, orders, chartAccounts, costCenters, onClose, onSaved }){
   const list = rfps||[];
   const first = list[0]||{};
   const supplier = suppliers.find(s=>s.id===first.supplier_id);
@@ -23689,7 +23734,9 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
     date: today,
     payee: first.supplier_name||supplier?.company||'',
     particulars: defaultParticulars,
-    expense_category: EXPENSE_CATEGORIES[0],
+    expense_category: '',
+    gl_account_code: '',
+    cost_center_id: '',
     check_number: '',
     check_date: today,
     bank_id: bankAccounts[0]?.id||null,
@@ -23725,6 +23772,7 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
           number, type:f.type, date:f.date,
           rfp_id: first.id, po_id: first.po_id||null, rfp_ids: ids, supplier_id: first.supplier_id,
           payee:f.payee, amount:Number(total), particulars:f.particulars||null, expense_category:f.expense_category||null,
+          gl_account_code:f.gl_account_code||null, cost_center_id:f.cost_center_id||null,
           check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
           check_date: f.type==='check' ? (f.check_date||null) : null,
           bank_id: f.bank_id||null,
@@ -23784,11 +23832,20 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
           <TpLbl t="Total amount"><input type="number" className="input bg-slate-100 text-slate-500" value={total} readOnly /></TpLbl>
         </div>
         <TpLbl t="Payee"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} /></TpLbl>
-        <TpLbl t="Expense category">
-          <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-            {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
-          </select>
-        </TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Expense account (chart of accounts)">
+            <select className="input" value={f.gl_account_code||''} onChange={e=>{ const a=(chartAccounts||[]).find(x=>x.code===e.target.value); up('gl_account_code',e.target.value); up('expense_category', a?a.name:''); }}>
+              <option value="">— select account —</option>
+              {coaExpenseOptions(chartAccounts)}
+            </select>
+          </TpLbl>
+          <TpLbl t="Cost center">
+            <select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}>
+              <option value="">— none —</option>
+              {(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}
+            </select>
+          </TpLbl>
+        </div>
         <TpLbl t="Particulars (auto-lists each PO — edit if needed)"><textarea className="input min-h-[90px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} /></TpLbl>
         {f.type==='check' && (
           <div className="grid grid-cols-3 gap-2 bg-blue-50 border border-blue-200 rounded p-2">
@@ -23847,7 +23904,8 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
     date: existing.date || today,
     payee: existing.payee || '',
     supplier_id: existing.supplier_id || null,
-    expense_category: existing.expense_category || EXPENSE_CATEGORIES[0],
+    expense_category: existing.expense_category || '',
+    gl_account_code: existing.gl_account_code || '',
     cost_center_id: existing.cost_center_id || '',
     amount: existing.amount || 0,
     particulars: existing.particulars || '',
@@ -23861,7 +23919,8 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
     date: today,
     payee: '',
     supplier_id: null,
-    expense_category: EXPENSE_CATEGORIES[0],
+    expense_category: '',
+    gl_account_code: '',
     cost_center_id: '',
     amount: 0,
     particulars: '',
@@ -23923,6 +23982,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
         amount: Number(f.amount),
         particulars: f.particulars || null,
         expense_category: f.expense_category || null,
+        gl_account_code: f.gl_account_code || null,
         cost_center_id: f.cost_center_id || null,
         split_lines: splitLines,
         check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
@@ -24047,9 +24107,10 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
               ))}
             </select>
           </TpLbl>
-          <TpLbl t="Expense category">
-            <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-              {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
+          <TpLbl t="Expense account (chart of accounts)">
+            <select className="input" value={f.gl_account_code||''} onChange={e=>{ const a=(chartAccounts||[]).find(x=>x.code===e.target.value); up('gl_account_code',e.target.value); up('expense_category', a?a.name:''); }}>
+              <option value="">— select account —</option>
+              {coaExpenseOptions(chartAccounts)}
             </select>
           </TpLbl>
         </div>
@@ -24164,10 +24225,13 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
 // Printable voucher document. Triggered from the Vouchers list's View / Print
 // buttons. The format mirrors a standard PH Check Voucher: company header,
 // payee, particulars, amount in numbers + words, bank info, signature lines.
-function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile, autoPrint, onClose, onSaved }){
+function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, costCenters, profile, autoPrint, onClose, onSaved }){
   const v = voucher;
   const bank = (bankAccounts||[]).find(b=>b.id===v.bank_id);
   const supplier = (suppliers||[]).find(s=>s.id===v.supplier_id);
+  const costCenter = (costCenters||[]).find(c=>c.id===v.cost_center_id);
+  const splits = Array.isArray(v.split_lines) ? v.split_lines : [];
+  const splitT = { debit: splits.reduce((s,l)=>s+(Number(l.debit)||0),0), credit: splits.reduce((s,l)=>s+(Number(l.credit)||0),0) };
   const preparedBy = (profiles||[]).find(p=>p.id===v.prepared_by);
   const approvedBy = (profiles||[]).find(p=>p.id===v.approved_by);
   const [approving,setApproving]=useState(false);
@@ -24283,10 +24347,11 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
         <SteezeLetterhead docTitle={typeLabel} />
 
         {/* Voucher meta — number / date / type / category */}
-        <div className="grid grid-cols-3 gap-3 mb-4 text-xs">
+        <div className="grid grid-cols-4 gap-3 mb-4 text-xs">
           <div><div className="font-semibold uppercase text-slate-500">Voucher No.</div><div className="font-mono text-base font-bold">{v.number||'—'}</div></div>
           <div><div className="font-semibold uppercase text-slate-500">Date</div><div className="font-medium">{fmtDate(v.date)}</div></div>
           <div><div className="font-semibold uppercase text-slate-500">Category</div><div className="font-medium">{v.expense_category||'—'}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Cost center</div><div className="font-medium">{costCenter?(costCenter.code?`${costCenter.code} · ${costCenter.name}`:costCenter.name):'—'}</div></div>
         </div>
 
         {/* Payee */}
@@ -24313,6 +24378,21 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, profile,
           <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">Particulars</div>
           <div className="text-sm mt-1 whitespace-pre-line">{v.particulars||'—'}</div>
         </div>
+
+        {/* Accounting breakdown (compound entry) */}
+        {splits.length>0 && (
+          <div className="mb-4">
+            <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500 mb-1">Accounting entry</div>
+            <table className="w-full text-xs border border-slate-400">
+              <thead className="bg-slate-50 text-slate-600"><tr><th className="text-left px-2 py-1 border border-slate-300">Account</th><th className="text-left px-2 py-1 border border-slate-300">Description</th><th className="text-right px-2 py-1 border border-slate-300 w-24">Debit</th><th className="text-right px-2 py-1 border border-slate-300 w-24">Credit</th></tr></thead>
+              <tbody>{splits.map((l,i)=>(
+                <tr key={i}><td className="px-2 py-1 border border-slate-300">{l.account_code} · {l.account_name||''}</td><td className="px-2 py-1 border border-slate-300 text-slate-600">{l.description||''}</td><td className="px-2 py-1 border border-slate-300 text-right">{Number(l.debit)?peso(l.debit):''}</td><td className="px-2 py-1 border border-slate-300 text-right">{Number(l.credit)?peso(l.credit):''}</td></tr>
+              ))}
+                <tr className="bg-slate-50 font-bold"><td className="px-2 py-1 border border-slate-300" colSpan="2">TOTAL</td><td className="px-2 py-1 border border-slate-300 text-right">{peso(splitT.debit)}</td><td className="px-2 py-1 border border-slate-300 text-right">{peso(splitT.credit)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Type-specific block */}
         {v.type==='check' && (
@@ -24660,7 +24740,7 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
       </table></div></div>
       {creating && <StandaloneVoucherModal profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
       {editing && <StandaloneVoucherModal key={editing.id} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
-      {viewing && <VoucherViewModal voucher={viewing} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} profile={profile} autoPrint={autoPrint} onClose={()=>{ setViewing(null); setAutoPrint(false); }} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
+      {viewing && <VoucherViewModal voucher={viewing} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} costCenters={costCenters} profile={profile} autoPrint={autoPrint} onClose={()=>{ setViewing(null); setAutoPrint(false); }} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
     </div>
   );
 }
@@ -24690,7 +24770,7 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
-function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, reload }){
+function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, costCenters, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
@@ -25008,7 +25088,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
       {/* Voucher review — uses the same view modal as the Vouchers list,
          giving Admin access to the Approve & Sign button + Print there too. */}
-      {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
+      {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} costCenters={costCenters} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
       {openMemo && <MemoViewModal memo={openMemo} profiles={profiles} onClose={()=>setOpenMemo(null)} />}
       {/* Payment verify modal — flips Pending → Verified, posts to bank, handles bank charges. */}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
@@ -25083,7 +25163,7 @@ const DEPARTMENT_OPTIONS = [
 ];
 
 /* ─────────── EXPENSES TRACKER ─────────── */
-function ExpensesView({ profile, profiles, expenses, bankAccounts, costCenters, reload }){
+function ExpensesView({ profile, profiles, expenses, bankAccounts, costCenters, chartAccounts, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState(''); // category
@@ -25165,7 +25245,6 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, costCenters, 
             <p className="text-slate-500 text-sm">{rows.length} expense{rows.length===1?'':'s'} · Total {peso(totalThisFilter)}{monthFilter?` in ${monthFilter}`:''}</p>
           </div>
           <div className="flex items-center gap-2">
-            {(canEdit || isOfficer) && <button onClick={addCategory} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">+ Add category</button>}
             {canCreate && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
           </div>
         </div>
@@ -25221,16 +25300,17 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, costCenters, 
         ); })}{rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No expenses match this filter. {canCreate && 'Click "+ New expense" to log one.'}</td></tr>}</tbody>
       </table></div></div>
 
-      {(creating||editing) && <ExpenseFormModal existing={editing} profile={profile} bankAccounts={bankAccounts} costCenters={costCenters} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {(creating||editing) && <ExpenseFormModal existing={editing} profile={profile} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
     </div>
   );
 }
 
-function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, onClose, onSaved }){
+function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, chartAccounts, onClose, onSaved }){
   const isEdit = !!existing;
   const [f,setF]=useState({
     date: existing?.date || new Date().toISOString().slice(0,10),
-    category: existing?.category || EXPENSE_CATEGORIES[0],
+    category: existing?.category || '',
+    gl_account_code: existing?.gl_account_code || '',
     cost_center_id: existing?.cost_center_id || '',
     vendor: existing?.vendor || '',
     description: existing?.description || '',
@@ -25263,7 +25343,7 @@ function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, onClos
     setBusy(true); setMsg('');
     try {
       const payload = {
-        date:f.date, category:f.category, cost_center_id:f.cost_center_id||null, vendor:f.vendor||null, description:f.description||null,
+        date:f.date, category:f.category, gl_account_code:f.gl_account_code||null, cost_center_id:f.cost_center_id||null, vendor:f.vendor||null, description:f.description||null,
         amount:amt, paid_via:f.paid_via, bank_id:(f.paid_via==='bank'?f.bank_id:null),
         receipt_url:f.receipt_url||null, tax_deductible:!!f.tax_deductible,
       };
@@ -25308,7 +25388,7 @@ function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, onClos
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
-          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Expense account (chart of accounts)"><select className="input" value={f.gl_account_code||''} onChange={e=>{ const a=(chartAccounts||[]).find(x=>x.code===e.target.value); up('gl_account_code',e.target.value); up('category', a?a.name:''); }}><option value="">— select account —</option>{coaExpenseOptions(chartAccounts)}</select></TpLbl>
         </div>
         <TpLbl t="Cost center (dept responsible)"><select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></TpLbl>
         <TpLbl t="Vendor / Payee"><input className="input" placeholder="Meralco, Manila Water, Globe, etc." value={f.vendor} onChange={e=>up('vendor',e.target.value)} /></TpLbl>
@@ -26287,6 +26367,14 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
 /* ─────────── JOURNAL ENTRIES / JOURNAL VOUCHERS ─────────── */
 const ACCOUNT_TYPES = ['Asset','Liability','Equity','Income','Expense'];
 
+// Expense/COGS accounts from the Chart of Accounts — used to drive the expense
+// "category" pickers (which are now real GL accounts).
+function coaExpenseAccounts(chartAccounts){
+  return (chartAccounts||[]).filter(a=>a.type==='Expense' && a.active!==false).slice().sort((x,y)=>String(x.code).localeCompare(String(y.code)));
+}
+function coaExpenseOptions(chartAccounts){
+  return coaExpenseAccounts(chartAccounts).map(a=>React.createElement('option',{ key:a.code, value:a.code }, `${a.code} · ${a.name}`));
+}
 // Map a free-text expense category to a Chart-of-Accounts code so single-line
 // vouchers/expenses can be projected into the General Ledger.
 function categoryToAccountCode(cat){
@@ -26372,8 +26460,8 @@ function buildGLPostings(data){
       const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
       if(v && Array.isArray(v.split_lines) && v.split_lines.length){
         v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, v.cost_center_id));
-      } else if(v){ push(b.date, categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
-      else if(e){ push(b.date, categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
+      } else if(v){ push(b.date, v.gl_account_code||categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
+      else if(e){ push(b.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
       else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued'); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, ''); }
       else { push(b.date, '401020', amt, 0, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, ''); }
     } else {
@@ -26385,7 +26473,7 @@ function buildGLPostings(data){
   // D. Petty-cash expenses (paid from the float, not the bank) — Dr expense, Cr Cash on Hand.
   expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash' && isApprovedFin(e)).forEach(e=>{
     const amt=Number(e.amount)||0; if(!amt) return;
-    push(e.date, categoryToAccountCode(e.category), amt, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
+    push(e.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
     push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash');
   });
   return P;
@@ -32535,12 +32623,12 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
-        {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
+        {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
@@ -32559,7 +32647,7 @@ function App(){
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} reload={loadAll} />}
+        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
