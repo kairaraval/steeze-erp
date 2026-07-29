@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 339 · Petty cash is now a true imprest float: expense lines carry a Chart-of-Accounts account, cost center and Input VAT. Liquidate posts the spend to the Expense Log (no bank return) and raises a replenishment request to Admin; once Admin approves, Accounting releases it from the bank to top the float back to its size.";
+const BUILD = "Live build 340 · Sales pipeline leads now accept Excel (and Word/CSV) file attachments — attach an .xlsx like a photo or PDF; it shows with a 📊 chip and opens/downloads via a secure link.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -519,7 +519,10 @@ function AttachmentChip({ att, small }){
     </button>
     {lightbox && url && <MediaLightbox url={url} path={att.path} name={att.name} kind="pdf" onClose={()=>setLightbox(false)} />}
   </>);
-  return <button type="button" onClick={openTab} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>🔗</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
+  const isSheet = /\.(xlsx|xls|csv)(?:$|\?)/i.test(ref);
+  const isDoc   = /\.(docx?|txt)(?:$|\?)/i.test(ref);
+  const fileIcon = isSheet ? '📊' : isDoc ? '📝' : '🔗';
+  return <button type="button" onClick={openTab} title="Open / download" className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>{fileIcon}</span><span className="font-medium truncate max-w-[10rem]">{att.name}</span></button>;
 }
 function firstImage(atts){ return (atts||[]).find(a=>a.type==='image'); }
 // Pick the cover image for a board card. Honors an explicit cover flag on the
@@ -767,7 +770,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
         )}
         <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'…':'Attach (multi)'}<input type="file" multiple accept="image/*,.pdf,application/pdf" className="hidden" onChange={pickFiles} disabled={reading} /></label>
+            <label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'…':'Attach (multi)'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={pickFiles} disabled={reading} /></label>
             <button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button>
             <span className="text-[10px] text-slate-400">or paste · ⌘V</span>
             <span className="text-[11px] text-slate-500">{mentionPreview?'Will notify: '+mentionPreview:'Tag with @firstname'}</span>
@@ -2552,7 +2555,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
               <div className="text-[10px] uppercase text-slate-500 font-semibold">Attachments {atts.length>0?`(${atts.length})`:''}</div>
               {job && (
                 <div className="flex items-center gap-1">
-                  <label className="text-xs px-2 py-1 rounded border bg-white cursor-pointer hover:bg-slate-50">📎 {reading?'Uploading…':'Photo / PDF'}<input type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label>
+                  <label className="text-xs px-2 py-1 rounded border bg-white cursor-pointer hover:bg-slate-50">📎 {reading?'Uploading…':'Photo / PDF / Excel'}<input type="file" accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={addPhoto} disabled={reading} /></label>
                   <button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button>
                   <span className="text-[10px] text-slate-400 ml-1">or paste ⌘V</span>
                 </div>
