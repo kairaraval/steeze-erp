@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 332 · Chart of Accounts replaced with your final list (per-bank cash accounts, split Input/Output VAT, EWT by type, full expense list). Reports engine repointed: per-bank cash mapping, revenue→501001, COGS grouping, VAT (201001/201002 vs 101010/101011) and EWT (201003 + 201011–201014) summaries.";
+const BUILD = "Live build 333 · Financial Reports: added the P&L Summary as its own tab (alongside Income Statement, Balance Sheet, Trial Balance, VAT, EWT).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26228,7 +26228,7 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
   );
 }
 
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters }){
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
@@ -26274,7 +26274,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
           </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          {[['pl','Income Statement'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
+          {[['pl','Income Statement'],['plsummary','P&L Summary'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
           ))}
         </div>
@@ -26291,6 +26291,12 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
           {expensesA.filter(b=>!isCogs(b.code)&&Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-slate-600 text-sm" />)}
           <Row label="Total Operating Expenses" val={opex} indent cls="font-medium" />
           <Row label="Net Income" val={netIncome} bold cls={netIncome<0?'text-rose-600':'text-emerald-700'} />
+        </div>
+      )}
+
+      {tab==='plsummary' && (
+        <div className="-mx-6 -mt-4">
+          <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} cashAdvances={cashAdvances} />
         </div>
       )}
 
@@ -32323,7 +32329,7 @@ function App(){
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
