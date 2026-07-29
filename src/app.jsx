@@ -25377,53 +25377,57 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
     .slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
   const totalSpent = linkedExpenses.reduce((s,e)=>s+Number(e.amount||0), 0);
   const outstanding = Number(pc.amount||0) - totalSpent - Number(pc.amount_returned||0);
-  // Local state for the add-expense inline form. Pre-fill today's date.
+  // Local state for the add-expense form — now MULTI-LINE: log several petty
+  // cash expenses at once and save them together.
   const today = new Date().toISOString().slice(0,10);
+  const defCat = allExpenseCategories().find(c=>/transport/i.test(c)) || allExpenseCategories()[0] || 'Other';
+  const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, category: defCat, vendor:'', description:'', amount:'', receipt_url:'' });
   const [addOpen,setAddOpen]=useState(false);
-  const [exp,setExp]=useState({ date: today, category: 'Transport', vendor:'', description:'', amount:0, receipt_url:'' });
+  const [rows,setRows]=useState([ blankRow() ]);
   const [busy,setBusy]=useState(false);
-  const [uploading,setUploading]=useState(false);
+  const [uploadingId,setUploadingId]=useState(null);
   const [msg,setMsg]=useState('');
-  function up(k,v){ setExp(p=>({...p,[k]:v})); }
-  function resetForm(){ setExp({ date: today, category: 'Transport', vendor:'', description:'', amount:0, receipt_url:'' }); setMsg(''); }
-  async function handleReceipt(file){
-    if(!file) return; setUploading(true);
+  function setRow(id,k,v){ setRows(rs=>rs.map(r=>r.id===id?{...r,[k]:v}:r)); }
+  function addRow(){ setRows(rs=>[...rs, blankRow()]); }
+  function removeRow(id){ setRows(rs=>rs.length>1?rs.filter(r=>r.id!==id):rs); }
+  function resetForm(){ setRows([ blankRow() ]); setMsg(''); }
+  const rowsTotal = rows.reduce((s,r)=>s+(Number(r.amount)||0),0);
+  async function handleReceipt(id,file){
+    if(!file) return; setUploadingId(id);
     try {
       const ext = (file.name.split('.').pop()||'jpg');
       const key = `expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
       const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
       if(upErr) throw upErr;
-      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
-      up('receipt_url', pu.publicUrl);
+      setRow(id,'receipt_url', key); // store storage key (private bucket)
     } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
-    setUploading(false);
+    setUploadingId(null);
   }
   async function addExpense(){
-    const amt = Number(exp.amount)||0;
-    if(amt <= 0){ setMsg('Enter an amount > 0.'); return; }
-    if(amt > outstanding + 0.005){
-      if(!confirm(`This expense (${peso(amt)}) is more than the outstanding balance (${peso(outstanding)}). Save anyway?`)) return;
+    const valid = rows.filter(r=> (Number(r.amount)||0) > 0);
+    if(!valid.length){ setMsg('Add at least one line with an amount.'); return; }
+    if(valid.some(r=>!r.description.trim())){ setMsg('Each line needs a short description.'); return; }
+    const total = valid.reduce((s,r)=>s+(Number(r.amount)||0),0);
+    if(total > outstanding + 0.005){
+      if(!confirm(`These expenses (${peso(total)}) exceed the outstanding balance (${peso(outstanding)}). Save anyway?`)) return;
     }
-    if(!exp.description.trim()){ setMsg('Add a short description.'); return; }
     setBusy(true); setMsg('');
     try {
-      const payload = {
-        date: exp.date,
-        category: exp.category || 'Other',
-        vendor: exp.vendor || null,
-        description: exp.description.trim(),
-        amount: amt,
-        paid_via: 'petty_cash',     // critical: don't deduct from a bank (the float was already withdrawn)
+      const payload = valid.map(r=>({
+        date: r.date,
+        category: r.category || 'Other',
+        vendor: r.vendor || null,
+        description: r.description.trim(),
+        amount: Number(r.amount)||0,
+        paid_via: 'petty_cash',     // don't deduct from a bank (the float was already withdrawn)
         bank_id: null,
-        receipt_url: exp.receipt_url || null,
+        receipt_url: r.receipt_url || null,
         tax_deductible: true,
         petty_cash_id: pc.id,
         created_by: profile.id,
-      };
+      }));
       const { error } = await sb.from('expenses').insert(payload);
       if(error) throw error;
-      // Tell the parent to reload so expensesAll refreshes and our running
-      // outstanding updates without losing this modal.
       resetForm();
       setAddOpen(false);
       onSaved && onSaved();
@@ -25458,32 +25462,46 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
 
         {/* Add expense inline form */}
         {!addOpen ? (
-          <button onClick={()=>{ resetForm(); setAddOpen(true); }} disabled={outstanding<=0.01} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">{outstanding<=0.01 ? 'Float exhausted — no more expenses can be charged' : '+ Add expense'}</button>
+          <button onClick={()=>{ resetForm(); setAddOpen(true); }} disabled={outstanding<=0.01} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">{outstanding<=0.01 ? 'Float exhausted — no more expenses can be charged' : '+ Add expenses'}</button>
         ) : (
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <TpLbl t="Date"><input type="date" className="input" value={exp.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
-              <TpLbl t="Amount *"><input type="number" step="0.01" className="input" value={exp.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
+            <div className="text-xs font-semibold text-indigo-800 uppercase tracking-wide">Log expenses — add as many lines as you need, then save together</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase text-slate-500"><tr>
+                  <th className="text-left px-1 py-1 w-32">Date</th>
+                  <th className="text-left px-1 py-1 w-44">Category</th>
+                  <th className="text-left px-1 py-1">Description *</th>
+                  <th className="text-left px-1 py-1 w-36">Vendor</th>
+                  <th className="text-right px-1 py-1 w-28">Amount *</th>
+                  <th className="text-center px-1 py-1 w-20">Receipt</th>
+                  <th className="w-6"></th>
+                </tr></thead>
+                <tbody>
+                  {rows.map(r=>(
+                    <tr key={r.id} className="align-top">
+                      <td className="px-1 py-0.5"><input type="date" className="input !py-1" value={r.date} onChange={e=>setRow(r.id,'date',e.target.value)} /></td>
+                      <td className="px-1 py-0.5"><select className="input !py-1" value={r.category} onChange={e=>setRow(r.id,'category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></td>
+                      <td className="px-1 py-0.5"><input className="input !py-1" value={r.description} onChange={e=>setRow(r.id,'description',e.target.value)} placeholder="e.g. Gas for delivery van" /></td>
+                      <td className="px-1 py-0.5"><input className="input !py-1" value={r.vendor} onChange={e=>setRow(r.id,'vendor',e.target.value)} placeholder="Shell, hardware…" /></td>
+                      <td className="px-1 py-0.5"><input type="number" step="0.01" className="input !py-1 text-right" value={r.amount} onChange={e=>setRow(r.id,'amount',e.target.value)} placeholder="0.00" /></td>
+                      <td className="px-1 py-0.5 text-center">
+                        {r.receipt_url ? <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-emerald-600 hover:underline">✓ View</button>
+                          : <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer">{uploadingId===r.id?'…':'📎 Add'}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ handleReceipt(r.id, e.target.files?.[0]); e.target.value=''; }} /></label>}
+                      </td>
+                      <td className="px-1 py-0.5 text-center"><button onClick={()=>removeRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <TpLbl t="Category">
-                <select className="input" value={exp.category} onChange={e=>up('category',e.target.value)}>
-                  {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
-                </select>
-              </TpLbl>
-              <TpLbl t="Vendor / Payee"><input className="input" value={exp.vendor} onChange={e=>up('vendor',e.target.value)} placeholder="e.g. Shell, hardware store" /></TpLbl>
+            <div className="flex items-center justify-between">
+              <button onClick={addRow} className="text-xs text-indigo-600 hover:underline font-medium">+ Add line</button>
+              <div className="text-sm font-semibold">Total: <span className={rowsTotal>outstanding+0.005?'text-rose-600':'text-slate-800'}>{peso(rowsTotal)}</span> <span className="text-xs text-slate-400">/ {peso(outstanding)} left</span></div>
             </div>
-            <TpLbl t="Description *"><input className="input" value={exp.description} onChange={e=>up('description',e.target.value)} placeholder="e.g. Gas for delivery van" /></TpLbl>
-            <TpLbl t="Receipt photo / scan">
-              <div className="flex items-center gap-2">
-                <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceipt(e.target.files?.[0]); e.target.value=''; }} className="text-xs flex-1" />
-                {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-                {exp.receipt_url && <button onClick={()=>openSignedAttachment(exp.receipt_url)} className="text-xs text-indigo-600 hover:underline shrink-0">✓ View</button>}
-              </div>
-            </TpLbl>
             {msg && <div className="text-xs text-rose-600">{msg}</div>}
             <div className="flex gap-2">
-              <button onClick={addExpense} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save expense'}</button>
+              <button onClick={addExpense} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':`Save ${rows.filter(r=>Number(r.amount)>0).length||''} expense${rows.filter(r=>Number(r.amount)>0).length===1?'':'s'}`}</button>
               <button onClick={()=>{ setAddOpen(false); resetForm(); }} className="py-2 px-4 rounded-lg bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">Cancel</button>
             </div>
           </div>
