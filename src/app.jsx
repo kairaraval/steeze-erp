@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 327 · New Quality Control module: production jobs & samples auto-land in the QC List when set to 'Quality Check (QC)'. QC logs handlers (staff), findings, sizing notes, rejects (production) or pass/fail + recommendation (samples). Fails/rejects notify the sales assistant + production supervisor. New 'Quality Control' role added.";
+const BUILD = "Live build 328 · Finance: (1) Accounting can add expense categories (shared across all dropdowns); (2) Accounting Supervisor gets an inbox notification when a loan is approved & ready to process; (3) Journal Entries can be saved as reusable templates (apply/rename/delete); (4) submitted JEs can be Cancelled (debits/credits zeroed, keeps the record with who + reason + a CANCELLED tag) — Delete button removed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7393,6 +7393,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     if(m.source==='lead') return 'lead:'+(m.lead_id||'');
     if(m.source==='sales_order') return 'sales_order:'+(m.sales_order_id||'');
     if(m.source==='pr') return 'pr:'+(m.id||'');
+    if(m.source==='notification') return 'notification:'+(m.id||'');
     return m.source+':'+(m.job_id||'');
   }
   // Map an inbox mention's source → activity table name. Single place to
@@ -7401,6 +7402,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     if(src==='lead') return 'lead_activity';
     if(src==='sales_order') return 'sales_order_activity';
     if(src==='pr') return 'pr_activity';
+    if(src==='notification') return 'notifications';
     return 'dept_job_activity';
   }
   const groupedCounts = {};     // key -> total count of mentions in that thread
@@ -7437,6 +7439,10 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     }
     if(m.source==='pr'){
       return { company:'', title:'Purchase Request', label:'Manual purchase request', tag:'Purchasing', icon:'🛒', color:'text-indigo-600' };
+    }
+    if(m.source==='notification'){
+      const title = m.ref_type==='loan' ? 'Employee Loan' : 'Notification';
+      return { company:'', title, label:m.text||'Notification', tag:'Alert', icon:'🔔', color:'text-amber-600' };
     }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
@@ -11151,6 +11157,17 @@ function loanStatusMeta(k){ return LOAN_STATUSES.find(s=>s.key===(k||'active')) 
 const LOAN_OPEN_STATUSES=['pending_admin','approved','active'];
 function canApproveLoan(p){ return p?.role==='admin'; }                                  // Admin approves
 function canProcessLoan(p){ return p?.role==='admin' || p?.role==='accounting'; }        // Accounting Supervisor processes
+// When Admin approves a loan, drop an inbox notification for the Accounting
+// Supervisor(s) so they know it's waiting for them to process & release.
+async function notifyAccountingLoanReady(loan, empName, actorId, profiles){
+  try {
+    const recips=(profiles||[]).filter(p=>p.role==='accounting').map(p=>p.id).filter(id=>id&&id!==actorId);
+    if(!recips.length) return;
+    const total=(Number(loan.principal)||0)*(1+((Number(loan.rate_pct)||0)/100)*(Number(loan.term_months)||0));
+    const rows=recips.map(id=>({ recipient_id:id, actor_id:actorId||null, text:`Loan for ${empName||'an employee'} — ${peso(loan.principal)} (total payable ${peso(total)}) approved. Ready for you to process & release.`, link_view:'hr-loans', ref_type:'loan', ref_id:loan.id, type:'system' }));
+    await sb.from('notifications').insert(rows);
+  } catch(e){ console.warn('loan notify failed', e?.message||e); }
+}
 
 function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, reload }){
   const isAcct = profile.role==='accounting' || profile.role==='accounting_officer';
@@ -11318,7 +11335,7 @@ function LoanDetailModal({ profile, profiles, loan, employees, installments, rel
   const [busy,setBusy]=useState(false);
   const emp=(employees||[]).find(e=>e.id===loan.employee_id);
   const sm=loanStatusMeta(loan.status);
-  async function approveLoan(){ if(!confirm('Approve this loan? It then goes to the Accounting Supervisor for processing/release.')) return; await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',loan.id); onSaved(); }
+  async function approveLoan(){ if(!confirm('Approve this loan? It then goes to the Accounting Supervisor for processing/release.')) return; await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',loan.id); const e=(employees||[]).find(x=>x.id===loan.employee_id); await notifyAccountingLoanReady(loan, e?fullName(e):'', profile.id, profiles); onSaved(); }
   async function rejectLoan(){ const r=prompt('Reason for rejecting this loan?'); if(r===null) return; await sb.from('employee_loans').update({ status:'rejected', rejected_reason:r||null }).eq('id',loan.id); onSaved(); }
   async function processLoan(){ if(!confirm('Mark this loan as processed & released? This confirms Accounting has released the funds; the repayment schedule becomes active.')) return; await sb.from('employee_loans').update({ status:'active', processed_by:profile.id, processed_at:new Date().toISOString() }).eq('id',loan.id); onSaved(); }
   const c=loanCompute(loan, installments);
@@ -14878,7 +14895,7 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
         </div>
         {kind==='subcon' && <div className="no-print grid grid-cols-2 gap-2">
           <div><label className="text-xs font-semibold text-slate-500">Expense category *</label>
-            <select value={category} onChange={e=>setCategory(e.target.value)} className="w-full border rounded px-2 py-1.5">{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
+            <select value={category} onChange={e=>setCategory(e.target.value)} className="w-full border rounded px-2 py-1.5">{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select>
           </div>
           <div><label className="text-xs font-semibold text-slate-500">Paid from bank *</label>
             <select value={bankId} onChange={e=>setBankId(e.target.value)} className="w-full border rounded px-2 py-1.5"><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
@@ -22697,7 +22714,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
               </select>
               <label className="text-xs text-slate-600">Category</label>
               <select value={payoutCategory} onChange={e=>setPayoutCategory(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
-                {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {allExpenseCategories().map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               <label className="text-xs text-slate-600">Fund from</label>
               <select value={selectedBankId||''} onChange={e=>setSelectedBankId(e.target.value||null)} className="text-xs border rounded px-2 py-1.5 bg-white">
@@ -23341,7 +23358,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, onC
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Expense category">
             <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-              {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
             </select>
           </TpLbl>
           <div></div>
@@ -23508,7 +23525,7 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
         <TpLbl t="Payee"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} /></TpLbl>
         <TpLbl t="Expense category">
           <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-            {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+            {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
           </select>
         </TpLbl>
         <TpLbl t="Particulars (auto-lists each PO — edit if needed)"><textarea className="input min-h-[90px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} /></TpLbl>
@@ -23747,7 +23764,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, ex
           </TpLbl>
           <TpLbl t="Expense category">
             <select className="input" value={f.expense_category} onChange={e=>up('expense_category',e.target.value)}>
-              {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
             </select>
           </TpLbl>
         </div>
@@ -24350,7 +24367,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   // Employee loans awaiting Admin approval → routes to Accounting for release.
   const pendingLoans = canApproveLoan(profile) ? (hrLoans||[]).filter(l => l.status==='pending_admin') : [];
   const loanEmpName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
-  async function approveLoanA(l){ if(!confirm('Approve this loan? It then routes to the Accounting Supervisor for processing/release.')) return; const { error }=await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',l.id); if(error){ alert(error.message); return; } reload && reload(); }
+  async function approveLoanA(l){ if(!confirm('Approve this loan? It then routes to the Accounting Supervisor for processing/release.')) return; const { error }=await sb.from('employee_loans').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',l.id); if(error){ alert(error.message); return; } const e=(employees||[]).find(x=>x.id===l.employee_id); await notifyAccountingLoanReady(l, e?fullName(e):'', profile.id, profiles); reload && reload(); }
   async function rejectLoanA(l){ const r=prompt('Reason for rejecting this loan?'); if(r===null) return; const { error }=await sb.from('employee_loans').update({ status:'rejected', rejected_reason:r||null }).eq('id',l.id); if(error){ alert(error.message); return; } reload && reload(); }
   async function approveMemo(m){
     if(!profile?.signature_data){ if(!confirm("You don't have an e-signature on file yet. Approve without one? Set one up via My Profile to sign.")) return; }
@@ -24700,6 +24717,15 @@ const EXPENSE_CATEGORIES = [
   'CAPEX — Building Improvements',
   'Other'
 ];
+// Custom expense categories added by Accounting live in the expense_categories
+// table. Loaded at app start into this module-level array; allExpenseCategories()
+// merges them with the built-in list (keeping 'Other' last), for every dropdown.
+let EXTRA_EXPENSE_CATEGORIES = [];
+function allExpenseCategories(){
+  const base = EXPENSE_CATEGORIES.slice(0, -1); // everything except trailing 'Other'
+  const extras = (EXTRA_EXPENSE_CATEGORIES||[]).filter(c=> c && !base.includes(c) && c!=='Other');
+  return [...base, ...extras, 'Other'];
+}
 const PAID_VIA_OPTIONS = [
   { key:'bank',        label:'Bank Transfer' },
   { key:'petty_cash',  label:'Petty Cash' },
@@ -24786,6 +24812,16 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
     const { error } = await sb.from('expenses').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', e.id);
     if(error){ alert(error.message); return; } reload();
   }
+  // Accounting (supervisor + officer) can add a new expense category — it's
+  // shared company-wide and shows up in every category dropdown.
+  async function addCategory(){
+    const name=(prompt('New expense category name:')||'').trim();
+    if(!name) return;
+    if(allExpenseCategories().some(c=>c.toLowerCase()===name.toLowerCase())){ alert('That category already exists.'); return; }
+    const { error } = await sb.from('expense_categories').insert({ name, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    reload();
+  }
 
   return (
     <div className="p-6">
@@ -24795,7 +24831,10 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
             <h1 className="text-2xl font-bold">💸 Expenses</h1>
             <p className="text-slate-500 text-sm">{rows.length} expense{rows.length===1?'':'s'} · Total {peso(totalThisFilter)}{monthFilter?` in ${monthFilter}`:''}</p>
           </div>
-          {canCreate && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
+          <div className="flex items-center gap-2">
+            {(canEdit || isOfficer) && <button onClick={addCategory} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">+ Add category</button>}
+            {canCreate && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New expense</button>}
+          </div>
         </div>
       </div>
 
@@ -24807,7 +24846,7 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, reload }){
 
       <div className="flex items-center gap-1 mb-4 flex-wrap">
         <button onClick={()=>setFilter('')} className={`text-xs px-3 py-1.5 rounded ${filter===''?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>All</button>
-        {EXPENSE_CATEGORIES.map(c=>{
+        {allExpenseCategories().map(c=>{
           const cnt = catTotals[c]||0;
           if(!cnt && filter!==c) return null; // skip zero categories unless filtered
           return <button key={c} onClick={()=>setFilter(filter===c?'':c)} className={`text-xs px-3 py-1.5 rounded ${filter===c?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{c} <span className="opacity-60 ml-1">{peso(cnt)}</span></button>;
@@ -24935,7 +24974,7 @@ function ExpenseFormModal({ existing, profile, bankAccounts, onClose, onSaved })
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
-          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></TpLbl>
         </div>
         <TpLbl t="Vendor / Payee"><input className="input" placeholder="Meralco, Manila Water, Globe, etc." value={f.vendor} onChange={e=>up('vendor',e.target.value)} /></TpLbl>
         <TpLbl t="Description"><textarea className="input min-h-[50px]" value={f.description} onChange={e=>up('description',e.target.value)} placeholder="What this expense is for" /></TpLbl>
@@ -25328,7 +25367,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
             <div className="grid grid-cols-2 gap-2">
               <TpLbl t="Category">
                 <select className="input" value={exp.category} onChange={e=>up('category',e.target.value)}>
-                  {EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+                  {allExpenseCategories().map(c=><option key={c}>{c}</option>)}
                 </select>
               </TpLbl>
               <TpLbl t="Vendor / Payee"><input className="input" value={exp.vendor} onChange={e=>up('vendor',e.target.value)} placeholder="e.g. Shell, hardware store" /></TpLbl>
@@ -25899,7 +25938,7 @@ function jeTotals(lines){
   const c=(lines||[]).reduce((s,l)=>s+(Number(l.credit)||0),0);
   return { debit:d, credit:c, balanced: Math.abs(d-c)<0.005 && d>0 };
 }
-function JournalView({ profile, journalEntries, chartAccounts, bankAccounts, reload }){
+function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAccounts, reload }){
   const bankName=(id)=> (bankAccounts||[]).find(b=>b.id===id)?.bank_name || '';
   const [tab,setTab]=useState('journal');
   const [editing,setEditing]=useState(null);   // entry or {} for new
@@ -25943,8 +25982,8 @@ function JournalView({ profile, journalEntries, chartAccounts, bankAccounts, rel
                 <td className="px-3 py-2 truncate max-w-[240px]">{j.memo||'—'}</td>
                 <td className="px-3 py-2 text-xs">{j.bank_id?<span className="inline-flex items-center gap-1">🏦 {bankName(j.bank_id)}</span>:<span className="text-slate-300">—</span>}</td>
                 <td className="px-3 py-2 text-xs text-slate-500">{j.reference||'—'}</td>
-                <td className="px-3 py-2 text-right font-semibold">{peso(j.total_debit)}</td>
-                <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${j.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{j.status==='draft'?'Draft':'Posted'}</span></td>
+                <td className={`px-3 py-2 text-right font-semibold ${j.status==='cancelled'?'text-slate-400 line-through':''}`}>{peso(j.total_debit)}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${j.status==='draft'?'bg-amber-100 text-amber-700':j.status==='cancelled'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{j.status==='draft'?'Draft':j.status==='cancelled'?'Cancelled':'Posted'}</span></td>
               </tr>
             ))}
           </tbody>
@@ -25971,7 +26010,7 @@ function JournalView({ profile, journalEntries, chartAccounts, bankAccounts, rel
       )}
 
       {editing && <JournalFormModal entry={editing} chartAccounts={accounts} bankAccounts={bankAccounts} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
-      {viewing && <JournalViewModal entry={viewing} bankAccounts={bankAccounts} profile={profile} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
+      {viewing && <JournalViewModal entry={viewing} bankAccounts={bankAccounts} profile={profile} profiles={profiles} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
       {addingAcct && <ChartAccountModal profile={profile} onClose={()=>setAddingAcct(false)} onSaved={()=>{ setAddingAcct(false); reload && reload(); }} />}
     </div>
   );
@@ -25990,6 +26029,40 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose
   function setLine(i,k,v){ setLines(ls=>ls.map((l,j)=>j===i?{...l,[k]:v}:l)); }
   function addLine(){ setLines(ls=>[...ls, blank()]); }
   function removeLine(i){ setLines(ls=>ls.filter((_,j)=>j!==i)); }
+  // Reusable JE templates — save the current account lines so recurring entries
+  // (rent, payroll accrual, etc.) can be recreated with one click. Renameable.
+  const [templates,setTemplates]=useState([]);
+  const [selTpl,setSelTpl]=useState('');
+  async function loadTemplates(){ try { const { data } = await sb.from('je_templates').select('*').order('name',{ascending:true}); setTemplates(data||[]); } catch(_){} }
+  useEffect(()=>{ loadTemplates(); },[]);
+  function applyTemplate(id){
+    const tpl=templates.find(x=>x.id===id); if(!tpl) return;
+    const tl=(tpl.lines||[]);
+    setLines(tl.length? tl.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(),blank()]);
+    if(tpl.memo && !memo) setMemo(tpl.memo);
+    if(tpl.bank_id && !bankId) setBankId(tpl.bank_id);
+  }
+  async function saveAsTemplate(){
+    const name=(prompt('Name this template (e.g. Monthly Rent, Payroll accrual):')||'').trim();
+    if(!name) return;
+    const tl=lines.filter(l=>l.account_code).map(l=>({ account_code:l.account_code, account_name:acctFor(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+    if(tl.length<1){ alert('Add at least one account line first.'); return; }
+    const { error }=await sb.from('je_templates').insert({ name, lines:tl, memo:memo.trim()||null, bank_id:bankId||null, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    await loadTemplates(); setMsg('Template saved ✓');
+  }
+  async function renameTemplate(){
+    const tpl=templates.find(x=>x.id===selTpl); if(!tpl){ alert('Pick a template first.'); return; }
+    const name=(prompt('Rename template:', tpl.name)||'').trim(); if(!name) return;
+    const { error }=await sb.from('je_templates').update({ name }).eq('id', tpl.id);
+    if(error){ alert(error.message); return; } loadTemplates();
+  }
+  async function deleteTemplate(){
+    const tpl=templates.find(x=>x.id===selTpl); if(!tpl){ alert('Pick a template first.'); return; }
+    if(!confirm(`Delete template "${tpl.name}"?`)) return;
+    const { error }=await sb.from('je_templates').delete().eq('id', tpl.id);
+    if(error){ alert(error.message); return; } setSelTpl(''); loadTemplates();
+  }
   async function save(status){
     const clean = lines.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
       .map(l=>({ account_code:l.account_code, account_name:acctFor(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
@@ -26019,6 +26092,17 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose
           <TpLbl t="Bank"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— none —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
           <TpLbl t="Reference"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="OR no. / adj." /></TpLbl>
           <TpLbl t="Memo"><input className="input" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="What is this entry for?" /></TpLbl>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap bg-slate-50 border rounded-lg px-3 py-2">
+          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Templates</span>
+          <select className="input !py-1 w-56" value={selTpl} onChange={e=>{ setSelTpl(e.target.value); if(e.target.value) applyTemplate(e.target.value); }}>
+            <option value="">— apply a saved template —</option>
+            {templates.map(tp=><option key={tp.id} value={tp.id}>{tp.name}</option>)}
+          </select>
+          {selTpl && <button type="button" onClick={renameTemplate} className="text-xs text-indigo-600 hover:underline">✎ Rename</button>}
+          {selTpl && <button type="button" onClick={deleteTemplate} className="text-xs text-rose-500 hover:underline">🗑 Delete</button>}
+          <div className="flex-1"></div>
+          <button type="button" onClick={saveAsTemplate} className="text-xs px-2.5 py-1 rounded bg-white border font-semibold hover:bg-white/70">💾 Save current as template</button>
         </div>
         <div className="border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
@@ -26064,12 +26148,20 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose
     </Modal>
   );
 }
-function JournalViewModal({ entry, bankAccounts, profile, canEdit, onEdit, onClose, onSaved }){
+function JournalViewModal({ entry, bankAccounts, profile, profiles, canEdit, onEdit, onClose, onSaved }){
   const t = jeTotals(entry.lines);
   const bank = (bankAccounts||[]).find(b=>b.id===entry.bank_id);
-  async function del(){
-    if(!confirm(`Delete journal entry ${entry.number}?`)) return;
-    const { error } = await sb.from('journal_entries').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', entry.id);
+  const isCancelled = entry.status==='cancelled';
+  const cancelledBy = (profiles||[]).find(p=>p.id===entry.cancelled_by);
+  // Cancel (not delete): keep the record for the audit trail but zero out the
+  // debits/credits so it no longer affects any totals. Record who + why.
+  async function cancelEntry(){
+    if(isCancelled) return;
+    const reason=prompt(`Reason for cancelling journal entry ${entry.number}?`);
+    if(reason===null) return;
+    if(!reason.trim() && !confirm('Cancel without a reason?')) return;
+    const zeroLines=(entry.lines||[]).map(l=>({ ...l, debit:0, credit:0 }));
+    const { error } = await sb.from('journal_entries').update({ status:'cancelled', lines:zeroLines, total_debit:0, total_credit:0, cancelled_by:profile.id, cancelled_at:new Date().toISOString(), cancel_reason:reason.trim()||null }).eq('id', entry.id);
     if(error){ alert(error.message); return; } onSaved();
   }
   return (
@@ -26079,8 +26171,9 @@ function JournalViewModal({ entry, bankAccounts, profile, canEdit, onEdit, onClo
         <SteezeLetterhead docTitle="JOURNAL VOUCHER" />
         <div className="flex justify-between text-xs text-slate-600 mb-3">
           <div><div><strong>JV No.:</strong> {entry.number}</div><div><strong>Date:</strong> {fmtDate(entry.date)}</div>{bank && <div><strong>Bank:</strong> 🏦 {bank.bank_name}{bank.account_number?` · ${bank.account_number}`:''}</div>}</div>
-          <div className="text-right">{entry.reference && <div><strong>Ref:</strong> {entry.reference}</div>}<span className={`text-[10px] px-2 py-0.5 rounded ${entry.status==='draft'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{entry.status==='draft'?'DRAFT':'POSTED'}</span></div>
+          <div className="text-right">{entry.reference && <div><strong>Ref:</strong> {entry.reference}</div>}<span className={`text-[10px] px-2 py-0.5 rounded ${entry.status==='draft'?'bg-amber-100 text-amber-700':isCancelled?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{entry.status==='draft'?'DRAFT':isCancelled?'CANCELLED':'POSTED'}</span></div>
         </div>
+        {isCancelled && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2 mb-3">⛔ <strong>CANCELLED</strong>{entry.cancelled_at?` on ${fmtDate(String(entry.cancelled_at).slice(0,10))}`:''}{cancelledBy?` by ${cancelledBy.name||cancelledBy.email}`:''} — {entry.cancel_reason||'no reason given'}. Debits &amp; credits were zeroed out; the record is kept for the audit trail.</div>}
         {entry.memo && <div className="text-sm mb-3"><strong>Memo:</strong> {entry.memo}</div>}
         <table className="w-full text-sm border">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase"><tr>
@@ -26102,8 +26195,8 @@ function JournalViewModal({ entry, bankAccounts, profile, canEdit, onEdit, onClo
       </div>
       <div className="no-print flex gap-2 mt-3">
         <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print</button>
-        {canEdit && <button onClick={onEdit} className="py-2 px-4 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">Edit</button>}
-        {canEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        {canEdit && !isCancelled && <button onClick={onEdit} className="py-2 px-4 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">Edit</button>}
+        {canEdit && !isCancelled && <button onClick={cancelEntry} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Cancel entry</button>}
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
@@ -26595,7 +26688,7 @@ function CalendarEventModal({ profile, defaultDate, onClose, onSaved }){
         <TpLbl t="Title *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} placeholder="e.g. Building insurance renewal" /></TpLbl>
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Amount"><input type="number" step="0.01" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0 for reminder only" /></TpLbl>
-          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{EXPENSE_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></TpLbl>
         </div>
         <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Anything finance / admin should know" /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -30587,6 +30680,7 @@ function App(){
   const [patternWorklist,setPatternWorklist]=useState([]);
   const [cuttingWorklist,setCuttingWorklist]=useState([]);
   const [qcReports,setQcReports]=useState([]);
+  const [extraExpenseCats,setExtraExpenseCats]=useState([]);
   const [styles,setStyles]=useState([]);
   const [items,setItems]=useState([]); const [suppliers,setSuppliers]=useState([]); const [departments,setDepartments]=useState([]);
   const [requests,setRequests]=useState([]); const [orders,setOrders]=useState([]);
@@ -30856,7 +30950,10 @@ function App(){
     // Purchase-request inbox notifications (e.g. manual requests to Purchasing).
     let prMentions=[];
     try { const pram = await sb.from('pr_activity').select('*').contains('mentions',[me]).order('created_at',{ascending:false}).limit(100); prMentions = (pram && !pram.error ? (pram.data||[]) : []).map(r=>({ ...r, source:'pr' })); } catch(_){}
-    setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
+    // Generic notifications (e.g. a loan awaiting Accounting's processing).
+    let noteMentions=[];
+    try { const notes = await sb.from('notifications').select('*').eq('recipient_id',me).order('created_at',{ascending:false}).limit(100); noteMentions = (notes && !notes.error ? (notes.data||[]) : []).map(r=>({ ...r, source:'notification', mentions:[me] })); } catch(_){}
+    setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions,...noteMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
     const counts={}; (ac.data||[]).forEach(r=>{ counts[r.lead_id]=(counts[r.lead_id]||0)+1; }); setActivityCounts(counts);
     // Same pattern but for dept-job activity. Key is job_id (uuid) so it
     // works across production / graphic / printing / sampling boards.
@@ -30888,6 +30985,7 @@ function App(){
     try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const cwl = await sb.from('cutting_worklist').select('*').order('start_date',{ascending:false}); setCuttingWorklist(cwl && !cwl.error ? (cwl.data||[]) : []); } catch(_){ setCuttingWorklist([]); }
     try { const qcr = await sb.from('qc_reports').select('*').order('created_at',{ascending:false}); setQcReports(qcr && !qcr.error ? (qcr.data||[]) : []); } catch(_){ setQcReports([]); }
+    try { const eca = await sb.from('expense_categories').select('name').order('name',{ascending:true}); const names=(eca && !eca.error)?(eca.data||[]).map(r=>r.name).filter(Boolean):[]; EXTRA_EXPENSE_CATEGORIES = names; setExtraExpenseCats(names); } catch(_){ EXTRA_EXPENSE_CATEGORIES=[]; setExtraExpenseCats([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
@@ -31335,6 +31433,7 @@ function App(){
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
   function openInboxItem(m){
+    if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
     if(m.source==='pr'){ setView('requests'); return; }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
@@ -31356,6 +31455,7 @@ function App(){
   //   • Sampling / Production mention → board view + dept-job activity (no
   //     LeadInfoModal exists for those yet — they go to the board).
   function openInboxTask(m){
+    if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
     if(m.source==='pr'){ setView('requests'); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
@@ -31806,7 +31906,7 @@ function App(){
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
-        {view==='journal' && <JournalView profile={profile} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
