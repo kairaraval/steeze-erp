@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 331 · Cost centers replaced with your final 20-department list (with codes, e.g. 300005-QC · Quality Control Department); dropdowns now show the code.";
+const BUILD = "Live build 332 · Chart of Accounts replaced with your final list (per-bank cash accounts, split Input/Output VAT, EWT by type, full expense list). Reports engine repointed: per-bank cash mapping, revenue→501001, COGS grouping, VAT (201001/201002 vs 101010/101011) and EWT (201003 + 201011–201014) summaries.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26057,21 +26057,45 @@ const ACCOUNT_TYPES = ['Asset','Liability','Equity','Income','Expense'];
 // vouchers/expenses can be projected into the General Ledger.
 function categoryToAccountCode(cat){
   const c=(cat||'').toLowerCase();
-  if(/cogs|raw material|fabric|trim|decoration|sublimation|dtf|embroider|subcontract|packaging|hangtag/.test(c)) return '5000';
-  if(/salar|wage|payroll/.test(c)) return '5100';
-  if(/rent/.test(c)) return '5200';
-  if(/utilit|electric|meralco|water|internet|globe|pldt/.test(c)) return '5300';
-  if(/suppl|office/.test(c)) return '5400';
-  if(/transport|freight|delivery|fuel|gas|toll/.test(c)) return '5500';
-  if(/repair|maintenance/.test(c)) return '5600';
-  if(/professional|consult|legal|audit|accounting fee/.test(c)) return '5700';
-  if(/tax|licens|bir|government|permit|barangay|mayor/.test(c)) return '5800';
-  if(/deprecia/.test(c)) return '5900';
-  if(/bank charge|bank fee/.test(c)) return '5951';
-  if(/capex|equipment|furniture|vehicle|building|it equipment/.test(c)) return '1500';
-  if(/sss|philhealth|pag-?ibig|contribution/.test(c)) return '2300';
-  if(/withhold/.test(c)) return '2200';
-  return '5950';
+  if(/raw material|fabric|trim/.test(c)) return '401050';           // COGS - Raw Materials
+  if(/decoration|sublimation|dtf|embroider/.test(c)) return '401051';// COGS - Decoration
+  if(/subcontract|subcon/.test(c)) return '401052';                 // COGS - Subcontractor
+  if(/packaging|hangtag/.test(c)) return '401053';                  // COGS - Packaging
+  if(/cogs|cost of goods/.test(c)) return '401048';                 // Cost of Goods Sold
+  if(/salar|wage|payroll/.test(c)) return '401007';                 // Salary Expense
+  if(/overtime/.test(c)) return '401011';
+  if(/commission/.test(c)) return '401010';                         // Commission - Local Sales
+  if(/rent/.test(c)) return '401024';                               // Rent Expenses
+  if(/electric|meralco/.test(c)) return '401004';                   // Electricity
+  if(/water/.test(c)) return '401005';                              // Water
+  if(/internet/.test(c)) return '401035';                           // Internet Expense
+  if(/mobile|communication|load|globe|smart|pldt/.test(c)) return '401036';
+  if(/suppl|office/.test(c)) return '401003';                       // Office Supplies
+  if(/gas|gasoline|fuel/.test(c)) return '401027';                  // Gasoline
+  if(/truck|freight|delivery/.test(c)) return '401025';             // Trucking - Delivery
+  if(/transport/.test(c)) return '401042';                          // Transportation Cost
+  if(/toll|parking/.test(c)) return '401037';
+  if(/repair|maintenance/.test(c)) return '401030';                 // R&M - Office/Plant (default)
+  if(/professional|consult|legal|audit|accounting fee/.test(c)) return '401023';
+  if(/licens|permit|barangay|mayor/.test(c)) return '401021';       // Licenses Fees
+  if(/tax|bir/.test(c)) return '401022';                            // Taxes
+  if(/deprecia/.test(c)) return '401016';                           // Depreciation (default office)
+  if(/bank charge|bank fee/.test(c)) return '401026';               // Bank Charges
+  if(/meal|food/.test(c)) return '401033';                          // Meals
+  if(/subscription|dues/.test(c)) return '401034';
+  if(/insurance/.test(c)) return '401039';
+  if(/media|advertis|marketing/.test(c)) return '401040';           // Media Cost
+  if(/gift|donation/.test(c)) return '401041';
+  if(/representation|entertain/.test(c)) return '401043';
+  if(/furniture|equipment|it equipment/.test(c)) return '101020';   // capitalize → Office & Plant Furniture Equipment (asset)
+  if(/vehicle/.test(c)) return '101018';                            // Motor Vehicle (asset)
+  if(/software|license fee for app/.test(c)) return '101019';       // Software Licenses (asset)
+  if(/capex|building/.test(c)) return '101017';                     // Fixed Assets
+  if(/sss/.test(c)) return '201006';
+  if(/philhealth/.test(c)) return '201007';
+  if(/pag-?ibig/.test(c)) return '201008';
+  if(/withhold/.test(c)) return '201003';                           // Withholding Tax Payable
+  return '401020';                                                  // Other Operating Expenses
 }
 
 // Project every recorded transaction into balanced double-entry GL postings
@@ -26080,11 +26104,19 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], chartAccounts=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[] } = data;
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
   const push=(date,code,debit,credit,source,ref,memo,cc)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null }); };
-  const CASH_BANK='1010', CASH_HAND='1000';
+  const CASH_HAND='101001';
+  // Map a bank_account (by id) to its Chart-of-Accounts "Cash in Bank - X" code.
+  const bankCoa=[['pnb','101002'],['ewb','101003'],['bpi','101004'],['ubp','101005'],['union','101005'],['bdo','101006'],['gcash','101007'],['e-wallet','101007']];
+  const bankById=new Map((bankAccounts||[]).map(b=>[b.id,b]));
+  function cashCodeFor(bankId){
+    const b=bankId?bankById.get(bankId):null; const nm=(b?.bank_name||'').toLowerCase();
+    for(const [kw,code] of bankCoa){ if(nm.includes(kw)) return code; }
+    return '101002'; // default: PNB (generic cash in bank)
+  }
   // A. Posted journal entries — already double-entry.
   journalEntries.filter(j=>!j.deleted_at && j.status!=='cancelled' && j.status!=='draft').forEach(j=>{
     (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo));
@@ -26092,13 +26124,15 @@ function buildGLPostings(data){
   // B. Sales collections (verified SO payments) — Dr Cash/Bank, Cr Sales Revenue.
   soPayments.filter(p=>!p.deleted_at && (p.status==='verified'||p.status==='paid'||p.status==='confirmed')).forEach(p=>{
     const amt=Number(p.amount)||0; if(!amt) return;
-    push(p.date||p.paid_at||p.created_at, CASH_BANK, amt, 0, 'AR', p.reference||'', 'Collection'); push(p.date||p.paid_at||p.created_at, '4000', 0, amt, 'AR', p.reference||'', 'Sales collection');
+    const cc=cashCodeFor(p.bank_id); const dt=p.date||p.paid_at||p.created_at;
+    push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection'); push(dt, '501001', 0, amt, 'AR', p.reference||'', 'Sales collection');
   });
   // C. Bank transactions (skip sales collections handled above to avoid double count).
   const vById=new Map(vouchers.map(v=>[v.id,v]));
   const eById=new Map(expenses.map(e=>[e.id,e]));
   bankTransactions.filter(b=>!b.deleted_at).forEach(b=>{
     const amt=Number(b.amount)||0; if(!amt) return;
+    const CASH_BANK=cashCodeFor(b.bank_id);
     if(b.direction==='out'){
       const v=b.ref_type==='voucher'?vById.get(b.ref_id):null;
       const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
@@ -26107,11 +26141,11 @@ function buildGLPostings(data){
       } else if(v){ push(b.date, categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
       else if(e){ push(b.date, categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
       else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued'); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, ''); }
-      else { push(b.date, '5950', amt, 0, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, ''); }
+      else { push(b.date, '401020', amt, 0, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, ''); }
     } else {
       if(b.ref_type==='so_payment'||b.ref_type==='sales'||b.ref_type==='sales_order') return; // handled in B
       if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, 0, amt, 'PC', b.reference_number, 'Return from petty cash'); push(b.date, CASH_BANK, amt, 0, 'PC', b.reference_number, ''); }
-      else { push(b.date, '4200', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
+      else { push(b.date, '501003', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
     }
   });
   // D. Petty-cash expenses (paid from the float, not the bank) — Dr expense, Cr Cash on Hand.
@@ -26141,8 +26175,8 @@ function finReportYears(postings){
   const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
 }
 
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts]);
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -26194,8 +26228,8 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
   );
 }
 
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts, costCenters }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts]);
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -26206,8 +26240,10 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   const byType=(bals,t)=> bals.filter(b=>b.type===t);
   const sum=(arr)=>arr.reduce((s,b)=>s+b.balance,0);
   // P&L
+  const COGS_CODES=['401002','401048','401050','401051','401052','401053']; // material + COGS accounts
+  const isCogs=(code)=>COGS_CODES.includes(code);
   const income=byType(plBal,'Income'); const expensesA=byType(plBal,'Expense');
-  const revenue=sum(income); const cogs=sum(expensesA.filter(b=>b.code==='5000')); const opex=sum(expensesA.filter(b=>b.code!=='5000'));
+  const revenue=sum(income); const cogs=sum(expensesA.filter(b=>isCogs(b.code))); const opex=sum(expensesA.filter(b=>!isCogs(b.code)));
   const grossProfit=revenue-cogs; const netIncome=revenue-cogs-opex;
   // Balance Sheet
   const assets=byType(bsBal,'Asset'); const liabs=byType(bsBal,'Liability'); const equity=byType(bsBal,'Equity');
@@ -26220,9 +26256,12 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   const tbCredit = tb.reduce((s,b)=> s + Math.max(0, (b.type==='Asset'||b.type==='Expense')?-b.balance:b.balance),0);
   // VAT / EWT (cumulative)
   const acctBal=(code,bals)=>{ const b=bals.find(x=>x.code===code); return b?b.balance:0; };
-  const outputVat=acctBal('2100',bsBal), inputVat=acctBal('1300',bsBal); const netVat=outputVat-inputVat;
-  const ewtPayable=acctBal('2200',bsBal);
-  const ewtPostings=cumulativePostings.filter(p=>p.account_code==='2200');
+  const outputVat=acctBal('201001',bsBal)+acctBal('201002',bsBal);          // Output Tax Payable Goods + Services
+  const inputVat=acctBal('101010',bsBal)+acctBal('101011',bsBal);           // Input Tax Services + Goods
+  const netVat=outputVat-inputVat;
+  const EWT_CODES=['201003','201011','201012','201013','201014'];           // WHT Payable + Expanded WHT (Goods/Services/Rent/Professional)
+  const ewtPayable=EWT_CODES.reduce((s,c)=>s+acctBal(c,bsBal),0);
+  const ewtPostings=cumulativePostings.filter(p=>EWT_CODES.includes(p.account_code));
   const Row=({label,val,bold,indent,cls})=> <div className={`flex items-center justify-between px-3 py-1.5 ${bold?'font-bold border-t':''}`}><span className={`${indent?'pl-4':''} ${cls||''}`}>{label}</span><span className={cls||''}>{peso(val)}</span></div>;
   return (
     <div className="p-6">
@@ -26249,7 +26288,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
           <Row label="Less: Cost of Goods Sold" val={cogs} indent cls="text-slate-500 text-sm" />
           <Row label="Gross Profit" val={grossProfit} bold />
           <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-slate-400 border-t">Operating Expenses</div>
-          {expensesA.filter(b=>b.code!=='5000'&&Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-slate-600 text-sm" />)}
+          {expensesA.filter(b=>!isCogs(b.code)&&Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-slate-600 text-sm" />)}
           <Row label="Total Operating Expenses" val={opex} indent cls="font-medium" />
           <Row label="Net Income" val={netIncome} bold cls={netIncome<0?'text-rose-600':'text-emerald-700'} />
         </div>
@@ -32283,8 +32322,8 @@ function App(){
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} chartAccounts={chartAccounts} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} chartAccounts={chartAccounts} costCenters={costCenters} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
