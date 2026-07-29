@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 333 · Financial Reports: added the P&L Summary as its own tab (alongside Income Statement, Balance Sheet, Trial Balance, VAT, EWT).";
+const BUILD = "Live build 334 · Removed the standalone 'P&L Summary' from the Finance sidebar — it now lives as a tab inside Financial Reports.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31965,7 +31965,6 @@ function App(){
     ['assets','Asset Register','🏷'],
     ['journal','Journal Entries','📓'],
     ['general-ledger','General Ledger','📒'],
-    ['pnl','P&L Summary','📊'],
     ['fin-reports','Financial Reports','📈'],
     ['bir','BIR Tax Helpers','🧾'],
   ] };
