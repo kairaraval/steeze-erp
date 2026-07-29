@@ -1834,6 +1834,17 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const [vatInclusive,setVatInclusive]=useState(!!existing?.vat_inclusive); // prices already include 12%
   const [qbNum,setQbNum]=useState(existing?.qb_invoice_number||so?.qb_invoice_number||'');
   const [qbUrl,setQbUrl]=useState(existing?.qb_invoice_url||so?.qb_invoice_url||'');
+  const [birBilling,setBirBilling]=useState(!!existing?.bir_billing);
+  const [birRef,setBirRef]=useState(existing?.bir_reference||'');
+  const [birDate,setBirDate]=useState(existing?.bir_date||'');
+  const [fileForBir,setFileForBir]=useState(!!existing?.file_for_bir);
+  // Due date = delivery (or expected delivery / issue) + payment terms.
+  function dueFromTerms(){
+    const base = so?.delivered_at || so?.expected_delivery || issueDate || new Date().toISOString().slice(0,10);
+    const d = new Date(base); if(isNaN(d.getTime())) return '';
+    d.setDate(d.getDate()+arTermsDays(paymentTerms||so?.payment_terms));
+    return d.toISOString().slice(0,10);
+  }
 
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
@@ -1842,7 +1853,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
     } else {
       setLines(invLinesFromSO(so||{}));
       const num = await nextInvoiceNumber(); if(alive) setNumber(num);
-      const d=new Date(); d.setDate(d.getDate()+30); if(alive) setDueDate(d.toISOString().slice(0,10));
+      if(alive) setDueDate(dueFromTerms());
     }
     if(alive) setLoading(false);
   })(); return ()=>{ alive=false; }; },[]);
@@ -1875,6 +1886,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
       status: nextStatus||status, issue_date: issueDate||null, due_date: dueDate||null,
       payment_terms: paymentTerms||null, notes: notes||null,
       qb_invoice_number: qbNum||null, qb_invoice_url: qbUrl||null,
+      bir_billing: birBilling, bir_reference: birRef||null, bir_date: birDate||null, file_for_bir: fileForBir,
       prepared_by: profile.id,
     };
   }
@@ -2055,8 +2067,9 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
               <input type="date" className="input" value={issueDate} onChange={e=>setIssueDate(e.target.value)} />
             </div>
             <div>
-              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Due date</label>
+              <label className="text-[10px] uppercase text-slate-400 font-semibold block">Due date {canEdit && <button type="button" onClick={()=>setDueDate(dueFromTerms())} className="ml-1 text-[9px] text-indigo-600 hover:underline normal-case">↻ from terms</button>}</label>
               <input type="date" className="input" value={dueDate} onChange={e=>setDueDate(e.target.value)} />
+              <div className="text-[9px] text-slate-400 mt-0.5">Delivery + payment terms</div>
             </div>
           </div>
         )}
@@ -2128,6 +2141,14 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                 <input className="input" value={qbNum} onChange={e=>setQbNum(e.target.value)} placeholder="QB invoice #" />
                 <input className="input" value={qbUrl} onChange={e=>setQbUrl(e.target.value)} placeholder="https://qbo.intuit.com/…" />
               </div> : <div className="text-sm">{qbNum||'—'} {qbUrl && <a href={qbUrl} target="_blank" className="text-indigo-600 underline">open</a>}</div>}
+            </div>
+            <div className="border rounded-lg p-2.5 bg-amber-50/50 border-amber-200">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-800"><input type="checkbox" checked={birBilling} disabled={!canEdit} onChange={e=>setBirBilling(e.target.checked)} /> Issue a BIR Billing Invoice</label>
+              {birBilling && <div className="grid grid-cols-2 gap-2 mt-2">
+                <div><label className="text-[10px] uppercase text-slate-400 font-semibold">BIR reference no.</label><input className="input" value={birRef} disabled={!canEdit} onChange={e=>setBirRef(e.target.value)} placeholder="Billing / SI no." /></div>
+                <div><label className="text-[10px] uppercase text-slate-400 font-semibold">BIR date</label><input type="date" className="input" value={birDate} disabled={!canEdit} onChange={e=>setBirDate(e.target.value)} /></div>
+              </div>}
+              <label className="flex items-center gap-2 text-sm text-slate-700 mt-2"><input type="checkbox" checked={fileForBir} disabled={!canEdit} onChange={e=>setFileForBir(e.target.checked)} /> File this invoice for BIR</label>
             </div>
           </div>
           <MoneyBox />
@@ -26568,7 +26589,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
     </div>
   );
 }
-function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAccounts, reload }){
+function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAccounts, costCenters, reload }){
   const bankName=(id)=> (bankAccounts||[]).find(b=>b.id===id)?.bank_name || '';
   const [tab,setTab]=useState('journal');
   const [editing,setEditing]=useState(null);   // entry or {} for new
@@ -26639,18 +26660,19 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
         </div>
       )}
 
-      {editing && <JournalFormModal entry={editing} chartAccounts={accounts} bankAccounts={bankAccounts} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
+      {editing && <JournalFormModal entry={editing} chartAccounts={accounts} bankAccounts={bankAccounts} costCenters={costCenters} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
       {viewing && <JournalViewModal entry={viewing} bankAccounts={bankAccounts} profile={profile} profiles={profiles} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
       {addingAcct && <ChartAccountModal profile={profile} onClose={()=>setAddingAcct(false)} onSaved={()=>{ setAddingAcct(false); reload && reload(); }} />}
     </div>
   );
 }
-function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose, onSaved }){
+function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, profile, onClose, onSaved }){
   const isEdit = !!entry?.id;
   const [date,setDate]=useState(entry.date||new Date().toISOString().slice(0,10));
   const [reference,setReference]=useState(entry.reference||'');
   const [memo,setMemo]=useState(entry.memo||'');
   const [bankId,setBankId]=useState(entry.bank_id||'');
+  const [costCenterId,setCostCenterId]=useState(entry.cost_center_id||'');
   const blank=()=>({ account_code:'', description:'', debit:'', credit:'' });
   const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -26701,7 +26723,7 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose
     if(status==='posted' && !tt.balanced){ setMsg(`Debits (${peso(tt.debit)}) must equal Credits (${peso(tt.credit)}) to post.`); return; }
     setBusy(true); setMsg('');
     try {
-      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, bank_id:bankId||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
+      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, bank_id:bankId||null, cost_center_id:costCenterId||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
       if(isEdit){ const { error } = await sb.from('journal_entries').update(payload).eq('id', entry.id); if(error) throw error; }
       else {
         const monthKey = date.slice(0,7);
@@ -26717,9 +26739,10 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, profile, onClose
   return (
     <Modal title={isEdit?`Journal entry · ${entry.number}`:'+ New journal entry'} onClose={onClose} xwide>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
           <TpLbl t="Bank"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— none —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+          <TpLbl t="Cost center"><select className="input" value={costCenterId} onChange={e=>setCostCenterId(e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></TpLbl>
           <TpLbl t="Reference"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="OR no. / adj." /></TpLbl>
           <TpLbl t="Memo"><input className="input" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="What is this entry for?" /></TpLbl>
         </div>
@@ -32540,7 +32563,7 @@ function App(){
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
-        {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} />}
