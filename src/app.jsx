@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 330 · Finance module upgrade: cost centers on vouchers/expenses; petty cash multi-line entry; optional compound (debit/credit) vouchers to split EWT/VAT; a new General Ledger tab (all accounts + drill-down) and Financial Reports tab (Income Statement, Balance Sheet/SoFP, Trial Balance, VAT & EWT summaries) generated from a real double-entry ledger projection — for PH tax prep.";
+const BUILD = "Live build 331 · Cost centers replaced with your final 20-department list (with codes, e.g. 300005-QC · Quality Control Department); dropdowns now show the code.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23823,7 +23823,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
           <TpLbl t="Cost center (dept responsible)">
             <select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}>
               <option value="">— none —</option>
-              {(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              {(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}
             </select>
           </TpLbl>
           <div className="flex items-end pb-1">
@@ -25076,7 +25076,7 @@ function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, onClos
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
           <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></TpLbl>
         </div>
-        <TpLbl t="Cost center (dept responsible)"><select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></TpLbl>
+        <TpLbl t="Cost center (dept responsible)"><select className="input" value={f.cost_center_id} onChange={e=>up('cost_center_id',e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></TpLbl>
         <TpLbl t="Vendor / Payee"><input className="input" placeholder="Meralco, Manila Water, Globe, etc." value={f.vendor} onChange={e=>up('vendor',e.target.value)} /></TpLbl>
         <TpLbl t="Description"><textarea className="input min-h-[50px]" value={f.description} onChange={e=>up('description',e.target.value)} placeholder="What this expense is for" /></TpLbl>
         <div className="grid grid-cols-2 gap-2">
@@ -31355,7 +31355,7 @@ function App(){
     try { const ast = await sb.from('assets').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setAssets(ast && !ast.error ? (ast.data||[]) : []); } catch(_){ setAssets([]); }
     try { const je = await sb.from('journal_entries').select('*').is('deleted_at',null).order('date',{ascending:false}); setJournalEntries(je && !je.error ? (je.data||[]) : []); } catch(_){ setJournalEntries([]); }
     try { const coa = await sb.from('chart_accounts').select('*').order('code',{ascending:true}); setChartAccounts(coa && !coa.error ? (coa.data||[]) : []); } catch(_){ setChartAccounts([]); }
-    try { const cc = await sb.from('cost_centers').select('*').order('name',{ascending:true}); setCostCenters(cc && !cc.error ? (cc.data||[]) : []); } catch(_){ setCostCenters([]); }
+    try { const cc = await sb.from('cost_centers').select('*').order('code',{ascending:true}); setCostCenters(cc && !cc.error ? (cc.data||[]) : []); } catch(_){ setCostCenters([]); }
     try { const pwl = await sb.from('pattern_worklist').select('*').order('start_date',{ascending:false}); setPatternWorklist(pwl && !pwl.error ? (pwl.data||[]) : []); } catch(_){ setPatternWorklist([]); }
     try { const cwl = await sb.from('cutting_worklist').select('*').order('start_date',{ascending:false}); setCuttingWorklist(cwl && !cwl.error ? (cwl.data||[]) : []); } catch(_){ setCuttingWorklist([]); }
     try { const qcr = await sb.from('qc_reports').select('*').order('created_at',{ascending:false}); setQcReports(qcr && !qcr.error ? (qcr.data||[]) : []); } catch(_){ setQcReports([]); }
