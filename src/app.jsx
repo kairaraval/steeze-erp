@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 328 · Finance: (1) Accounting can add expense categories (shared across all dropdowns); (2) Accounting Supervisor gets an inbox notification when a loan is approved & ready to process; (3) Journal Entries can be saved as reusable templates (apply/rename/delete); (4) submitted JEs can be Cancelled (debits/credits zeroed, keeps the record with who + reason + a CANCELLED tag) — Delete button removed.";
+const BUILD = "Live build 329 · Trip tickets: each stop is now 🚗 Start driving → 📍 Arrived → 🏁 Done — Arrived just marks reaching the site, Done marks finishing on-site (and ticks off the Daily Schedule). Shows both drive time and on-site time.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15909,14 +15909,33 @@ function TripTicketsView({ profile }){
     } else {
       await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, arrived_at:nowIso, lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
     }
-    // Also tick off the matching row on the Daily Schedule with the arrival time.
+    setBusyStop(null); loadTicket();
+  }
+  // Finished on-site (offloaded / signed off). This is the true completion of the
+  // stop — it stamps completed_at and ticks off the Daily Schedule row.
+  async function markCompleted(delivery){
+    if(!ticket) return; setBusyStop(delivery.id);
+    const geo=await captureTripGeo();
+    const nowIso=new Date().toISOString();
+    const ex=stopFor(delivery.id);
+    if(ex){
+      await sb.from('trip_ticket_stops').update({ completed_at:nowIso, ...(ex.arrived_at?{}:{ arrived_at:nowIso }) }).eq('id',ex.id);
+    } else {
+      await sb.from('trip_ticket_stops').insert({ ticket_id:ticket.id, delivery_id:delivery.id, label:delivery.client_name||delivery.item||'Stop', address:delivery.address||null, arrived_at:nowIso, completed_at:nowIso, lat:geo?.lat??null, lng:geo?.lng??null, gps_accuracy:geo?.acc??null, position:delivery.position||0 });
+    }
+    // Tick off the matching Daily Schedule row with the completion time.
     try { await sb.from('logistics_deliveries').update({ status:'delivered', delivered_at:nowIso }).eq('id', delivery.id); } catch(_){}
     setBusyStop(null); loadTicket();
   }
+  async function undoCompleted(delivery){ const ex=stopFor(delivery.id); if(!ex) return;
+    await sb.from('trip_ticket_stops').update({ completed_at:null }).eq('id',ex.id);
+    try { await sb.from('logistics_deliveries').update({ status:'pending', delivered_at:null }).eq('id', delivery.id); } catch(_){}
+    loadTicket();
+  }
   async function undoArrived(delivery){ const ex=stopFor(delivery.id); if(!ex) return;
-    if(ex.departed_at){ await sb.from('trip_ticket_stops').update({ arrived_at:null }).eq('id',ex.id); }
+    if(ex.departed_at){ await sb.from('trip_ticket_stops').update({ arrived_at:null, completed_at:null }).eq('id',ex.id); }
     else { await sb.from('trip_ticket_stops').delete().eq('id',ex.id); }
-    // Un-tick the Daily Schedule row too.
+    // Make sure the Daily Schedule row is back to pending too.
     try { await sb.from('logistics_deliveries').update({ status:'pending', delivered_at:null }).eq('id', delivery.id); } catch(_){}
     loadTicket();
   }
@@ -15986,7 +16005,7 @@ function TripTicketsView({ profile }){
     <div className="p-6 max-w-3xl mx-auto">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <h1 className="text-2xl font-bold">🎫 Trip Tickets</h1>
-        <p className="text-slate-500 text-sm">Per stop: tap 🚗 Start driving, then 📍 Arrived — it times each leg. Log breaks + mileage + gas, then 🏁 Done for the day.</p>
+        <p className="text-slate-500 text-sm">Per stop: 🚗 Start driving → 📍 Arrived → 🏁 Done (when you finish on-site). It times the drive and the on-site stay. Log breaks + mileage + gas, then 🏁 Done for the day.</p>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
           <button onClick={()=>setTab('ticket')} className={`px-3 py-1.5 rounded-md ${tab==='ticket'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Daily Ticket</button>
           <button onClick={()=>setTab('report')} className={`px-3 py-1.5 rounded-md ${tab==='report'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Mileage & Fuel</button>
@@ -16090,26 +16109,34 @@ function TripTicketsView({ profile }){
               <div className="bg-white border rounded-xl overflow-hidden">
                 <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📍 Delivery stops ({deliveries.length})</div>
                 {deliveries.length===0 && <div className="px-4 py-5 text-center text-slate-400 text-sm">No deliveries assigned to you on the schedule for this day. Add ad-hoc stops below.</div>}
-                {deliveries.map((d,idx)=>{ const s=stopFor(d.id); const departed=!!(s&&s.departed_at); const arrived=!!(s&&s.arrived_at);
+                {deliveries.map((d,idx)=>{ const s=stopFor(d.id); const departed=!!(s&&s.departed_at); const arrived=!!(s&&s.arrived_at); const completed=!!(s&&s.completed_at);
                   const travelMs=(departed&&arrived)?durBetween(s.departed_at,s.arrived_at):(departed&&!arrived?(nowMs-new Date(s.departed_at).getTime()):null);
+                  const onsiteMs=arrived?(completed?durBetween(s.arrived_at,s.completed_at):(nowMs-new Date(s.arrived_at).getTime())):null;
                   return (
                   <div key={d.id} className="border-t px-3 py-2.5 flex items-center gap-2">
                     <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate">{d.client_name||d.item||'Delivery'}</div>
+                      <div className="text-sm font-medium truncate">{d.client_name||d.item||'Delivery'}{completed && <span className="ml-1.5 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 align-middle">Done</span>}</div>
                       <div className="text-[11px] text-slate-500 truncate">
                         {d.address||''}
                         {departed && <> · 🚗 {fmtTime(s.departed_at)}</>}
-                        {arrived && <> → 📍 {fmtTime(s.arrived_at)} · <span className="text-cyan-700 font-semibold">🕒 {fmtDur(travelMs)}</span> {pinLink(s)}</>}
+                        {arrived && <> → 📍 {fmtTime(s.arrived_at)} · <span className="text-cyan-700 font-semibold">🕒 {fmtDur(travelMs)}</span></>}
+                        {arrived && !completed && <> · <span className="text-amber-600 font-semibold">on-site {fmtDur(onsiteMs)}…</span></>}
+                        {completed && <> → 🏁 {fmtTime(s.completed_at)} · <span className="text-emerald-700 font-semibold">on-site {fmtDur(onsiteMs)}</span></>}
+                        {' '}{arrived && pinLink(s)}
                         {departed && !arrived && <> · <span className="text-amber-600 font-semibold">en route {fmtDur(travelMs)}…</span></>}
                       </div>
                     </div>
                     {!departed && <button onClick={()=>markDeparted(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold hover:bg-cyan-700 shrink-0 disabled:opacity-50" title="Start driving to this stop">{busyStop===d.id?'…':'🚗 Start driving'}</button>}
                     {departed && !arrived && <>
-                      <button onClick={()=>markArrived(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0 disabled:opacity-50">{busyStop===d.id?'📍…':'Arrived ✓'}</button>
+                      <button onClick={()=>markArrived(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0 disabled:opacity-50" title="Reached the location">{busyStop===d.id?'📍…':'📍 Arrived'}</button>
                       <button onClick={()=>undoDeparted(d)} disabled={!isOpen} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Cancel departure">✕</button>
                     </>}
-                    {arrived && <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40">Undo</button>}
+                    {arrived && !completed && <>
+                      <button onClick={()=>markCompleted(d)} disabled={!isOpen||busyStop===d.id} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-700 text-white font-semibold hover:bg-emerald-800 shrink-0 disabled:opacity-50" title="Finished on-site — delivery complete">{busyStop===d.id?'🏁…':'🏁 Done'}</button>
+                      <button onClick={()=>undoArrived(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40" title="Undo arrival">Undo</button>
+                    </>}
+                    {completed && <button onClick={()=>undoCompleted(d)} disabled={!isOpen} className="text-xs text-slate-400 hover:text-rose-500 shrink-0 disabled:opacity-40" title="Reopen this stop">Undo</button>}
                   </div>
                 ); })}
                 {/* Ad-hoc stops */}
