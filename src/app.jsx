@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 329 · Trip tickets: each stop is now 🚗 Start driving → 📍 Arrived → 🏁 Done — Arrived just marks reaching the site, Done marks finishing on-site (and ticks off the Daily Schedule). Shows both drive time and on-site time.";
+const BUILD = "Live build 330 · Finance module upgrade: cost centers on vouchers/expenses; petty cash multi-line entry; optional compound (debit/credit) vouchers to split EWT/VAT; a new General Ledger tab (all accounts + drill-down) and Financial Reports tab (Income Statement, Balance Sheet/SoFP, Trial Balance, VAT & EWT summaries) generated from a real double-entry ledger projection — for PH tax prep.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26052,10 +26052,263 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
 
 /* ─────────── JOURNAL ENTRIES / JOURNAL VOUCHERS ─────────── */
 const ACCOUNT_TYPES = ['Asset','Liability','Equity','Income','Expense'];
+
+// Map a free-text expense category to a Chart-of-Accounts code so single-line
+// vouchers/expenses can be projected into the General Ledger.
+function categoryToAccountCode(cat){
+  const c=(cat||'').toLowerCase();
+  if(/cogs|raw material|fabric|trim|decoration|sublimation|dtf|embroider|subcontract|packaging|hangtag/.test(c)) return '5000';
+  if(/salar|wage|payroll/.test(c)) return '5100';
+  if(/rent/.test(c)) return '5200';
+  if(/utilit|electric|meralco|water|internet|globe|pldt/.test(c)) return '5300';
+  if(/suppl|office/.test(c)) return '5400';
+  if(/transport|freight|delivery|fuel|gas|toll/.test(c)) return '5500';
+  if(/repair|maintenance/.test(c)) return '5600';
+  if(/professional|consult|legal|audit|accounting fee/.test(c)) return '5700';
+  if(/tax|licens|bir|government|permit|barangay|mayor/.test(c)) return '5800';
+  if(/deprecia/.test(c)) return '5900';
+  if(/bank charge|bank fee/.test(c)) return '5951';
+  if(/capex|equipment|furniture|vehicle|building|it equipment/.test(c)) return '1500';
+  if(/sss|philhealth|pag-?ibig|contribution/.test(c)) return '2300';
+  if(/withhold/.test(c)) return '2200';
+  return '5950';
+}
+
+// Project every recorded transaction into balanced double-entry GL postings
+// against the Chart of Accounts. All postings balance by construction, so the
+// Trial Balance, P&L and Balance Sheet derived from them reconcile.
+// NOTE: this is a derived ledger for management + tax-prep. Revenue is
+// recognised on collection (cash basis). Review before filing.
+function buildGLPostings(data){
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], chartAccounts=[] } = data;
+  const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
+  const P=[];
+  const push=(date,code,debit,credit,source,ref,memo,cc)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null }); };
+  const CASH_BANK='1010', CASH_HAND='1000';
+  // A. Posted journal entries — already double-entry.
+  journalEntries.filter(j=>!j.deleted_at && j.status!=='cancelled' && j.status!=='draft').forEach(j=>{
+    (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo));
+  });
+  // B. Sales collections (verified SO payments) — Dr Cash/Bank, Cr Sales Revenue.
+  soPayments.filter(p=>!p.deleted_at && (p.status==='verified'||p.status==='paid'||p.status==='confirmed')).forEach(p=>{
+    const amt=Number(p.amount)||0; if(!amt) return;
+    push(p.date||p.paid_at||p.created_at, CASH_BANK, amt, 0, 'AR', p.reference||'', 'Collection'); push(p.date||p.paid_at||p.created_at, '4000', 0, amt, 'AR', p.reference||'', 'Sales collection');
+  });
+  // C. Bank transactions (skip sales collections handled above to avoid double count).
+  const vById=new Map(vouchers.map(v=>[v.id,v]));
+  const eById=new Map(expenses.map(e=>[e.id,e]));
+  bankTransactions.filter(b=>!b.deleted_at).forEach(b=>{
+    const amt=Number(b.amount)||0; if(!amt) return;
+    if(b.direction==='out'){
+      const v=b.ref_type==='voucher'?vById.get(b.ref_id):null;
+      const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
+      if(v && Array.isArray(v.split_lines) && v.split_lines.length){
+        v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, v.cost_center_id));
+      } else if(v){ push(b.date, categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
+      else if(e){ push(b.date, categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
+      else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued'); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, ''); }
+      else { push(b.date, '5950', amt, 0, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, ''); }
+    } else {
+      if(b.ref_type==='so_payment'||b.ref_type==='sales'||b.ref_type==='sales_order') return; // handled in B
+      if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, 0, amt, 'PC', b.reference_number, 'Return from petty cash'); push(b.date, CASH_BANK, amt, 0, 'PC', b.reference_number, ''); }
+      else { push(b.date, '4200', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
+    }
+  });
+  // D. Petty-cash expenses (paid from the float, not the bank) — Dr expense, Cr Cash on Hand.
+  expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash' && isApprovedFin(e)).forEach(e=>{
+    const amt=Number(e.amount)||0; if(!amt) return;
+    push(e.date, categoryToAccountCode(e.category), amt, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
+    push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash');
+  });
+  return P;
+}
+// Sum postings into per-account balances (respecting normal balance sign).
+function glAccountBalances(postings, chartAccounts){
+  const typeOf={}; (chartAccounts||[]).forEach(a=>{ typeOf[a.code]=a.type; });
+  const bal={};
+  postings.forEach(p=>{ const b=bal[p.account_code]||(bal[p.account_code]={ code:p.account_code, name:p.account_name, type:typeOf[p.account_code]||'Expense', debit:0, credit:0 }); b.debit+=p.debit; b.credit+=p.credit; });
+  return Object.values(bal).map(b=>{ const normalDebit=(b.type==='Asset'||b.type==='Expense'); b.balance = normalDebit ? (b.debit-b.credit) : (b.credit-b.debit); return b; });
+}
 function jeTotals(lines){
   const d=(lines||[]).reduce((s,l)=>s+(Number(l.debit)||0),0);
   const c=(lines||[]).reduce((s,l)=>s+(Number(l.credit)||0),0);
   return { debit:d, credit:c, balanced: Math.abs(d-c)<0.005 && d>0 };
+}
+
+// Shared year/period picker for the finance reports.
+function finReportYears(postings){
+  const ys=new Set(); postings.forEach(p=>{ const y=(p.date||'').slice(0,4); if(y) ys.add(y); });
+  const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
+}
+
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts]);
+  const years = finReportYears(postings);
+  const [year,setYear]=useState('all');
+  const [sel,setSel]=useState(null); // account code drilled into
+  const inYear=(p)=> year==='all' || (p.date||'').slice(0,4)===year;
+  const shown = postings.filter(inYear);
+  const balances = glAccountBalances(shown, chartAccounts);
+  const balByCode={}; balances.forEach(b=>balByCode[b.code]=b);
+  const accounts=(chartAccounts||[]).slice().sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const selPostings = sel ? shown.filter(p=>p.account_code===sel).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))) : [];
+  let run=0;
+  const selAcct=(chartAccounts||[]).find(a=>a.code===sel);
+  const normalDebit = selAcct && (selAcct.type==='Asset'||selAcct.type==='Expense');
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📒 General Ledger</h1><p className="text-slate-500 text-sm">All accounts with live balances, projected from every recorded transaction. Click an account to see its postings.</p></div>
+          <select value={year} onChange={e=>setYear(e.target.value)} className="input w-32"><option value="all">All years</option>{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+        </div>
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded-xl overflow-hidden h-fit">
+          <div className="px-4 py-2 bg-slate-50 border-b text-xs font-semibold uppercase text-slate-500">Chart of Accounts</div>
+          {ACCOUNT_TYPES.map(t=>{ const list=accounts.filter(a=>a.type===t); if(!list.length) return null; return (
+            <div key={t}>
+              <div className="px-4 py-1.5 bg-slate-100/70 text-[11px] font-bold text-slate-600">{t}</div>
+              {list.map(a=>{ const b=balByCode[a.code]; const val=b?b.balance:0; return (
+                <button key={a.code} onClick={()=>setSel(a.code)} className={`w-full text-left px-4 py-1.5 border-t flex items-center justify-between hover:bg-indigo-50 ${sel===a.code?'bg-indigo-50':''}`}>
+                  <span className="text-sm"><span className="font-mono text-xs text-slate-400 mr-2">{a.code}</span>{a.name}</span>
+                  <span className={`text-sm font-semibold ${val<0?'text-rose-600':'text-slate-700'}`}>{peso(val)}</span>
+                </button>
+              ); })}
+            </div>
+          ); })}
+        </div>
+        <div className="bg-white border rounded-xl overflow-hidden h-fit">
+          {!sel ? <div className="px-4 py-16 text-center text-slate-400 text-sm">Select an account to view its ledger.</div> : (<>
+            <div className="px-4 py-2.5 bg-slate-50 border-b flex items-center justify-between"><div className="font-semibold text-sm"><span className="font-mono text-xs text-slate-400 mr-2">{sel}</span>{selAcct?.name}</div><div className="text-xs text-slate-500">{selPostings.length} postings</div></div>
+            <div className="max-h-[60vh] overflow-y-auto"><table className="w-full text-sm">
+              <thead className="bg-white text-[10px] uppercase text-slate-400 sticky top-0"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Src</th><th className="text-left px-2 py-1.5">Memo</th><th className="text-right px-2 py-1.5">Debit</th><th className="text-right px-2 py-1.5">Credit</th><th className="text-right px-2 py-1.5">Balance</th></tr></thead>
+              <tbody>{selPostings.map((p,i)=>{ run += normalDebit ? (p.debit-p.credit) : (p.credit-p.debit); return (
+                <tr key={i} className="border-t"><td className="px-2 py-1 text-xs whitespace-nowrap">{fmtDate(p.date)}</td><td className="px-2 py-1 text-[10px] text-slate-400">{p.source}{p.ref?` ${p.ref}`:''}</td><td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[180px]">{p.memo||'—'}</td><td className="px-2 py-1 text-right">{p.debit?peso(p.debit):''}</td><td className="px-2 py-1 text-right">{p.credit?peso(p.credit):''}</td><td className="px-2 py-1 text-right font-medium">{peso(run)}</td></tr>
+              ); })}{selPostings.length===0 && <tr><td colSpan="6" className="px-2 py-6 text-center text-slate-400 text-xs">No postings in this period.</td></tr>}</tbody>
+            </table></div>
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts, costCenters }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, chartAccounts]);
+  const years = finReportYears(postings);
+  const [tab,setTab]=useState('pl');
+  const [year,setYear]=useState(years[0]);
+  const periodPostings = postings.filter(p=> (p.date||'').slice(0,4)===year);      // P&L: within the year
+  const cumulativePostings = postings.filter(p=> (p.date||'').slice(0,4)<=year);    // BS: up to end of year
+  const plBal = glAccountBalances(periodPostings, chartAccounts);
+  const bsBal = glAccountBalances(cumulativePostings, chartAccounts);
+  const byType=(bals,t)=> bals.filter(b=>b.type===t);
+  const sum=(arr)=>arr.reduce((s,b)=>s+b.balance,0);
+  // P&L
+  const income=byType(plBal,'Income'); const expensesA=byType(plBal,'Expense');
+  const revenue=sum(income); const cogs=sum(expensesA.filter(b=>b.code==='5000')); const opex=sum(expensesA.filter(b=>b.code!=='5000'));
+  const grossProfit=revenue-cogs; const netIncome=revenue-cogs-opex;
+  // Balance Sheet
+  const assets=byType(bsBal,'Asset'); const liabs=byType(bsBal,'Liability'); const equity=byType(bsBal,'Equity');
+  const netIncomeCum = sum(byType(bsBal,'Income')) - sum(byType(bsBal,'Expense'));
+  const totalAssets=sum(assets); const totalLiab=sum(liabs); const totalEquity=sum(equity)+netIncomeCum;
+  const bsCheck = totalAssets - (totalLiab+totalEquity);
+  // Trial balance (cumulative)
+  const tb = bsBal.concat([]).sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const tbDebit = tb.reduce((s,b)=> s + Math.max(0, (b.type==='Asset'||b.type==='Expense')?b.balance:-b.balance),0);
+  const tbCredit = tb.reduce((s,b)=> s + Math.max(0, (b.type==='Asset'||b.type==='Expense')?-b.balance:b.balance),0);
+  // VAT / EWT (cumulative)
+  const acctBal=(code,bals)=>{ const b=bals.find(x=>x.code===code); return b?b.balance:0; };
+  const outputVat=acctBal('2100',bsBal), inputVat=acctBal('1300',bsBal); const netVat=outputVat-inputVat;
+  const ewtPayable=acctBal('2200',bsBal);
+  const ewtPostings=cumulativePostings.filter(p=>p.account_code==='2200');
+  const Row=({label,val,bold,indent,cls})=> <div className={`flex items-center justify-between px-3 py-1.5 ${bold?'font-bold border-t':''}`}><span className={`${indent?'pl-4':''} ${cls||''}`}>{label}</span><span className={cls||''}>{peso(val)}</span></div>;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📊 Financial Reports</h1><p className="text-slate-500 text-sm">Derived from the General Ledger. Revenue is on a cash (collection) basis. Review with your accountant before filing.</p></div>
+          <div className="flex items-center gap-2">
+            <select value={year} onChange={e=>setYear(e.target.value)} className="input w-28">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+          </div>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          {[['pl','Income Statement'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {tab==='pl' && (
+        <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
+          <div className="px-4 py-3 border-b text-center"><div className="font-bold text-lg">Income Statement</div><div className="text-xs text-slate-500">For the year {year} · cash basis</div></div>
+          <Row label="Revenue" val={revenue} />
+          {income.map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-slate-500 text-sm" />)}
+          <Row label="Less: Cost of Goods Sold" val={cogs} indent cls="text-slate-500 text-sm" />
+          <Row label="Gross Profit" val={grossProfit} bold />
+          <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-slate-400 border-t">Operating Expenses</div>
+          {expensesA.filter(b=>b.code!=='5000'&&Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-slate-600 text-sm" />)}
+          <Row label="Total Operating Expenses" val={opex} indent cls="font-medium" />
+          <Row label="Net Income" val={netIncome} bold cls={netIncome<0?'text-rose-600':'text-emerald-700'} />
+        </div>
+      )}
+
+      {tab==='bs' && (
+        <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
+          <div className="px-4 py-3 border-b text-center"><div className="font-bold text-lg">Statement of Financial Position</div><div className="text-xs text-slate-500">As of Dec 31, {year}</div></div>
+          <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-slate-400">Assets</div>
+          {assets.filter(b=>Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-sm" />)}
+          <Row label="Total Assets" val={totalAssets} bold />
+          <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-slate-400 border-t">Liabilities</div>
+          {liabs.filter(b=>Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-sm" />)}
+          <Row label="Total Liabilities" val={totalLiab} indent cls="font-medium" />
+          <div className="px-3 py-1.5 text-[11px] uppercase font-semibold text-slate-400 border-t">Equity</div>
+          {equity.filter(b=>Math.abs(b.balance)>0.005).map(b=><Row key={b.code} label={b.name} val={b.balance} indent cls="text-sm" />)}
+          <Row label="Net Income (retained this year)" val={netIncomeCum} indent cls="text-sm" />
+          <Row label="Total Equity" val={totalEquity} indent cls="font-medium" />
+          <Row label="Total Liabilities + Equity" val={totalLiab+totalEquity} bold />
+          <div className={`px-3 py-2 text-xs text-center ${Math.abs(bsCheck)<1?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{Math.abs(bsCheck)<1?'✓ Balanced':`Out of balance by ${peso(Math.abs(bsCheck))} — likely missing opening balances or uncategorised transactions`}</div>
+        </div>
+      )}
+
+      {tab==='tb' && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b text-center"><div className="font-bold text-lg">Trial Balance</div><div className="text-xs text-slate-500">As of Dec 31, {year}</div></div>
+          <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Code</th><th className="text-left px-3 py-2">Account</th><th className="text-right px-3 py-2">Debit</th><th className="text-right px-3 py-2">Credit</th></tr></thead>
+            <tbody>{tb.filter(b=>Math.abs(b.balance)>0.005).map(b=>{ const nd=(b.type==='Asset'||b.type==='Expense'); const dr=nd?Math.max(0,b.balance):Math.max(0,-b.balance); const cr=nd?Math.max(0,-b.balance):Math.max(0,b.balance); return (
+              <tr key={b.code} className="border-t"><td className="px-3 py-1.5 font-mono text-xs">{b.code}</td><td className="px-3 py-1.5">{b.name}</td><td className="px-3 py-1.5 text-right">{dr?peso(dr):''}</td><td className="px-3 py-1.5 text-right">{cr?peso(cr):''}</td></tr>
+            ); })}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td colSpan="2" className="px-3 py-2">TOTAL</td><td className="px-3 py-2 text-right">{peso(tbDebit)}</td><td className="px-3 py-2 text-right">{peso(tbCredit)}</td></tr></tfoot>
+          </table>
+          <div className={`px-3 py-2 text-xs text-center ${Math.abs(tbDebit-tbCredit)<1?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{Math.abs(tbDebit-tbCredit)<1?'✓ Debits equal credits':`Off by ${peso(Math.abs(tbDebit-tbCredit))}`}</div>
+        </div>
+      )}
+
+      {tab==='vat' && (
+        <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
+          <div className="px-4 py-3 border-b text-center"><div className="font-bold text-lg">VAT Summary</div><div className="text-xs text-slate-500">As of Dec 31, {year} · from posted Output/Input VAT</div></div>
+          <Row label="Output VAT (on sales)" val={outputVat} />
+          <Row label="Less: Input VAT (on purchases)" val={inputVat} />
+          <Row label={netVat>=0?'VAT Payable to BIR':'VAT Credit (carry over)'} val={Math.abs(netVat)} bold cls={netVat>=0?'text-rose-600':'text-emerald-700'} />
+          <div className="px-3 py-2 text-[11px] text-slate-400 border-t">VAT is captured only where you record it — via a compound (split) voucher line to Input/Output VAT, or a journal entry. Use the voucher's "Itemize / split" mode to break out the 12% VAT.</div>
+        </div>
+      )}
+
+      {tab==='ewt' && (
+        <div className="bg-white border rounded-xl max-w-3xl mx-auto overflow-hidden">
+          <div className="px-4 py-3 border-b text-center"><div className="font-bold text-lg">Expanded Withholding Tax (EWT)</div><div className="text-xs text-slate-500">As of Dec 31, {year} · tax withheld, for remittance (1601-EQ) &amp; 2307</div></div>
+          <Row label="Withholding Tax Payable (to remit)" val={ewtPayable} bold cls="text-rose-600" />
+          <table className="w-full text-sm border-t"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Source</th><th className="text-left px-3 py-2">Memo</th><th className="text-right px-3 py-2">Withheld</th></tr></thead>
+            <tbody>{ewtPostings.filter(p=>p.credit>0).map((p,i)=>(
+              <tr key={i} className="border-t"><td className="px-3 py-1.5 text-xs">{fmtDate(p.date)}</td><td className="px-3 py-1.5 text-xs text-slate-500">{p.source} {p.ref}</td><td className="px-3 py-1.5 text-xs text-slate-600">{p.memo||'—'}</td><td className="px-3 py-1.5 text-right">{peso(p.credit)}</td></tr>
+            ))}{ewtPostings.filter(p=>p.credit>0).length===0 && <tr><td colSpan="4" className="px-3 py-6 text-center text-slate-400 text-xs">No EWT recorded yet. Use a compound voucher line crediting "Withholding Tax Payable" to record tax withheld from a supplier.</td></tr>}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAccounts, reload }){
   const bankName=(id)=> (bankAccounts||[]).find(b=>b.id===id)?.bank_name || '';
@@ -31212,7 +31465,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','fin-reports','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -31666,7 +31919,9 @@ function App(){
     ['banks','Bank Accounts','🏦'],
     ['assets','Asset Register','🏷'],
     ['journal','Journal Entries','📓'],
+    ['general-ledger','General Ledger','📒'],
     ['pnl','P&L Summary','📊'],
+    ['fin-reports','Financial Reports','📈'],
     ['bir','BIR Tax Helpers','🧾'],
   ] };
   const FINANCE_PURCHASING = { group:'Finance', items:[
@@ -32028,6 +32283,8 @@ function App(){
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} chartAccounts={chartAccounts} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} chartAccounts={chartAccounts} costCenters={costCenters} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
