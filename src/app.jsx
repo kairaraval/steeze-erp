@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 338 · Finance: RFP/batch vouchers now support compound (debit/credit) split + cost center like the standalone voucher; voucher previews show the accounting entry + cost center; expense/voucher 'category' is now a real Chart-of-Accounts account (posts exactly to the GL); invoice due date auto-computes from delivery + terms and has BIR billing-invoice fields + a 'file for BIR' checkbox; Journal Entries carry a cost center.";
+const BUILD = "Live build 339 · Petty cash is now a true imprest float: expense lines carry a Chart-of-Accounts account, cost center and Input VAT. Liquidate posts the spend to the Expense Log (no bank return) and raises a replenishment request to Admin; once Admin approves, Accounting releases it from the bank to top the float back to its size.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25682,20 +25682,25 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
 // a running list of expenses charged against it, the outstanding balance,
 // and a one-click "+ Add expense" inline form. When outstanding reaches
 // zero, the row can be closed and a new float issued.
-function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClose, onSaved }){
+function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chartAccounts, costCenters, replenishments, bankAccounts, onLiquidate, onApproveRepl, onReleaseRepl, onClose, onSaved }){
   const pc = pettyCash;
   const custodian = (profiles||[]).find(p=>p.id===pc.custodian_id);
-  // Pull THE LATEST expenses snapshot from props each render — when a new
-  // expense is added and the parent reloads, this stays in sync.
+  const isAdmin = profile.role==='admin';
+  const isAcct = profile.role==='accounting' || profile.role==='accounting_officer';
+  const [relBank,setRelBank]=useState((bankAccounts||[])[0]?.id||'');
+  const myRepl = (replenishments||[]).filter(r=>r.petty_cash_id===pc.id).slice().sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  // Pull THE LATEST expenses snapshot from props each render.
   const linkedExpenses = (expensesAll||[]).filter(e => e.petty_cash_id === pc.id)
     .slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-  const totalSpent = linkedExpenses.reduce((s,e)=>s+Number(e.amount||0), 0);
-  const outstanding = Number(pc.amount||0) - totalSpent - Number(pc.amount_returned||0);
-  // Local state for the add-expense form — now MULTI-LINE: log several petty
-  // cash expenses at once and save them together.
+  // Imprest float: On hand = float − everything ever spent + everything replenished.
+  const totalSpentEver = linkedExpenses.reduce((s,e)=>s+Number(e.amount||0), 0);
+  const replenishedTotal = (replenishments||[]).filter(r=>r.petty_cash_id===pc.id && r.status==='released').reduce((s,r)=>s+Number(r.amount||0),0);
+  const onHand = Number(pc.amount||0) - totalSpentEver + replenishedTotal;
+  const cycleSpent = linkedExpenses.filter(e=>!e.pc_liquidated_at).reduce((s,e)=>s+Number(e.amount||0),0); // unliquidated
+  const totalSpent = totalSpentEver; const outstanding = onHand; // spendable cash
+  // Local state for the add-expense form — MULTI-LINE.
   const today = new Date().toISOString().slice(0,10);
-  const defCat = allExpenseCategories().find(c=>/transport/i.test(c)) || allExpenseCategories()[0] || 'Other';
-  const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, category: defCat, vendor:'', description:'', amount:'', receipt_url:'' });
+  const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, gl_account_code:'', category:'', cost_center_id:'', vendor:'', description:'', amount:'', input_vat:'', receipt_url:'' });
   const [addOpen,setAddOpen]=useState(false);
   const [rows,setRows]=useState([ blankRow() ]);
   const [busy,setBusy]=useState(false);
@@ -25721,6 +25726,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
     const valid = rows.filter(r=> (Number(r.amount)||0) > 0);
     if(!valid.length){ setMsg('Add at least one line with an amount.'); return; }
     if(valid.some(r=>!r.description.trim())){ setMsg('Each line needs a short description.'); return; }
+    if(valid.some(r=>!r.gl_account_code)){ setMsg('Pick a chart-of-accounts account for each line.'); return; }
     const total = valid.reduce((s,r)=>s+(Number(r.amount)||0),0);
     if(total > outstanding + 0.005){
       if(!confirm(`These expenses (${peso(total)}) exceed the outstanding balance (${peso(outstanding)}). Save anyway?`)) return;
@@ -25730,6 +25736,9 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
       const payload = valid.map(r=>({
         date: r.date,
         category: r.category || 'Other',
+        gl_account_code: r.gl_account_code || null,
+        cost_center_id: r.cost_center_id || null,
+        input_vat: Number(r.input_vat)||0,
         vendor: r.vendor || null,
         description: r.description.trim(),
         amount: Number(r.amount)||0,
@@ -25754,24 +25763,50 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
         {/* Header summary card */}
         <div className="grid grid-cols-4 gap-2">
           <div className="bg-slate-50 border rounded-lg p-3">
-            <div className="text-[10px] uppercase text-slate-400">Starting balance</div>
+            <div className="text-[10px] uppercase text-slate-400">Float (imprest)</div>
             <div className="text-lg font-bold mt-0.5">{peso(pc.amount)}</div>
           </div>
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <div className="text-[10px] uppercase text-amber-700">Spent so far</div>
-            <div className="text-lg font-bold mt-0.5 text-amber-800">{peso(totalSpent)}</div>
-            <div className="text-[10px] text-amber-600 mt-0.5">{linkedExpenses.length} expense{linkedExpenses.length===1?'':'s'}</div>
+            <div className="text-[10px] uppercase text-amber-700">Spent this cycle</div>
+            <div className="text-lg font-bold mt-0.5 text-amber-800">{peso(cycleSpent)}</div>
+            <div className="text-[10px] text-amber-600 mt-0.5">to liquidate &amp; replenish</div>
           </div>
-          <div className={`border rounded-lg p-3 ${outstanding>0.01?'bg-emerald-50 border-emerald-200':'bg-slate-100 border-slate-300'}`}>
-            <div className="text-[10px] uppercase text-emerald-700">Outstanding</div>
-            <div className={`text-2xl font-extrabold mt-0.5 ${outstanding>0.01?'text-emerald-700':'text-slate-500'}`}>{peso(outstanding)}</div>
-            {outstanding<=0.01 && <div className="text-[10px] text-slate-500 mt-0.5">Float exhausted — issue a new one</div>}
+          <div className={`border rounded-lg p-3 ${onHand>0.01?'bg-emerald-50 border-emerald-200':'bg-slate-100 border-slate-300'}`}>
+            <div className="text-[10px] uppercase text-emerald-700">Cash on hand</div>
+            <div className={`text-2xl font-extrabold mt-0.5 ${onHand>0.01?'text-emerald-700':'text-slate-500'}`}>{peso(onHand)}</div>
+            {onHand<=0.01 && <div className="text-[10px] text-slate-500 mt-0.5">Depleted — liquidate to replenish</div>}
           </div>
           <div className="bg-slate-50 border rounded-lg p-3">
             <div className="text-[10px] uppercase text-slate-400">Custodian</div>
             <div className="text-sm font-semibold mt-0.5 truncate">{custodian?(custodian.name||custodian.email):pc.custodian_name||'—'}</div>
             <div className="text-[10px] text-slate-500 mt-0.5">Issued {fmtDate(pc.date)}</div>
           </div>
+        </div>
+
+        {/* Liquidate & replenishment */}
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="text-xs text-slate-600">Spent this cycle: <b>{peso(cycleSpent)}</b>. Liquidate to post it to the Expense Log and request replenishment from Admin (top the float back to {peso(pc.amount)}).</div>
+            {(isAdmin||isAcct) && cycleSpent>0.005 && <button onClick={()=>onLiquidate && onLiquidate(pc)} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">Liquidate &amp; request replenishment</button>}
+          </div>
+          {myRepl.length>0 && (
+            <div className="mt-2 space-y-1.5">
+              {myRepl.map(r=>{ const st=r.status; return (
+                <div key={r.id} className="flex items-center gap-2 flex-wrap bg-white border rounded px-2 py-1.5 text-xs">
+                  <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${st==='pending_admin'?'bg-amber-100 text-amber-700':st==='approved'?'bg-blue-100 text-blue-700':st==='released'?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{st==='pending_admin'?'Pending admin':st}</span>
+                  <span className="font-semibold">{peso(r.amount)}</span>
+                  <span className="text-slate-400">requested {fmtDate(String(r.requested_at||r.created_at).slice(0,10))}</span>
+                  <div className="flex-1"></div>
+                  {st==='pending_admin' && isAdmin && <button onClick={()=>onApproveRepl && onApproveRepl(r)} className="px-2 py-0.5 rounded bg-blue-600 text-white font-semibold">✓ Approve</button>}
+                  {st==='approved' && isAcct && <>
+                    <select value={relBank} onChange={e=>setRelBank(e.target.value)} className="border rounded px-1 py-0.5 text-[11px]"><option value="">bank…</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
+                    <button onClick={()=>onReleaseRepl && onReleaseRepl(r, relBank)} className="px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold">🏦 Release from bank</button>
+                  </>}
+                  {st==='released' && <span className="text-slate-400">released {r.released_at?fmtDate(String(r.released_at).slice(0,10)):''}</span>}
+                </div>
+              ); })}
+            </div>
+          )}
         </div>
 
         {/* Add expense inline form */}
@@ -25783,25 +25818,27 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase text-slate-500"><tr>
-                  <th className="text-left px-1 py-1 w-32">Date</th>
-                  <th className="text-left px-1 py-1 w-44">Category</th>
+                  <th className="text-left px-1 py-1 w-28">Date</th>
+                  <th className="text-left px-1 py-1 w-48">Account (COA)</th>
+                  <th className="text-left px-1 py-1 w-40">Cost center</th>
                   <th className="text-left px-1 py-1">Description *</th>
-                  <th className="text-left px-1 py-1 w-36">Vendor</th>
-                  <th className="text-right px-1 py-1 w-28">Amount *</th>
-                  <th className="text-center px-1 py-1 w-20">Receipt</th>
+                  <th className="text-right px-1 py-1 w-24">Input VAT</th>
+                  <th className="text-right px-1 py-1 w-24">Amount *</th>
+                  <th className="text-center px-1 py-1 w-14">Receipt</th>
                   <th className="w-6"></th>
                 </tr></thead>
                 <tbody>
                   {rows.map(r=>(
                     <tr key={r.id} className="align-top">
                       <td className="px-1 py-0.5"><input type="date" className="input !py-1" value={r.date} onChange={e=>setRow(r.id,'date',e.target.value)} /></td>
-                      <td className="px-1 py-0.5"><select className="input !py-1" value={r.category} onChange={e=>setRow(r.id,'category',e.target.value)}>{allExpenseCategories().map(c=><option key={c}>{c}</option>)}</select></td>
+                      <td className="px-1 py-0.5"><select className="input !py-1" value={r.gl_account_code} onChange={e=>{ const a=(chartAccounts||[]).find(x=>x.code===e.target.value); setRow(r.id,'gl_account_code',e.target.value); setRow(r.id,'category', a?a.name:''); }}><option value="">— account —</option>{coaExpenseOptions(chartAccounts)}</select></td>
+                      <td className="px-1 py-0.5"><select className="input !py-1" value={r.cost_center_id} onChange={e=>setRow(r.id,'cost_center_id',e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></td>
                       <td className="px-1 py-0.5"><input className="input !py-1" value={r.description} onChange={e=>setRow(r.id,'description',e.target.value)} placeholder="e.g. Gas for delivery van" /></td>
-                      <td className="px-1 py-0.5"><input className="input !py-1" value={r.vendor} onChange={e=>setRow(r.id,'vendor',e.target.value)} placeholder="Shell, hardware…" /></td>
+                      <td className="px-1 py-0.5"><input type="number" step="0.01" className="input !py-1 text-right" value={r.input_vat} onChange={e=>setRow(r.id,'input_vat',e.target.value)} placeholder="0.00" /></td>
                       <td className="px-1 py-0.5"><input type="number" step="0.01" className="input !py-1 text-right" value={r.amount} onChange={e=>setRow(r.id,'amount',e.target.value)} placeholder="0.00" /></td>
                       <td className="px-1 py-0.5 text-center">
                         {r.receipt_url ? <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-emerald-600 hover:underline">✓ View</button>
-                          : <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer">{uploadingId===r.id?'…':'📎 Add'}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ handleReceipt(r.id, e.target.files?.[0]); e.target.value=''; }} /></label>}
+                          : <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer">{uploadingId===r.id?'…':'📎'}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ handleReceipt(r.id, e.target.files?.[0]); e.target.value=''; }} /></label>}
                       </td>
                       <td className="px-1 py-0.5 text-center"><button onClick={()=>removeRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>
                     </tr>
@@ -25863,7 +25900,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, onClo
   );
 }
 
-function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, reload, kind }){
+function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, chartAccounts, costCenters, replenishments, reload, kind }){
   // `kind` props split the single cash_advances table into two distinct views:
   //   'petty_cash'   — petty cash float for daily operational small expenses
   //   'cash_advance' — small loans to employees, paid back from payroll
@@ -25898,27 +25935,43 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
     if(error){ alert(error.message); return; }
     reload && reload();
   }
-  // Liquidate a petty cash float: close it out, recognise the SPENT amount as
-  // expense (it now enters the Expense Log), and return the unspent cash to the
-  // source bank. Nothing was counted as an expense before this step.
+  // Imprest liquidation: recognise the spent (unliquidated) receipts as expense
+  // (they enter the Expense Log / GL), and raise a REPLENISHMENT REQUEST to Admin
+  // for that amount — to top the float back to its original size. No cash is
+  // returned to the bank; the bank funds the replenishment only when released.
   async function liquidatePetty(c){
-    const spent = spentOn(c);
-    const outstanding = Math.max(0, Number(c.amount||0) - spent - Number(c.amount_returned||0));
-    if(!confirm(`Liquidate ${c.number||'petty cash'}?\n\n• Spent (logged receipts): ${peso(spent)}\n• Cash returned to bank: ${peso(outstanding)}\n\nThe spent amount now posts to the Expense Log; the returned cash goes back to the source bank.`)) return;
+    const cycleExp = expensesFor(c).filter(e=>!e.pc_liquidated_at);
+    const spent = cycleExp.reduce((s,e)=>s+Number(e.amount||0),0);
+    if(spent<=0.005){ alert('Nothing to liquidate — no unliquidated receipts on this float.'); return; }
+    if(!confirm(`Liquidate ${c.number||'petty cash'}?\n\n• Spent (receipts to recognise): ${peso(spent)}\n\nThis posts the spend to the Expense Log and raises a ${peso(spent)} replenishment request to Admin to bring the float back to ${peso(c.amount)}. No cash is returned to the bank.`)) return;
     try {
-      if(outstanding > 0.01 && c.bank_id){
-        await sb.from('bank_transactions').insert({
-          bank_id: c.bank_id, date: new Date().toISOString().slice(0,10), direction:'in', amount: outstanding,
-          description: `Return from ${c.number||'petty cash'} · ${c.custodian_name||''}`,
-          ref_type:'cash_advance', ref_id: c.id, created_by: profile.id,
-        });
-      }
-      const { error } = await sb.from('cash_advances').update({
-        status:'liquidated', liquidated_at:new Date().toISOString().slice(0,10),
-        amount_liquidated: spent, amount_returned: Number(c.amount_returned||0)+outstanding,
-      }).eq('id', c.id);
-      if(error) throw error;
+      const now=new Date().toISOString();
+      await Promise.all(cycleExp.map(e=> sb.from('expenses').update({ pc_liquidated_at: now }).eq('id', e.id)));
+      await sb.from('petty_cash_replenishments').insert({ petty_cash_id:c.id, amount:spent, status:'pending_admin', requested_by:profile.id, note:`Replenish ${c.number||'petty cash'} to ${peso(c.amount)}` });
+      await sb.from('cash_advances').update({ liquidated_at:now.slice(0,10) }).eq('id', c.id);
+      // Notify admins that a replenishment needs approval.
+      try {
+        const admins=(profiles||[]).filter(p=>p.role==='admin').map(p=>p.id).filter(id=>id&&id!==profile.id);
+        if(admins.length) await sb.from('notifications').insert(admins.map(id=>({ recipient_id:id, actor_id:profile.id, text:`Petty cash ${c.number||''} liquidated — replenishment of ${peso(spent)} needs your approval.`, link_view:'petty-cash', ref_type:'petty_replenish', ref_id:c.id, type:'system' })));
+      } catch(_){}
       reload && reload();
+    } catch(e){ alert(e.message||String(e)); }
+  }
+  // Admin approves the replenishment amount.
+  async function approveReplenishment(r){
+    if(!confirm(`Approve replenishment of ${peso(r.amount)}? Accounting will then withdraw it from the bank.`)) return;
+    const { error }=await sb.from('petty_cash_replenishments').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id', r.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  // Accounting releases the approved replenishment — withdraws from the bank and
+  // tops the float back up (Dr Cash on Hand / Cr Cash in Bank).
+  async function releaseReplenishment(r, bankId){
+    if(!bankId){ alert('Pick the bank to withdraw the replenishment from.'); return; }
+    try {
+      const float=(cashAdvances||[]).find(c=>c.id===r.petty_cash_id);
+      await sb.from('bank_transactions').insert({ bank_id:bankId, date:new Date().toISOString().slice(0,10), direction:'out', amount:Number(r.amount||0), description:`Petty cash replenishment · ${float?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
+      const { error }=await sb.from('petty_cash_replenishments').update({ status:'released', released_by:profile.id, released_at:new Date().toISOString(), bank_id:bankId }).eq('id', r.id);
+      if(error) throw error; reload && reload();
     } catch(e){ alert(e.message||String(e)); }
   }
 
@@ -26018,7 +26071,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
                 {isPetty ? (
                   c.status==='open' && canEdit && <>
                     <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline mr-2">+ Add expense</button>
-                    <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Close the float — post spent to Expense Log, return unspent to bank">Liquidate →</button>
+                    <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Recognise spend to Expense Log + request replenishment from Admin">Liquidate →</button>
                   </>
                 ) : (
                   c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
@@ -26031,7 +26084,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
       </table></div></div>
 
       {(creating||editing) && <CashAdvanceFormModal existing={editing} kind={kind} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
-      {detail && <PettyCashDetailModal pettyCash={detail} expensesAll={expenses} profile={profile} profiles={profiles} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload && reload(); }} />}
+      {detail && <PettyCashDetailModal pettyCash={detail} expensesAll={expenses} profile={profile} profiles={profiles} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={replenishments} bankAccounts={bankAccounts} onLiquidate={liquidatePetty} onApproveRepl={approveReplenishment} onReleaseRepl={releaseReplenishment} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload && reload(); }} />}
       {liquidating && <LiquidationModal ca={liquidating} profile={profile} bankAccounts={bankAccounts} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload(); }} />}
     </div>
   );
@@ -26470,10 +26523,13 @@ function buildGLPostings(data){
       else { push(b.date, '501003', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
     }
   });
-  // D. Petty-cash expenses (paid from the float, not the bank) — Dr expense, Cr Cash on Hand.
-  expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash' && isApprovedFin(e)).forEach(e=>{
+  // D. Petty-cash expenses (paid from the float) — Dr expense (net) + Dr Input VAT,
+  // Cr Cash on Hand (total). Replenishment tops Cash on Hand back from the bank.
+  expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash').forEach(e=>{
     const amt=Number(e.amount)||0; if(!amt) return;
-    push(e.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
+    const vat=Math.max(0, Number(e.input_vat)||0); const net=amt-vat;
+    push(e.date, e.gl_account_code||categoryToAccountCode(e.category), net, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
+    if(vat>0) push(e.date, '101011', vat, 0, 'PC', '', 'Input VAT', e.cost_center_id);
     push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash');
   });
   return P;
@@ -27480,10 +27536,13 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
   // Petty cash spend is deferred until the float is LIQUIDATED — an un-liquidated
   // float is still an advance (asset), not an expense. So an expense charged to a
   // petty cash that hasn't been liquidated yet is held out of the P&L.
-  const unliquidatedPC = new Set((cashAdvances||[]).filter(c=>c.status!=='liquidated').map(c=>c.id));
-  const inPeriodExpenses = (expenses||[]).filter(e =>
-    inRange(e.date) && isApprovedFin(e) && !(e.petty_cash_id && unliquidatedPC.has(e.petty_cash_id))
-  );
+  // Petty-cash spend enters the P&L only once the receipt is LIQUIDATED
+  // (pc_liquidated_at set). Regular expenses enter once approved.
+  const inPeriodExpenses = (expenses||[]).filter(e => {
+    if(!inRange(e.date)) return false;
+    if(e.petty_cash_id) return !!e.pc_liquidated_at;
+    return isApprovedFin(e);
+  });
   // VOUCHERS are real disbursements too (rent, gov fees, transport paid via
   // Check / BT / Cash directly — outside the PO chain). Skip:
   //   • deleted vouchers (deleted_at set)
@@ -31441,6 +31500,7 @@ function App(){
   const [budgetRequests,setBudgetRequests]=useState([]);
   // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
+  const [pcReplenishments,setPcReplenishments]=useState([]);
   // Custom Payment Calendar events — Finance-added items that don't fit the
   // auto categories (recurring reminders, ad-hoc planned spend, etc.)
   const [calendarEvents,setCalendarEvents]=useState([]);
@@ -31759,6 +31819,7 @@ function App(){
     setBudgetRequests(br && !br.error ? (br.data||[]) : []);
     setExpenses(ex && !ex.error ? (ex.data||[]) : []);
     setCashAdvances(ca && !ca.error ? (ca.data||[]) : []);
+    try { const pcr = await sb.from('petty_cash_replenishments').select('*').order('created_at',{ascending:false}); setPcReplenishments(pcr && !pcr.error ? (pcr.data||[]) : []); } catch(_){ setPcReplenishments([]); }
     setStockMovements(sm && !sm.error ? (sm.data||[]) : []);
     setCalendarEvents(ce && !ce.error ? (ce.data||[]) : []);
     setDeliveryReceipts(dr && !dr.error ? (dr.data||[]) : []);
@@ -32634,8 +32695,8 @@ function App(){
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
-        {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="petty_cash" />}
-        {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} reload={loadAll} kind="cash_advance" />}
+        {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
+        {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
