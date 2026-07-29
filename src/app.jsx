@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 336 · Trip ticket stops now show the client name as the title (item beneath), and the drive/on-site times sit on their own wrapping row so the total drive time is always visible (no longer cut off).";
+const BUILD = "Live build 337 · Employee loans: Accounting can Release approved loans in ONE disbursement voucher (Dr Advances to Employees, Cr Cash in Bank) that posts to the bank. New 'Advances to Employees' subledger (acct 101013) lists every released loan with balances; repayments are booked via Journal Entry and marked paid there.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11169,7 +11169,7 @@ async function notifyAccountingLoanReady(loan, empName, actorId, profiles){
   } catch(e){ console.warn('loan notify failed', e?.message||e); }
 }
 
-function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, reload }){
+function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, bankAccounts, reload }){
   const isAcct = profile.role==='accounting' || profile.role==='accounting_officer';
   // Accounting (the processing step) lands on their processing queue first;
   // everyone else opens on the Active list.
@@ -11177,6 +11177,7 @@ function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstal
   const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null);
   const [printing,setPrinting]=useState(null);
+  const [releasing,setReleasing]=useState(false); // batch disbursement voucher modal
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   const rows=(hrLoans||[]).filter(l=>{ const st=l.status||'active';
     if(filter==='all') return true;
@@ -11215,6 +11216,10 @@ function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstal
           return (
           <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':isQueue&&cnt>0?'bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
         ); })}
+        <div className="flex-1"></div>
+        {filter==='for_processing' && canProcessLoan(profile) && forProcessingCount>0 && (
+          <button onClick={()=>setReleasing(true)} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">🏦 Release &amp; create voucher ({forProcessingCount})</button>
+        )}
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
         <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
@@ -11251,6 +11256,149 @@ function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstal
       {creating && <LoanFormModal profile={profile} employees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
       {detail && <LoanDetailModal profile={profile} profiles={profiles} loan={detail} employees={employees} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===detail.id)} reload={reload} onClose={()=>setDetail(null)} onPrint={(l)=>{ setDetail(null); setPrinting(l); }} onSaved={()=>{ setDetail(null); reload(); }} />}
       {printing && <LoanFormPrintView loan={printing} employees={employees} profiles={profiles} installments={(hrLoanInstallments||[]).filter(x=>x.loan_id===printing.id)} onClose={()=>setPrinting(null)} />}
+      {releasing && <LoanDisbursementModal profile={profile} loans={(hrLoans||[]).filter(l=>l.status==='approved')} employees={employees} bankAccounts={bankAccounts} onClose={()=>setReleasing(false)} onSaved={()=>{ setReleasing(false); reload(); }} />}
+    </div>
+  );
+}
+
+// Batch-release approved employee loans into ONE disbursement voucher:
+// Dr Advances to Employees (101013), Cr Cash in Bank. Posts the bank txn and
+// marks each loan active (funds released). Interest is not disbursed — only the
+// principal (cash handed over) moves.
+function LoanDisbursementModal({ profile, loans, employees, bankAccounts, onClose, onSaved }){
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const [sel,setSel]=useState(()=> new Set((loans||[]).map(l=>l.id)));
+  const [bankId,setBankId]=useState((bankAccounts||[])[0]?.id||'');
+  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const chosen=(loans||[]).filter(l=>sel.has(l.id));
+  const total=chosen.reduce((s,l)=>s+(Number(l.principal)||0),0);
+  function toggle(id){ setSel(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; }); }
+  const bankCoa=[['pnb','101002'],['ewb','101003'],['bpi','101004'],['ubp','101005'],['union','101005'],['bdo','101006'],['gcash','101007'],['e-wallet','101007']];
+  function cashCode(){ const b=(bankAccounts||[]).find(x=>x.id===bankId); const nm=(b?.bank_name||'').toLowerCase(); for(const [kw,code] of bankCoa){ if(nm.includes(kw)) return code; } return '101002'; }
+  async function release(){
+    if(!chosen.length){ setMsg('Select at least one loan.'); return; }
+    if(!bankId){ setMsg('Pick the bank to release from.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const bank=(bankAccounts||[]).find(x=>x.id===bankId);
+      const number = await nextFinanceNumberFromDb('BT', ymdToMonthKey(date));
+      const splits=[
+        { account_code:'101013', account_name:'Advances - Employee', description:'Employee loans released', debit:total, credit:0 },
+        { account_code:cashCode(), account_name:bank?.bank_name||'Cash in Bank', description:'Cash released to borrowers', debit:0, credit:total },
+      ];
+      const particulars = `Employee loan disbursement — ${chosen.length} borrower${chosen.length===1?'':'s'}: `+chosen.map(l=>empName(l.employee_id)).join(', ');
+      // Bank transaction (out) so the ledger + bank balance reflect the release.
+      const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        bank_id:bankId, date, direction:'out', amount:total,
+        description:`${number} — Employee loan disbursement (${chosen.length})`,
+        ref_type:'voucher', ref_id:null, reference_number:number, created_by:profile.id,
+      }).select('id').single();
+      if(btErr) throw btErr;
+      const { data: vdata, error: vErr } = await sb.from('vouchers').insert({
+        number, type:'bank_transfer', date, payee:'Employee Loan Disbursement',
+        amount:total, particulars, expense_category:null, split_lines:splits,
+        bank_id:bankId, bank_transaction_id:btx.id, prepared_by:profile.id,
+        released_at:new Date().toISOString(), approval_status:'approved',
+      }).select('id').single();
+      if(vErr) throw vErr;
+      await sb.from('bank_transactions').update({ ref_id:vdata.id }).eq('id', btx.id);
+      // Mark each loan released & active.
+      const nowIso=new Date().toISOString();
+      await Promise.all(chosen.map(l=> sb.from('employee_loans').update({ status:'active', processed_by:profile.id, processed_at:nowIso, disbursed_at:nowIso, disbursement_voucher_id:vdata.id }).eq('id', l.id)));
+      setBusy(false); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="🏦 Release employee loans — one voucher" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
+          Creates a single disbursement voucher for the selected loans — <b>debit Advances to Employees</b>, <b>credit Cash in Bank</b>. Only the principal (cash handed over) moves; interest is collected later via salary deduction.
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Release date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+          <TpLbl t="Release from bank *"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">—</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+        </div>
+        <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="px-2 py-1.5 w-8"></th><th className="text-left px-2 py-1.5">Borrower</th><th className="text-left px-2 py-1.5">Granted</th><th className="text-right px-2 py-1.5">Principal (to release)</th></tr></thead>
+            <tbody>{(loans||[]).map(l=>(
+              <tr key={l.id} className="border-t">
+                <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={sel.has(l.id)} onChange={()=>toggle(l.id)} /></td>
+                <td className="px-2 py-1.5 font-medium">{empName(l.employee_id)}</td>
+                <td className="px-2 py-1.5 text-xs text-slate-500">{fmtDate(l.date_granted)}</td>
+                <td className="px-2 py-1.5 text-right font-semibold">{peso(l.principal)}</td>
+              </tr>
+            ))}{(loans||[]).length===0 && <tr><td colSpan="4" className="px-2 py-6 text-center text-slate-400 text-xs">No approved loans awaiting release.</td></tr>}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td colSpan="3" className="px-2 py-2">TOTAL TO RELEASE ({chosen.length})</td><td className="px-2 py-2 text-right text-emerald-700">{peso(total)}</td></tr></tfoot>
+          </table>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={release} disabled={busy||!chosen.length} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Releasing…':`Release ${chosen.length} loan${chosen.length===1?'':'s'} · ${peso(total)}`}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Advances to Employees — the subledger for account 101013. Every company loan
+// that has been disbursed shows here with its running balance. Repayments are
+// booked by Accounting via a Journal Entry (Dr Cash / Cr Advances to Employees);
+// once fully settled, mark it paid here.
+function AdvancesToEmployeesView({ profile, profiles, employees, hrLoans, hrLoanInstallments, reload }){
+  const [filter,setFilter]=useState('outstanding'); // 'outstanding'|'paid'|'all'
+  const [search,setSearch]=useState('');
+  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const who=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):''; };
+  // Only DISBURSED loans are advances on the books (active or paid).
+  const advances=(hrLoans||[]).filter(l=> !l.deleted_at && (l.status==='active' || l.status==='paid'));
+  const rows=advances.map(l=>{ const c=loanCompute(l, hrLoanInstallments); return { l, principal:c.principal, repaid:c.paid, remaining:c.outstanding }; })
+    .filter(r=> filter==='all' ? true : filter==='paid' ? r.l.status==='paid' : r.l.status==='active')
+    .filter(r=> !search || empName(r.l.employee_id).toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=> b.remaining-a.remaining);
+  const totAdvanced=advances.reduce((s,l)=>s+(Number(l.principal)||0),0);
+  const totRepaid=advances.reduce((s,l)=>s+loanCompute(l,hrLoanInstallments).paid,0);
+  const totOutstanding=advances.filter(l=>l.status==='active').reduce((s,l)=>s+loanCompute(l,hrLoanInstallments).outstanding,0);
+  async function markPaid(l){ if(!confirm(`Mark ${empName(l.employee_id)}'s advance as fully paid? Record the final repayment as a Journal Entry (Dr Cash · Cr Advances to Employees) if you haven't yet.`)) return;
+    const { error }=await sb.from('employee_loans').update({ status:'paid', settled_at:new Date().toISOString().slice(0,10) }).eq('id', l.id); if(error){ alert(error.message); return; } reload && reload(); }
+  async function reopen(l){ const { error }=await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', l.id); if(error){ alert(error.message); return; } reload && reload(); }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🤝 Advances to Employees</h1><p className="text-slate-500 text-sm">Subledger for account 101013 · all company loans released to staff. Repayments are booked via Journal Entry.</p></div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-56" />
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total advanced (principal)</div><div className="text-xl font-bold mt-1">{peso(totAdvanced)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Total repaid</div><div className="text-xl font-bold mt-1 text-emerald-700">{peso(totRepaid)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase text-slate-500">Outstanding</div><div className="text-xl font-bold mt-1 text-rose-700">{peso(totOutstanding)}</div><div className="text-[11px] text-slate-500">{advances.filter(l=>l.status==='active').length} active</div></div>
+      </div>
+      <div className="flex items-center gap-1 mb-4">
+        {[['outstanding','Outstanding'],['paid','Paid'],['all','All']].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)} className={`text-xs px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{l}</button>
+        ))}
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Released</th>
+          <th className="text-right px-3 py-2">Advance (principal)</th><th className="text-right px-3 py-2">Repaid</th><th className="text-right px-3 py-2">Remaining</th>
+          <th className="text-left px-3 py-2">Status</th>{canEdit && <th></th>}
+        </tr></thead>
+        <tbody>{rows.map(r=>(
+          <tr key={r.l.id} className="border-t hover:bg-slate-50">
+            <td className="px-3 py-2 font-medium">{empName(r.l.employee_id)}</td>
+            <td className="px-3 py-2 text-xs">{r.l.disbursed_at?fmtDate(String(r.l.disbursed_at).slice(0,10)):fmtDate(r.l.date_granted)}</td>
+            <td className="px-3 py-2 text-right">{peso(r.principal)}</td>
+            <td className="px-3 py-2 text-right text-emerald-700">{peso(r.repaid)}</td>
+            <td className={`px-3 py-2 text-right font-bold ${r.remaining>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(r.remaining)}</td>
+            <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${r.l.status==='paid'?'bg-emerald-100 text-emerald-700':'bg-indigo-100 text-indigo-700'}`}>{r.l.status==='paid'?'Paid':'Active'}</span></td>
+            {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">{r.l.status==='active' ? <button onClick={()=>markPaid(r.l)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Mark paid</button> : <button onClick={()=>reopen(r.l)} className="text-xs text-slate-400 hover:text-indigo-600">Reopen</button>}</td>}
+          </tr>
+        ))}{rows.length===0 && <tr><td colSpan={canEdit?7:6} className="text-center text-slate-400 py-8">No advances here.</td></tr>}</tbody>
+      </table></div></div>
+      <div className="mt-3 text-[11px] text-slate-500">💡 When an employee pays (via salary deduction or cash), book it as a Journal Entry — <b>Debit Cash · Credit Advances to Employees (101013)</b> — then mark the advance paid here once fully settled.</div>
     </div>
   );
 }
@@ -31575,7 +31723,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','fin-reports','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','prod-timeline','pattern','cutting','sampling','embroidery','knitting','profile','subcon','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -32030,6 +32178,7 @@ function App(){
     ['assets','Asset Register','🏷'],
     ['journal','Journal Entries','📓'],
     ['general-ledger','General Ledger','📒'],
+    ['advances-employees','Advances to Employees','🤝'],
     ['fin-reports','Financial Reports','📈'],
     ['bir','BIR Tax Helpers','🧾'],
   ] };
@@ -32320,7 +32469,7 @@ function App(){
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
-        {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
+        {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
@@ -32393,6 +32542,7 @@ function App(){
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
+        {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
