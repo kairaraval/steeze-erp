@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 334 · Removed the standalone 'P&L Summary' from the Finance sidebar — it now lives as a tab inside Financial Reports.";
+const BUILD = "Live build 335 · Customer Ledger upgraded to Accounts Receivable: A/R aging buckets (Current / 1–30 / 31–60 / 61–90 / 90+) aged from delivery date + payment terms, per-client and totals. Open the client to see each open SO's due date & days overdue and Record a payment inline (same verify/bank flow).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22897,54 +22897,93 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
 
 
 /* ─────────── CUSTOMER LEDGER ─────────── */
-function CustomerLedgerView({ clients, salesOrders, soPayments, invoices }){
+// ── Accounts Receivable aging helpers ──────────────────────────────
+// The receivable clock starts on DELIVERY; the payment terms then set the due
+// date (e.g. "Net 30" → due 30 days after delivery; "upon delivery"/DP → due on
+// the delivery date). Undelivered balances aren't overdue yet ("Current").
+const AR_BUCKETS = [['current','Current'],['1-30','1–30'],['31-60','31–60'],['61-90','61–90'],['90+','90+ days']];
+function arTermsDays(terms){ const t=(terms||'').toLowerCase(); const m=t.match(/net\s*(\d+)/)||t.match(/(\d+)\s*days?/); return m?(parseInt(m[1],10)||0):0; }
+function arDueDate(so){ if(!so.delivered_at) return null; const d=new Date(so.delivered_at); if(isNaN(d.getTime())) return null; d.setHours(0,0,0,0); d.setDate(d.getDate()+arTermsDays(so.payment_terms)); return d; }
+function soOpenBalance(so){ return so.balance_due!=null ? (Number(so.balance_due)||0) : (Number(so.total||0)-Number(so.amount_paid||0)); }
+function arDaysPast(so, todayMs){ const due=arDueDate(so); if(!due) return null; return Math.floor((todayMs-due.getTime())/86400000); }
+function arBucketKey(so, todayMs){ const days=arDaysPast(so, todayMs); if(days==null || days<=0) return 'current'; if(days<=30) return '1-30'; if(days<=60) return '31-60'; if(days<=90) return '61-90'; return '90+'; }
+
+function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profile, profiles, bankAccounts, reload }){
   const [search,setSearch]=useState('');
   const [openClient,setOpenClient]=useState(null);
-  // Roll up per client: how many SOs, total invoiced, total paid, balance, last activity.
+  const [onlyOwing,setOnlyOwing]=useState(true);
+  const todayMs=(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const rows = (clients||[]).map(c => {
-    const soForClient = salesOrders.filter(s => s.client_id===c.id && s.status!=='cancelled');
+    const soForClient = (salesOrders||[]).filter(s => s.client_id===c.id && s.status!=='cancelled' && !s.deleted_at);
     const totalInvoiced = soForClient.reduce((s,o)=>s+Number(o.total||0), 0);
     const totalPaid = soForClient.reduce((s,o)=>s+Number(o.amount_paid||0), 0);
-    const balance = totalInvoiced - totalPaid;
+    const openForClient = soForClient.filter(s=>soOpenBalance(s)>0.01);
+    const buckets = { current:0,'1-30':0,'31-60':0,'61-90':0,'90+':0 };
+    openForClient.forEach(s=>{ buckets[arBucketKey(s,todayMs)] += soOpenBalance(s); });
+    const balance = openForClient.reduce((s,o)=>s+soOpenBalance(o),0);
+    const overdue = balance - buckets.current;
     const lastDate = soForClient.map(o=>o.date).sort().reverse()[0]||null;
-    const invCount = (invoices||[]).filter(iv => iv.client_id===c.id && iv.status!=='cancelled').length;
-    return { client: c, soCount: soForClient.length, invCount, totalInvoiced, totalPaid, balance, lastDate };
-  }).filter(r => r.soCount>0 || r.invCount>0 || r.balance!==0);
-  const filtered = rows.filter(r => !search || (r.client.company||'').toLowerCase().includes(search.toLowerCase()));
-  const sorted = filtered.sort((a,b)=>b.balance-a.balance);
-  const totalAR = sorted.reduce((s,r)=>s+r.balance, 0);
+    return { client:c, soCount:soForClient.length, totalInvoiced, totalPaid, balance, overdue, buckets, lastDate };
+  }).filter(r => r.soCount>0 || r.balance>0.01);
+  const filtered = rows
+    .filter(r => !search || (r.client.company||'').toLowerCase().includes(search.toLowerCase()))
+    .filter(r => !onlyOwing || r.balance>0.01)
+    .sort((a,b)=> b.balance-a.balance);
+  const totalAR = rows.reduce((s,r)=>s+r.balance, 0);
+  const bucketTotals = { current:0,'1-30':0,'31-60':0,'61-90':0,'90+':0 };
+  rows.forEach(r=> AR_BUCKETS.forEach(([k])=> bucketTotals[k]+=r.buckets[k]));
+  const overdueTotal = totalAR - bucketTotals.current;
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold">👥 Customer Ledger</h1>
-            <p className="text-slate-500 text-sm">{sorted.length} client{sorted.length===1?'':'s'} with activity · Total AR: <strong className="text-rose-700">{peso(totalAR)}</strong></p>
+            <h1 className="text-2xl font-bold">📇 Accounts Receivable</h1>
+            <p className="text-slate-500 text-sm">Total A/R: <strong className="text-rose-700">{peso(totalAR)}</strong> · Overdue: <strong className="text-rose-700">{peso(overdueTotal)}</strong> · Aged from delivery + payment terms</p>
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search client…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
+          <div className="flex items-center gap-2">
+            <label className="text-xs flex items-center gap-1.5 text-slate-600"><input type="checkbox" checked={onlyOwing} onChange={e=>setOnlyOwing(e.target.checked)} />With balance only</label>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search client…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-52" />
+          </div>
         </div>
       </div>
+      {/* Aging summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        {AR_BUCKETS.map(([k,l])=>(
+          <div key={k} className={`border rounded-lg p-3 ${k==='current'?'bg-white':'bg-rose-50/40 border-rose-100'}`}>
+            <div className="text-[10px] uppercase text-slate-400">{l}</div>
+            <div className={`text-lg font-bold mt-0.5 ${k==='current'?'text-slate-700':'text-rose-700'}`}>{peso(bucketTotals[k])}</div>
+          </div>
+        ))}
+      </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Client</th><th className="text-right px-3 py-2">SOs</th><th className="text-right px-3 py-2">Invoices</th><th className="text-right px-3 py-2">Total Invoiced</th><th className="text-right px-3 py-2">Total Paid</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Last SO</th><th></th></tr></thead>
-        <tbody>{sorted.map(r => (
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Client</th>
+          {AR_BUCKETS.map(([k,l])=><th key={k} className="text-right px-3 py-2">{l}</th>)}
+          <th className="text-right px-3 py-2">Balance</th><th></th>
+        </tr></thead>
+        <tbody>{filtered.map(r => (
           <tr key={r.client.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpenClient(r.client)}>
             <td className="px-3 py-2 font-medium">{r.client.company}</td>
-            <td className="px-3 py-2 text-right">{r.soCount}</td>
-            <td className="px-3 py-2 text-right">{r.invCount||'—'}</td>
-            <td className="px-3 py-2 text-right">{peso(r.totalInvoiced)}</td>
-            <td className="px-3 py-2 text-right text-emerald-700">{peso(r.totalPaid)}</td>
+            {AR_BUCKETS.map(([k])=><td key={k} className={`px-3 py-2 text-right ${k!=='current'&&r.buckets[k]>0.01?'text-rose-700 font-medium':'text-slate-500'}`}>{r.buckets[k]>0.01?peso(r.buckets[k]):'—'}</td>)}
             <td className={`px-3 py-2 text-right font-bold ${r.balance>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(r.balance)}</td>
-            <td className="px-3 py-2 text-xs">{r.lastDate?fmtDate(r.lastDate):'—'}</td>
-            <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setOpenClient(r.client);}} className="text-xs text-indigo-600 hover:underline">View ledger</button></td>
+            <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setOpenClient(r.client);}} className="text-xs text-indigo-600 hover:underline">Open</button></td>
           </tr>
-        ))}{sorted.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No client activity yet. SOs appear here once leads hit Closed Won.</td></tr>}</tbody>
+        ))}{filtered.length===0 && <tr><td colSpan={AR_BUCKETS.length+3} className="text-center text-slate-400 py-8">No receivables. Balances appear once a Sales Order is created and (for aging) delivered.</td></tr>}</tbody>
+        <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">TOTAL</td>{AR_BUCKETS.map(([k])=><td key={k} className="px-3 py-2 text-right">{peso(bucketTotals[k])}</td>)}<td className="px-3 py-2 text-right text-rose-700">{peso(totalAR)}</td><td></td></tr></tfoot>
       </table></div></div>
-      {openClient && <CustomerLedgerDetailModal client={openClient} sos={salesOrders.filter(s=>s.client_id===openClient.id)} payments={soPayments.filter(p=>salesOrders.find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} onClose={()=>setOpenClient(null)} />}
+      {openClient && <CustomerLedgerDetailModal client={openClient} sos={(salesOrders||[]).filter(s=>s.client_id===openClient.id)} payments={(soPayments||[]).filter(p=>(salesOrders||[]).find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={reload} onClose={()=>setOpenClient(null)} />}
     </div>
   );
 }
 
-function CustomerLedgerDetailModal({ client, sos, payments, invoices, onClose }){
+function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, profiles, bankAccounts, reload, onClose }){
+  const [paying,setPaying]=useState(null); // SO to record a payment against
+  const todayMs=(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const openSOs=(sos||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at && soOpenBalance(s)>0.01)
+    .slice().sort((a,b)=>{ const da=arDaysPast(a,todayMs), db=arDaysPast(b,todayMs); return (db==null?-1:db)-(da==null?-1:da); });
+  const canPay = typeof canLogSOPayment==='function' ? canLogSOPayment(profile) : true;
+  const agingChip=(so)=>{ if(!so.delivered_at) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">Undelivered</span>; const dp=arDaysPast(so,todayMs); if(dp==null) return null; if(dp<=0) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Current · due in {Math.abs(dp)}d</span>; return <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">{dp}d overdue</span>; };
   // Build a unified ledger: every SO (debit) and every payment (credit) sorted by date.
   const ledger = [];
   sos.filter(s=>s.status!=='cancelled').forEach(s => ledger.push({ date:s.date, type:'so', ref:s.number, debit:Number(s.total||0), credit:0, raw:s }));
@@ -22956,7 +22995,7 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, onClose })
   const totalDebit = ledger.reduce((s,r)=>s+r.debit,0);
   const totalCredit = ledger.reduce((s,r)=>s+r.credit,0);
   return (
-    <Modal title={`Customer Ledger — ${client.company}`} onClose={onClose} xwide>
+    <Modal title={`Statement of Account — ${client.company}`} onClose={onClose} xwide>
       <div className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-slate-50 border rounded p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Total Invoiced</div><div className="font-bold">{peso(totalDebit)}</div></div>
@@ -22975,6 +23014,29 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, onClose })
             </tr>
           ))}{withRunning.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-6">No activity for this client yet.</td></tr>}</tbody>
         </table></div></div>
+        {/* Open receivables (aged) with one-click payment entry. */}
+        <div>
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-1.5">💰 Open balances ({openSOs.length})</div>
+          {openSOs.length===0 ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-3 text-sm text-emerald-700 text-center">✓ Fully settled — no open receivables.</div>
+          ) : (
+            <div className="bg-white border rounded-lg overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">SO</th><th className="text-left px-3 py-2">Delivered</th><th className="text-left px-3 py-2">Terms</th><th className="text-left px-3 py-2">Due</th><th className="text-left px-3 py-2">Aging</th><th className="text-right px-3 py-2">Balance</th><th></th></tr></thead>
+              <tbody>{openSOs.map(s=>{ const due=arDueDate(s); return (
+                <tr key={s.id} className="border-t">
+                  <td className="px-3 py-2 font-mono text-xs font-semibold">{s.number}</td>
+                  <td className="px-3 py-2 text-xs">{s.delivered_at?fmtDate(String(s.delivered_at).slice(0,10)):'—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[140px]" title={s.payment_terms||''}>{s.payment_terms||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{due?fmtDate(due.toISOString().slice(0,10)):'on delivery'}</td>
+                  <td className="px-3 py-2">{agingChip(s)}</td>
+                  <td className="px-3 py-2 text-right font-semibold text-rose-700">{peso(soOpenBalance(s))}</td>
+                  <td className="px-3 py-2 text-right">{canPay && <button onClick={()=>setPaying(s)} className="text-xs px-2.5 py-1 rounded bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Record payment</button>}</td>
+                </tr>
+              ); })}</tbody>
+            </table></div></div>
+          )}
+        </div>
+
         {/* Invoices issued against this client's projects (informational — the
             running balance above stays driven by SOs + payments to avoid
             double-counting). */}
@@ -22998,6 +23060,7 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, onClose })
           </div>
         )}
       </div>
+      {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload && reload(); }} />}
     </Modal>
   );
 }
@@ -31952,7 +32015,7 @@ function App(){
     ['estimates','Estimates','🧾'],
     ['sales-orders','Sales Orders','📜'],
     ['invoices','Invoices','🧾'],
-    ['ledger','Customer Ledger','👥'],
+    ['ledger','Accounts Receivable','📇'],
     ['commissions','Commissions','💰'],
     ['rfps','Request for Payment','📝'],
     ['ap-vouchers','A/P Vouchers','📄'],
@@ -32320,7 +32383,7 @@ function App(){
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
-        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} />}
+        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
