@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 340 · Sales pipeline leads now accept Excel (and Word/CSV) file attachments — attach an .xlsx like a photo or PDF; it shows with a 📊 chip and opens/downloads via a secure link.";
+const BUILD = "Live build 341 · Sales Orders: Admin, Accounting Supervisor and Accounting Officer can now ✎ Edit a logged payment (amount, date, method, reference, bank) or delete it — the linked bank transaction and the order balance update automatically.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21342,6 +21342,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   const [editing,setEditing]=useState(null);   // SO to open
   const [paying,setPaying]=useState(null);     // SO to log a Pending payment for
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment row to verify
+  const [editingPayment,setEditingPayment]=useState(null); // payment row to edit (admin/accounting)
   const [filter,setFilter]=useState('');
   const [search,setSearch]=useState('');
   const [monthFilter,setMonthFilter]=useState(''); // '' = all months, else 'YYYY-MM'
@@ -21616,14 +21617,15 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
         />
       )}
 
-      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} />}
+      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} onEditPayment={(payment, so)=>{ setEditing(null); setEditingPayment({ payment, so }); }} />}
       {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
+      {editingPayment && <SalesOrderEditPaymentModal payment={editingPayment.payment} so={editingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setEditingPayment(null)} onSaved={()=>{ setEditingPayment(null); reload(); }} />}
     </div>
   );
 }
 
-function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, salesCommissions, onClose, onSaved, onPay, onVerifyPayment }){
+function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, salesCommissions, onClose, onSaved, onPay, onVerifyPayment, onEditPayment }){
   const canInvoice = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Commission rows tied to this SO + whether a PAID one was based on a total
   // that no longer matches (so we can flag the delta for manual settlement).
@@ -21868,6 +21870,9 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
                       {(p.attachment_url||p.attachment_path) && <ProofLink path={p.attachment_path} url={p.attachment_url} className="text-[10px] text-indigo-600 hover:underline mr-1">📷</ProofLink>}
                       {p.status === 'pending' && canVerifySOPayment(profile) && onVerifyPayment && (
                         <button onClick={()=>onVerifyPayment(p, so)} className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Verify</button>
+                      )}
+                      {p.status !== 'voided' && canEditSOPayment(profile) && onEditPayment && (
+                        <button onClick={()=>onEditPayment(p, so)} className="text-[10px] px-2 py-0.5 rounded border border-slate-300 text-slate-600 font-semibold hover:bg-slate-50 ml-1">✎ Edit</button>
                       )}
                       {p.status === 'voided' && p.void_reason && <span className="text-[10px] text-rose-600 italic" title={p.void_reason}>voided</span>}
                     </td>
@@ -22289,6 +22294,94 @@ function canLogSOPayment(profile){
 function canVerifySOPayment(profile){
   // Only Accounting + Admin can convert Pending → Verified.
   return profile?.role === 'admin' || profile?.role === 'accounting';
+}
+function canEditSOPayment(profile){
+  // Admin + Accounting Supervisor + Accounting Officer may edit a logged payment.
+  return ['admin','accounting','accounting_officer'].includes(profile?.role);
+}
+// Edit an already-logged SO payment (amount / date / method / reference / bank).
+// Keeps the linked bank transaction in sync and recomputes the SO totals.
+function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClose, onSaved }){
+  const [amount,setAmount]=useState(String(payment.amount||''));
+  const [method,setMethod]=useState(payment.method||'gcash');
+  const [reference,setReference]=useState(payment.reference||'');
+  const [date,setDate]=useState(payment.date||new Date().toISOString().slice(0,10));
+  const [bankId,setBankId]=useState(payment.bank_id||(payment.method==='cash'?null:(bankAccounts[0]?.id||null)));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const isVerified = payment.status==='verified';
+  async function recomputeSO(){
+    const { data:all } = await sb.from('sales_order_payments').select('amount,status').eq('sales_order_id', so.id);
+    const newPaid = (all||[]).filter(p=>p.status==='verified').reduce((s,p)=>s+Number(p.amount||0),0);
+    const newBal = Math.max(0, Number(so.total||0)-newPaid);
+    const newStatus = newBal<=0.01?'paid':(newPaid>0.01?'partial':'open');
+    await sb.from('sales_orders').update({ amount_paid:newPaid, balance_due:newBal, status:newStatus }).eq('id', so.id);
+  }
+  async function save(){
+    const amt=Number(amount)||0;
+    if(amt<=0){ setMsg('Amount must be greater than 0.'); return; }
+    if(method!=='cash' && !bankId){ setMsg('Pick the bank / wallet that received it.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      let bankTxId = payment.bank_transaction_id || null;
+      if(isVerified){
+        if(method!=='cash' && bankId){
+          if(bankTxId){
+            await sb.from('bank_transactions').update({ bank_id:bankId, date, amount:amt, reference_number:reference||null, description:`Payment from ${so.client_name||''} for ${so.number}` }).eq('id', bankTxId);
+          } else {
+            const { data:btx, error:be } = await sb.from('bank_transactions').insert({ bank_id:bankId, date, direction:'in', amount:amt, description:`Payment from ${so.client_name||''} for ${so.number}`, ref_type:'sales_order', ref_id:so.id, reference_number:reference||null, created_by:profile.id }).select('id').single();
+            if(be) throw be; bankTxId=btx.id;
+          }
+        } else if(method==='cash' && bankTxId){
+          try { await sb.from('bank_transactions').delete().eq('id', bankTxId); } catch(_){}
+          bankTxId=null;
+        }
+      }
+      const { error:pe } = await sb.from('sales_order_payments').update({ amount:amt, method, reference:reference||null, date, bank_id:method==='cash'?null:bankId, bank_transaction_id:bankTxId }).eq('id', payment.id);
+      if(pe) throw pe;
+      await recomputeSO();
+      try { await sb.from('sales_order_activity').insert({ sales_order_id:so.id, actor_id:profile.id, type:'system', text:`✎ Payment edited — ${peso(amt)} · ${payMethodLabel(method)}${reference?` · ${reference}`:''}` }); } catch(_){}
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function del(){
+    if(!confirm(`Delete this ${peso(payment.amount)} payment?\n\nIts bank transaction (if any) is reversed and the order balance recomputed.`)) return;
+    setBusy(true); setMsg('');
+    try {
+      if(payment.bank_transaction_id){ try { await sb.from('bank_transactions').delete().eq('id', payment.bank_transaction_id); } catch(_){} }
+      await sb.from('sales_order_payments').delete().eq('id', payment.id);
+      await recomputeSO();
+      try { await sb.from('sales_order_activity').insert({ sales_order_id:so.id, actor_id:profile.id, type:'system', text:`🗑 Payment of ${peso(payment.amount)} deleted` }); } catch(_){}
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`Edit payment — ${so.number}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded p-2 text-xs text-slate-600">Status: <b>{payment.status||'verified'}</b>. Editing a verified payment updates the linked bank transaction and the order balance.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount *"><input type="number" step="0.01" className="input" value={amount} onChange={e=>setAmount(e.target.value)} /></TpLbl>
+          <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Method"><select className="input" value={method} onChange={e=>{ setMethod(e.target.value); if(e.target.value==='cash') setBankId(null); else if(!bankId) setBankId(bankAccounts[0]?.id||null); }}>{PAYMENT_METHOD_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></TpLbl>
+          <TpLbl t="Reference #"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="Ref / deposit slip / check #" /></TpLbl>
+        </div>
+        <TpLbl t={`Bank / wallet ${method==='cash'?'(N/A for cash)':'*'}`}>
+          <select className="input" value={bankId||''} disabled={method==='cash'} onChange={e=>setBankId(e.target.value||null)}>
+            <option value="">—</option>
+            {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}
+          </select>
+        </TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy} onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50">🗑 Delete</button>
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="py-2 px-3 rounded-lg border text-slate-600 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button disabled={busy} onClick={save} className="py-2 px-4 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save changes'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 
