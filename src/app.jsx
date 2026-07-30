@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 341 · Sales Orders: Admin, Accounting Supervisor and Accounting Officer can now ✎ Edit a logged payment (amount, date, method, reference, bank) or delete it — the linked bank transaction and the order balance update automatically.";
+const BUILD = "Live build 342 · Number fields (quantity & price on estimates, invoices, leads, everywhere) no longer change when you scroll the mouse wheel over them — prevents accidental qty/price edits.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31697,6 +31697,14 @@ function App(){
   const [muted,setMuted]=useState(()=>{ try{ return localStorage.getItem('steeze.notifications.muted')==='1'; }catch(_){ return false; } });
   function toggleMute(){ setMuted(m=>{ const n=!m; try{ localStorage.setItem('steeze.notifications.muted', n?'1':'0'); }catch(_){} return n; }); }
   const mutedRef=useRef(muted); useEffect(()=>{ mutedRef.current=muted; },[muted]);
+  // Stop the mouse wheel from accidentally changing a focused number field
+  // (qty / price on estimates, invoices, leads, etc.). One tick is absorbed and
+  // the field blurs, so a second scroll moves the page normally.
+  useEffect(()=>{
+    const onWheel=(e)=>{ const el=e.target; if(el && el.tagName==='INPUT' && el.type==='number' && el===document.activeElement){ e.preventDefault(); el.blur(); } };
+    document.addEventListener('wheel', onWheel, { passive:false });
+    return ()=>document.removeEventListener('wheel', onWheel);
+  },[]);
   const [toast,setToast]=useState(null); // { title, body }
   useEffect(()=>{ if(!toast) return; const t=setTimeout(()=>setToast(null),5000); return ()=>clearTimeout(t); },[toast]);
   // Won celebration — listens for the custom event dispatched by Pipeline
