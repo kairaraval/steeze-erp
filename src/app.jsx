@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 342 · Number fields (quantity & price on estimates, invoices, leads, everywhere) no longer change when you scroll the mouse wheel over them — prevents accidental qty/price edits.";
+const BUILD = "Live build 343 · Cost center is now per-line on Journal Entries and on the compound (debit/credit) split of Check/Cash and RFP vouchers (petty cash already had it) — each posts to the GL with its own cost center.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23611,12 +23611,12 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   // Optional compound (debit/credit) breakdown — segregate EWT / Input VAT.
   const [splitOn,setSplitOn]=useState(false);
-  const [splits,setSplits]=useState([{ account_code:'', description:'', debit:'', credit:'' },{ account_code:'', description:'', debit:'', credit:'' }]);
+  const [splits,setSplits]=useState([{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' },{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]);
   const splitAcct=(code)=> (chartAccounts||[]).find(a=>a.code===code);
   const splitT = { debit: splits.reduce((s,l)=>s+(Number(l.debit)||0),0), credit: splits.reduce((s,l)=>s+(Number(l.credit)||0),0) };
   const splitBalanced = Math.abs(splitT.debit - splitT.credit) < 0.01 && splitT.debit>0;
   function setSplit(i,k,val){ setSplits(ls=>ls.map((l,j)=>j===i?{...l,[k]:val}:l)); }
-  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', description:'', debit:'', credit:'' }]); }
+  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]); }
   function removeSplit(i){ setSplits(ls=>ls.filter((_,j)=>j!==i)); }
   async function save(){
     if(f.type==='check' && !f.bank_id){ setMsg('Pick the bank the check draws from.'); return; }
@@ -23625,7 +23625,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
     let splitLines=null;
     if(splitOn){
       const cs=splits.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
-        .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+        .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', cost_center_id:l.cost_center_id||null, description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
       if(cs.length<2){ setMsg('A split entry needs at least two lines.'); return; }
       const st={ debit:cs.reduce((s,l)=>s+l.debit,0), credit:cs.reduce((s,l)=>s+l.credit,0) };
       if(Math.abs(st.debit-st.credit)>=0.01){ setMsg(`Split is out of balance by ${peso(Math.abs(st.debit-st.credit))}.`); return; }
@@ -23750,17 +23750,17 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
         <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={splitOn} onChange={e=>setSplitOn(e.target.checked)} /> Itemize / split (debit–credit) — segregate EWT / VAT</label>
         {splitOn && (
           <div className="border border-indigo-200 rounded-lg overflow-hidden">
-            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5 w-56">Account</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-24">Debit</th><th className="text-right px-2 py-1.5 w-24">Credit</th><th className="w-8"></th></tr></thead>
+            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5 w-48">Account</th><th className="text-left px-2 py-1.5 w-32">Cost center</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-24">Debit</th><th className="text-right px-2 py-1.5 w-24">Credit</th><th className="w-8"></th></tr></thead>
               <tbody>{splits.map((l,i)=>(
                 <tr key={i} className="border-t">
-                  <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td>
+                  <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td><td className="px-2 py-1"><select className="input !py-1" value={l.cost_center_id||''} onChange={e=>setSplit(i,'cost_center_id',e.target.value)}><option value="">— cc —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code||c.name}</option>)}</select></td>
                   <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setSplit(i,'description',e.target.value)} placeholder="line memo" /></td>
                   <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setSplit(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setSplit(i,'credit',''); }} /></td>
                   <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setSplit(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setSplit(i,'debit',''); }} /></td>
                   <td className="px-2 py-1 text-center"><button type="button" onClick={()=>removeSplit(i)} className="text-slate-400 hover:text-rose-600">✕</button></td>
                 </tr>
               ))}</tbody>
-              <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-2 py-1.5" colSpan="2"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td><td className="px-2 py-1.5 text-right">{peso(splitT.debit)}</td><td className="px-2 py-1.5 text-right">{peso(splitT.credit)}</td><td></td></tr></tfoot>
+              <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-2 py-1.5" colSpan="3"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td><td className="px-2 py-1.5 text-right">{peso(splitT.debit)}</td><td className="px-2 py-1.5 text-right">{peso(splitT.credit)}</td><td></td></tr></tfoot>
             </table>
             <div className={`text-xs text-center py-1 ${splitBalanced?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{splitBalanced?'✓ Balanced':`Out of balance by ${peso(Math.abs(splitT.debit-splitT.credit))}`}</div>
           </div>
@@ -24030,12 +24030,12 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
   // Optional compound (debit/credit) breakdown — segregate EWT / Input VAT from
   // the expense. When on, the split must balance. Stored as split_lines.
   const [splitOn,setSplitOn]=useState(!!(existing && Array.isArray(existing.split_lines) && existing.split_lines.length));
-  const [splits,setSplits]=useState(()=> (existing && Array.isArray(existing.split_lines) && existing.split_lines.length) ? existing.split_lines.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [{ account_code:'', description:'', debit:'', credit:'' },{ account_code:'', description:'', debit:'', credit:'' }]);
+  const [splits,setSplits]=useState(()=> (existing && Array.isArray(existing.split_lines) && existing.split_lines.length) ? existing.split_lines.map(l=>({ account_code:l.account_code||'', cost_center_id:l.cost_center_id||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' },{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]);
   const splitAcct=(code)=> (chartAccounts||[]).find(a=>a.code===code);
   const splitT = { debit: splits.reduce((s,l)=>s+(Number(l.debit)||0),0), credit: splits.reduce((s,l)=>s+(Number(l.credit)||0),0) };
   const splitBalanced = Math.abs(splitT.debit - splitT.credit) < 0.01 && splitT.debit>0;
   function setSplit(i,k,v){ setSplits(ls=>ls.map((l,j)=>j===i?{...l,[k]:v}:l)); }
-  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', description:'', debit:'', credit:'' }]); }
+  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]); }
   function removeSplit(i){ setSplits(ls=>ls.filter((_,j)=>j!==i)); }
   // Locally-added payees (just-created via quick-add) so the dropdown shows
   // them immediately without waiting for the page-level reload.
@@ -24065,7 +24065,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
       let splitLines = null;
       if(splitOn){
         const cleanSplit = splits.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
-          .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+          .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', cost_center_id:l.cost_center_id||null, description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
         if(cleanSplit.length<2){ setMsg('A split entry needs at least two lines.'); setBusy(false); return; }
         const st={ debit:cleanSplit.reduce((s,l)=>s+l.debit,0), credit:cleanSplit.reduce((s,l)=>s+l.credit,0) };
         if(Math.abs(st.debit-st.credit)>=0.01){ setMsg(`Split is out of balance by ${peso(Math.abs(st.debit-st.credit))} — debits must equal credits.`); setBusy(false); return; }
@@ -24269,13 +24269,13 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
             </div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
-                <th className="text-left px-2 py-1.5 w-56">Account</th><th className="text-left px-2 py-1.5">Description</th>
+                <th className="text-left px-2 py-1.5 w-48">Account</th><th className="text-left px-2 py-1.5 w-32">Cost center</th><th className="text-left px-2 py-1.5">Description</th>
                 <th className="text-right px-2 py-1.5 w-28">Debit</th><th className="text-right px-2 py-1.5 w-28">Credit</th><th className="w-8"></th>
               </tr></thead>
               <tbody>
                 {splits.map((l,i)=>(
                   <tr key={i} className="border-t">
-                    <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td>
+                    <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td><td className="px-2 py-1"><select className="input !py-1" value={l.cost_center_id||''} onChange={e=>setSplit(i,'cost_center_id',e.target.value)}><option value="">— cc —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code||c.name}</option>)}</select></td>
                     <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setSplit(i,'description',e.target.value)} placeholder="line memo" /></td>
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setSplit(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setSplit(i,'credit',''); }} /></td>
                     <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setSplit(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setSplit(i,'debit',''); }} /></td>
@@ -24285,7 +24285,7 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
               </tbody>
               <tfoot>
                 <tr className="border-t bg-slate-50 font-semibold">
-                  <td className="px-2 py-1.5" colSpan="2"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td>
+                  <td className="px-2 py-1.5" colSpan="3"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td>
                   <td className="px-2 py-1.5 text-right">{peso(splitT.debit)}</td>
                   <td className="px-2 py-1.5 text-right">{peso(splitT.credit)}</td>
                   <td></td>
@@ -26590,7 +26590,7 @@ function buildGLPostings(data){
   }
   // A. Posted journal entries — already double-entry.
   journalEntries.filter(j=>!j.deleted_at && j.status!=='cancelled' && j.status!=='draft').forEach(j=>{
-    (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo));
+    (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo, l.cost_center_id||j.cost_center_id));
   });
   // B. Sales collections (verified SO payments) — Dr Cash/Bank, Cr Sales Revenue.
   soPayments.filter(p=>!p.deleted_at && (p.status==='verified'||p.status==='paid'||p.status==='confirmed')).forEach(p=>{
@@ -26608,7 +26608,7 @@ function buildGLPostings(data){
       const v=b.ref_type==='voucher'?vById.get(b.ref_id):null;
       const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
       if(v && Array.isArray(v.split_lines) && v.split_lines.length){
-        v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, v.cost_center_id));
+        v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, l.cost_center_id||v.cost_center_id));
       } else if(v){ push(b.date, v.gl_account_code||categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
       else if(e){ push(b.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
       else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued'); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, ''); }
@@ -26913,8 +26913,8 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
   const [memo,setMemo]=useState(entry.memo||'');
   const [bankId,setBankId]=useState(entry.bank_id||'');
   const [costCenterId,setCostCenterId]=useState(entry.cost_center_id||'');
-  const blank=()=>({ account_code:'', description:'', debit:'', credit:'' });
-  const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
+  const blank=()=>({ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' });
+  const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', cost_center_id:l.cost_center_id||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const acctFor=(code)=> (chartAccounts||[]).find(a=>a.code===code);
   const t = jeTotals(lines);
@@ -26957,7 +26957,7 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
   }
   async function save(status){
     const clean = lines.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
-      .map(l=>({ account_code:l.account_code, account_name:acctFor(l.account_code)?.name||'', description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+      .map(l=>({ account_code:l.account_code, account_name:acctFor(l.account_code)?.name||'', cost_center_id:l.cost_center_id||null, description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
     if(clean.length<2){ setMsg('A journal entry needs at least two lines.'); return; }
     const tt=jeTotals(clean);
     if(status==='posted' && !tt.balanced){ setMsg(`Debits (${peso(tt.debit)}) must equal Credits (${peso(tt.credit)}) to post.`); return; }
@@ -27000,8 +27000,8 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
         <div className="border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
-              <th className="text-left px-2 py-1.5 w-64">Account</th><th className="text-left px-2 py-1.5">Description</th>
-              <th className="text-right px-2 py-1.5 w-32">Debit</th><th className="text-right px-2 py-1.5 w-32">Credit</th><th className="w-8"></th>
+              <th className="text-left px-2 py-1.5 w-52">Account</th><th className="text-left px-2 py-1.5 w-40">Cost center</th><th className="text-left px-2 py-1.5">Description</th>
+              <th className="text-right px-2 py-1.5 w-28">Debit</th><th className="text-right px-2 py-1.5 w-28">Credit</th><th className="w-8"></th>
             </tr></thead>
             <tbody>
               {lines.map((l,i)=>(
@@ -27012,6 +27012,7 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
                       {chartAccounts.filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}
                     </select>
                   </td>
+                  <td className="px-2 py-1"><select className="input !py-1" value={l.cost_center_id||''} onChange={e=>setLine(i,'cost_center_id',e.target.value)}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></td>
                   <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setLine(i,'description',e.target.value)} placeholder="line memo" /></td>
                   <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setLine(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setLine(i,'credit',''); }} /></td>
                   <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setLine(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setLine(i,'debit',''); }} /></td>
@@ -27021,7 +27022,7 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
             </tbody>
             <tfoot>
               <tr className="border-t bg-slate-50 font-semibold">
-                <td className="px-2 py-1.5" colSpan="2"><button onClick={addLine} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td>
+                <td className="px-2 py-1.5" colSpan="3"><button onClick={addLine} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td>
                 <td className="px-2 py-1.5 text-right">{peso(t.debit)}</td>
                 <td className="px-2 py-1.5 text-right">{peso(t.credit)}</td>
                 <td></td>
