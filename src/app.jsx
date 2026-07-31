@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 346 · Removed the Production Timeline from the Production module (all roles).";
+const BUILD = "Live build 347 · Graphic Design board: added an artists' priority Checklist as the leftmost column. It auto-mirrors active jobs (title links to the card), artists can claim tasks with their name, reorder by priority, and tick them off.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3757,6 +3757,19 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
     reload();
   }
   const liveDetail = detail ? (jobs.find(x=>x.id===detail.id)||detail) : null;
+  // ── Artists' priority checklist (Graphic board only) ─────────────────────
+  // Auto-mirrors active jobs (anything not yet delivered). Artists claim a task
+  // by typing their name, reorder by priority, and tick it off. Clicking the
+  // title opens the full job card for details.
+  const showChecklist = jobType==='graphic';
+  const checklistJobs = showChecklist
+    ? filtered.filter(j=>!doneStatuses.includes(j.status))
+        .slice().sort((a,b)=> ((a.cl_position??1e9)-(b.cl_position??1e9)) || (new Date(a.created_at||0)-new Date(b.created_at||0)))
+    : [];
+  async function reorderChecklist(list){ await Promise.all(list.map((j,i)=> sb.from(table).update({ cl_position:i }).eq('id',j.id))); reload(); }
+  function moveChecklist(j,dir){ const arr=checklistJobs.slice(); const i=arr.findIndex(x=>x.id===j.id); const k=i+dir; if(i<0||k<0||k>=arr.length) return; [arr[i],arr[k]]=[arr[k],arr[i]]; reorderChecklist(arr); }
+  async function toggleChecklistDone(j){ const { error }=await sb.from(table).update({ cl_done:!j.cl_done }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
+  async function setChecklistAssignee(j,name){ if((j.cl_assignee||'')===((name||'').trim())) return; const { error }=await sb.from(table).update({ cl_assignee:(name||'').trim()||null }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -3786,6 +3799,33 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
         // height below the page header (~150px) and is horizontally
         // scrollable when there are more columns than fit.
         <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-160px)]">
+          {showChecklist && (
+            <div className="flex-shrink-0 w-64 flex flex-col h-full">
+              <div className="shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold bg-pink-600 text-white">📋 Checklist <span className="opacity-70">({checklistJobs.length})</span></div>
+              <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-1.5 min-h-[120px] bg-pink-50/70">
+                <div className="text-[10px] text-pink-700/80 px-1 pb-1">Arrange by priority · claim with your name · tick when done. Tap the title to open the card.</div>
+                {checklistJobs.map((j,idx)=>(
+                  <div key={j.id} className="bg-white border rounded-lg px-2 py-1.5">
+                    <div className="flex items-start gap-1.5">
+                      <div className="flex flex-col shrink-0 -my-0.5">
+                        <button onClick={()=>moveChecklist(j,-1)} disabled={idx===0} className={`text-[11px] leading-none px-0.5 ${idx===0?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move up">▲</button>
+                        <button onClick={()=>moveChecklist(j,1)} disabled={idx===checklistJobs.length-1} className={`text-[11px] leading-none px-0.5 ${idx===checklistJobs.length-1?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move down">▼</button>
+                      </div>
+                      <input type="checkbox" checked={!!j.cl_done} onChange={()=>toggleChecklistDone(j)} className="mt-0.5 shrink-0" />
+                      <button onClick={()=>setDetail(j)} className={`min-w-0 flex-1 text-left text-xs font-medium hover:underline ${j.cl_done?'line-through text-slate-400':'text-slate-800'}`} title="Open the job card for details">
+                        {j.item||j.number||'—'}
+                        {j.client_name && <span className="block text-[10px] text-slate-400 font-normal truncate">{j.client_name}</span>}
+                      </button>
+                    </div>
+                    <div className="mt-1 pl-6">
+                      <input key={j.id+'-'+(j.cl_assignee||'')} defaultValue={j.cl_assignee||''} onBlur={e=>setChecklistAssignee(j,e.target.value)} placeholder="+ artist name" className="w-full text-[11px] px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 placeholder-slate-400 focus:bg-white" />
+                    </div>
+                  </div>
+                ))}
+                {checklistJobs.length===0 && <div className="text-center text-slate-400 text-xs py-6">No active jobs yet. New To-Do tasks show up here automatically.</div>}
+              </div>
+            </div>
+          )}
           {statuses.map(st=>{ const col=filtered.filter(j=>j.status===st.key);
             const isDragTarget = dragOverStatus === st.key;
             const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStatus!==st.key) setDragOverStatus(st.key); };
