@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 352 · Graphic checklist: drag an item up or down to reorder its priority within the checklist (no longer moves it to board columns). ▲▼ arrows still work too.";
+const BUILD = "Live build 353 · Inbox: leftmost checkbox on each item — tick several (or Select all) and 'Clear selected' clears them at once.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7451,6 +7451,8 @@ function SamplingJobForm({ existing, profile, leads, onClose, onSaved }){
 function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, salesOrders, mentions, onOpen, onGoToTask, reload }){
   const [filter,setFilter]=useState('all');
   const [busyIds,setBusyIds]=useState(new Set());
+  const [selected,setSelected]=useState(()=>new Set()); // dedupKeys ticked for bulk clear
+  function toggleSelect(key){ setSelected(prev=>{ const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; }); }
   // archived_by holds the profile ids of users who have CLEARED a conversation
   // from their personal inbox. Clearing is permanent — there's no archive view,
   // the cleared row simply never shows in this user's inbox again. The
@@ -7575,6 +7577,17 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     }));
     reload && reload();
   }
+  // Clear only the ticked rows (each expands to its full thread group).
+  async function clearSelected(){
+    const rows=[];
+    visible.forEach(m=>{ const k=dedupKey(m); if(selected.has(k)) (groupedAll[k]||[m]).forEach(r=>rows.push(r)); });
+    const toClear = rows.filter(m=>!(m.archived_by||[]).includes(profile.id));
+    if(toClear.length===0){ setSelected(new Set()); return; }
+    await Promise.all(toClear.map(m=>{ const table=inboxTableFor(m.source); const nextRead=Array.from(new Set([...(m.read_by||[]), profile.id])); const nextArchived=Array.from(new Set([...(m.archived_by||[]), profile.id])); return sb.from(table).update({ read_by:nextRead, archived_by:nextArchived }).eq('id', m.id); }));
+    setSelected(new Set());
+    reload && reload();
+  }
+  function selectAllVisible(){ setSelected(new Set(visible.map(dedupKey))); }
   // Group mentions by relative date: Today / Yesterday / Last 7 days / Older
   function groupKey(iso){
     const d = new Date(iso); const now = new Date();
@@ -7616,11 +7629,19 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
             <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 Mentions ({realCount})</button>
             <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 Notifications ({autoCount})</button>
           </div>
-          {unread.length>0 && (
-            <button onClick={clearAll} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium">
-              <span className="text-emerald-600">✓</span> Clear all
-            </button>
-          )}
+          {selected.size>0 ? (
+            <>
+              <button onClick={clearSelected} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-pink-600 text-white hover:bg-pink-700 font-semibold">✓ Clear selected ({selected.size})</button>
+              <button onClick={()=>setSelected(new Set())} className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 font-medium">Deselect</button>
+            </>
+          ) : (<>
+            {visible.length>0 && <button onClick={selectAllVisible} className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 font-medium">Select all</button>}
+            {unread.length>0 && (
+              <button onClick={clearAll} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium">
+                <span className="text-emerald-600">✓</span> Clear all
+              </button>
+            )}
+          </>)}
         </div>
       </div>
 
@@ -7644,6 +7665,8 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                 const busy = busyIds.has(m.id);
                 return (
                   <div key={m.id+m.source} className={`group relative flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition ${isArchived(m) ? 'bg-slate-50/60 opacity-60' : (isUnread ? '' : 'opacity-70')}`}>
+                    {/* Bulk-select checkbox */}
+                    <input type="checkbox" checked={selected.has(dedupKey(m))} onChange={()=>toggleSelect(dedupKey(m))} className="shrink-0" title="Select to clear" />
                     {/* Unread dot + source icon */}
                     <div className="shrink-0 w-6 flex items-center justify-center">
                       {isUnread ? (
