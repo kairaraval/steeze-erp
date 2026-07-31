@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 354 · Inbox: the 'All' tab count now excludes cleared items (matches the list), so it goes down as you clear conversations.";
+const BUILD = "Live build 355 · Techpacks: 📌 Save snapshot keeps a view-only copy of a techpack (with its code) on the lead, and one is auto-saved on approval — so the Sample techpack survives even after Production overwrites the live one. Open any saved version from '🗂 Saved' and Print / Save PDF.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17085,9 +17085,22 @@ function DriversManageModal({ drivers, onClose, onChanged }){
   );
 }
 
-function TechpackEditor({ profile, profiles, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups }){
-  const [tp,setTp]=useState(()=>mergeTechpack(lead.techpack, lead, client, profile));
-  const [active,setActive]=useState('header'); const [mode,setMode]=useState(readOnly?'preview':'edit'); const [saving,setSaving]=useState(false);
+function TechpackEditor({ profile, profiles, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups, overrideTechpack, snapshotMeta, onOpenSnapshot }){
+  const ro = readOnly || !!overrideTechpack; // snapshots are always view-only
+  const [tp,setTp]=useState(()=>mergeTechpack(overrideTechpack||lead.techpack, lead, client, profile));
+  const [active,setActive]=useState('header'); const [mode,setMode]=useState(ro?'preview':'edit'); const [saving,setSaving]=useState(false);
+  // Saved techpack snapshots (view-only versions) for this lead.
+  const [snaps,setSnaps]=useState([]); const [showSnaps,setShowSnaps]=useState(false);
+  async function loadSnaps(){ try{ const { data }=await sb.from('techpack_snapshots').select('*').eq('lead_id', lead.id).order('saved_at',{ascending:false}); setSnaps(data||[]); }catch(_){} }
+  useEffect(()=>{ loadSnaps(); },[lead.id]);
+  async function saveSnapshot(){
+    const code = tp.prodFormNo || lead.techpack_number || '';
+    const label = prompt('Name this saved techpack (e.g. Sample, Production):', code||'Snapshot');
+    if(label===null) return;
+    const { error } = await sb.from('techpack_snapshots').insert({ lead_id:lead.id, code, label:(label||'').trim()||code||'Snapshot', data: tp, source:'manual', saved_by:profile.id });
+    if(error){ alert(error.message); return; }
+    await loadSnaps(); alert('Saved a view-only snapshot of this techpack.');
+  }
   // Preview zoom — string keys 'fit' / '1' / '0.75' / '0.5' / '0.33'.
   // Default to 'fit' on narrow screens (phones/tablets) so the whole page is
   // visible on first load; default to 1 (100%) on desktop. Stored as the
@@ -17149,7 +17162,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   function duplicateSection(key){ const id='xp'+Date.now()+Math.random().toString(36).slice(2,5); setTp(t=>({...t, extraPages:[...(t.extraPages||[]), { id, type:key, data:{ ...JSON.parse(JSON.stringify(t[key])), enabled:true } }]})); setActive(id); }
   function removeExtra(id){ if(!confirm('Delete this duplicated page?')) return; setTp(t=>({...t, extraPages:(t.extraPages||[]).filter(p=>p.id!==id)})); if(active===id) setActive('header'); }
   async function save(){
-    if(readOnly){ alert("You're viewing this techpack in preview-only mode."); return; }
+    if(ro){ alert("You're viewing this techpack in preview-only mode."); return; }
     setSaving(true);
     const payload={...tp,updatedAt:todayISO()};
     // Save and also read back the updated row, so we can detect silent RLS failures
@@ -17205,6 +17218,16 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
             text: `✍ ${profile.name||profile.email} signed the techpack${lead.techpack_number?` ${lead.techpack_number}`:''} — ${lead.title||''}. Ready for production.`,
             mentions });
         }
+        // Auto-save a view-only snapshot on approval so this version (and its
+        // code) is preserved even if a new techpack later overwrites the live one.
+        try {
+          const code = payload.prodFormNo || lead.techpack_number || '';
+          const { data:ex } = await sb.from('techpack_snapshots').select('id').eq('lead_id', lead.id).eq('code', code).eq('source','approval').limit(1);
+          if(!ex || ex.length===0){
+            await sb.from('techpack_snapshots').insert({ lead_id:lead.id, code, label:`Approved · ${code||todayISO()}`, data: payload, source:'approval', saved_by:profile.id });
+            loadSnaps();
+          }
+        } catch(_){}
       }
     } catch(e){ console.warn('techpack sign notify failed:', e?.message||e); }
     reload&&reload();
@@ -17703,9 +17726,28 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   return (
     <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
       <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
-        <div className="min-w-0"><div className="font-bold text-slate-900 truncate">Techpack — {tp.styleName||lead.title}</div><div className="text-xs text-slate-500">{tp.clientName}</div></div>
+        <div className="min-w-0">
+          <div className="font-bold text-slate-900 truncate">{overrideTechpack?'📌 Saved techpack':'Techpack'} — {tp.styleName||lead.title}</div>
+          <div className="text-xs text-slate-500 truncate">{overrideTechpack ? `${snapshotMeta?.label||''}${snapshotMeta?.code?` · ${snapshotMeta.code}`:''}${snapshotMeta?.saved_at?` · saved ${fmtDate(String(snapshotMeta.saved_at).slice(0,10))}`:''}` : tp.clientName}</div>
+        </div>
         <div className="flex items-center gap-2">
-          {readOnly ? <div className="text-xs text-slate-500 px-2 py-1 bg-slate-100 rounded">📋 Preview (read-only)</div> : <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setMode('edit')} className={`px-3 py-1.5 rounded-md ${mode==='edit'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Edit</button><button onClick={()=>setMode('preview')} className={`px-3 py-1.5 rounded-md ${mode==='preview'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Preview</button></div>}
+          {!overrideTechpack && (
+            <div className="relative">
+              <button onClick={()=>setShowSnaps(v=>!v)} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">🗂 Saved ({snaps.length})</button>
+              {showSnaps && (
+                <div className="absolute right-0 mt-1 w-72 bg-white border rounded-lg shadow-lg z-20 max-h-80 overflow-y-auto">
+                  {!ro && <button onClick={()=>{ setShowSnaps(false); saveSnapshot(); }} className="w-full text-left px-3 py-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 border-b">📌 Save current as snapshot</button>}
+                  {snaps.length===0 ? <div className="px-3 py-3 text-xs text-slate-400">No saved versions yet.</div> : snaps.map(s=>(
+                    <button key={s.id} onClick={()=>{ setShowSnaps(false); onOpenSnapshot && onOpenSnapshot(s); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b last:border-0">
+                      <div className="text-sm font-medium text-slate-800 truncate">{s.label||'Snapshot'}</div>
+                      <div className="text-[11px] text-slate-500">{s.code||'—'}{s.source==='approval'?' · auto (approved)':''} · {s.saved_at?fmtDate(String(s.saved_at).slice(0,10)):''}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {ro ? <div className="text-xs text-slate-500 px-2 py-1 bg-slate-100 rounded">📋 {overrideTechpack?'Saved snapshot (read-only)':'Preview (read-only)'}</div> : <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setMode('edit')} className={`px-3 py-1.5 rounded-md ${mode==='edit'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Edit</button><button onClick={()=>setMode('preview')} className={`px-3 py-1.5 rounded-md ${mode==='preview'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Preview</button></div>}
           {mode==='preview' && (
             <select value={previewZoom} onChange={e=>setPreviewZoom(e.target.value)} className="px-2 py-2 rounded-lg border text-sm bg-white" title="Preview zoom">
               <option value="fit">Fit width ({Math.round(scale*100)}%)</option>
@@ -17715,8 +17757,8 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               <option value="0.33">33%</option>
             </select>
           )}
-          {mode==='preview' && <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">🖨 Print</button>}
-          {!readOnly && <button onClick={save} disabled={saving} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{saving?'Saving…':'Save'}</button>}
+          {mode==='preview' && <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">🖨 Print / Save PDF</button>}
+          {!ro && <button onClick={save} disabled={saving} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{saving?'Saving…':'Save'}</button>}
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -31778,6 +31820,7 @@ function App(){
   const [selectedSupplier,setSelectedSupplier]=useState(null);
   const [techpackLead,setTechpackLead]=useState(null);
   const [techpackReadOnly,setTechpackReadOnly]=useState(false);
+  const [techpackSnapView,setTechpackSnapView]=useState(null); // { lead, snap } — stacked view-only snapshot
   const openTechpackEdit=(lead)=>{ setTechpackReadOnly(false); setTechpackLead(lead); };
   const openTechpackView=(lead)=>{ setTechpackReadOnly(true); setTechpackLead(lead); };
   const [deptActivity,setDeptActivity]=useState(null); // { job, jobType, title }
@@ -33000,7 +33043,8 @@ function App(){
           }}
         />
       )}
-      {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
+      {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onOpenSnapshot={(snap)=>setTechpackSnapView({ lead:(leads.find(l=>l.id===techpackLead.id)||techpackLead), snap })} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
+      {techpackSnapView && <TechpackEditor key={'snap-'+techpackSnapView.snap.id} profile={profile} profiles={profiles} lead={techpackSnapView.lead} client={clients.find(c=>c.id===techpackSnapView.lead.client_id)} reload={loadAll} readOnly overrideTechpack={techpackSnapView.snap.data} snapshotMeta={techpackSnapView.snap} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>setTechpackSnapView(null)} />}
       {editLead && <LeadForm key={editLead.id || 'new'} profile={profile} profiles={profiles} clients={clients} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
       {sendGraphicLead && <SendToGraphicModal profile={profile} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
