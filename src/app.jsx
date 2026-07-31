@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 351 · Graphic checklist items are now draggable — drag a lead straight onto any board column (e.g. For Approval) to move it. ▲▼ still reorder priority within the checklist.";
+const BUILD = "Live build 352 · Graphic checklist: drag an item up or down to reorder its priority within the checklist (no longer moves it to board columns). ▲▼ arrows still work too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3712,6 +3712,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   // highlights the drop column.
   const [draggedJobId,setDraggedJobId]=useState(null);
   const [dragOverStatus,setDragOverStatus]=useState(null);
+  const [clDragId,setClDragId]=useState(null); // checklist reorder drag
   const [mainTab,setMainTab]=useState('jobs'); // 'jobs' | 'resources' (resources only when showResources)
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
@@ -3770,6 +3771,8 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const checklistArtists = (profiles||[]).filter(p=>['Paul Laud','Ron Sagario'].includes(p.name));
   async function reorderChecklist(list){ await Promise.all(list.map((j,i)=> sb.from(table).update({ cl_position:i }).eq('id',j.id))); reload(); }
   function moveChecklist(j,dir){ const arr=checklistJobs.slice(); const i=arr.findIndex(x=>x.id===j.id); const k=i+dir; if(i<0||k<0||k>=arr.length) return; [arr[i],arr[k]]=[arr[k],arr[i]]; reorderChecklist(arr); }
+  // Drag-to-reorder WITHIN the checklist (up/down). Does not touch the board.
+  function dropChecklistOn(target){ if(!clDragId || clDragId===target.id) return; const arr=checklistJobs.slice(); const from=arr.findIndex(x=>x.id===clDragId); const to=arr.findIndex(x=>x.id===target.id); if(from<0||to<0) return; const [moved]=arr.splice(from,1); arr.splice(to,0,moved); reorderChecklist(arr); }
   // Ticking a checklist item moves the job to "For Approval" (it then leaves the
   // To-Do checklist). It re-appears if the card is moved back to To Do.
   async function toggleChecklistDone(j){ const { error }=await sb.from(table).update({ status:'for approval', cl_done:false }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
@@ -3811,10 +3814,12 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                 {checklistJobs.map((j,idx)=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const label=lead?.title||j.item||j.number||'—'; const sub=j.client_name||lead?.client_name||''; return (
                   <div key={j.id}
                        draggable
-                       onDragStart={(e)=>{ try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', j.id); }catch(_){}; setDraggedJobId(j.id); }}
-                       onDragEnd={()=>{ setDraggedJobId(null); setDragOverStatus(null); }}
-                       title="Drag onto a column to move it"
-                       className={`bg-white border rounded-lg px-2 py-1.5 cursor-grab active:cursor-grabbing transition ${draggedJobId===j.id?'opacity-40 ring-2 ring-pink-400':''}`}>
+                       onDragStart={(e)=>{ setClDragId(j.id); try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain','cl-reorder'); }catch(_){}; }}
+                       onDragOver={(e)=>{ e.preventDefault(); }}
+                       onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); dropChecklistOn(j); setClDragId(null); }}
+                       onDragEnd={()=>setClDragId(null)}
+                       title="Drag up or down to reorder priority"
+                       className={`bg-white border rounded-lg px-2 py-1.5 cursor-grab active:cursor-grabbing transition ${clDragId===j.id?'opacity-40 ring-2 ring-pink-400':''}`}>
                     <div className="flex items-start gap-1.5">
                       <div className="flex flex-col shrink-0 -my-0.5">
                         <button onClick={()=>moveChecklist(j,-1)} disabled={idx===0} className={`text-[11px] leading-none px-0.5 ${idx===0?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move up">▲</button>
