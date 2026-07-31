@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 353 · Inbox: leftmost checkbox on each item — tick several (or Select all) and 'Clear selected' clears them at once.";
+const BUILD = "Live build 354 · Inbox: the 'All' tab count now excludes cleared items (matches the list), so it goes down as you clear conversations.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7624,7 +7624,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
         </div>
         <div className="flex items-center gap-2">
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
-            <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({mentions.length})</button>
+            <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({nonArchivedMentions.length})</button>
             <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
             <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 Mentions ({realCount})</button>
             <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 Notifications ({autoCount})</button>
