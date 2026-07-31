@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 350 · Graphic checklist: ticking an item now moves that card to 'For Approval' (and off the To-Do checklist); moving it back to To Do re-adds it.";
+const BUILD = "Live build 351 · Graphic checklist items are now draggable — drag a lead straight onto any board column (e.g. For Approval) to move it. ▲▼ still reorder priority within the checklist.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3809,7 +3809,12 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-1.5 min-h-[120px] bg-pink-50/70">
                 <div className="text-[10px] text-pink-700/80 px-1 pb-1">Arrange by priority · claim with your name · tick when done. Tap the title to open the card.</div>
                 {checklistJobs.map((j,idx)=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const label=lead?.title||j.item||j.number||'—'; const sub=j.client_name||lead?.client_name||''; return (
-                  <div key={j.id} className="bg-white border rounded-lg px-2 py-1.5">
+                  <div key={j.id}
+                       draggable
+                       onDragStart={(e)=>{ try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', j.id); }catch(_){}; setDraggedJobId(j.id); }}
+                       onDragEnd={()=>{ setDraggedJobId(null); setDragOverStatus(null); }}
+                       title="Drag onto a column to move it"
+                       className={`bg-white border rounded-lg px-2 py-1.5 cursor-grab active:cursor-grabbing transition ${draggedJobId===j.id?'opacity-40 ring-2 ring-pink-400':''}`}>
                     <div className="flex items-start gap-1.5">
                       <div className="flex flex-col shrink-0 -my-0.5">
                         <button onClick={()=>moveChecklist(j,-1)} disabled={idx===0} className={`text-[11px] leading-none px-0.5 ${idx===0?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move up">▲</button>
