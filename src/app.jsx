@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 348 · Graphic checklist now mirrors only the To-Do column — an item drops off when moved out of To Do or ticked, and re-appears if moved back to To Do. Titles show the linked lead/project and open its details.";
+const BUILD = "Live build 349 · Graphic checklist: claim a task by clicking an artist's avatar (Paul Laud / Ron Sagario) instead of typing — the selected one is ringed; click again to unclaim.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3766,6 +3766,8 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
     ? filtered.filter(j=> j.status==='to do' && !j.cl_done)
         .slice().sort((a,b)=> ((a.cl_position??1e9)-(b.cl_position??1e9)) || (new Date(a.created_at||0)-new Date(b.created_at||0)))
     : [];
+  // The two graphic artists — click their avatar to claim/unclaim a task.
+  const checklistArtists = (profiles||[]).filter(p=>['Paul Laud','Ron Sagario'].includes(p.name));
   async function reorderChecklist(list){ await Promise.all(list.map((j,i)=> sb.from(table).update({ cl_position:i }).eq('id',j.id))); reload(); }
   function moveChecklist(j,dir){ const arr=checklistJobs.slice(); const i=arr.findIndex(x=>x.id===j.id); const k=i+dir; if(i<0||k<0||k>=arr.length) return; [arr[i],arr[k]]=[arr[k],arr[i]]; reorderChecklist(arr); }
   async function toggleChecklistDone(j){ const { error }=await sb.from(table).update({ cl_done:!j.cl_done }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
@@ -3817,8 +3819,13 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         {sub && <span className="block text-[10px] text-slate-400 font-normal truncate">{sub}</span>}
                       </button>
                     </div>
-                    <div className="mt-1 pl-6">
-                      <input key={j.id+'-'+(j.cl_assignee||'')} defaultValue={j.cl_assignee||''} onBlur={e=>setChecklistAssignee(j,e.target.value)} placeholder="+ artist name" className="w-full text-[11px] px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 placeholder-slate-400 focus:bg-white" />
+                    <div className="mt-1 pl-6 flex items-center gap-1.5">
+                      {checklistArtists.map(a=>{ const on=(j.cl_assignee||'')===a.name; return (
+                        <button key={a.id} onClick={()=>setChecklistAssignee(j, on?'':a.name)} title={on?`${a.name} — click to unclaim`:`Assign to ${a.name}`} className={`rounded-full transition ${on?'ring-2 ring-pink-500':'opacity-40 hover:opacity-100'}`}>
+                          <Avatar profile={a} size="sm" />
+                        </button>
+                      ); })}
+                      {j.cl_assignee && !checklistArtists.some(a=>a.name===j.cl_assignee) && <span className="text-[10px] text-slate-500 truncate">{j.cl_assignee}</span>}
                     </div>
                   </div>
                 ); })}
