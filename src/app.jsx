@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 358 · QC Report: 'QC handled by' now lists only QC / Quality Control staff, and a new 'Issue / reject type' checklist (fabric damage, wrong size, wrong logo, reject on print/embroidery, wrong print details, and more) lets you tag findings — shown on the QC list and in reject notifications.";
+const BUILD = "Live build 359 · QC: fixed double entries in the Quality Control list when a job is set to QC (deduped + guarded), and added a project-basics strip (total quantity, per-item breakdown, client, target delivery) at the top of each QC report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6645,13 +6645,30 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const [tab,setTab]=useState('worklist');
   const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
-
+  // Guards against seeding the SAME job into the QC list twice. reload() reloads
+  // all data (new prodJobs/sampleJobs array refs), which can re-fire this effect
+  // before the freshly-inserted qc_reports row lands in state — so relying on
+  // qcReports alone let a duplicate slip through. These refs update synchronously
+  // and persist across renders, so a job we've already attempted is never
+  // inserted again. (A unique index on source_job_id is the DB-level backstop.)
+  const seededRef=useRef(new Set());
+  const seedingRef=useRef(false);
   useEffect(()=>{ (async()=>{
+    if(seedingRef.current) return;
     const existing=new Set((qcReports||[]).map(w=>w.source_job_id).filter(Boolean));
-    const add=[];
-    (prodJobs||[]).filter(j=> j.status==='quality check (qc)').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'production', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
-    (sampleJobs||[]).filter(j=> j.status==='quality check (qc)').forEach(j=>{ if(!existing.has(j.id)) add.push({ source_type:'sample', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
-    if(add.length){ const { error }=await sb.from('qc_reports').insert(add); if(!error) reload(); }
+    const add=[]; const newIds=[];
+    const consider=(j,source_type)=>{ if(!j||j.status!=='quality check (qc)') return; if(existing.has(j.id)||seededRef.current.has(j.id)) return; newIds.push(j.id); add.push({ source_type, source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); };
+    (prodJobs||[]).forEach(j=>consider(j,'production'));
+    (sampleJobs||[]).forEach(j=>consider(j,'sample'));
+    if(!add.length) return;
+    newIds.forEach(id=>seededRef.current.add(id));   // claim before awaiting
+    seedingRef.current=true;
+    const { error }=await sb.from('qc_reports').insert(add);
+    seedingRef.current=false;
+    if(error){
+      // Unique-violation just means another render already seeded it — ignore.
+      if(String(error.code)!=='23505'){ newIds.forEach(id=>seededRef.current.delete(id)); console.warn('QC seed failed', error.message); }
+    } else { reload(); }
   })(); },[prodJobs, sampleJobs, qcReports]);
 
   const open=(qcReports||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
@@ -6721,6 +6738,11 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   const [empSearch,setEmpSearch]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
+  // Basic project details shown at the top of the QC report.
+  const projItems=Array.isArray(lead?.items)?lead.items:[];
+  const projQty=projItems.reduce((s,it)=>s+(Number(it.quantity)||0),0);
+  const projDelivery=lead?.delivery_date||lead?.expected_close||null;
+  const projTerms=lead?.payment_terms||null;
   // Only QC staff can be tagged as the QC handler — position of "QC",
   // "Quality Control", or "Quality Control Head".
   const isQCStaff=(e)=>/\bqc\b|quality\s*control/i.test(String(e.position||''));
@@ -6767,6 +6789,21 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${isSample?'bg-purple-100 text-purple-700':'bg-emerald-100 text-emerald-700'}`}>{isSample?'Sample':'Production'}</span>
           {w.client_name && <span className="text-slate-500">{w.client_name}</span>}
           {lead && lead.techpack && openTechpack && <button onClick={()=>{ onClose(); openTechpack(lead); }} className="text-teal-700 hover:underline">📋 View techpack</button>}
+        </div>
+
+        {/* Project basics */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Project</div><div className="font-medium truncate" title={w.item||lead?.title||''}>{w.item||lead?.title||'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Client</div><div className="font-medium truncate">{w.client_name||'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Total quantity</div><div className="font-bold text-indigo-700">{projQty>0?projQty.toLocaleString()+' pcs':'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Target delivery</div><div className="font-medium">{projDelivery?fmtDate(projDelivery):'—'}</div></div>
+          </div>
+          {projItems.length>0 && (
+            <div className="mt-2 pt-2 border-t border-slate-200 flex flex-wrap gap-1.5">
+              {projItems.map((it,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-white border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-600">{it.itemType||it.description||it.category||'Item'}</span>{Number(it.quantity)>0 && <span className="font-semibold text-slate-800">×{Number(it.quantity).toLocaleString()}</span>}</span>))}
+            </div>
+          )}
         </div>
 
         <div>
