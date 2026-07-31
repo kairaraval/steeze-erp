@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 355 · Techpacks: 📌 Save snapshot keeps a view-only copy of a techpack (with its code) on the lead, and one is auto-saved on approval — so the Sample techpack survives even after Production overwrites the live one. Open any saved version from '🗂 Saved' and Print / Save PDF.";
+const BUILD = "Live build 356 · New roles: QC Team Leader (Quality Control + Production board), QC Personnel (Quality Control only) and Inventory Personnel (Inventory list only). Assign them from the Team page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14246,6 +14246,9 @@ function roleLabel(r){
          r==='pattern_maker'          ? 'Pattern Maker' :
          r==='cutting_dept'           ? 'Cutting Department' :
          r==='qc'                     ? 'Quality Control' :
+         r==='qc_leader'              ? 'QC Team Leader' :
+         r==='qc_personnel'           ? 'QC Personnel' :
+         r==='inventory_personnel'    ? 'Inventory Personnel' :
          r==='graphic'                ? 'Graphic Design' :
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
@@ -14267,6 +14270,9 @@ function RoleBadge({ role }){
     role==='pattern_maker'          ? 'bg-lime-100 text-lime-700' :
     role==='cutting_dept'           ? 'bg-red-100 text-red-700' :
     role==='qc'                     ? 'bg-teal-100 text-teal-700' :
+    role==='qc_leader'              ? 'bg-teal-200 text-teal-800' :
+    role==='qc_personnel'           ? 'bg-teal-50 text-teal-600' :
+    role==='inventory_personnel'    ? 'bg-amber-100 text-amber-700' :
     role==='graphic'                ? 'bg-pink-100 text-pink-700' :
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
@@ -14506,6 +14512,9 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'pattern_maker', label:'Pattern Maker', count:profiles.filter(p=>p.role==='pattern_maker').length },
     { key:'cutting_dept', label:'Cutting Dept', count:profiles.filter(p=>p.role==='cutting_dept').length },
     { key:'qc',           label:'Quality Control', count:profiles.filter(p=>p.role==='qc').length },
+    { key:'qc_leader',    label:'QC Team Leader',  count:profiles.filter(p=>p.role==='qc_leader').length },
+    { key:'qc_personnel', label:'QC Personnel',    count:profiles.filter(p=>p.role==='qc_personnel').length },
+    { key:'inventory_personnel', label:'Inventory Personnel', count:profiles.filter(p=>p.role==='inventory_personnel').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
@@ -14513,7 +14522,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','qc','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -14554,6 +14563,9 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="pattern_maker">Pattern Maker</option>
               <option value="cutting_dept">Cutting Department</option>
               <option value="qc">Quality Control</option>
+              <option value="qc_leader">QC Team Leader</option>
+              <option value="qc_personnel">QC Personnel</option>
+              <option value="inventory_personnel">Inventory Personnel</option>
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
@@ -14653,6 +14665,10 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="production_supervisor">Production Supervisor</option>
                   <option value="pattern_maker">Pattern Maker</option>
                   <option value="cutting_dept">Cutting Department</option>
+                  <option value="qc">Quality Control</option>
+                  <option value="qc_leader">QC Team Leader</option>
+                  <option value="qc_personnel">QC Personnel</option>
+                  <option value="inventory_personnel">Inventory Personnel</option>
                   <option value="graphic">Graphic Design</option>
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
@@ -32115,6 +32131,18 @@ function App(){
       // Quality Control team — QC List + techpacks (for reference) + inbox + profile.
       allowed = new Set(['inbox','my-tasks','qc','techpacks','profile']);
       fallback = 'qc';
+    } else if(profile.role==='qc_leader'){
+      // QC Team Leader — Quality Control + the Production board (+ techpacks for reference).
+      allowed = new Set(['inbox','my-tasks','qc','prod','techpacks','profile']);
+      fallback = 'qc';
+    } else if(profile.role==='qc_personnel'){
+      // QC Personnel — Quality Control only (+ techpacks for reference).
+      allowed = new Set(['inbox','qc','techpacks','profile']);
+      fallback = 'qc';
+    } else if(profile.role==='inventory_personnel'){
+      // Inventory Personnel — Inventory List only.
+      allowed = new Set(['inbox','inventory','profile']);
+      fallback = 'inventory';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
@@ -32566,6 +32594,9 @@ function App(){
   const isPatternMaker=profile.role==='pattern_maker';
   const isCuttingDept=profile.role==='cutting_dept';
   const isQc=profile.role==='qc';
+  const isQcLeader=profile.role==='qc_leader';
+  const isQcPersonnel=profile.role==='qc_personnel';
+  const isInventoryPersonnel=profile.role==='inventory_personnel';
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -32644,6 +32675,28 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
+      PERSONAL_GROUP,
+    ];
+  } else if(isQcLeader){
+    // QC Team Leader — Quality Control + the Production board.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'] ] },
+      PERSONAL_GROUP,
+    ];
+  } else if(isQcPersonnel){
+    // QC Personnel — Quality Control only.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
+      PERSONAL_GROUP,
+    ];
+  } else if(isInventoryPersonnel){
+    // Inventory Personnel — the Inventory List only.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isHR){
