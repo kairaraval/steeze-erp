@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 343 · Cost center is now per-line on Journal Entries and on the compound (debit/credit) split of Check/Cash and RFP vouchers (petty cash already had it) — each posts to the GL with its own cost center.";
+const BUILD = "Live build 344 · Bank balances are now 'as of today' — post-dated (future-dated) transactions like post-dated checks no longer reduce the balance until their date arrives. The bank view flags post-dated rows and shows the not-yet-cleared total separately. Opening balances recalibrated.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21124,9 +21124,13 @@ async function nextFinanceNumberFromDb(prefix, monthKey){
 function ymdToMonthKey(d){ const x = d ? new Date(d) : new Date(); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'); }
 
 // Compute running balance for a bank account from opening + all in/out txns.
-function bankBalance(bank, txns){
+function todayLocalStr(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+// Balance AS OF TODAY: excludes post-dated (future-dated) transactions such as
+// post-dated checks — they only affect the balance once their date arrives.
+function bankBalance(bank, txns, asOf){
+  const today = asOf || todayLocalStr();
   const opening = Number(bank?.opening_balance)||0;
-  return (txns||[]).filter(t=>t.bank_id===bank.id).reduce((s,t)=>{
+  return (txns||[]).filter(t=>t.bank_id===bank.id && (!t.date || String(t.date).slice(0,10) <= today)).reduce((s,t)=>{
     const amt = Number(t.amount)||0;
     return s + (t.direction==='in' ? amt : -amt);
   }, opening);
@@ -21275,17 +21279,24 @@ function BankAccountDetailModal({ bank, txns, onClose, reload, canEdit }){
     if(error){ alert(error.message); return; }
     reload();
   }
-  const inSum = txns.filter(t=>t.direction==='in').reduce((s,t)=>s+Number(t.amount||0),0);
-  const outSum = txns.filter(t=>t.direction==='out').reduce((s,t)=>s+Number(t.amount||0),0);
+  const today = todayLocalStr();
+  const isFuture = (t)=> t.date && String(t.date).slice(0,10) > today;
+  // Cleared = dated on/before today. Post-dated = future (e.g. post-dated checks).
+  const inSum = txns.filter(t=>t.direction==='in' && !isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const outSum = txns.filter(t=>t.direction==='out' && !isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const pdcOut = txns.filter(t=>t.direction==='out' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const pdcIn = txns.filter(t=>t.direction==='in' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const hasPdc = pdcOut>0.005 || pdcIn>0.005;
   return (
     <Modal title={`${bank.bank_name} — Transactions`} onClose={onClose} xwide>
       <div className="space-y-3">
         <div className="grid grid-cols-4 gap-2 text-center">
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-700">Money in</div><div className="font-bold text-emerald-800">{peso(inSum)}</div></div>
-          <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-700">Money out</div><div className="font-bold text-rose-800">{peso(outSum)}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-700">Money in (cleared)</div><div className="font-bold text-emerald-800">{peso(inSum)}</div></div>
+          <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-700">Money out (cleared)</div><div className="font-bold text-rose-800">{peso(outSum)}</div></div>
           <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Opening</div><div className="font-bold">{peso(bank.opening_balance)}</div></div>
-          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-700">Balance</div><div className="font-bold text-indigo-800">{peso(bankBalance(bank, txns))}</div></div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-700">Balance today</div><div className="font-bold text-indigo-800">{peso(bankBalance(bank, txns))}</div></div>
         </div>
+        {hasPdc && <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 text-xs text-amber-800">🕒 <b>Post-dated (not yet cleared):</b> {pdcOut>0.005 && <>−{peso(pdcOut)} out</>}{pdcOut>0.005&&pdcIn>0.005 && ' · '}{pdcIn>0.005 && <>+{peso(pdcIn)} in</>}. These are excluded from the balance until their date arrives.</div>}
         <div className="flex items-center gap-1 text-xs">
           {['all','in','out','unreconciled'].map(k=>(
             <button key={k} onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{k==='all'?'All':k==='in'?'Money in':k==='out'?'Money out':'Unreconciled'}</button>
@@ -21294,8 +21305,8 @@ function BankAccountDetailModal({ bank, txns, onClose, reload, canEdit }){
         <div className="bg-white border rounded-lg overflow-hidden"><div className="max-h-[60vh] overflow-y-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Reconciled</th></tr></thead>
           <tbody>{filtered.map(t=>(
-            <tr key={t.id} className="border-t">
-              <td className="px-3 py-2 text-xs">{fmtDate(t.date)}</td>
+            <tr key={t.id} className={`border-t ${isFuture(t)?'bg-amber-50/40':''}`}>
+              <td className="px-3 py-2 text-xs">{fmtDate(t.date)}{isFuture(t) && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">post-dated</span>}</td>
               <td className="px-3 py-2">{t.description||'—'}</td>
               <td className="px-3 py-2 text-xs text-slate-500">{t.reference_number||t.ref_type||''}</td>
               <td className={`px-3 py-2 text-right font-semibold ${t.direction==='in'?'text-emerald-700':'text-rose-700'}`}>{t.direction==='in'?'+':'−'}{peso(t.amount)}</td>
