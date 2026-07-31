@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 356 · New roles: QC Team Leader (Quality Control + Production board), QC Personnel (Quality Control only) and Inventory Personnel (Inventory list only). Assign them from the Team page.";
+const BUILD = "Live build 357 · Graphic/Printing cover photo: the ⭐ 'set as cover' star now shows on every photo, even uploads that lost their file type (iPhone HEIC, drag-drops, older attachments) — so you can always change the board cover.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -495,13 +495,34 @@ function MediaLightbox({ url, path, name, kind, onClose }){
     </div>
   );
 }
+// True when an attachment can serve as an image / board cover photo.
+// Deliberately permissive so the ⭐ cover control is ALWAYS available for
+// anything that might be a photo. Many uploads lose their MIME type at upload
+// time (iPhone HEIC, drag-drops, some pasted screenshots, legacy rows) and get
+// saved as type:'file' — if the filename also lacks a clean extension the old
+// extension-only check would hide the star. This honors the explicit image
+// type/mime and the file extension, and as a last resort treats any upload
+// that isn't a clearly non-image document (pdf/office/media/link) as an image.
+function attIsImage(a){
+  if(!a) return false;
+  if(a.type==='image') return true;
+  if(a.type==='pdf' || a.type==='link') return false;
+  const ref=String(a.url||a.name||a.path||'').toLowerCase();
+  if(/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|tiff?|avif)(?:$|\?)/i.test(ref)) return true;
+  if(String(a.mime||'').toLowerCase().startsWith('image/')) return true;
+  // Clearly-typed non-image files never qualify as a cover.
+  if(/\.(pdf|xlsx?|csv|docx?|pptx?|txt|zip|rar|7z|mp4|mov|avi|mkv|webm|mp3|wav|m4a|ai|psd|eps|json)(?:$|\?)/i.test(ref)) return false;
+  // Unknown / extension-less upload with no contrary signal → assume image so
+  // the cover control stays available.
+  return true;
+}
 function AttachmentChip({ att, small }){
   const [url,setUrl]=useState(att.url||null);
   const [lightbox,setLightbox]=useState(false);
   useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
   // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual files).
   const ref=String(att.url||att.name||att.path||'').toLowerCase();
-  const isImage = att.type==='image' || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(ref);
+  const isImage = attIsImage(att);
   const isPdf   = !isImage && (att.type==='pdf' || /\.pdf(?:$|\?)/i.test(ref));
   const openLB   =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) setLightbox(true); };
   const openTab  =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) window.open(url,'_blank'); };
@@ -530,10 +551,12 @@ function firstImage(atts){ return (atts||[]).find(a=>a.type==='image'); }
 // otherwise falls back to the first image. Works for graphic + printing jobs.
 function pickCover(atts){
   const list = atts||[];
-  const isImageish = a => a && (a.type==='image' || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(String(a.url||a.name||a.path||'').toLowerCase()));
-  const explicit = list.find(a=>a && a.is_cover && isImageish(a));
+  const explicit = list.find(a=>a && a.is_cover && attIsImage(a));
   if(explicit) return explicit;
-  return list.find(isImageish);
+  // An explicit cover that failed the image test still wins (the team chose it).
+  const flagged = list.find(a=>a && a.is_cover);
+  if(flagged) return flagged;
+  return list.find(attIsImage);
 }
 
 // Large inline rendering of an attachment inside a comment body (images render
@@ -3981,7 +4004,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               )}
               {(liveDetail.attachments||[]).length>0 && (() => {
                 const atts = liveDetail.attachments;
-                const isImageish = a => a && (a.type==='image' || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(String(a.url||a.name||a.path||'').toLowerCase()));
+                const isImageish = attIsImage;
                 const coverIdx = atts.findIndex(a=>a&&a.is_cover&&isImageish(a));
                 const effectiveCoverIdx = coverIdx>=0 ? coverIdx : atts.findIndex(isImageish);
                 const hasAnyImage = atts.some(isImageish);
