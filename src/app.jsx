@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 359 · QC: fixed double entries in the Quality Control list when a job is set to QC (deduped + guarded), and added a project-basics strip (total quantity, per-item breakdown, client, target delivery) at the top of each QC report.";
+const BUILD = "Live build 360 · Balance Sheet fix: bank opening balances (₱19.95M) are now in the ledger via an opening journal entry (offset to Retained Earnings), so Cash in Bank matches reality; also fixed bank→GL account matching so each bank's transactions post to its own Cash-in-Bank line instead of all landing in PNB.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26819,7 +26819,18 @@ function buildGLPostings(data){
   const push=(date,code,debit,credit,source,ref,memo,cc)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null }); };
   const CASH_HAND='101001';
   // Map a bank_account (by id) to its Chart-of-Accounts "Cash in Bank - X" code.
-  const bankCoa=[['pnb','101002'],['ewb','101003'],['bpi','101004'],['ubp','101005'],['union','101005'],['bdo','101006'],['gcash','101007'],['e-wallet','101007']];
+  // Match on BOTH the short code AND the full legal name — accounts are stored
+  // with full names ("Philippine National Bank", "Bank of the Philippine
+  // Islands", …), which don't contain the short tokens, so keyword-only
+  // matching used to dump every bank into PNB (101002).
+  const bankCoa=[
+    ['pnb','101002'],['philippine national','101002'],['national bank','101002'],
+    ['ewb','101003'],['east west','101003'],['eastwest','101003'],
+    ['bpi','101004'],['philippine islands','101004'],['islands','101004'],
+    ['ubp','101005'],['union','101005'],
+    ['bdo','101006'],
+    ['gcash','101007'],['g-cash','101007'],['e-wallet','101007'],['ewallet','101007'],
+  ];
   const bankById=new Map((bankAccounts||[]).map(b=>[b.id,b]));
   function cashCodeFor(bankId){
     const b=bankId?bankById.get(bankId):null; const nm=(b?.bank_name||'').toLowerCase();
