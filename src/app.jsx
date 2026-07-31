@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 344 · Bank balances are now 'as of today' — post-dated (future-dated) transactions like post-dated checks no longer reduce the balance until their date arrives. The bank view flags post-dated rows and shows the not-yet-cleared total separately. Opening balances recalibrated.";
+const BUILD = "Live build 345 · Materials Queue no longer lists items that are already on hand (fully coverable from stock) or lines already pulled/fulfilled from stock — only what actually needs buying shows up.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20363,6 +20363,8 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
   const isAdmin = profile.role === 'admin';
+  // Stock reservations so we can tell which lines are already covered on-hand.
+  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   // Admin-only: remove a single line from a PR right inside the Materials
   // Queue. Useful when finance / admin decides a line shouldn't be bought
   // (cancelled order, mis-typed quantity, etc.) without opening the PR.
@@ -20385,11 +20387,15 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload
       const lead = pr.linked_lead_id ? (leads||[]).find(l=>l.id===pr.linked_lead_id) : null;
       (pr.lines||[]).forEach((line, idx) => {
         if(line.linked_po_id) return; // already in a PO
+        if((Number(line.qty)||0) <= 0) return; // nothing left to buy (e.g. fully pulled from stock)
         // Figure out supplier — prefer the snapshot stored on the PR line
         // (set when the user picked the inventory item) over a fresh lookup,
         // so a supplier change in Inventory doesn't retroactively re-route
         // existing PR lines.
         const inventoryItem = line.item_id ? (items||[]).find(i=>i.id===line.item_id) : null;
+        // If the material is already on hand (fully coverable from current stock),
+        // it belongs in "fulfill from stock" — not the buy queue. Skip it.
+        if(inventoryItem){ const cov=lineCoverage(line, inventoryItem, reservations); if(cov && (cov.state==='covered' || cov.state==='overage')) return; }
         const supplierId = line.supplier_id || inventoryItem?.supplier_id || '__unassigned__';
         if(!map.has(supplierId)){
           map.set(supplierId,{
