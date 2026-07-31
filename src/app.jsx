@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 357 · Graphic/Printing cover photo: the ⭐ 'set as cover' star now shows on every photo, even uploads that lost their file type (iPhone HEIC, drag-drops, older attachments) — so you can always change the board cover.";
+const BUILD = "Live build 358 · QC Report: 'QC handled by' now lists only QC / Quality Control staff, and a new 'Issue / reject type' checklist (fabric damage, wrong size, wrong logo, reject on print/embroidery, wrong print details, and more) lets you tag findings — shown on the QC list and in reject notifications.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6665,6 +6665,7 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const summaryLine=(w)=>{ const bits=[];
     if(w.source_type==='sample'){ if(w.sample_result) bits.push(w.sample_result==='passed'?'✅ Passed':w.sample_result==='failed'?'❌ Failed':w.sample_result); if(w.recommendation) bits.push('Rec: '+w.recommendation); }
     else if(w.reject_count!=null) bits.push(`${w.reject_count} reject${w.reject_count===1?'':'s'}`);
+    if(Array.isArray(w.reject_types)&&w.reject_types.length) bits.push('⚠ '+w.reject_types.join(', '));
     if(Array.isArray(w.qc_handlers)&&w.qc_handlers.length) bits.push('QC: '+w.qc_handlers.map(id=>{const e=(employees||[]).find(x=>x.id===id);return e?fullName(e):'—';}).join(', '));
     return bits.join(' · ');
   };
@@ -6714,20 +6715,28 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   const [sizing,setSizing]=useState(w.sizing_notes||'');
   const [rejectCount,setRejectCount]=useState(w.reject_count!=null?String(w.reject_count):'');
   const [rejectReason,setRejectReason]=useState(w.reject_reason||'');
+  const [rejectTypes,setRejectTypes]=useState(Array.isArray(w.reject_types)?w.reject_types:[]);
   const [sampleResult,setSampleResult]=useState(w.sample_result||'');
   const [recommendation,setRecommendation]=useState(w.recommendation||'');
   const [empSearch,setEmpSearch]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
-  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  // Only QC staff can be tagged as the QC handler — position of "QC",
+  // "Quality Control", or "Quality Control Head".
+  const isQCStaff=(e)=>/\bqc\b|quality\s*control/i.test(String(e.position||''));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated'&&isQCStaff(e));
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   function toggleHandler(id){ setHandlers(h=> h.includes(id)?h.filter(x=>x!==id):[...h,id]); }
+  function toggleRejectType(t){ setRejectTypes(r=> r.includes(t)?r.filter(x=>x!==t):[...r,t]); }
   const filteredEmps=activeEmps.filter(e=> !empSearch || fullName(e).toLowerCase().includes(empSearch.toLowerCase())).slice(0,60);
+  // Common QC reject / issue types (tick all that apply).
+  const REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on print','Reject on embroidery','Wrong print details','Stitching defect','Stain / dirt marks','Color mismatch','Loose threads','Measurement out of tolerance','Missing parts / accessories'];
 
   async function save(){
     setBusy(true); setMsg('');
     const payload={
       qc_handlers:handlers, comments:comments||null, sizing_notes:sizing||null, updated_at:new Date().toISOString(),
+      reject_types: rejectTypes.length?rejectTypes:null,
       reject_count: isSample?null:(rejectCount===''?null:Number(rejectCount)),
       reject_reason: isSample?null:(rejectReason||null),
       sample_result: isSample?(sampleResult||null):null,
@@ -6742,7 +6751,8 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
         const assistantId=lead.created_by||lead.manager_id||null;
         const mentions=[...new Set([assistantId, ...supers])].filter(id=>id && id!==profile.id);
         if(mentions.length){
-          const what = isSample ? `Sample FAILED QC${recommendation?` — ${recommendation}`:''}` : `${rejectCount} reject${Number(rejectCount)===1?'':'s'} flagged at QC${rejectReason?` — ${rejectReason}`:''}`;
+          const typesStr = rejectTypes.length?` [${rejectTypes.join(', ')}]`:'';
+          const what = isSample ? `Sample FAILED QC${recommendation?` — ${recommendation}`:''}${typesStr}` : `${rejectCount} reject${Number(rejectCount)===1?'':'s'} flagged at QC${rejectReason?` — ${rejectReason}`:''}${typesStr}`;
           await sb.from('lead_activity').insert({ lead_id:lead.id, actor_id:profile.id, type:'system', text:`🔍 QC: ${what} — ${w.item||lead.title||''}`, mentions });
         }
       }
@@ -6770,7 +6780,18 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
                 <span>{fullName(e)}</span>
               </label>
             ))}
-            {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">No staff match.</div>}
+            {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">{empSearch?'No QC staff match.':'No QC staff found — only employees with a QC / Quality Control position can be tagged here.'}</div>}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Issue / reject type <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+          <div className="flex flex-wrap gap-1.5">
+            {REJECT_TYPES.map(t=>{ const on=rejectTypes.includes(t); return (
+              <button key={t} type="button" onClick={()=>toggleRejectType(t)} className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300 hover:text-rose-600'}`}>
+                <span className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center text-[9px] ${on?'bg-white text-rose-500 border-white':'border-slate-300 text-transparent'}`}>✓</span>{t}
+              </button>
+            ); })}
           </div>
         </div>
 
