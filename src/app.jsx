@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 349 · Graphic checklist: claim a task by clicking an artist's avatar (Paul Laud / Ron Sagario) instead of typing — the selected one is ringed; click again to unclaim.";
+const BUILD = "Live build 350 · Graphic checklist: ticking an item now moves that card to 'For Approval' (and off the To-Do checklist); moving it back to To Do re-adds it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3770,7 +3770,9 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const checklistArtists = (profiles||[]).filter(p=>['Paul Laud','Ron Sagario'].includes(p.name));
   async function reorderChecklist(list){ await Promise.all(list.map((j,i)=> sb.from(table).update({ cl_position:i }).eq('id',j.id))); reload(); }
   function moveChecklist(j,dir){ const arr=checklistJobs.slice(); const i=arr.findIndex(x=>x.id===j.id); const k=i+dir; if(i<0||k<0||k>=arr.length) return; [arr[i],arr[k]]=[arr[k],arr[i]]; reorderChecklist(arr); }
-  async function toggleChecklistDone(j){ const { error }=await sb.from(table).update({ cl_done:!j.cl_done }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
+  // Ticking a checklist item moves the job to "For Approval" (it then leaves the
+  // To-Do checklist). It re-appears if the card is moved back to To Do.
+  async function toggleChecklistDone(j){ const { error }=await sb.from(table).update({ status:'for approval', cl_done:false }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function setChecklistAssignee(j,name){ if((j.cl_assignee||'')===((name||'').trim())) return; const { error }=await sb.from(table).update({ cl_assignee:(name||'').trim()||null }).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   return (
     <div className="p-6">
@@ -3813,7 +3815,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         <button onClick={()=>moveChecklist(j,-1)} disabled={idx===0} className={`text-[11px] leading-none px-0.5 ${idx===0?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move up">▲</button>
                         <button onClick={()=>moveChecklist(j,1)} disabled={idx===checklistJobs.length-1} className={`text-[11px] leading-none px-0.5 ${idx===checklistJobs.length-1?'text-slate-200':'text-slate-400 hover:text-pink-600'}`} title="Move down">▼</button>
                       </div>
-                      <input type="checkbox" checked={!!j.cl_done} onChange={()=>toggleChecklistDone(j)} className="mt-0.5 shrink-0" title="Tick to remove from the checklist" />
+                      <input type="checkbox" checked={!!j.cl_done} onChange={()=>toggleChecklistDone(j)} className="mt-0.5 shrink-0" title="Tick when done → moves the card to For Approval" />
                       <button onClick={()=> (lead && openLead) ? openLead({ lead, job:j, jobType, canSendToPrinting }) : setDetail(j)} className="min-w-0 flex-1 text-left text-xs font-medium hover:underline text-slate-800" title="Open the linked lead / job for details">
                         {label}
                         {sub && <span className="block text-[10px] text-slate-400 font-normal truncate">{sub}</span>}
