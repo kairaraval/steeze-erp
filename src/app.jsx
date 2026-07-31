@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 360 · Balance Sheet fix: bank opening balances (₱19.95M) are now in the ledger via an opening journal entry (offset to Retained Earnings), so Cash in Bank matches reality; also fixed bank→GL account matching so each bank's transactions post to its own Cash-in-Bank line instead of all landing in PNB.";
+const BUILD = "Live build 361 · Sales Orders: editing an SO total down until existing payments cover it now flips the status to Paid instead of staying stuck on 'Partial' (balance ₱0 but wrong badge). Also corrected the one SO that was already in this state.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21936,7 +21936,17 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
       // subtotal = base (ex-VAT). Commission is computed on this, not the
       // VAT-inclusive total. Falls back to effTotal when there are no lines.
       payload.subtotal = hasLines ? linesSub : effTotal;
-      payload.balance_due = Math.max(0, effTotal - (Number(so.amount_paid)||0));
+      const paidNow = Number(so.amount_paid)||0;
+      const bal = Math.max(0, effTotal - paidNow);
+      payload.balance_due = bal;
+      // Re-derive the payment status too — editing the total down until existing
+      // payments cover it should flip the SO to Paid, not leave it stuck on
+      // "Partial". (Mirrors the status logic used when a payment is verified.)
+      if(so.status!=='cancelled'){
+        payload.status = (bal<=0.01 && paidNow>0.01) ? 'paid'
+          : (paidNow>0.01 ? 'partial'
+          : (bal>0.01 ? 'open' : so.status));
+      }
     } else {
       delete payload.total;
     }
