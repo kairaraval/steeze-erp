@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 362 · New: Vision & Goals board (owner/admin only) — set the company vision, break it into strategic goals and measurable key results (number target, milestone checklist, or manual %), with target dates, status, and progress that rolls up KR → Goal → Vision. Number goals can auto-track live OS data (revenue collected, headcount, etc.).";
+const BUILD = "Live build 363 · Purchasing Resources: fixed swatch/ready-made thumbnails showing a folder icon instead of the photo — image detection now falls back to the filename when the uploaded file lost its type (HEIC, drag-drops, older items), and clicking a swatch opens it inline.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2746,9 +2746,15 @@ function DesignResourceForm({ profile, boards, existing, defaultBoardId, onClose
 }
 
 function DesignResourceCard({ r, canEdit, onOpen, onEdit, onDelete }){
-  const isImg = (r.file_type||'').startsWith('image');
-  const isPdf = (r.file_type||'').includes('pdf');
+  // Robust image detection: many uploads lost their MIME type (iPhone HEIC,
+  // drag-drops, older rows) and were stored with an empty/non-image file_type,
+  // which used to hide the thumbnail behind a folder icon. Fall back to the
+  // filename extension and treat anything that isn't clearly a PDF/link as an
+  // image (swatches & ready-made refs are only ever images or PDFs).
+  const ref=`${r.file_name||''} ${r.file_path||''}`.toLowerCase();
   const isLink = !r.file_path && !!r.url;
+  const isPdf = !isLink && ((r.file_type||'').includes('pdf') || /\.pdf(?:$|\?)/.test(ref));
+  const isImg = !isPdf && !isLink && !!r.file_path && attIsImage({ type:(r.file_type||'').startsWith('image')?'image':undefined, mime:r.file_type, name:r.file_name, path:r.file_path });
   return (
     <div className="bg-white border rounded-lg shadow-sm overflow-hidden relative group">
       {canEdit && (
@@ -3308,7 +3314,7 @@ function PurchasingResourcesView({ profile }){
     if(error){ alert(error.message); return; } load();
   }
   async function openRes(r){
-    if(r.file_path){ try { const u=await signedUrl(r.file_path); const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); if(ref.includes('image')||/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'image',name:r.title||r.file_name||''}); else if(ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref)) setLightbox({url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path}); else window.open(u,'_blank','noopener'); } catch(_){} return; }
+    if(r.file_path){ try { const u=await signedUrl(r.file_path); const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); const isPdf=ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref); if(isPdf) setLightbox({url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path}); else setLightbox({url:u,kind:'image',name:r.title||r.file_name||''}); } catch(_){} return; }
     if(r.url) window.open(r.url,'_blank','noopener');
   }
   const q=search.toLowerCase();
