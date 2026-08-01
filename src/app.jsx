@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 361 · Sales Orders: editing an SO total down until existing payments cover it now flips the status to Paid instead of staying stuck on 'Partial' (balance ₱0 but wrong badge). Also corrected the one SO that was already in this state.";
+const BUILD = "Live build 362 · New: Vision & Goals board (owner/admin only) — set the company vision, break it into strategic goals and measurable key results (number target, milestone checklist, or manual %), with target dates, status, and progress that rolls up KR → Goal → Vision. Number goals can auto-track live OS data (revenue collected, headcount, etc.).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13533,6 +13533,323 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
         </div>
       )}
     </div>
+  );
+}
+
+/* ─────────── VISION & GOALS (owner / admin private) ───────────
+   One hierarchical table `company_goals`:
+     kind 'vision' → the company vision   (one hero card)
+     kind 'goal'   → strategic goal        (child of vision)
+     kind 'kr'     → key result / target   (child of a goal; measurable)
+   Progress rolls up KR → Goal → Vision. KRs measure by a number target,
+   a milestone checklist, or a manual %. A number KR can auto-pull its
+   "actual" from live OS data (revenue collected, headcount, …). */
+const GOAL_STATUS = {
+  not_started: { label:'Not started', chip:'bg-slate-100 text-slate-600', bar:'bg-slate-400' },
+  on_track:    { label:'On track',    chip:'bg-emerald-100 text-emerald-700', bar:'bg-emerald-500' },
+  at_risk:     { label:'At risk',     chip:'bg-amber-100 text-amber-700', bar:'bg-amber-500' },
+  achieved:    { label:'Achieved',    chip:'bg-indigo-100 text-indigo-700', bar:'bg-indigo-500' },
+};
+function goalFmtVal(v,unit){ const n=Number(v)||0; if(unit==='₱') return peso(n); if(unit==='%') return `${n.toLocaleString()}%`; return `${n.toLocaleString()}${unit?(' '+unit):''}`; }
+function goalDaysLeft(due){ if(!due) return null; return Math.ceil((new Date(due+'T00:00:00') - new Date(new Date().toDateString()))/86400000); }
+
+function GoalsBoardView({ profile, soPayments, salesOrders, clients, employees }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [noTable,setNoTable]=useState(false);
+  const [edit,setEdit]=useState(null);   // { row } or { kind, parent_id } for new
+  const canEdit = profile.role==='admin';
+
+  async function load(){
+    setLoading(true);
+    const { data, error }=await sb.from('company_goals').select('*').order('sort',{ascending:true}).order('created_at',{ascending:true});
+    if(error){ setNoTable(true); setLoading(false); return; }
+    setNoTable(false); setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  // Live "actuals" a number KR can auto-track.
+  const yr=String(new Date().getFullYear());
+  const AUTO={
+    revenue_collected_ytd:{ label:`Revenue collected (${yr})`, unit:'₱', value:(soPayments||[]).filter(p=>p.status==='verified'&&String(p.date||'').slice(0,4)===yr).reduce((s,p)=>s+Number(p.amount||0),0) },
+    revenue_collected_all:{ label:'Revenue collected (all-time)', unit:'₱', value:(soPayments||[]).filter(p=>p.status==='verified').reduce((s,p)=>s+Number(p.amount||0),0) },
+    sales_orders_ytd:{ label:`Sales orders won (${yr})`, unit:'', value:(salesOrders||[]).filter(o=>String(o.date||'').slice(0,4)===yr&&o.status!=='cancelled').length },
+    active_clients:{ label:'Active clients', unit:'', value:(clients||[]).length },
+    headcount:{ label:'Headcount (active)', unit:'', value:(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').length },
+  };
+  const krActual=(kr)=> (kr.auto_metric&&AUTO[kr.auto_metric]) ? AUTO[kr.auto_metric].value : (Number(kr.current_value)||0);
+  function krPct(kr){
+    if(kr.status==='achieved') return 1;
+    if(kr.metric_type==='number'){ const t=Number(kr.target_value)||0; return t>0?Math.max(0,Math.min(1,krActual(kr)/t)):0; }
+    if(kr.metric_type==='manual'){ return Math.max(0,Math.min(1,(Number(kr.manual_pct)||0)/100)); }
+    const ms=Array.isArray(kr.milestones)?kr.milestones:[]; return ms.length?ms.filter(m=>m.done).length/ms.length:0;
+  }
+  const vision=rows.find(r=>r.kind==='vision')||null;
+  const goals=rows.filter(r=>r.kind==='goal');
+  const krsOf=(goalId)=>rows.filter(r=>r.kind==='kr'&&r.parent_id===goalId);
+  const goalPct=(g)=>{ const ks=krsOf(g.id); if(!ks.length) return g.status==='achieved'?1:0; return ks.reduce((s,k)=>s+krPct(k),0)/ks.length; };
+  const overall = goals.length? goals.reduce((s,g)=>s+goalPct(g),0)/goals.length : 0;
+
+  async function saveRow(payload, id){
+    if(id){ const { error }=await sb.from('company_goals').update({ ...payload, updated_at:new Date().toISOString() }).eq('id',id); if(error){ alert(error.message); return false; } }
+    else { const { error }=await sb.from('company_goals').insert({ ...payload, created_by:profile.id }); if(error){ alert(error.message); return false; } }
+    await load(); return true;
+  }
+  async function delRow(r){
+    const kids = r.kind!=='kr' ? rows.filter(x=>x.parent_id===r.id).length : 0;
+    if(!confirm(`Delete "${r.title}"${kids?` and its ${kids} item(s)`:''}? This can't be undone.`)) return;
+    const { error }=await sb.from('company_goals').delete().eq('id',r.id); if(error){ alert(error.message); return; }
+    await load();
+  }
+  async function setStatus(r,status){ await sb.from('company_goals').update({ status, updated_at:new Date().toISOString() }).eq('id',r.id); await load(); }
+  async function toggleMilestone(kr,idx){
+    const ms=(Array.isArray(kr.milestones)?kr.milestones:[]).map((m,i)=> i===idx?{...m,done:!m.done}:m);
+    await sb.from('company_goals').update({ milestones:ms, updated_at:new Date().toISOString() }).eq('id',kr.id); await load();
+  }
+
+  const Bar=({pct,cls})=>(<div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full rounded-full ${cls||'bg-indigo-500'}`} style={{width:`${Math.round(pct*100)}%`}}/></div>);
+  const Countdown=({due})=>{ const d=goalDaysLeft(due); if(d==null) return null; const cls=d<0?'text-rose-600':d<=14?'text-amber-600':'text-slate-500'; return <span className={`text-[11px] ${cls}`} title={fmtDate(due)}>{d<0?`${Math.abs(d)}d overdue`:d===0?'due today':`${d}d left`}</span>; };
+
+  if(loading) return <div className="p-6 text-slate-400 text-sm">Loading vision & goals…</div>;
+  if(noTable) return (
+    <div className="p-6 max-w-2xl">
+      <h1 className="text-2xl font-bold mb-2">🎯 Vision &amp; Goals</h1>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+        <div className="font-semibold mb-1">One-time setup needed</div>
+        The <code>company_goals</code> table hasn't been created yet. Run <code>migrations/company_goals.sql</code> in your Supabase SQL editor (or ask me to run it once database access is back), then reload this page.
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🎯 Vision &amp; Goals</h1><p className="text-slate-500 text-sm">Private strategy board · set the vision, break it into goals and measurable key results, and track progress.</p></div>
+          {canEdit && <button onClick={()=>setEdit({ kind:'goal', parent_id:vision?.id||null })} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add goal</button>}
+        </div>
+      </div>
+
+      {/* Vision hero */}
+      <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-5 mb-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wider font-bold text-indigo-400 mb-1">Our Vision</div>
+            {vision ? (<>
+              <div className="text-xl font-bold text-slate-800 whitespace-pre-line">{vision.title}</div>
+              {vision.description && <div className="text-sm text-slate-600 mt-1 whitespace-pre-line">{vision.description}</div>}
+            </>) : <div className="text-slate-400 text-sm">No vision set yet.{canEdit?' Click "Set vision" to add your north-star statement.':''}</div>}
+          </div>
+          {canEdit && <button onClick={()=> setEdit(vision?{row:vision}:{ kind:'vision', parent_id:null })} className="shrink-0 text-xs px-2.5 py-1.5 rounded-lg bg-white border border-indigo-200 text-indigo-700 font-semibold hover:bg-indigo-50">{vision?'Edit vision':'Set vision'}</button>}
+        </div>
+        {goals.length>0 && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-xs mb-1"><span className="font-semibold text-slate-600">Overall progress</span><span className="font-bold text-indigo-700">{Math.round(overall*100)}%</span></div>
+            <Bar pct={overall} cls="bg-indigo-500" />
+          </div>
+        )}
+      </div>
+
+      {/* Goals */}
+      {goals.length===0 ? (
+        <div className="bg-white border rounded-xl px-4 py-12 text-center text-slate-400 text-sm">No goals yet.{canEdit?' Add your first strategic goal to get started.':''}</div>
+      ) : (
+        <div className="space-y-4">
+          {goals.map(g=>{ const ks=krsOf(g.id); const gp=goalPct(g); const gm=GOAL_STATUS[g.status]||GOAL_STATUS.on_track; return (
+            <div key={g.id} className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b bg-slate-50/60">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-800">{g.title}</span>
+                      {canEdit
+                        ? <select value={g.status} onChange={e=>setStatus(g,e.target.value)} className={`text-[10px] font-bold uppercase rounded px-1.5 py-0.5 border-0 ${gm.chip}`}>{Object.entries(GOAL_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
+                        : <span className={`text-[10px] font-bold uppercase rounded px-1.5 py-0.5 ${gm.chip}`}>{gm.label}</span>}
+                      {g.owner_name && <span className="text-[11px] text-slate-500">👤 {g.owner_name}</span>}
+                      <Countdown due={g.due_date} />
+                    </div>
+                    {g.description && <div className="text-xs text-slate-500 mt-1 whitespace-pre-line">{g.description}</div>}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="text-right"><div className="text-xs font-bold text-slate-700">{Math.round(gp*100)}%</div><div className="w-24"><Bar pct={gp} cls={gm.bar} /></div></div>
+                    {canEdit && <>
+                      <button onClick={()=>setEdit({ kind:'kr', parent_id:g.id })} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100 whitespace-nowrap">+ Key result</button>
+                      <button onClick={()=>setEdit({row:g})} className="text-slate-400 hover:text-indigo-600 text-sm" title="Edit goal">✎</button>
+                      <button onClick={()=>delRow(g)} className="text-slate-300 hover:text-rose-500 text-sm" title="Delete goal">✕</button>
+                    </>}
+                  </div>
+                </div>
+              </div>
+              {ks.length===0 ? (
+                <div className="px-4 py-4 text-xs text-slate-400">No key results yet.{canEdit?' Add a measurable target so progress can be tracked.':''}</div>
+              ) : (
+                <div className="divide-y">
+                  {ks.map(k=>{ const kp=krPct(k); const km=GOAL_STATUS[k.status]||GOAL_STATUS.on_track; const auto=k.auto_metric&&AUTO[k.auto_metric]; const unit=k.unit||(auto?auto.unit:''); const ms=Array.isArray(k.milestones)?k.milestones:[]; return (
+                    <div key={k.id} className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-slate-800">{k.title}</span>
+                            {auto && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title={`Auto-tracked from ${auto.label}`}>⚡ Auto</span>}
+                            <Countdown due={k.due_date} />
+                          </div>
+                          {k.description && <div className="text-[11px] text-slate-500 mt-0.5 whitespace-pre-line">{k.description}</div>}
+                          {/* metric detail */}
+                          {k.metric_type==='number' && (
+                            <div className="mt-1.5">
+                              <div className="flex items-center justify-between text-[11px] mb-1"><span className="text-slate-500">{goalFmtVal(krActual(k),unit)} <span className="text-slate-400">of</span> {goalFmtVal(k.target_value,unit)}</span><span className="font-semibold text-slate-600">{Math.round(kp*100)}%</span></div>
+                              <Bar pct={kp} cls={km.bar} />
+                            </div>
+                          )}
+                          {k.metric_type==='manual' && (
+                            <div className="mt-1.5"><div className="flex items-center justify-between text-[11px] mb-1"><span className="text-slate-500">Manual progress</span><span className="font-semibold text-slate-600">{Math.round(kp*100)}%</span></div><Bar pct={kp} cls={km.bar} /></div>
+                          )}
+                          {k.metric_type==='checklist' && (
+                            <div className="mt-1.5">
+                              <div className="flex items-center justify-between text-[11px] mb-1"><span className="text-slate-500">{ms.filter(m=>m.done).length}/{ms.length} milestones</span><span className="font-semibold text-slate-600">{Math.round(kp*100)}%</span></div>
+                              <Bar pct={kp} cls={km.bar} />
+                              {ms.length>0 && <div className="mt-1.5 space-y-0.5">{ms.map((m,i)=>(
+                                <label key={m.id||i} className={`flex items-center gap-2 text-[12px] ${canEdit?'cursor-pointer':''}`}><input type="checkbox" checked={!!m.done} disabled={!canEdit} onChange={()=>toggleMilestone(k,i)} /><span className={m.done?'line-through text-slate-400':'text-slate-600'}>{m.text}</span></label>
+                              ))}</div>}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`text-[9px] font-bold uppercase rounded px-1.5 py-0.5 ${km.chip}`}>{km.label}</span>
+                          {canEdit && <>
+                            <button onClick={()=>setEdit({row:k})} className="text-slate-400 hover:text-indigo-600 text-sm" title="Edit key result">✎</button>
+                            <button onClick={()=>delRow(k)} className="text-slate-300 hover:text-rose-500 text-sm" title="Delete">✕</button>
+                          </>}
+                        </div>
+                      </div>
+                    </div>
+                  ); })}
+                </div>
+              )}
+            </div>
+          ); })}
+        </div>
+      )}
+
+      {edit && <GoalNodeModal init={edit} autoOptions={AUTO} onSave={saveRow} onClose={()=>setEdit(null)} />}
+    </div>
+  );
+}
+
+function GoalNodeModal({ init, autoOptions, onSave, onClose }){
+  const existing = init.row || null;
+  const kind = existing ? existing.kind : init.kind;
+  const isKR = kind==='kr';
+  const isVision = kind==='vision';
+  const [title,setTitle]=useState(existing?.title||'');
+  const [description,setDescription]=useState(existing?.description||'');
+  const [ownerName,setOwnerName]=useState(existing?.owner_name||'');
+  const [status,setStatus]=useState(existing?.status||'on_track');
+  const [dueDate,setDueDate]=useState(existing?.due_date||'');
+  const [metricType,setMetricType]=useState(existing?.metric_type||'checklist');
+  const [targetValue,setTargetValue]=useState(existing?.target_value!=null?String(existing.target_value):'');
+  const [currentValue,setCurrentValue]=useState(existing?.current_value!=null?String(existing.current_value):'');
+  const [unit,setUnit]=useState(existing?.unit||'');
+  const [autoMetric,setAutoMetric]=useState(existing?.auto_metric||'');
+  const [manualPct,setManualPct]=useState(existing?.manual_pct!=null?String(existing.manual_pct):'0');
+  const [milestones,setMilestones]=useState(Array.isArray(existing?.milestones)?existing.milestones:[]);
+  const [msText,setMsText]=useState('');
+  const [busy,setBusy]=useState(false);
+
+  function addMs(){ const t=msText.trim(); if(!t) return; setMilestones([...milestones,{ id:'m'+Date.now(), text:t, done:false }]); setMsText(''); }
+  function rmMs(i){ setMilestones(milestones.filter((_,x)=>x!==i)); }
+
+  async function save(){
+    if(!title.trim()){ alert('Please enter a title.'); return; }
+    setBusy(true);
+    const payload={ kind, title:title.trim(), description:description.trim()||null, status,
+      owner_name: isVision?null:(ownerName.trim()||null),
+      due_date: isVision?null:(dueDate||null),
+      parent_id: existing?existing.parent_id:(init.parent_id||null) };
+    if(isKR){
+      payload.metric_type=metricType;
+      payload.unit = (autoMetric&&autoOptions[autoMetric]) ? autoOptions[autoMetric].unit : (unit.trim()||null);
+      payload.auto_metric = metricType==='number'?(autoMetric||null):null;
+      payload.target_value = metricType==='number'?(targetValue===''?null:Number(targetValue)):null;
+      payload.current_value = (metricType==='number'&&!autoMetric)?(currentValue===''?null:Number(currentValue)):null;
+      payload.manual_pct = metricType==='manual'?(manualPct===''?0:Number(manualPct)):null;
+      payload.milestones = metricType==='checklist'?milestones:[];
+    }
+    const ok=await onSave(payload, existing?.id);
+    setBusy(false);
+    if(ok) onClose();
+  }
+
+  const titleLabel = isVision?'Vision statement':isKR?'Key result':'Goal';
+  return (
+    <Modal title={`${existing?'Edit':'New'} ${titleLabel}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">{isVision?'Vision':'Title'}</div>
+          <textarea value={title} onChange={e=>setTitle(e.target.value)} placeholder={isVision?'e.g. To be the leading customized apparel maker in the Philippines…':(isKR?'e.g. Reach ₱50M in collected revenue':'e.g. Grow revenue and margins')} className="input min-h-[48px] whitespace-pre-line" />
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Description <span className="text-slate-300 normal-case">· optional</span></div>
+          <textarea value={description} onChange={e=>setDescription(e.target.value)} placeholder="Extra context…" className="input min-h-[40px] whitespace-pre-line" />
+        </div>
+
+        {!isVision && (
+          <div className="grid grid-cols-2 gap-3">
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Accountable <span className="text-slate-300 normal-case">· optional</span></div><input value={ownerName} onChange={e=>setOwnerName(e.target.value)} placeholder="Name" className="input" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Target date <span className="text-slate-300 normal-case">· optional</span></div><input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} className="input" /></div>
+          </div>
+        )}
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Status</div>
+          <select value={status} onChange={e=>setStatus(e.target.value)} className="input">{Object.entries(GOAL_STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
+        </div>
+
+        {isKR && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+            <div>
+              <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">How to measure this</div>
+              <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+                {[['number','🎯 Number target'],['checklist','✅ Milestones'],['manual','↔ Manual %']].map(([k,l])=>(
+                  <button key={k} type="button" onClick={()=>setMetricType(k)} className={`px-2.5 py-1 rounded-md ${metricType===k?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {metricType==='number' && (<>
+              <div>
+                <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Auto-track actual from OS data <span className="text-slate-300 normal-case">· optional</span></div>
+                <select value={autoMetric} onChange={e=>setAutoMetric(e.target.value)} className="input">
+                  <option value="">— Manual entry —</option>
+                  {Object.entries(autoOptions).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Target</div><input type="number" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="0" className="input" /></div>
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Current</div><input type="number" value={autoMetric?String(autoOptions[autoMetric]?.value??''):currentValue} onChange={e=>setCurrentValue(e.target.value)} disabled={!!autoMetric} placeholder="0" className="input disabled:bg-slate-100 disabled:text-slate-400" /></div>
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Unit</div><input value={autoMetric?(autoOptions[autoMetric]?.unit||''):unit} onChange={e=>setUnit(e.target.value)} disabled={!!autoMetric} placeholder="₱, pcs…" className="input disabled:bg-slate-100 disabled:text-slate-400" /></div>
+              </div>
+              {autoMetric && <div className="text-[11px] text-sky-700">⚡ Current value updates automatically from live data.</div>}
+            </>)}
+            {metricType==='manual' && (
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Progress %</div><input type="number" min="0" max="100" value={manualPct} onChange={e=>setManualPct(e.target.value)} className="input" /></div>
+            )}
+            {metricType==='checklist' && (
+              <div>
+                <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Milestones</div>
+                <div className="space-y-1 mb-2">{milestones.map((m,i)=>(<div key={m.id||i} className="flex items-center gap-2 text-sm"><span className="flex-1 text-slate-700">{m.text}</span><button type="button" onClick={()=>rmMs(i)} className="text-slate-300 hover:text-rose-500">✕</button></div>))}</div>
+                <div className="flex gap-2"><input value={msText} onChange={e=>setMsText(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); addMs(); } }} placeholder="Add a milestone…" className="input flex-1" /><button type="button" onClick={addMs} className="px-3 py-2 rounded-lg bg-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-300">Add</button></div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2 border-t">
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -32918,6 +33235,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
@@ -33033,6 +33351,7 @@ function App(){
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
+        {view==='goals' && profile.role==='admin' && <GoalsBoardView profile={profile} soPayments={soPayments} salesOrders={salesOrders} clients={clients} employees={employees} />}
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} vouchers={vouchers} cashAdvances={cashAdvances} budgetRequests={budgetRequests} rfps={rfps} apVouchers={apVouchers} />}
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
