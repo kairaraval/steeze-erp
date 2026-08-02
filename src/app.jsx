@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 368 · Process boards: each item now opens a QC-style Report — project details, process handled by, quantity done, rejects (qty + issue/damage checkboxes), notes — plus a 'Request replacement' button that routes a repair request to a department (parts + pcs).";
+const BUILD = "Live build 369 · Replacement requests: now take multiple part lines (qty per part) so quantities are accurate, plus a reason checklist (fabric damage, print damage, print error, machine error, cold spot, others + reason box).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7303,6 +7303,8 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack
 const PROCESS_REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on print','Reject on embroidery','Wrong print details','Stitching defect','Stain / dirt marks','Color mismatch','Loose threads','Measurement out of tolerance','Missing parts / accessories'];
 // Departments a replacement / repair request can be routed to.
 const REPLACEMENT_DEPARTMENTS=['Cutting','Sewing In-House','Sewing Subcon','Trad Sorting','Subli Sorting','Sublimation Printing','DTF Printing','DTF Pressing','Subli Pressing','Embroidery','Knitting','Graphic Design','Purchasing','Other'];
+// Reasons for a replacement / repair (tick all that apply; "Others" opens a box).
+const REPLACEMENT_REASONS=['Fabric damage','Print damage','Print error','Machine error','Cold spot'];
 
 function ProcessReportModal({ w, profile, employees, leads, process, title, openTechpack, onClose, onSaved }){
   const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
@@ -7327,15 +7329,25 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
   // Replacement / repair requests for this item.
   const [reqs,setReqs]=useState([]);
   const [showReqForm,setShowReqForm]=useState(false);
-  const [rf,setRf]=useState({ department:'', parts:'', qty:'', notes:'' });
+  const emptyReqForm={ department:'', lines:[{ part:'', qty:'' }], reasons:[], reasonOther:'', notes:'' };
+  const [rf,setRf]=useState(emptyReqForm);
+  function setLine(i,k,v){ setRf(f=>({ ...f, lines:f.lines.map((l,x)=> x===i?{...l,[k]:v}:l) })); }
+  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'' }] })); }
+  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'' }]:f.lines.filter((_,x)=>x!==i) })); }
+  function toggleReason(r){ setRf(f=>({ ...f, reasons:f.reasons.includes(r)?f.reasons.filter(x=>x!==r):[...f.reasons,r] })); }
   async function loadReqs(){ const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',w.id).order('created_at',{ascending:false}); setReqs(data||[]); }
   useEffect(()=>{ loadReqs(); },[w.id]);
   async function submitReq(){
     if(!rf.department){ alert('Choose which department this request is for.'); return; }
-    if(!rf.parts.trim()){ alert('Describe what parts need replacing.'); return; }
-    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, parts:rf.parts.trim(), qty:rf.qty===''?null:Number(rf.qty), notes:rf.notes.trim()||null, created_by:profile.id });
+    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
+    if(!lines.length){ alert('Add at least one part that needs replacing.'); return; }
+    const otherChecked = rf.reasons.includes('Others');
+    if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
+    const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
+    const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
+    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, lines, parts:partsSummary, qty:totalQty||null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
-    setRf({ department:'', parts:'', qty:'', notes:'' }); setShowReqForm(false); loadReqs();
+    setRf(emptyReqForm); setShowReqForm(false); loadReqs();
   }
   async function setReqStatus(r,status){ await sb.from('replacement_requests').update({ status, done_at: status==='done'?new Date().toISOString():null }).eq('id',r.id); loadReqs(); }
   async function delReq(r){ if(!confirm('Delete this replacement request?')) return; await sb.from('replacement_requests').delete().eq('id',r.id); loadReqs(); }
@@ -7425,38 +7437,58 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
           </div>
           {reqs.length>0 && (
             <div className="space-y-1.5 mb-2">
-              {reqs.map(r=>{ const [sl,sc]=reqStatusMeta[r.status]||reqStatusMeta.open; return (
-                <div key={r.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-2 flex-wrap">
-                  <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
-                  <span className="font-semibold">{r.department}</span>
-                  <span className="text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pc${r.qty===1?'':'s'}`:''}</span>
-                  {r.notes && <span className="text-[11px] text-slate-400">— {r.notes}</span>}
-                  <div className="flex-1"></div>
-                  {r.status!=='done' ? <button onClick={()=>setReqStatus(r,'done')} className="text-[11px] text-emerald-600 hover:underline">Mark done</button> : <button onClick={()=>setReqStatus(r,'open')} className="text-[11px] text-slate-400 hover:underline">Reopen</button>}
-                  <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm">✕</button>
+              {reqs.map(r=>{ const [sl,sc]=reqStatusMeta[r.status]||reqStatusMeta.open; const lines=Array.isArray(r.lines)&&r.lines.length?r.lines:null; const reasons=[...(Array.isArray(r.reasons)?r.reasons:[]).filter(x=>x!=='Others'), ...(r.reason_other?[r.reason_other]:[])]; return (
+                <div key={r.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
+                    <span className="font-semibold">{r.department}</span>
+                    {!lines && <span className="text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pc${r.qty===1?'':'s'}`:''}</span>}
+                    <div className="flex-1"></div>
+                    {r.status!=='done' ? <button onClick={()=>setReqStatus(r,'done')} className="text-[11px] text-emerald-600 hover:underline">Mark done</button> : <button onClick={()=>setReqStatus(r,'open')} className="text-[11px] text-slate-400 hover:underline">Reopen</button>}
+                    <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm">✕</button>
+                  </div>
+                  {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+                  {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
+                  {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
                 </div>
               ); })}
             </div>
           )}
           {showReqForm && (
-            <div className="bg-white border rounded-lg p-2.5 space-y-2">
-              <div className="grid md:grid-cols-2 gap-2">
-                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Request to department *</div>
-                  <select value={rf.department} onChange={e=>setRf({...rf,department:e.target.value})} className="input"><option value="">— Select —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select>
-                </div>
-                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">How many pcs</div>
-                  <input type="number" min="0" value={rf.qty} onChange={e=>setRf({...rf,qty:e.target.value})} placeholder="e.g. 3" className="input" />
-                </div>
+            <div className="bg-white border rounded-lg p-2.5 space-y-2.5">
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Request to department *</div>
+                <select value={rf.department} onChange={e=>setRf({...rf,department:e.target.value})} className="input"><option value="">— Select —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select>
               </div>
-              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">What parts need replacing *</div>
-                <input value={rf.parts} onChange={e=>setRf({...rf,parts:e.target.value})} placeholder="e.g. Front panel, left sleeve, collar…" className="input" />
+              <div>
+                <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Parts needed — qty per part *</div>
+                <div className="space-y-1.5">
+                  {rf.lines.map((l,i)=>(
+                    <div key={i} className="flex items-center gap-1.5">
+                      <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-20 shrink-0" />
+                      <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1" />
+                      <button type="button" onClick={()=>rmLine(i)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 w-6" title="Remove line">✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={addLine} className="mt-1.5 text-xs text-indigo-600 font-semibold hover:underline">+ Add part line</button>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reason for replacement <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[...REPLACEMENT_REASONS,'Others'].map(rn=>{ const on=rf.reasons.includes(rn); return (
+                    <button key={rn} type="button" onClick={()=>toggleReason(rn)} className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300 hover:text-rose-600'}`}>
+                      <span className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center text-[9px] ${on?'bg-white text-rose-500 border-white':'border-slate-300 text-transparent'}`}>✓</span>{rn}
+                    </button>
+                  ); })}
+                </div>
+                {rf.reasons.includes('Others') && <input value={rf.reasonOther} onChange={e=>setRf({...rf,reasonOther:e.target.value})} placeholder="Please specify the reason…" className="input mt-1.5" />}
               </div>
               <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes <span className="text-slate-300 normal-case">· optional</span></div>
-                <input value={rf.notes} onChange={e=>setRf({...rf,notes:e.target.value})} placeholder="Reason / details…" className="input" />
+                <input value={rf.notes} onChange={e=>setRf({...rf,notes:e.target.value})} placeholder="Extra details…" className="input" />
               </div>
               <div className="flex gap-2">
                 <button onClick={submitReq} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Submit request</button>
-                <button onClick={()=>{ setShowReqForm(false); setRf({ department:'', parts:'', qty:'', notes:'' }); }} className="px-3 py-1.5 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+                <button onClick={()=>{ setShowReqForm(false); setRf(emptyReqForm); }} className="px-3 py-1.5 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
               </div>
             </div>
           )}
