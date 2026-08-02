@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 364 · Quality Control: added a 📏 Sizers tab that mirrors all sizers from Sales → Resources (view-only, searchable, click to view inline) so QC can reference size sets while checking.";
+const BUILD = "Live build 365 · Quality Control: added a 📐 Size Charts tab that mirrors all size charts from Sales → Resources (folder filter, searchable, click to view inline) so QC can reference size specs while checking.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6651,20 +6651,22 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const [tab,setTab]=useState('worklist');
   const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
-  // Sizers — read-only mirror of the Sales module's "Sizers" resources so QC can
-  // reference the physical size sets while checking. Same rows, no editing here.
+  // Size Charts — read-only mirror of the Sales module's "Size Charts" resources
+  // so QC can reference size specs while checking. Same rows, no editing here.
   const [sizers,setSizers]=useState([]);
   const [sizerSearch,setSizerSearch]=useState('');
+  const [sizerFolder,setSizerFolder]=useState('ALL');
   const [sizerLightbox,setSizerLightbox]=useState(null);
   useEffect(()=>{ (async()=>{
-    const { data }=await sb.from('sales_resources').select('*').eq('category','sizers').is('deleted_at',null).order('created_at',{ascending:false});
+    const { data }=await sb.from('sales_resources').select('*').eq('category','size_charts').is('deleted_at',null).order('created_at',{ascending:false});
     setSizers(data||[]);
   })(); },[]);
   async function openSizer(r){
     if(r.file_path){ try { const u=await signedUrl(r.file_path); const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); const isPdf=ref.includes('pdf')||/\.pdf(?:$|\?)/.test(ref); setSizerLightbox(isPdf?{url:u,kind:'pdf',name:r.title||r.file_name||'',path:r.file_path}:{url:u,kind:'image',name:r.title||r.file_name||''}); } catch(_){} return; }
     if(r.url) window.open(r.url,'_blank','noopener');
   }
-  const sizerList = sizers.filter(r=> !sizerSearch || `${r.title||''} ${r.notes||''} ${r.file_name||''}`.toLowerCase().includes(sizerSearch.toLowerCase()));
+  const sizerFolders = ['ALL', ...(RES_FOLDERS.size_charts||[])];
+  const sizerList = sizers.filter(r=> (sizerFolder==='ALL' || (r.folder||RES_FOLDERS.size_charts?.[0])===sizerFolder) && (!sizerSearch || `${r.title||''} ${r.notes||''} ${r.file_name||''}`.toLowerCase().includes(sizerSearch.toLowerCase())));
   // Guards against seeding the SAME job into the QC list twice. reload() reloads
   // all data (new prodJobs/sampleJobs array refs), which can re-fire this effect
   // before the freshly-inserted qc_reports row lands in state — so relying on
@@ -6734,17 +6736,20 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>To Check ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
-          <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📏 Sizers ({sizers.length})</button>
+          <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📐 Size Charts ({sizers.length})</button>
         </div>
       </div>
       {tab==='sizers' ? (
         <div>
           <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-            <div className="text-xs text-slate-500">Reference size sets, mirrored from Sales → Resources → Sizers. View-only.</div>
-            <input value={sizerSearch} onChange={e=>setSizerSearch(e.target.value)} placeholder="Search sizers…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-48" />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {sizerFolders.map(fd=>(<button key={fd} onClick={()=>setSizerFolder(fd)} className={`text-xs px-2.5 py-1 rounded-full border ${sizerFolder===fd?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{fd==='ALL'?'All':fd}</button>))}
+            </div>
+            <input value={sizerSearch} onChange={e=>setSizerSearch(e.target.value)} placeholder="Search size charts…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-48" />
           </div>
+          <div className="text-xs text-slate-500 mb-3">Reference size charts, mirrored from Sales → Resources → Size Charts. View-only.</div>
           {sizerList.length===0 ? (
-            <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">{sizers.length===0?'No sizers in Sales Resources yet.':'No sizers match your search.'}</div>
+            <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">{sizers.length===0?'No size charts in Sales Resources yet.':'No size charts match.'}</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
               {sizerList.map(r=><DesignResourceCard key={r.id} r={r} canEdit={false} onOpen={openSizer} onEdit={()=>{}} onDelete={()=>{}} />)}
