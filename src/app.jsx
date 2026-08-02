@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 370 · Replacement Requests queue (Production): requests now go to a queue where the Production Supervisor approves & routes them to a department; each of Pattern / In-House Cutting / Printing / Graphic gets a 'For Replacement' tab. Supervisor can escalate excessive rejects to HR (notifies their inbox). New Production Assistant role can view the queue.";
+const BUILD = "Live build 371 · Replacement Requests: a new request now pings the Production Supervisor's inbox and shows a count badge on the sidebar 'Replacement Requests' item; the 'For Replacement' tab in Pattern / In-House Cutting / Printing / Graphic shows a red count when work is routed there.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3745,6 +3745,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const [dragOverStatus,setDragOverStatus]=useState(null);
   const [clDragId,setClDragId]=useState(null); // checklist reorder drag
   const [mainTab,setMainTab]=useState('jobs'); // 'jobs' | 'resources' (resources only when showResources)
+  const replCount=useReplacementCount(replacementDept);
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   const canDelete = isAdmin || !isAssistant; // admin + managers
@@ -3825,7 +3826,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
           <div className="flex gap-1 mt-3 flex-wrap">
             <button onClick={()=>setMainTab('jobs')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='jobs'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎨 Jobs</button>
             {showResources && <button onClick={()=>setMainTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='resources'?'bg-pink-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📌 Resources</button>}
-            {replacementDept && <button onClick={()=>setMainTab('replacements')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='replacements'?'bg-rose-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🔁 For Replacement</button>}
+            {replacementDept && <button onClick={()=>setMainTab('replacements')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold inline-flex items-center gap-1.5 ${mainTab==='replacements'?'bg-rose-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🔁 For Replacement{replCount>0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-bold ${mainTab==='replacements'?'bg-white text-rose-600':'bg-rose-500 text-white'}`}>{replCount}</span>}</button>}
           </div>
         )}
       </div>
@@ -6427,6 +6428,7 @@ function textToSizes(t){ return String(t||'').split(',').map(s=>s.trim()).filter
 
 function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
+  const replCount=useReplacementCount('Pattern');
   const [search,setSearch]=useState('');
   const [editing,setEditing]=useState(null);   // pattern being edited/created
   const [prefill,setPrefill]=useState(null);    // prefill from a worklist item
@@ -6535,7 +6537,7 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
           <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({prodCount})</button>
           <button onClick={()=>setTab('sample')} className={`px-3 py-1.5 rounded-md ${tab==='sample'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sample Patterns ({sampleCount})</button>
           <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
-          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement</button>
+          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md inline-flex items-center gap-1.5 ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement{replCount>0 && <span className="text-[10px] rounded-full px-1.5 py-0.5 font-bold bg-rose-500 text-white">{replCount}</span>}</button>
         </div>
       </div>
       {tab==='replacements' && <ForReplacementPanel profile={profile} department="Pattern" />}
@@ -6931,6 +6933,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
 
 function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
+  const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
@@ -7001,7 +7004,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Cutting ({done.length})</button>
           <button onClick={()=>setTab('patterns')} className={`px-3 py-1.5 rounded-md ${tab==='patterns'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({lib.length})</button>
-          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement</button>
+          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md inline-flex items-center gap-1.5 ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement{replCount>0 && <span className="text-[10px] rounded-full px-1.5 py-0.5 font-bold bg-rose-500 text-white">{replCount}</span>}</button>
         </div>
       </div>
 
@@ -7360,6 +7363,12 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
     const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
     const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
+    // Ping the Production Supervisor(s) — a new request needs approval & routing.
+    try {
+      const sup=await sb.from('profiles').select('id').eq('role','production_supervisor');
+      const ids=(sup.data||[]).map(p=>p.id).filter(id=>id!==profile.id);
+      if(ids.length){ const txt=`🔁 New replacement request from ${title} — ${w.item||w.title||''}${w.client_name?` (${w.client_name})`:''}. Needs your approval & routing.`; await sb.from('notifications').insert(ids.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'replacements', ref_type:'replacement_request', type:'system' }))); }
+    } catch(_){}
     setRf(emptyReqForm); setShowReqForm(false); loadReqs();
   }
   async function delReq(r){ if(!confirm('Delete this replacement request?')) return; await sb.from('replacement_requests').delete().eq('id',r.id); loadReqs(); }
@@ -7514,6 +7523,14 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
       </div>
     </Modal>
   );
+}
+
+// Count of open (approved / in-progress) replacement requests routed to a
+// department — drives the red badge on each board's "For Replacement" tab.
+function useReplacementCount(department){
+  const [n,setN]=useState(0);
+  useEffect(()=>{ let on=true; if(!department){ setN(0); return; } (async()=>{ try{ const { count }=await sb.from('replacement_requests').select('id',{count:'exact',head:true}).eq('department',department).in('status',['approved','in_progress']); if(on) setN(count||0); }catch(_){} })(); return ()=>{on=false;}; },[department]);
+  return n;
 }
 
 // Small card showing a replacement request's details (part lines + reasons).
@@ -32732,6 +32749,7 @@ function App(){
   const [patterns,setPatterns]=useState([]); const [patternTasks,setPatternTasks]=useState([]);
   const [patternWorklist,setPatternWorklist]=useState([]);
   const [cuttingWorklist,setCuttingWorklist]=useState([]);
+  const [replacementPending,setReplacementPending]=useState(0);
   const [qcReports,setQcReports]=useState([]);
   const [extraExpenseCats,setExtraExpenseCats]=useState([]);
   const [styles,setStyles]=useState([]);
@@ -33105,6 +33123,8 @@ function App(){
   }
   useEffect(()=>{ if(session) loadAll(); },[session]);
   useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
+  // Pending replacement-request count for the sidebar badge (refreshes on nav).
+  useEffect(()=>{ (async()=>{ try{ const { count }=await sb.from('replacement_requests').select('id',{count:'exact',head:true}).eq('status','pending'); setReplacementPending(count||0); }catch(_){} })(); },[view]);
   // Each restricted role has its own allowed-view set + default landing page.
   // If a user (e.g. via a stale tab) lands on a view they shouldn't see, bounce
   // them to their default.
@@ -33880,7 +33900,7 @@ function App(){
   function NavBtn([k,lbl,icon]){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
     // not error) so it stands out from inbox @mentions (which are rose).
-    const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : k==='approvals'?pendingApprovals : 0;
+    const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : k==='approvals'?pendingApprovals : k==='replacements'?replacementPending : 0;
     const badgeColor = k==='approvals' ? 'bg-amber-500' : 'bg-rose-500';
     return <button key={k} onClick={()=>navTo(k)} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center">{icon}</span><span className="flex-1 text-left">{lbl}</span>{badge>0 && <span className={`text-[10px] ${badgeColor} text-white rounded-full px-1.5 py-0.5 font-bold`}>{badge}</span>}</button>;
   }
