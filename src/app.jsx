@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 367 · Production: retired the old 'Sorting' and 'Heat Press' stages — existing jobs moved to Trad Sorting / Subli Pressing. The stage list now uses Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing.";
+const BUILD = "Live build 368 · Process boards: each item now opens a QC-style Report — project details, process handled by, quantity done, rejects (qty + issue/damage checkboxes), notes — plus a 'Request replacement' button that routes a repair request to a department (parts + pcs).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7183,11 +7183,12 @@ const PROCESS_BOARDS = [
   { key:'dtf-pressing',   process:'dtf_pressing',   title:'DTF Pressing',   icon:'🔥', seedStatus:'dtf pressing',   role:'dtf_pressing_head' },
   { key:'subli-pressing', process:'subli_pressing', title:'Subli Pressing', icon:'🔥', seedStatus:'subli pressing', role:'subli_pressing_head' },
 ];
-function ProcessWorklistView({ profile, prodJobs, leads, openTechpack, process, title, icon, seedStatus }){
+function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack, process, title, icon, seedStatus }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState('worklist');
   const [newTask,setNewTask]=useState('');
+  const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   const seededRef=useRef(new Set());
   const seedingRef=useRef(false);
@@ -7236,10 +7237,11 @@ function ProcessWorklistView({ profile, prodJobs, leads, openTechpack, process, 
         </div>
         <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div>
-          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
-        </div>
+        <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
+          <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.qty_done!=null?` · ${w.qty_done} done`:''}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
+        </button>
+        <button onClick={()=>setDetail(w)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold shrink-0">Report ▸</button>
         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
         <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>
         <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
@@ -7251,7 +7253,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, openTechpack, process, 
   const doneRow=(w)=>{ const [bl,bc]=srcBadge(w.source_type); return (
     <div key={w.id} className="border-t px-3 py-2 flex items-center gap-2 flex-wrap">
       <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
-      <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.notes?` · ${w.notes}`:''}</div></div>
+      <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group"><div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.qty_done!=null?` · ${w.qty_done} done`:''}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.notes?` · ${w.notes}`:''}</div></button>
       <div className="text-[11px] text-slate-500 text-right shrink-0">{w.start_date?fmtDate(w.start_date):'—'} → <span className="font-semibold text-emerald-700">{w.done_at?fmtTime(w.done_at):'done'}</span></div>
       <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>
       <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0">✕</button>
@@ -7291,7 +7293,184 @@ function ProcessWorklistView({ profile, prodJobs, leads, openTechpack, process, 
           {done.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">Nothing finished yet. Click “✓ Done” on a worklist item to move it here.</div> : done.map(doneRow)}
         </div>
       )}
+
+      {detail && <ProcessReportModal w={detail} profile={profile} employees={employees} leads={leads} process={process} title={title} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); load(); }} />}
     </div>
+  );
+}
+
+// Reject / issue types shared by the process report (same set as QC).
+const PROCESS_REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on print','Reject on embroidery','Wrong print details','Stitching defect','Stain / dirt marks','Color mismatch','Loose threads','Measurement out of tolerance','Missing parts / accessories'];
+// Departments a replacement / repair request can be routed to.
+const REPLACEMENT_DEPARTMENTS=['Cutting','Sewing In-House','Sewing Subcon','Trad Sorting','Subli Sorting','Sublimation Printing','DTF Printing','DTF Pressing','Subli Pressing','Embroidery','Knitting','Graphic Design','Purchasing','Other'];
+
+function ProcessReportModal({ w, profile, employees, leads, process, title, openTechpack, onClose, onSaved }){
+  const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
+  const projItems=Array.isArray(lead?.items)?lead.items:[];
+  const projQty=projItems.reduce((s,it)=>s+(Number(it.quantity)||0),0);
+  const projDelivery=lead?.delivery_date||lead?.expected_close||null;
+
+  const [handlers,setHandlers]=useState(Array.isArray(w.handled_by)?w.handled_by:[]);
+  const [qtyDone,setQtyDone]=useState(w.qty_done!=null?String(w.qty_done):'');
+  const [rejectCount,setRejectCount]=useState(w.reject_count!=null?String(w.reject_count):'');
+  const [rejectTypes,setRejectTypes]=useState(Array.isArray(w.reject_types)?w.reject_types:[]);
+  const [notes,setNotes]=useState(w.notes||'');
+  const [empSearch,setEmpSearch]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const filteredEmps=activeEmps.filter(e=> !empSearch || fullName(e).toLowerCase().includes(empSearch.toLowerCase())).slice(0,60);
+  function toggleHandler(id){ setHandlers(h=> h.includes(id)?h.filter(x=>x!==id):[...h,id]); }
+  function toggleRejectType(t){ setRejectTypes(r=> r.includes(t)?r.filter(x=>x!==t):[...r,t]); }
+
+  // Replacement / repair requests for this item.
+  const [reqs,setReqs]=useState([]);
+  const [showReqForm,setShowReqForm]=useState(false);
+  const [rf,setRf]=useState({ department:'', parts:'', qty:'', notes:'' });
+  async function loadReqs(){ const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',w.id).order('created_at',{ascending:false}); setReqs(data||[]); }
+  useEffect(()=>{ loadReqs(); },[w.id]);
+  async function submitReq(){
+    if(!rf.department){ alert('Choose which department this request is for.'); return; }
+    if(!rf.parts.trim()){ alert('Describe what parts need replacing.'); return; }
+    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, parts:rf.parts.trim(), qty:rf.qty===''?null:Number(rf.qty), notes:rf.notes.trim()||null, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    setRf({ department:'', parts:'', qty:'', notes:'' }); setShowReqForm(false); loadReqs();
+  }
+  async function setReqStatus(r,status){ await sb.from('replacement_requests').update({ status, done_at: status==='done'?new Date().toISOString():null }).eq('id',r.id); loadReqs(); }
+  async function delReq(r){ if(!confirm('Delete this replacement request?')) return; await sb.from('replacement_requests').delete().eq('id',r.id); loadReqs(); }
+
+  async function save(){
+    setBusy(true); setMsg('');
+    const payload={ handled_by:handlers.length?handlers:null, qty_done:qtyDone===''?null:Number(qtyDone), reject_count:rejectCount===''?null:Number(rejectCount), reject_types:rejectTypes.length?rejectTypes:null, notes:notes||null };
+    const { error }=await sb.from('process_worklist').update(payload).eq('id',w.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    setBusy(false); setMsg('Saved ✓'); onSaved && onSaved();
+  }
+
+  const reqStatusMeta={ open:['Open','bg-amber-100 text-amber-700'], in_progress:['In progress','bg-blue-100 text-blue-700'], done:['Done','bg-emerald-100 text-emerald-700'] };
+  return (
+    <Modal title={`${title} Report · ${w.item||w.title||'—'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          <span className="uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{w.source_type==='manual'?'Ad-hoc':'Production'}</span>
+          {w.client_name && <span className="text-slate-500">{w.client_name}</span>}
+          {lead && lead.techpack && openTechpack && <button onClick={()=>{ onClose(); openTechpack(lead); }} className="text-teal-700 hover:underline">📋 View techpack</button>}
+        </div>
+
+        {/* Project basics */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Project</div><div className="font-medium truncate" title={w.item||lead?.title||''}>{w.item||lead?.title||'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Client</div><div className="font-medium truncate">{w.client_name||'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Total quantity</div><div className="font-bold text-indigo-700">{projQty>0?projQty.toLocaleString()+' pcs':'—'}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Target delivery</div><div className="font-medium">{projDelivery?fmtDate(projDelivery):'—'}</div></div>
+          </div>
+          {projItems.length>0 && (
+            <div className="mt-2 pt-2 border-t border-slate-200 flex flex-wrap gap-1.5">
+              {projItems.map((it,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-white border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-600">{it.itemType||it.description||it.category||'Item'}</span>{Number(it.quantity)>0 && <span className="font-semibold text-slate-800">×{Number(it.quantity).toLocaleString()}</span>}</span>))}
+            </div>
+          )}
+        </div>
+
+        {/* Process handled by */}
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">{title} handled by</div>
+          {handlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{handlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{empName(id)}<button onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
+          <input value={empSearch} onChange={e=>setEmpSearch(e.target.value)} placeholder="Search staff to add…" className="input text-sm" />
+          <div className="mt-1 max-h-36 overflow-y-auto border rounded-lg divide-y">
+            {filteredEmps.map(e=>(
+              <label key={e.id} className="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={handlers.includes(e.id)} onChange={()=>toggleHandler(e.id)} />
+                <span>{fullName(e)}</span>
+              </label>
+            ))}
+            {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">No staff match.</div>}
+          </div>
+        </div>
+
+        {/* Quantity done + rejects */}
+        <div className="grid md:grid-cols-3 gap-3">
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Quantity done</div>
+            <input type="number" min="0" value={qtyDone} onChange={e=>setQtyDone(e.target.value)} placeholder="0" className="input" />
+          </div>
+          <div className="md:col-span-2 bg-rose-50/40 border border-rose-100 rounded-lg p-3">
+            <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Rejects (qty)</div>
+            <input type="number" min="0" value={rejectCount} onChange={e=>setRejectCount(e.target.value)} placeholder="0" className="input" />
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Issue / reject type <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+          <div className="flex flex-wrap gap-1.5">
+            {PROCESS_REJECT_TYPES.map(t=>{ const on=rejectTypes.includes(t); return (
+              <button key={t} type="button" onClick={()=>toggleRejectType(t)} className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300 hover:text-rose-600'}`}>
+                <span className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center text-[9px] ${on?'bg-white text-rose-500 border-white':'border-slate-300 text-transparent'}`}>✓</span>{t}
+              </button>
+            ); })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes / findings</div>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder={`General ${title.toLowerCase()} findings…`} className="input min-h-[60px] whitespace-pre-line" />
+        </div>
+
+        {/* Replacement requests */}
+        <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[10px] uppercase text-indigo-500 font-semibold">Replacement / repair requests</div>
+            {!showReqForm && <button onClick={()=>setShowReqForm(true)} className="text-xs px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🔁 Request replacement</button>}
+          </div>
+          {reqs.length>0 && (
+            <div className="space-y-1.5 mb-2">
+              {reqs.map(r=>{ const [sl,sc]=reqStatusMeta[r.status]||reqStatusMeta.open; return (
+                <div key={r.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-2 flex-wrap">
+                  <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
+                  <span className="font-semibold">{r.department}</span>
+                  <span className="text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pc${r.qty===1?'':'s'}`:''}</span>
+                  {r.notes && <span className="text-[11px] text-slate-400">— {r.notes}</span>}
+                  <div className="flex-1"></div>
+                  {r.status!=='done' ? <button onClick={()=>setReqStatus(r,'done')} className="text-[11px] text-emerald-600 hover:underline">Mark done</button> : <button onClick={()=>setReqStatus(r,'open')} className="text-[11px] text-slate-400 hover:underline">Reopen</button>}
+                  <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm">✕</button>
+                </div>
+              ); })}
+            </div>
+          )}
+          {showReqForm && (
+            <div className="bg-white border rounded-lg p-2.5 space-y-2">
+              <div className="grid md:grid-cols-2 gap-2">
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Request to department *</div>
+                  <select value={rf.department} onChange={e=>setRf({...rf,department:e.target.value})} className="input"><option value="">— Select —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select>
+                </div>
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">How many pcs</div>
+                  <input type="number" min="0" value={rf.qty} onChange={e=>setRf({...rf,qty:e.target.value})} placeholder="e.g. 3" className="input" />
+                </div>
+              </div>
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">What parts need replacing *</div>
+                <input value={rf.parts} onChange={e=>setRf({...rf,parts:e.target.value})} placeholder="e.g. Front panel, left sleeve, collar…" className="input" />
+              </div>
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes <span className="text-slate-300 normal-case">· optional</span></div>
+                <input value={rf.notes} onChange={e=>setRf({...rf,notes:e.target.value})} placeholder="Reason / details…" className="input" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={submitReq} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Submit request</button>
+                <button onClick={()=>{ setShowReqForm(false); setRf({ department:'', parts:'', qty:'', notes:'' }); }} className="px-3 py-1.5 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+              </div>
+            </div>
+          )}
+          {reqs.length===0 && !showReqForm && <div className="text-[11px] text-slate-400">No replacement requests. Raise one to route repairs to a department.</div>}
+        </div>
+
+        <div className="flex items-center gap-2 pt-2 border-t">
+          {msg && <span className={`text-xs ${msg==='Saved ✓'?'text-emerald-600':'text-rose-600'}`}>{msg}</span>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save report'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -33583,7 +33762,7 @@ function App(){
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
-        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
+        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} employees={employees} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
