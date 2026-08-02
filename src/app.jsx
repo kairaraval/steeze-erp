@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 369 · Replacement requests: now take multiple part lines (qty per part) so quantities are accurate, plus a reason checklist (fabric damage, print damage, print error, machine error, cold spot, others + reason box).";
+const BUILD = "Live build 370 · Replacement Requests queue (Production): requests now go to a queue where the Production Supervisor approves & routes them to a department; each of Pattern / In-House Cutting / Printing / Graphic gets a 'For Replacement' tab. Supervisor can escalate excessive rejects to HR (notifies their inbox). New Production Assistant role can view the queue.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3735,7 +3735,7 @@ function CostingCalculatorView({ profile }){
   );
 }
 
-function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, reload, openActivity, openTechpack, openLead }){
+function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, replacementDept, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   // Kanban drag-and-drop state for the Board layout — same pattern as the
@@ -3821,14 +3821,16 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
             </>}
           </div>
         </div>
-        {showResources && (
-          <div className="flex gap-1 mt-3">
+        {(showResources || replacementDept) && (
+          <div className="flex gap-1 mt-3 flex-wrap">
             <button onClick={()=>setMainTab('jobs')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='jobs'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎨 Jobs</button>
-            <button onClick={()=>setMainTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='resources'?'bg-pink-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📌 Resources</button>
+            {showResources && <button onClick={()=>setMainTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='resources'?'bg-pink-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📌 Resources</button>}
+            {replacementDept && <button onClick={()=>setMainTab('replacements')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='replacements'?'bg-rose-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🔁 For Replacement</button>}
           </div>
         )}
       </div>
 
+      {mainTab==='replacements' && replacementDept && <ForReplacementPanel profile={profile} department={replacementDept} />}
       {mainTab==='resources' && <DesignResourcesBoard profile={profile} />}
 
       {mainTab==='jobs' && layout==='board' && (
@@ -6533,8 +6535,10 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
           <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({prodCount})</button>
           <button onClick={()=>setTab('sample')} className={`px-3 py-1.5 rounded-md ${tab==='sample'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sample Patterns ({sampleCount})</button>
           <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
+          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement</button>
         </div>
       </div>
+      {tab==='replacements' && <ForReplacementPanel profile={profile} department="Pattern" />}
 
       {tab==='worklist' && (
         <div className="space-y-4">
@@ -6997,8 +7001,11 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Cutting ({done.length})</button>
           <button onClick={()=>setTab('patterns')} className={`px-3 py-1.5 rounded-md ${tab==='patterns'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({lib.length})</button>
+          <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement</button>
         </div>
       </div>
+
+      {tab==='replacements' && <ForReplacementPanel profile={profile} department="Cutting" />}
 
       {tab==='worklist' && (
         <div className="space-y-4">
@@ -7301,8 +7308,14 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack
 
 // Reject / issue types shared by the process report (same set as QC).
 const PROCESS_REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on print','Reject on embroidery','Wrong print details','Stitching defect','Stain / dirt marks','Color mismatch','Loose threads','Measurement out of tolerance','Missing parts / accessories'];
-// Departments a replacement / repair request can be routed to.
-const REPLACEMENT_DEPARTMENTS=['Cutting','Sewing In-House','Sewing Subcon','Trad Sorting','Subli Sorting','Sublimation Printing','DTF Printing','DTF Pressing','Subli Pressing','Embroidery','Knitting','Graphic Design','Purchasing','Other'];
+// Departments a replacement / repair request can be routed to. The four with a
+// dedicated "For Replacement" board tab are Pattern, Cutting, Printing and
+// Graphic Design (see REPLACEMENT_BOARD_DEPT).
+const REPLACEMENT_DEPARTMENTS=['Pattern','Cutting','Printing','Graphic Design','Sewing In-House','Sewing Subcon','Embroidery','Knitting','Purchasing','Other'];
+// Maps a board view key to the department label whose approved replacement
+// requests show in that board's "For Replacement" tab.
+const REPLACEMENT_BOARD_DEPT={ pattern:'Pattern', cutting:'Cutting', printing:'Printing', graphic:'Graphic Design' };
+const REPLACEMENT_STATUS_META={ pending:['Pending approval','bg-amber-100 text-amber-700'], approved:['Approved · routed','bg-blue-100 text-blue-700'], in_progress:['In progress','bg-indigo-100 text-indigo-700'], done:['Done','bg-emerald-100 text-emerald-700'], declined:['Declined','bg-rose-100 text-rose-700'] };
 // Reasons for a replacement / repair (tick all that apply; "Others" opens a box).
 const REPLACEMENT_REASONS=['Fabric damage','Print damage','Print error','Machine error','Cold spot'];
 
@@ -7345,11 +7358,10 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
     if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
     const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
     const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
-    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, lines, parts:partsSummary, qty:totalQty||null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
+    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
     setRf(emptyReqForm); setShowReqForm(false); loadReqs();
   }
-  async function setReqStatus(r,status){ await sb.from('replacement_requests').update({ status, done_at: status==='done'?new Date().toISOString():null }).eq('id',r.id); loadReqs(); }
   async function delReq(r){ if(!confirm('Delete this replacement request?')) return; await sb.from('replacement_requests').delete().eq('id',r.id); loadReqs(); }
 
   async function save(){
@@ -7360,7 +7372,6 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
     setBusy(false); setMsg('Saved ✓'); onSaved && onSaved();
   }
 
-  const reqStatusMeta={ open:['Open','bg-amber-100 text-amber-700'], in_progress:['In progress','bg-blue-100 text-blue-700'], done:['Done','bg-emerald-100 text-emerald-700'] };
   return (
     <Modal title={`${title} Report · ${w.item||w.title||'—'}`} onClose={onClose} wide>
       <div className="space-y-3">
@@ -7437,15 +7448,14 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
           </div>
           {reqs.length>0 && (
             <div className="space-y-1.5 mb-2">
-              {reqs.map(r=>{ const [sl,sc]=reqStatusMeta[r.status]||reqStatusMeta.open; const lines=Array.isArray(r.lines)&&r.lines.length?r.lines:null; const reasons=[...(Array.isArray(r.reasons)?r.reasons:[]).filter(x=>x!=='Others'), ...(r.reason_other?[r.reason_other]:[])]; return (
+              {reqs.map(r=>{ const [sl,sc]=REPLACEMENT_STATUS_META[r.status]||REPLACEMENT_STATUS_META.pending; const lines=Array.isArray(r.lines)&&r.lines.length?r.lines:null; const reasons=[...(Array.isArray(r.reasons)?r.reasons:[]).filter(x=>x!=='Others'), ...(r.reason_other?[r.reason_other]:[])]; return (
                 <div key={r.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
                     <span className="font-semibold">{r.department}</span>
                     {!lines && <span className="text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pc${r.qty===1?'':'s'}`:''}</span>}
                     <div className="flex-1"></div>
-                    {r.status!=='done' ? <button onClick={()=>setReqStatus(r,'done')} className="text-[11px] text-emerald-600 hover:underline">Mark done</button> : <button onClick={()=>setReqStatus(r,'open')} className="text-[11px] text-slate-400 hover:underline">Reopen</button>}
-                    <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm">✕</button>
+                    {r.status==='pending' && <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm" title="Cancel request">✕</button>}
                   </div>
                   {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
                   {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
@@ -7500,6 +7510,172 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
           <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save report'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Small card showing a replacement request's details (part lines + reasons).
+function ReplacementCard({ r, children }){
+  const lines=Array.isArray(r.lines)&&r.lines.length?r.lines:null;
+  const reasons=[...(Array.isArray(r.reasons)?r.reasons:[]).filter(x=>x!=='Others'), ...(r.reason_other?[r.reason_other]:[])];
+  const [sl,sc]=REPLACEMENT_STATUS_META[r.status]||REPLACEMENT_STATUS_META.pending;
+  return (
+    <div className="bg-white border rounded-xl px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
+        <span className="text-sm font-semibold">{r.item||'—'}</span>
+        {r.client_name && <span className="text-xs text-slate-500">· {r.client_name}</span>}
+        <span className="text-[10px] text-slate-400">→ {r.department}</span>
+        <div className="flex-1"></div>
+        {children}
+      </div>
+      {lines && <div className="mt-1.5 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+      {!lines && r.parts && <div className="mt-1 text-xs text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pcs`:''}</div>}
+      {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
+      {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
+    </div>
+  );
+}
+
+// "For Replacement" panel embedded in the Pattern / Cutting / Printing / Graphic
+// boards — shows requests the Production Supervisor approved & routed to that
+// department, which they work through and mark done.
+function ForReplacementPanel({ profile, department }){
+  const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
+  async function load(){ setLoading(true); const { data }=await sb.from('replacement_requests').select('*').eq('department',department).in('status',['approved','in_progress','done']).order('created_at',{ascending:false}); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[department]);
+  async function setStatus(r,status){ await sb.from('replacement_requests').update({ status, done_at:status==='done'?new Date().toISOString():null }).eq('id',r.id); load(); }
+  const openR=rows.filter(r=>r.status!=='done'); const doneR=rows.filter(r=>r.status==='done');
+  if(loading) return <div className="text-slate-400 text-sm py-8 text-center">Loading…</div>;
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🔁 For Replacement — routed to {department} ({openR.length})</div>
+        <div className="p-3 space-y-2">
+          {openR.length===0 ? <div className="text-center text-slate-400 text-sm py-4">No replacement work assigned. Approved requests routed here by the Production Supervisor will appear.</div> : openR.map(r=>(
+            <ReplacementCard key={r.id} r={r}>
+              {r.status==='approved' && <button onClick={()=>setStatus(r,'in_progress')} className="text-[11px] px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100">Start</button>}
+              <button onClick={()=>setStatus(r,'done')} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Done</button>
+            </ReplacementCard>
+          ))}
+        </div>
+      </div>
+      {doneR.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Completed ({doneR.length})</div>
+          <div className="p-3 space-y-2">{doneR.map(r=>(<ReplacementCard key={r.id} r={r}><button onClick={()=>setStatus(r,'approved')} className="text-[11px] text-slate-400 hover:underline">Reopen</button></ReplacementCard>))}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Replacement Requests queue (Admin / Production Supervisor / Production
+// Assistant). The Supervisor approves & routes each request to the department
+// that will do the repair, or declines it. She can also escalate to HR.
+function ReplacementQueueView({ profile, profiles, employees }){
+  const canApprove = profile.role==='admin' || profile.role==='production_supervisor';
+  const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState('pending');
+  const [routeDept,setRouteDept]=useState({});   // id -> chosen department
+  const [hrFor,setHrFor]=useState(null);          // request being escalated (or {} for blank)
+  async function load(){ setLoading(true); const { data }=await sb.from('replacement_requests').select('*').order('created_at',{ascending:false}); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  const pending=rows.filter(r=>r.status==='pending');
+  const routed=rows.filter(r=>r.status==='approved'||r.status==='in_progress');
+  const done=rows.filter(r=>r.status==='done');
+  const declined=rows.filter(r=>r.status==='declined');
+  async function approve(r){
+    const dept=routeDept[r.id]||r.department;
+    if(!dept){ alert('Choose a department to route this to.'); return; }
+    await sb.from('replacement_requests').update({ status:'approved', department:dept, routed_by:profile.id, routed_at:new Date().toISOString() }).eq('id',r.id); load();
+  }
+  async function decline(r){ if(!confirm('Decline this replacement request?')) return; await sb.from('replacement_requests').update({ status:'declined' }).eq('id',r.id); load(); }
+  async function reopen(r){ await sb.from('replacement_requests').update({ status:'pending', routed_by:null, routed_at:null }).eq('id',r.id); load(); }
+  const list = tab==='pending'?pending : tab==='routed'?routed : tab==='done'?done : declined;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🔁 Replacement Requests</h1><p className="text-slate-500 text-sm">Repair / replacement requests from the production floor. {canApprove?'Approve & route each to the department that will fix it.':'View-only.'}</p></div>
+          {canApprove && <button onClick={()=>setHrFor({})} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700">⚠ Report to HR</button>}
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          <button onClick={()=>setTab('pending')} className={`px-3 py-1.5 rounded-md ${tab==='pending'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pending ({pending.length})</button>
+          <button onClick={()=>setTab('routed')} className={`px-3 py-1.5 rounded-md ${tab==='routed'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Routed ({routed.length})</button>
+          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+          <button onClick={()=>setTab('declined')} className={`px-3 py-1.5 rounded-md ${tab==='declined'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Declined ({declined.length})</button>
+        </div>
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : list.length===0 ? (
+        <div className="bg-white border rounded-xl px-4 py-12 text-center text-slate-400 text-sm">Nothing here.</div>
+      ) : (
+        <div className="space-y-2 max-w-3xl">
+          {list.map(r=>(
+            <ReplacementCard key={r.id} r={r}>
+              {tab==='pending' && canApprove && (
+                <div className="flex items-center gap-1.5">
+                  <select value={routeDept[r.id]??r.department??''} onChange={e=>setRouteDept({...routeDept,[r.id]:e.target.value})} className="text-xs border rounded px-1.5 py-1 bg-white">
+                    <option value="">— Route to —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}
+                  </select>
+                  <button onClick={()=>approve(r)} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">Approve & route</button>
+                  <button onClick={()=>decline(r)} className="text-[11px] px-2 py-1 rounded bg-white border text-rose-600 font-semibold hover:bg-rose-50">Decline</button>
+                </div>
+              )}
+              {tab!=='pending' && canApprove && r.status!=='pending' && <button onClick={()=>reopen(r)} className="text-[11px] text-slate-400 hover:underline">Send back to pending</button>}
+            </ReplacementCard>
+          ))}
+        </div>
+      )}
+      {hrFor && <HrEscalationModal init={hrFor} profile={profile} profiles={profiles} employees={employees} onClose={()=>setHrFor(null)} onSaved={()=>setHrFor(null)} />}
+    </div>
+  );
+}
+
+function HrEscalationModal({ init, profile, profiles, employees, onClose, onSaved }){
+  const r = init && init.id ? init : null;
+  const [subject,setSubject]=useState(r?`Excessive rejects — ${r.item||''}`:'');
+  const [rejectQty,setRejectQty]=useState('');
+  const [personId,setPersonId]=useState('');
+  const [reason,setReason]=useState('');
+  const [details,setDetails]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  async function save(){
+    if(!subject.trim()){ setMsg('Add a subject.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ subject:subject.trim(), item:r?.item||null, client_name:r?.client_name||null, lead_id:r?.lead_id||null, reject_qty:rejectQty===''?null:Number(rejectQty), process:r?.process||null, department:r?.department||null, person_employee_id:personId||null, reason:reason.trim()||null, details:details.trim()||null, created_by:profile.id };
+    const { error }=await sb.from('hr_escalations').insert(payload);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try {
+      const hrIds=(profiles||[]).filter(p=>p.role==='hr').map(p=>p.id);
+      const person = personId ? (employees||[]).find(e=>e.id===personId) : null;
+      const txt = `⚠ Quality escalation from Production: ${subject.trim()}${rejectQty?` — ${rejectQty} rejects`:''}${person?` · re: ${fullName(person)}`:''}${reason?` — ${reason.trim()}`:''}. Please investigate.`;
+      if(hrIds.length) await sb.from('notifications').insert(hrIds.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'hr-relations', ref_type:'hr_escalation', type:'system' })));
+    } catch(e){ console.warn('HR notify failed', e?.message||e); }
+    setBusy(false); onSaved && onSaved();
+  }
+  return (
+    <Modal title="⚠ Report to HR — quality escalation" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-500">Use this when rejects are excessive and need HR's attention. HR is notified in their inbox.</p>
+        {r && <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2">Linked to request: <span className="font-semibold">{r.item||'—'}</span>{r.client_name?` · ${r.client_name}`:''}{r.department?` → ${r.department}`:''}</div>}
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Subject *</div><input value={subject} onChange={e=>setSubject(e.target.value)} placeholder="e.g. Excessive rejects on DTF pressing" className="input" /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reject qty</div><input type="number" min="0" value={rejectQty} onChange={e=>setRejectQty(e.target.value)} placeholder="0" className="input" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Person involved <span className="text-slate-300 normal-case">· optional</span></div>
+            <select value={personId} onChange={e=>setPersonId(e.target.value)} className="input"><option value="">— None —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select>
+          </div>
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reason / issue</div><input value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Repeated machine errors, mishandling…" className="input" /></div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Details for HR</div><textarea value={details} onChange={e=>setDetails(e.target.value)} placeholder="What happened, how many, when, any pattern…" className="input min-h-[70px] whitespace-pre-line" /></div>
+        <div className="flex items-center gap-2 pt-2 border-t">
+          {msg && <span className="text-xs text-rose-600">{msg}</span>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">{busy?'Sending…':'Send to HR'}</button>
         </div>
       </div>
     </Modal>
@@ -15016,6 +15192,7 @@ function roleLabel(r){
          r==='assistant'              ? 'Sales Assistant' :
          r==='production'             ? 'Production Team' :
          r==='production_supervisor'  ? 'Production Supervisor' :
+         r==='production_assistant'   ? 'Production Assistant' :
          r==='purchasing'             ? 'Purchasing Team' :
          r==='purchasing_admin'       ? 'Purchasing Admin' :
          r==='accounting'             ? 'Accounting Supervisor' :
@@ -15044,6 +15221,7 @@ function RoleBadge({ role }){
     role==='assistant'              ? 'bg-amber-100 text-amber-700' :
     role==='production'             ? 'bg-emerald-100 text-emerald-700' :
     role==='production_supervisor'  ? 'bg-teal-100 text-teal-700' :
+    role==='production_assistant'   ? 'bg-emerald-50 text-emerald-600' :
     role==='purchasing'             ? 'bg-violet-100 text-violet-700' :
     role==='purchasing_admin'       ? 'bg-violet-200 text-violet-800' :
     role==='accounting'             ? 'bg-sky-100 text-sky-700' :
@@ -15288,6 +15466,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'assistant',   label:'Sales Asst.',   count:profiles.filter(p=>p.role==='assistant').length },
     { key:'production',  label:'Production',    count:profiles.filter(p=>p.role==='production').length },
     { key:'production_supervisor', label:'Prod Supervisor', count:profiles.filter(p=>p.role==='production_supervisor').length },
+    { key:'production_assistant', label:'Prod Assistant', count:profiles.filter(p=>p.role==='production_assistant').length },
     { key:'graphic',     label:'Graphic',       count:profiles.filter(p=>p.role==='graphic').length },
     { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
@@ -15311,7 +15490,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -15349,6 +15528,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option disabled>──────────</option>
               <option value="production">Production Team</option>
               <option value="production_supervisor">Production Supervisor</option>
+              <option value="production_assistant">Production Assistant</option>
               <option value="pattern_maker">Pattern Maker</option>
               <option value="cutting_dept">Cutting Department</option>
               <option value="qc">Quality Control</option>
@@ -15456,6 +15636,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option disabled>──────────</option>
                   <option value="production">Production Team</option>
                   <option value="production_supervisor">Production Supervisor</option>
+              <option value="production_assistant">Production Assistant</option>
                   <option value="pattern_maker">Pattern Maker</option>
                   <option value="cutting_dept">Cutting Department</option>
                   <option value="qc">Quality Control</option>
@@ -32976,8 +33157,12 @@ function App(){
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
+    } else if(profile.role==='production_assistant'){
+      // Production Assistant — production boards + the Replacement Requests queue (view).
+      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile']);
+      fallback = 'prod';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'graphic';
@@ -33415,6 +33600,7 @@ function App(){
   const isSewingLead=profile.role==='sewing_lead';
   const isKnitEmbroLead=profile.role==='knit_embro_lead';
   const isProdSupervisor=profile.role==='production_supervisor';
+  const isProdAssistant=profile.role==='production_assistant';
   const isHR=profile.role==='hr';
   const isLogistics=profile.role==='logistics';
   const isPatternMaker=profile.role==='pattern_maker';
@@ -33550,11 +33736,18 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
+      PERSONAL_GROUP,
+    ];
+  } else if(isProdAssistant){
+    // Production Assistant — production boards + the Replacement Requests queue (view-only).
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction || isGraphicTeam || isPrintingTeam){
@@ -33654,7 +33847,7 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
@@ -33795,14 +33988,15 @@ function App(){
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
         {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} employees={employees} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
+        {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
-        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
