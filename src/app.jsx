@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 366 · Production: four new process boards — Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing — each a worklist like In-House Cutting (auto-seeds when a job hits that stage + ad-hoc add, notes, reorder, done). Added the matching Production stages and four dept-head roles that each see only their own board.";
+const BUILD = "Live build 367 · Production: retired the old 'Sorting' and 'Heat Press' stages — existing jobs moved to Trad Sorting / Subli Pressing. The stage list now uses Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -96,14 +96,12 @@ const PRODUCTION_STATUSES = [
   { key:'materials to purchase', label:'Materials to Purchase', color:'bg-rose-100 text-rose-700' },
   { key:'graphic design',        label:'Graphic Design',        color:'bg-pink-100 text-pink-700' },
   { key:'for pattern',           label:'For Pattern',           color:'bg-violet-100 text-violet-700' },
-  { key:'sorting',               label:'Sorting',               color:'bg-slate-200 text-slate-700' },
   { key:'trad sorting',          label:'Trad Sorting',          color:'bg-slate-200 text-slate-700' },
   { key:'subli sorting',         label:'Subli Sorting',         color:'bg-purple-100 text-purple-700' },
   { key:'cutting - in house',    label:'Cutting - In House',    color:'bg-amber-100 text-amber-700' },
   { key:'cutting - subcon',      label:'Cutting - Subcon',      color:'bg-yellow-100 text-yellow-700' },
   { key:'sublimation printing',  label:'Sublimation Printing',  color:'bg-purple-100 text-purple-700' },
   { key:'dtf printing',          label:'DTF Printing',          color:'bg-fuchsia-100 text-fuchsia-700' },
-  { key:'heat press',            label:'Heat Press',            color:'bg-orange-100 text-orange-700' },
   { key:'dtf pressing',          label:'DTF Pressing',          color:'bg-orange-100 text-orange-700' },
   { key:'subli pressing',        label:'Subli Pressing',        color:'bg-orange-100 text-orange-700' },
   { key:'embroidery',            label:'Embroidery',            color:'bg-cyan-100 text-cyan-700' },
