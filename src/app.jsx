@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 371 · Replacement Requests: a new request now pings the Production Supervisor's inbox and shows a count badge on the sidebar 'Replacement Requests' item; the 'For Replacement' tab in Pattern / In-House Cutting / Printing / Graphic shows a red count when work is routed there.";
+const BUILD = "Live build 372 · Replacement Requests: moved directly under Production Board in the sidebar, and each request now shows the total project quantity + what % of the project is being replaced so the Supervisor can judge tolerance.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7361,7 +7361,7 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
     if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
     const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
     const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
-    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
+    const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, project_qty:projQty>0?projQty:null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
     // Ping the Production Supervisor(s) — a new request needs approval & routing.
     try {
@@ -7550,6 +7550,13 @@ function ReplacementCard({ r, children }){
       </div>
       {lines && <div className="mt-1.5 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
       {!lines && r.parts && <div className="mt-1 text-xs text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pcs`:''}</div>}
+      {(()=>{ const rq=Number(r.qty)||0; const pq=Number(r.project_qty)||0; if(!rq && !pq) return null; const pct=pq>0?Math.round(rq/pq*100):null; const hot=pct!=null&&pct>10; return (
+        <div className="mt-1 text-[11px] flex items-center gap-1.5 flex-wrap">
+          <span className="text-slate-500">Replacement:</span>
+          <span className="font-semibold text-slate-700">{rq||'—'} of {pq>0?`${pq} pcs`:'—'}</span>
+          {pct!=null && <span className={`px-1.5 py-0.5 rounded-full font-bold ${hot?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{pct}% of project</span>}
+        </div>
+      ); })()}
       {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
       {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
     </div>
@@ -33756,7 +33763,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -33767,7 +33774,7 @@ function App(){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction || isGraphicTeam || isPrintingTeam){
@@ -33867,7 +33874,7 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['replacements','Replacement Requests','🔁'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
