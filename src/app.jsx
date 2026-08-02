@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 365 · Quality Control: added a 📐 Size Charts tab that mirrors all size charts from Sales → Resources (folder filter, searchable, click to view inline) so QC can reference size specs while checking.";
+const BUILD = "Live build 366 · Production: four new process boards — Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing — each a worklist like In-House Cutting (auto-seeds when a job hits that stage + ad-hoc add, notes, reorder, done). Added the matching Production stages and four dept-head roles that each see only their own board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -97,11 +97,15 @@ const PRODUCTION_STATUSES = [
   { key:'graphic design',        label:'Graphic Design',        color:'bg-pink-100 text-pink-700' },
   { key:'for pattern',           label:'For Pattern',           color:'bg-violet-100 text-violet-700' },
   { key:'sorting',               label:'Sorting',               color:'bg-slate-200 text-slate-700' },
+  { key:'trad sorting',          label:'Trad Sorting',          color:'bg-slate-200 text-slate-700' },
+  { key:'subli sorting',         label:'Subli Sorting',         color:'bg-purple-100 text-purple-700' },
   { key:'cutting - in house',    label:'Cutting - In House',    color:'bg-amber-100 text-amber-700' },
   { key:'cutting - subcon',      label:'Cutting - Subcon',      color:'bg-yellow-100 text-yellow-700' },
   { key:'sublimation printing',  label:'Sublimation Printing',  color:'bg-purple-100 text-purple-700' },
   { key:'dtf printing',          label:'DTF Printing',          color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'heat press',            label:'Heat Press',            color:'bg-orange-100 text-orange-700' },
+  { key:'dtf pressing',          label:'DTF Pressing',          color:'bg-orange-100 text-orange-700' },
+  { key:'subli pressing',        label:'Subli Pressing',        color:'bg-orange-100 text-orange-700' },
   { key:'embroidery',            label:'Embroidery',            color:'bg-cyan-100 text-cyan-700' },
   { key:'out to sewing subcon',  label:'Out to Sewing Subcon',  color:'bg-blue-100 text-blue-700' },
   { key:'sewing in-house',       label:'Sewing In-House',       color:'bg-indigo-100 text-indigo-700' },
@@ -7167,6 +7171,129 @@ function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>
       </div>
     </Modal>
+  );
+}
+
+// ─────────── GENERIC PRODUCTION PROCESS BOARDS ───────────
+// Sorting / pressing sub-processes, each with their own worklist that mirrors
+// the In-House Cutting look (To-do + Done + ad-hoc add + notes + reorder). Rows
+// auto-seed from a Production Board stage and also accept manual items. One
+// shared `process_worklist` table keyed by `process`.
+const PROCESS_BOARDS = [
+  { key:'trad-sorting',   process:'trad_sorting',   title:'Trad Sorting',   icon:'🧺', seedStatus:'trad sorting',   role:'trad_sorting_head' },
+  { key:'subli-sorting',  process:'subli_sorting',  title:'Subli Sorting',  icon:'🧺', seedStatus:'subli sorting',  role:'subli_sorting_head' },
+  { key:'dtf-pressing',   process:'dtf_pressing',   title:'DTF Pressing',   icon:'🔥', seedStatus:'dtf pressing',   role:'dtf_pressing_head' },
+  { key:'subli-pressing', process:'subli_pressing', title:'Subli Pressing', icon:'🔥', seedStatus:'subli pressing', role:'subli_pressing_head' },
+];
+function ProcessWorklistView({ profile, prodJobs, leads, openTechpack, process, title, icon, seedStatus }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState('worklist');
+  const [newTask,setNewTask]=useState('');
+  const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+  const seededRef=useRef(new Set());
+  const seedingRef=useRef(false);
+
+  async function load(){
+    setLoading(true);
+    const { data }=await sb.from('process_worklist').select('*').eq('process',process).order('position',{ascending:true}).order('created_at',{ascending:true});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[process]);
+
+  // Auto-seed a row for any production job at this process's stage that doesn't
+  // have one yet. Ref-guarded so a re-render with stale rows can't double-insert
+  // (the unique index on (process, source_job_id) is the DB backstop).
+  useEffect(()=>{ (async()=>{
+    if(seedingRef.current) return;
+    const existing=new Set(rows.map(w=>w.source_job_id).filter(Boolean));
+    const add=[]; const ids=[];
+    (prodJobs||[]).forEach(j=>{ if(!j||j.status!==seedStatus) return; if(existing.has(j.id)||seededRef.current.has(j.id)) return; ids.push(j.id); add.push({ process, source_type:'production', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null }); });
+    if(!add.length) return;
+    ids.forEach(id=>seededRef.current.add(id));
+    seedingRef.current=true;
+    const { error }=await sb.from('process_worklist').insert(add);
+    seedingRef.current=false;
+    if(error){ if(String(error.code)!=='23505'){ ids.forEach(id=>seededRef.current.delete(id)); console.warn('process seed failed', error.message); } }
+    else load();
+  })(); },[prodJobs, rows, process, seedStatus]);
+
+  const open=rows.filter(w=>w.status!=='done');
+  const done=rows.filter(w=>w.status==='done');
+  async function reorder(list){ await Promise.all(list.map((w,i)=> sb.from('process_worklist').update({ position:i }).eq('id',w.id))); load(); }
+  function moveWork(w,dir){ const arr=open.slice(); const i=arr.findIndex(x=>x.id===w.id); const j=i+dir; if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; reorder(arr); }
+  async function saveNotes(w,val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('process_worklist').update({ notes:val||null }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  async function markDone(w){ const { error }=await sb.from('process_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  async function reopenItem(w){ const { error }=await sb.from('process_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
+  const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
+
+  const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
+    <div key={w.id} className="border-t px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-col shrink-0 -my-1">
+          <button onClick={()=>moveWork(w,-1)} disabled={idx===0} className={`text-[11px] leading-none px-1 ${idx===0?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move up">▲</button>
+          <button onClick={()=>moveWork(w,1)} disabled={idx===open.length-1} className={`text-[11px] leading-none px-1 ${idx===open.length-1?'text-slate-200':'text-slate-400 hover:text-indigo-600'}`} title="Move down">▼</button>
+        </div>
+        <span className="text-[10px] font-bold text-slate-400 w-4 text-center shrink-0">{idx+1}</span>
+        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
+        </div>
+        {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
+        <button onClick={()=>markDone(w)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700 shrink-0">✓ Done</button>
+        <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0" title="Remove">✕</button>
+      </div>
+      <input defaultValue={w.notes||''} onBlur={e=>saveNotes(w,e.target.value)} placeholder="Add a note…" className="mt-1.5 w-full text-xs px-2 py-1 rounded border border-amber-300 bg-yellow-100 text-amber-900 placeholder-amber-500" />
+    </div>
+  ); };
+
+  const doneRow=(w)=>{ const [bl,bc]=srcBadge(w.source_type); return (
+    <div key={w.id} className="border-t px-3 py-2 flex items-center gap-2 flex-wrap">
+      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
+      <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.notes?` · ${w.notes}`:''}</div></div>
+      <div className="text-[11px] text-slate-500 text-right shrink-0">{w.start_date?fmtDate(w.start_date):'—'} → <span className="font-semibold text-emerald-700">{w.done_at?fmtTime(w.done_at):'done'}</span></div>
+      <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>
+      <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0">✕</button>
+    </div>
+  ); };
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div>
+          <h1 className="text-2xl font-bold">{icon} {title}</h1>
+          <p className="text-slate-500 text-sm">{open.length} to do · {done.length} done · items appear here when a Production job hits the “{title}” stage.</p>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
+          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+        </div>
+      </div>
+
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='worklist' ? (
+        <div className="space-y-4">
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">{icon} To do</div>
+            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing here. Items appear when a Production job hits the “{title}” stage.</div> : open.map((w,i)=>worklistRow(w,i))}
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
+            <div className="p-2 flex gap-1.5">
+              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder={`Add something to ${title.toLowerCase()}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done — finished (start → finished date/time)</div>
+          {done.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">Nothing finished yet. Click “✓ Done” on a worklist item to move it here.</div> : done.map(doneRow)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -14690,6 +14817,10 @@ function roleLabel(r){
          r==='qc_leader'              ? 'QC Team Leader' :
          r==='qc_personnel'           ? 'QC Personnel' :
          r==='inventory_personnel'    ? 'Inventory Personnel' :
+         r==='trad_sorting_head'      ? 'Trad Sorting Head' :
+         r==='subli_sorting_head'     ? 'Subli Sorting Head' :
+         r==='dtf_pressing_head'      ? 'DTF Pressing Head' :
+         r==='subli_pressing_head'    ? 'Subli Pressing Head' :
          r==='graphic'                ? 'Graphic Design' :
          r==='printing'               ? 'Printing Team' :
          r==='sewing_lead'            ? 'Sewing Line Lead' :
@@ -14714,6 +14845,10 @@ function RoleBadge({ role }){
     role==='qc_leader'              ? 'bg-teal-200 text-teal-800' :
     role==='qc_personnel'           ? 'bg-teal-50 text-teal-600' :
     role==='inventory_personnel'    ? 'bg-amber-100 text-amber-700' :
+    role==='trad_sorting_head'      ? 'bg-slate-200 text-slate-700' :
+    role==='subli_sorting_head'     ? 'bg-purple-100 text-purple-700' :
+    role==='dtf_pressing_head'      ? 'bg-orange-100 text-orange-700' :
+    role==='subli_pressing_head'    ? 'bg-orange-100 text-orange-700' :
     role==='graphic'                ? 'bg-pink-100 text-pink-700' :
     role==='printing'               ? 'bg-purple-100 text-purple-700' :
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
@@ -14956,6 +15091,10 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'qc_leader',    label:'QC Team Leader',  count:profiles.filter(p=>p.role==='qc_leader').length },
     { key:'qc_personnel', label:'QC Personnel',    count:profiles.filter(p=>p.role==='qc_personnel').length },
     { key:'inventory_personnel', label:'Inventory Personnel', count:profiles.filter(p=>p.role==='inventory_personnel').length },
+    { key:'trad_sorting_head',   label:'Trad Sorting Head',   count:profiles.filter(p=>p.role==='trad_sorting_head').length },
+    { key:'subli_sorting_head',  label:'Subli Sorting Head',  count:profiles.filter(p=>p.role==='subli_sorting_head').length },
+    { key:'dtf_pressing_head',   label:'DTF Pressing Head',   count:profiles.filter(p=>p.role==='dtf_pressing_head').length },
+    { key:'subli_pressing_head', label:'Subli Pressing Head', count:profiles.filter(p=>p.role==='subli_pressing_head').length },
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
@@ -14963,7 +15102,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -15007,6 +15146,10 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="qc_leader">QC Team Leader</option>
               <option value="qc_personnel">QC Personnel</option>
               <option value="inventory_personnel">Inventory Personnel</option>
+              <option value="trad_sorting_head">Trad Sorting Head</option>
+              <option value="subli_sorting_head">Subli Sorting Head</option>
+              <option value="dtf_pressing_head">DTF Pressing Head</option>
+              <option value="subli_pressing_head">Subli Pressing Head</option>
               <option value="graphic">Graphic Design</option>
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
@@ -15110,6 +15253,10 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="qc_leader">QC Team Leader</option>
                   <option value="qc_personnel">QC Personnel</option>
                   <option value="inventory_personnel">Inventory Personnel</option>
+              <option value="trad_sorting_head">Trad Sorting Head</option>
+              <option value="subli_sorting_head">Subli Sorting Head</option>
+              <option value="dtf_pressing_head">DTF Pressing Head</option>
+              <option value="subli_pressing_head">Subli Pressing Head</option>
                   <option value="graphic">Graphic Design</option>
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
@@ -32605,6 +32752,14 @@ function App(){
       // Inventory Personnel — Inventory List only.
       allowed = new Set(['inbox','inventory','profile']);
       fallback = 'inventory';
+    } else if(profile.role==='trad_sorting_head'){
+      allowed = new Set(['inbox','trad-sorting','profile']); fallback = 'trad-sorting';
+    } else if(profile.role==='subli_sorting_head'){
+      allowed = new Set(['inbox','subli-sorting','profile']); fallback = 'subli-sorting';
+    } else if(profile.role==='dtf_pressing_head'){
+      allowed = new Set(['inbox','dtf-pressing','profile']); fallback = 'dtf-pressing';
+    } else if(profile.role==='subli_pressing_head'){
+      allowed = new Set(['inbox','subli-pressing','profile']); fallback = 'subli-pressing';
     } else if(profile.role==='production'){
       allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
@@ -33059,6 +33214,7 @@ function App(){
   const isQcLeader=profile.role==='qc_leader';
   const isQcPersonnel=profile.role==='qc_personnel';
   const isInventoryPersonnel=profile.role==='inventory_personnel';
+  const processHeadBoard = PROCESS_BOARDS.find(pb=>pb.role===profile.role) || null;
   // Build the sidebar nav per role.
   let NAV;
   // Logistics is visible to every role — same Daily Schedule view for all.
@@ -33161,6 +33317,14 @@ function App(){
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       PERSONAL_GROUP,
     ];
+  } else if(processHeadBoard){
+    // Process dept head (Trad Sorting / Subli Sorting / DTF Pressing / Subli
+    // Pressing) — only their own process board.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Production', items:[ [processHeadBoard.key, processHeadBoard.title, processHeadBoard.icon] ] },
+      PERSONAL_GROUP,
+    ];
   } else if(isHR){
     // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
     // Payroll + Budget Requests + their profile (for their e-signature).
@@ -33177,7 +33341,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -33189,7 +33353,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -33281,7 +33445,7 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
@@ -33421,6 +33585,7 @@ function App(){
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
+        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
