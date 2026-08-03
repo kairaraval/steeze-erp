@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 374 · Sales Order: the Linked Lead is now clickable — opens the full lead details.";
+const BUILD = "Live build 375 · Sales Order: when an SO is fully paid, its linked lead automatically moves from 'Delivered - For Payment' to 'Delivered & Paid' (existing paid orders backfilled).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22874,6 +22874,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
     }
     const { error } = await sb.from('sales_orders').update(payload).eq('id', so.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    if(payload.status==='paid') await advanceLeadOnSOPaid(so.lead_id);
     onSaved();
   }
   async function markDelivered(){
@@ -23353,6 +23354,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
         amount_paid: newPaid, balance_due: newBal, status: newStatus,
       }).eq('id', so.id);
       if(uErr) throw uErr;
+      if(newStatus==='paid') await advanceLeadOnSOPaid(so.lead_id);
       // System event + ping the sales agent who logged it so they know the
       // money landed. Mentions = [logger] → triggers their inbox + sound.
       try {
@@ -23485,6 +23487,7 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
     const newBal = Math.max(0, Number(so.total||0)-newPaid);
     const newStatus = newBal<=0.01?'paid':(newPaid>0.01?'partial':'open');
     await sb.from('sales_orders').update({ amount_paid:newPaid, balance_due:newBal, status:newStatus }).eq('id', so.id);
+    if(newStatus==='paid') await advanceLeadOnSOPaid(so.lead_id);
   }
   async function save(){
     const amt=Number(amount)||0;
@@ -24342,6 +24345,14 @@ const AR_BUCKETS = [['current','Current'],['1-30','1–30'],['31-60','31–60'],
 function arTermsDays(terms){ const t=(terms||'').toLowerCase(); const m=t.match(/net\s*(\d+)/)||t.match(/(\d+)\s*days?/); return m?(parseInt(m[1],10)||0):0; }
 function arDueDate(so){ if(!so.delivered_at) return null; const d=new Date(so.delivered_at); if(isNaN(d.getTime())) return null; d.setHours(0,0,0,0); d.setDate(d.getDate()+arTermsDays(so.payment_terms)); return d; }
 function soOpenBalance(so){ return so.balance_due!=null ? (Number(so.balance_due)||0) : (Number(so.total||0)-Number(so.amount_paid||0)); }
+// When a Sales Order becomes fully paid, advance its linked lead from
+// "Delivered - For Payment" to "Delivered & Paid" (only when it's at that
+// stage, so Won/other stages aren't disturbed). Hoisted — used by the verify +
+// payment-edit flows.
+async function advanceLeadOnSOPaid(leadId){
+  if(!leadId) return;
+  try { await sb.from('leads').update({ stage:'delivered_paid', payment_status:'paid' }).eq('id', leadId).eq('stage','delivered_pending'); } catch(_){}
+}
 function arDaysPast(so, todayMs){ const due=arDueDate(so); if(!due) return null; return Math.floor((todayMs-due.getTime())/86400000); }
 function arBucketKey(so, todayMs){ const days=arDaysPast(so, todayMs); if(days==null || days<=0) return 'current'; if(days<=30) return '1-30'; if(days<=60) return '31-60'; if(days<=90) return '61-90'; return '90+'; }
 
