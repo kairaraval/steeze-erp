@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 376 · Production Board: added a 'Won' column showing the closed-won date (when the project was added to the board) in both Table and Group-by-status views.";
+const BUILD = "Live build 377 · Lead line items: description is now multi-line (press Enter for a new line), the Qty & Price boxes are wider, and there's a new 'Price already VAT-inclusive' option alongside 'Add VAT 12%'.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -907,7 +907,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   }, [clientId, clientMode]);
   const existingClientContacts = (()=>{ const c=(clients||[]).find(x=>x.id===clientId); return Array.isArray(c?.contacts)?c.contacts:[]; })();
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
-  const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]);
+  const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat, vatInclusive:!!it.vatInclusive })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Catalog of item names used across past leads/estimates, for the Item dropdown.
@@ -929,12 +929,15 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
       if(alive) setItemOptions([...map.values()].sort((a,b)=>a.localeCompare(b)));
     } catch(_){}
   })(); return ()=>{ alive=false; }; },[]);
-  const subtotal=items.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
-  const vat=items.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*0.12:0); },0);
-  const total=subtotal+vat; const hasItems=items.some(it=>(Number(it.quantity)||0)>0&&(Number(it.pricePerItem)||0)>0); const value=hasItems?total:(Number(manualValue)||0);
+  // Per-line VAT: 'vatInclusive' means the entered price already contains 12%
+  // (net = amount/1.12); 'withVat' adds 12% on top; neither = no VAT.
+  const lineCalc=(it)=>{ const amt=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); if(it.vatInclusive){ const net=amt/1.12; return { net, v:amt-net, total:amt }; } if(it.withVat){ return { net:amt, v:amt*0.12, total:amt*1.12 }; } return { net:amt, v:0, total:amt }; };
+  const subtotal=items.reduce((s,it)=>s+lineCalc(it).net,0);
+  const vat=items.reduce((s,it)=>s+lineCalc(it).v,0);
+  const total=items.reduce((s,it)=>s+lineCalc(it).total,0); const hasItems=items.some(it=>(Number(it.quantity)||0)>0&&(Number(it.pricePerItem)||0)>0); const value=hasItems?total:(Number(manualValue)||0);
   function setItem(idx,k,v){ setItems(items.map((it,i)=>i===idx?{...it,[k]:v}:it)); }
-  function addItem(){ setItems([...items,{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false }]); }
-  function removeItem(idx){ setItems(items.length===1?[{ id:'i'+Date.now(), itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]:items.filter((_,i)=>i!==idx)); }
+  function addItem(){ setItems([...items,{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]); }
+  function removeItem(idx){ setItems(items.length===1?[{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]:items.filter((_,i)=>i!==idx)); }
   // Accepts MULTIPLE files at once — paired with `multiple` on the <input> below.
   // Uploads them sequentially (so Supabase Storage doesn't see a thundering
   // herd) and appends all metas in a single state update at the end.
@@ -991,7 +994,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         }
         try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
       }
-      const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=it.withVat?sub*0.12:0; return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
+      const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0; const c=lineCalc(it); return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, vatInclusive:!!it.vatInclusive, lineTotal:c.total }; });
       const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
@@ -1100,13 +1103,16 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
           <div className="space-y-2">{items.map((it,idx)=>(
             <div key={it.id} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
-              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Category</label><select className="input mt-0.5" value={it.category} onChange={e=>setItem(idx,'category',e.target.value)}><option value="">—</option>{ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
-              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
-              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
+              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Category</label><select className="input mt-0.5" value={it.category} onChange={e=>setItem(idx,'category',e.target.value)}><option value="">—</option>{ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
               <div className="col-span-1 text-right"><button onClick={()=>removeItem(idx)} className="text-rose-400 text-sm">✕</button></div>
-              <div className="col-span-12"><label className="text-[10px] text-slate-500 uppercase">Description</label><input className="input mt-0.5" value={it.description||''} onChange={e=>setItem(idx,'description',e.target.value)} placeholder="Carries to the estimate — e.g. full sublimation, dri-fit, sizes S–XL" /></div>
-              <div className="col-span-12"><label className="flex items-center gap-1.5 text-[11px] cursor-pointer"><input type="checkbox" checked={it.withVat} onChange={e=>setItem(idx,'withVat',e.target.checked)} /><span className={it.withVat?'text-emerald-700':'text-slate-500'}>With VAT 12%</span></label></div>
+              <div className="col-span-12"><label className="text-[10px] text-slate-500 uppercase">Description</label><textarea className="input mt-0.5 min-h-[52px] whitespace-pre-line" value={it.description||''} onChange={e=>setItem(idx,'description',e.target.value)} placeholder="Carries to the estimate — e.g. full sublimation, dri-fit, sizes S–XL. Press Enter for a new line." /></div>
+              <div className="col-span-12 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <label className="flex items-center gap-1.5 text-[11px] cursor-pointer"><input type="checkbox" checked={it.withVat} onChange={e=>{ const on=e.target.checked; setItems(items.map((x,i)=> i===idx?{...x, withVat:on, vatInclusive:on?false:x.vatInclusive}:x)); }} /><span className={it.withVat?'text-emerald-700':'text-slate-500'}>Add VAT 12% (price is net)</span></label>
+                <label className="flex items-center gap-1.5 text-[11px] cursor-pointer"><input type="checkbox" checked={it.vatInclusive} onChange={e=>{ const on=e.target.checked; setItems(items.map((x,i)=> i===idx?{...x, vatInclusive:on, withVat:on?false:x.withVat}:x)); }} /><span className={it.vatInclusive?'text-emerald-700':'text-slate-500'}>Price already VAT-inclusive</span></label>
+              </div>
             </div>))}
           </div>
           {hasItems && (<div className="mt-3 pt-2 border-t text-sm space-y-1"><div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{peso(subtotal)}</span></div><div className="flex justify-between text-slate-500"><span>VAT 12%</span><span>{peso(vat)}</span></div><div className="flex justify-between font-bold pt-1 border-t"><span>Total</span><span>{peso(total)}</span></div></div>)}
