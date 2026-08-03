@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 373 · Lead payment terms: the '50% DP' option now reads '50% DP;Full payment upon delivery' (existing leads/SOs/estimates updated to match).";
+const BUILD = "Live build 374 · Sales Order: the Linked Lead is now clickable — opens the full lead details.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22484,7 +22484,7 @@ const SO_STATUSES = [
 ];
 function soMeta(k){ return SO_STATUSES.find(s=>s.key===k)||SO_STATUSES[0]; }
 
-function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices, bankAccounts, clients, leads, salesCommissions, soActivityCounts, openPaymentsTab, onPaymentsTabOpened, reload, onCreateDR }){
+function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices, bankAccounts, clients, leads, salesCommissions, soActivityCounts, openPaymentsTab, onPaymentsTabOpened, reload, onCreateDR, onOpenLead }){
   // Build DR pre-fill from an SO row. Lines come from the SO if items exist;
   // otherwise we start with one blank line so the user types what's actually
   // being delivered (partial delivery is the common case).
@@ -22777,7 +22777,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
         />
       )}
 
-      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} onEditPayment={(payment, so)=>{ setEditing(null); setEditingPayment({ payment, so }); }} />}
+      {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} onEditPayment={(payment, so)=>{ setEditing(null); setEditingPayment({ payment, so }); }} onOpenLead={onOpenLead} />}
       {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
       {editingPayment && <SalesOrderEditPaymentModal payment={editingPayment.payment} so={editingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setEditingPayment(null)} onSaved={()=>{ setEditingPayment(null); reload(); }} />}
@@ -22785,7 +22785,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   );
 }
 
-function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, salesCommissions, onClose, onSaved, onPay, onVerifyPayment, onEditPayment }){
+function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAccounts, clients, leads, salesCommissions, onClose, onSaved, onPay, onVerifyPayment, onEditPayment, onOpenLead }){
   const canInvoice = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Commission rows tied to this SO + whether a PAID one was based on a total
   // that no longer matches (so we can flag the delta for manual settlement).
@@ -22916,7 +22916,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
         <div className="grid grid-cols-3 gap-3 text-sm">
           <div><div className="text-[10px] uppercase text-slate-400">Client</div><div className="font-semibold">{so.client_name||'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">SO Date</div><div>{fmtDate(so.date)}</div></div>
-          <div><div className="text-[10px] uppercase text-slate-400">Linked Lead</div><div className="text-xs">{lead?lead.title:'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Linked Lead</div>{lead ? (onOpenLead ? <button onClick={()=>{ onClose(); onOpenLead(lead); }} className="text-xs text-indigo-600 font-medium hover:underline text-left" title="Open the linked lead for full details">{lead.title} ↗</button> : <div className="text-xs">{lead.title}</div>) : <div className="text-xs">—</div>}</div>
         </div>
 
         {/* Order amount + line items — editable by Accounting/Admin. Editing a
@@ -34063,7 +34063,7 @@ function App(){
         {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} cashAdvances={cashAdvances} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
-        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={loadAll} />}
@@ -34165,7 +34165,7 @@ function App(){
       {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
       {/* SO opened via deep-link / inbox click. Renders the full SO modal
          (which has its own Activity tab built in). */}
-      {inboxOpenSO && <SalesOrderEditModal so={(salesOrders||[]).find(s=>s.id===inboxOpenSO.id)||inboxOpenSO} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===inboxOpenSO.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setInboxOpenSO(null)} onSaved={()=>{ setInboxOpenSO(null); loadAll(); }} onPay={()=>{}} onVerifyPayment={()=>{}} />}
+      {inboxOpenSO && <SalesOrderEditModal so={(salesOrders||[]).find(s=>s.id===inboxOpenSO.id)||inboxOpenSO} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===inboxOpenSO.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setInboxOpenSO(null)} onSaved={()=>{ setInboxOpenSO(null); loadAll(); }} onPay={()=>{}} onVerifyPayment={()=>{}} onOpenLead={(l)=>{ setInboxOpenSO(null); setDetailLead(l); }} />}
 
       {/* Delivery Receipt modals — create (drCreateCtx), edit (drEditing), view/print (drViewing). */}
       {drCreateCtx && canManageDR(profile) && (
