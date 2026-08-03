@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 372 · Replacement Requests: moved directly under Production Board in the sidebar, and each request now shows the total project quantity + what % of the project is being replaced so the Supervisor can judge tolerance.";
+const BUILD = "Live build 373 · Lead payment terms: the '50% DP' option now reads '50% DP;Full payment upon delivery' (existing leads/SOs/estimates updated to match).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1361,7 +1361,8 @@ const estStatusMeta = (k) => ESTIMATE_STATUSES.find(s=>s.key===(k||'draft')) || 
 // PAYMENT_TERMS_OPTIONS) into the sentence printed on the estimate.
 function paymentTermsClause(term){
   switch(term){
-    case '50% DP': return 'A 50% DP of the total order value is required before production starts. The 50% balance shall be paid in full upon completion of the order.';
+    case '50% DP;Full payment upon delivery':
+    case '50% DP': return 'A 50% DP of the total order value is required before production starts. The remaining 50% balance shall be paid in full upon delivery of the order.';
     case 'Full payment upon delivery': return 'Full payment of the total order value is due upon delivery of the order.';
     case 'Net 15 - 15 days upon delivery': return 'The total order value shall be paid in full within 15 days upon delivery of the order.';
     case 'Net 30 - 30 days upon delivery': return 'The total order value shall be paid in full within 30 days upon delivery of the order.';
@@ -26416,7 +26417,7 @@ const PAID_VIA_OPTIONS = [
 // PO and SO documents verbatim. Add a new option here once and it appears
 // in every payment-terms picker in the app.
 const PAYMENT_TERMS_OPTIONS = [
-  '50% DP',
+  '50% DP;Full payment upon delivery',
   'Full payment upon delivery',
   'Net 15 - 15 days upon delivery',
   'Net 30 - 30 days upon delivery',
