@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 378 · HR: the Notice of Decision (NOD) is now dated on the day the decision is made (the case's closed date), not the NTE/opened date.";
+const BUILD = "Live build 379 · Photos: when several photos are attached, opening one now lets you browse them all with ← / → arrows (and on-screen ‹ › buttons) instead of one at a time.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -408,9 +408,16 @@ function Avatar({ profile, size='md' }){
   const initials = ((profile&&profile.name)||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
   return <div className={`${cls} rounded-full ${avaColor(profile&&profile.id)} text-white flex items-center justify-center font-bold shrink-0`}>{initials}</div>;
 }
-function MediaLightbox({ url, path, name, kind, onClose }){
-  // kind: 'image' or 'pdf'
-  useEffect(()=>{ const k=(e)=>{ if(e.key==='Escape') onClose(); }; window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k); },[onClose]);
+function MediaLightbox({ url, path, name, kind, onClose, items, startIndex }){
+  // kind: 'image' or 'pdf'.
+  // Optional gallery mode: pass `items` = [{url, name, path?, kind?}] and a
+  // startIndex to page through many photos with ← / → (arrows + keyboard).
+  const gallery = Array.isArray(items) && items.length>1 ? items : null;
+  const [cur,setCur]=useState(()=> gallery ? Math.min(Math.max(0, startIndex||0), items.length-1) : 0);
+  const active = gallery ? items[cur] : { url, path, name, kind };
+  const go=(d)=>{ if(!gallery) return; setCur(c=> (c + d + items.length) % items.length); };
+  useEffect(()=>{ const k=(e)=>{ if(e.key==='Escape') onClose(); else if(gallery && e.key==='ArrowLeft') go(-1); else if(gallery && e.key==='ArrowRight') go(1); }; window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k); },[onClose, gallery, items]);
+  url = active.url; path = active.path; name = active.name; kind = active.kind || kind || 'image';
   const isPdf = kind === 'pdf';
   // PDFs come from two places:
   //   • Files uploaded INTO Steeze OS — stored in Supabase Storage (have `path`).
@@ -455,6 +462,10 @@ function MediaLightbox({ url, path, name, kind, onClose }){
   return (
     <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-[60] p-4" onClick={onClose}>
       <button onClick={onClose} className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl leading-none">✕</button>
+      {gallery && (<>
+        <button onClick={e=>{ e.stopPropagation(); go(-1); }} title="Previous (←)" className="absolute left-3 md:left-6 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center backdrop-blur">‹</button>
+        <button onClick={e=>{ e.stopPropagation(); go(1); }} title="Next (→)" className="absolute right-3 md:right-6 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center backdrop-blur">›</button>
+      </>)}
       <div className="flex flex-col items-center" onClick={e=>e.stopPropagation()}>
         {isPdf ? (
           pdfSrc ? (
@@ -489,9 +500,10 @@ function MediaLightbox({ url, path, name, kind, onClose }){
           <img src={url} alt={name} className="max-w-[92vw] max-h-[82vh] object-contain rounded shadow-2xl" />
         )}
         <div className="text-white text-xs mt-3 bg-black/40 px-3 py-1 rounded flex items-center gap-3">
+          {gallery && <span className="font-semibold text-white/90">{cur+1} / {items.length}</span>}
           <span className="font-medium truncate max-w-[60vw]">{name}</span>
           <a href={url} target="_blank" rel="noopener" className="underline hover:text-white">Open original ↗</a>
-          <span className="text-white/60">Esc to close</span>
+          <span className="text-white/60 hidden md:inline">{gallery?'← → to browse · ':''}Esc to close</span>
         </div>
       </div>
     </div>
@@ -518,9 +530,18 @@ function attIsImage(a){
   // the cover control stays available.
   return true;
 }
-function AttachmentChip({ att, small }){
+// Resolve an attachment object to a displayable (signed) URL.
+async function resolveAttUrl(att){
+  if(!att) return null;
+  if(att.path){ try { return await signedUrl(att.path); } catch(_){} }
+  const key = storageKeyFromUrl(att.url);
+  if(key){ try { return await signedUrl(key); } catch(_){} }
+  return att.url || null;
+}
+function AttachmentChip({ att, small, gallery }){
   const [url,setUrl]=useState(att.url||null);
   const [lightbox,setLightbox]=useState(false);
+  const [galItems,setGalItems]=useState(null); // { items, index } when opened as a photo gallery
   useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
   // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual files).
   const ref=String(att.url||att.name||att.path||'').toLowerCase();
@@ -528,9 +549,23 @@ function AttachmentChip({ att, small }){
   const isPdf   = !isImage && (att.type==='pdf' || /\.pdf(?:$|\?)/i.test(ref));
   const openLB   =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) setLightbox(true); };
   const openTab  =(e)=>{ if(e){ e.preventDefault(); e.stopPropagation(); } if(url) window.open(url,'_blank'); };
+  // Open an image. If a gallery of sibling attachments was passed and it holds
+  // more than one photo, open a browsable gallery (← / →) starting at this one.
+  const openImg = async (e)=>{
+    if(e){ e.preventDefault(); e.stopPropagation(); }
+    const imgs = (Array.isArray(gallery) && gallery.length ? gallery : [att]).filter(attIsImage);
+    if(imgs.length>1){
+      const items = await Promise.all(imgs.map(async a=>({ url:(await resolveAttUrl(a))||a.url||null, name:a.name, kind:'image' })));
+      const idx = Math.max(0, imgs.indexOf(att));
+      setGalItems({ items, index: idx });
+      setLightbox(true);
+    } else if(url){ setGalItems(null); setLightbox(true); }
+  };
   if(isImage) return (<>
-    <button type="button" onClick={openLB} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
-    {lightbox && url && <MediaLightbox url={url} name={att.name} kind="image" onClose={()=>setLightbox(false)} />}
+    <button type="button" onClick={openImg} className="block hover:opacity-90">{url?<img src={url} alt={att.name} className={small?'w-12 h-12 object-cover rounded border':'max-h-40 rounded border'} />:<div className={`${small?'w-12 h-12':'w-24 h-24'} bg-slate-100 rounded flex items-center justify-center text-slate-300`}>…</div>}</button>
+    {lightbox && (galItems
+      ? <MediaLightbox items={galItems.items} startIndex={galItems.index} name={att.name} kind="image" onClose={()=>{ setLightbox(false); setGalItems(null); }} />
+      : (url && <MediaLightbox url={url} name={att.name} kind="image" onClose={()=>setLightbox(false)} />))}
   </>);
   if(isPdf) return (<>
     <button type="button" onClick={openLB} className="block hover:opacity-90 group">
@@ -2449,7 +2484,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             <div><div className="text-[10px] uppercase text-slate-400">Techpack Number</div><div>{lead.techpack_number||'—'}</div></div>
           </div>
           {(lead.items||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Items</div><div className="border rounded-lg divide-y">{lead.items.map((it,i)=>(<div key={i} className="flex justify-between px-3 py-1.5 text-sm"><span>{it.itemType}{it.category?` · ${it.category}`:''} {it.withVat?<span className="text-[10px] text-emerald-600">+VAT</span>:''}</span><span className="font-medium">{it.quantity} × {peso(it.pricePerItem)}</span></div>))}</div></div>)}
-          {(lead.attachments||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{lead.attachments.map((a,i)=><AttachmentChip key={i} att={a} small />)}</div></div>)}
+          {(lead.attachments||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{lead.attachments.map((a,i)=><AttachmentChip key={i} att={a} small gallery={lead.attachments} />)}</div></div>)}
           {/* Inline notes box — quick-save without opening the Edit modal */}
           <div className="border rounded-lg p-3 bg-amber-50/50 border-amber-200">
             <div className="flex items-center justify-between mb-1.5">
@@ -2599,7 +2634,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
               <div className="flex flex-wrap gap-2">
                 {atts.map((a,i)=>(
                   <div key={i} className="relative group">
-                    <AttachmentChip att={a} small />
+                    <AttachmentChip att={a} small gallery={atts} />
                     {job && <button onClick={()=>removeAtt(i)} title="Remove" className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-100 transition">✕</button>}
                   </div>
                 ))}
@@ -4039,7 +4074,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         const explicit = i===coverIdx;
                         return (
                           <div key={i} className={`relative ${isCover?'ring-2 ring-amber-400 rounded-lg':''}`}>
-                            <AttachmentChip att={a} small />
+                            <AttachmentChip att={a} small gallery={atts} />
                             {img && (
                               <button
                                 type="button"
