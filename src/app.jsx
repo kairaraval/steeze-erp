@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 375 · Sales Order: when an SO is fully paid, its linked lead automatically moves from 'Delivered - For Payment' to 'Delivered & Paid' (existing paid orders backfilled).";
+const BUILD = "Live build 376 · Production Board: added a 'Won' column showing the closed-won date (when the project was added to the board) in both Table and Group-by-status views.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6089,7 +6089,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
 
       {layout==='table' && (
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className={`text-left px-3 py-2 ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2" title="Date the project was closed-won / added to the board">Won</th><th className="text-left px-3 py-2">Status</th><th className={`text-left px-3 py-2 ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th><th className="text-left px-3 py-2">Sales Owner</th><th></th></tr></thead>
         <tbody>{shown.map(j=>{
           const lead = j.lead_id ? (leads||[]).find(l=>l.id===j.lead_id) : null;
           const effectiveDue = deadlineOf(j, lead);
@@ -6106,6 +6106,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
             <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="Closed-won / added to the board">{(()=>{ const d=lead?.won_at||j.created_at; return d?fmtDate(d):'—'; })()}</td>
             <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
             <td className="px-3 py-2">
               <div className="flex flex-col gap-0.5">
@@ -6131,7 +6132,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
           </tr>
           );
         })}
-        {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No jobs here. Won leads arrive via "Send to Production".</td></tr>}
+        {shown.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No jobs here. Won leads arrive via "Send to Production".</td></tr>}
         </tbody></table></div></div>
       )}
 
@@ -6162,6 +6163,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                       <th className="text-left px-3 py-2 font-medium">Client</th>
                       <th className="text-left px-3 py-2 font-medium">Item</th>
                       <th className="text-right px-3 py-2 font-medium">Qty</th>
+                      <th className="text-left px-3 py-2 font-medium" title="Closed-won / added to the board">Won</th>
                       <th className={`text-left px-3 py-2 font-medium ${sortBy==='due_asc'||sortBy==='due_desc'?'text-indigo-600':''}`}>Deadline{(sortBy==='due_asc'||sortBy==='due_desc')&&<span className="ml-1">{sortBy==='due_asc'?'⬆':'⬇'}</span>}</th>
                       <th className="text-left px-3 py-2 font-medium">Sales Owner</th>
                       <th className="text-left px-3 py-2 font-medium">Move to</th>
@@ -6182,6 +6184,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                         <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
                         <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
                         <td className="px-3 py-2.5 text-right">{j.quantity||'—'}</td>
+                        <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap" title="Closed-won / added to the board">{(()=>{ const d=lead?.won_at||j.created_at; return d?fmtDate(d):'—'; })()}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex flex-col gap-0.5">
                             <input type="date" value={effectiveDue||''} onChange={e=>changeDueDate(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white ${di.overdue?'text-rose-700 font-semibold':''}`} title={dueIsFromLead?'Inherited from the lead\'s delivery date — save here to override':'Production deadline'} />
@@ -6203,7 +6206,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                       );
                     })}
                     {col.length===0 && (
-                      <tr><td colSpan="8" className="text-center text-slate-300 text-xs py-3">— nothing in this status —</td></tr>
+                      <tr><td colSpan="9" className="text-center text-slate-300 text-xs py-3">— nothing in this status —</td></tr>
                     )}
                   </tbody>
                 </table>
