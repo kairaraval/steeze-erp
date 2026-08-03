@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 377 · Lead line items: description is now multi-line (press Enter for a new line), the Qty & Price boxes are wider, and there's a new 'Price already VAT-inclusive' option alongside 'Add VAT 12%'.";
+const BUILD = "Live build 378 · HR: the Notice of Decision (NOD) is now dated on the day the decision is made (the case's closed date), not the NTE/opened date.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11635,11 +11635,16 @@ function CaseNTEPrintView({ caseRow, employees, profile, initialDoc, onClose }){
       <div className="tp-print py-6">
         <div className="po-page flow mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.3in', fontSize:'11pt', color:'#222'}}>
           <SteezeLetterhead docTitle={doc.title} />
+          {/* The NOD is dated when the decision is issued (the case's closed
+              date), NOT the NTE/opened date. Falls back to today if the case
+              isn't marked closed yet. Other documents keep the opened date. */}
+          {(() => { const docDate = docKey==='nod' ? (caseRow.closed_date || new Date().toISOString().slice(0,10)) : caseRow.opened_date; return (
           <div className="grid grid-cols-3 gap-3 mt-3 mb-3 text-[11px]">
-            <div><div className={LBL}>Date</div><div className="font-medium">{fmtDate(caseRow.opened_date)}</div></div>
+            <div><div className={LBL}>Date</div><div className="font-medium">{fmtDate(docDate)}</div></div>
             <div><div className={LBL}>Case type</div><div className="font-medium">{ct.label}</div></div>
             <div><div className={LBL}>Ref</div><div className="font-mono font-medium">{ref}</div></div>
           </div>
+          ); })()}
           <div className="border-y-2 border-slate-800 py-2 mb-4 space-y-1">
             <div className="flex gap-2"><div className={LBL+' w-24 shrink-0 pt-0.5'}>Employee</div><div className="text-sm font-semibold">{emp?fullName(emp):'—'}{emp?.position?` — ${emp.position}`:''}</div></div>
             <div className="flex gap-2"><div className={LBL+' w-24 shrink-0 pt-0.5'}>Offense</div><div className="text-sm">{sev?sev.label:'—'}{caseRow.sanction_type?` · Sanction: ${caseRow.sanction_type}`:''}</div></div>
