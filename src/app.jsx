@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 386 · Sidebar favorites: tap the ☆ next to any menu item to pin it to a Favorites section at the top. Turn on 'Only' to hide everything else and land on just your favorite lists on open/refresh. Saved per user.";
+const BUILD = "Live build 387 · Fix: the 'Update now' banner was getting stuck on 'Updating…' — a leftover guard blocked the reload. It now reloads reliably (with a fallback), so updates always finish.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34800,16 +34800,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 //      ignores the immediate controllerchange that follows.
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   let reloading = false;
-  // If we just reloaded for a SW swap, skip the next controllerchange.
-  const justReloaded = sessionStorage.getItem('sw-just-reloaded') === '1';
-  if (justReloaded) sessionStorage.removeItem('sw-just-reloaded');
+  // Clear any leftover flag from the OLD auto-reload logic so it can't block us.
+  try { sessionStorage.removeItem('sw-just-reloaded'); } catch(_) {}
+  function doReload(){ if (reloading) return; reloading = true; window.location.reload(); }
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return;
-    if (justReloaded) return;                            // ignore the post-reload event
+    // A new SW took control (only happens after the user taps "Update now",
+    // since we never auto-skip-waiting). Reload to pick up the new build.
     if (!navigator.serviceWorker.controller) return;     // initial SW install — no reload
-    reloading = true;
-    sessionStorage.setItem('sw-just-reloaded', '1');
-    window.location.reload();
+    doReload();
   });
   // Show a small, non-intrusive banner when a new version is ready instead of
   // reloading on our own. Forcing an immediate reload mid-work wiped whatever
@@ -34823,7 +34821,13 @@ if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
     const later = document.createElement('button'); later.textContent='Later'; later.style.cssText='background:transparent;color:#cbd5e1;border:0;font:600 13px system-ui;cursor:pointer;padding:6px 8px;';
     later.onclick = ()=>{ bar.remove(); };
     const btn = document.createElement('button'); btn.textContent='Update now'; btn.style.cssText='background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:7px 14px;font:700 13px system-ui;cursor:pointer;';
-    btn.onclick = ()=>{ btn.textContent='Updating…'; btn.disabled=true; try{ worker.postMessage({ type:'SKIP_WAITING' }); }catch(_){} };
+    btn.onclick = ()=>{
+      btn.textContent='Updating…'; btn.disabled=true;
+      try{ worker.postMessage({ type:'SKIP_WAITING' }); }catch(_){}
+      // Fallback: if controllerchange doesn't fire (e.g. the message is missed),
+      // reload anyway so the update always completes.
+      setTimeout(doReload, 2000);
+    };
     bar.appendChild(msg); bar.appendChild(later); bar.appendChild(btn);
     document.body.appendChild(bar);
   }
