@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 387 · Fix: the 'Update now' banner was getting stuck on 'Updating…' — a leftover guard blocked the reload. It now reloads reliably (with a fallback), so updates always finish.";
+const BUILD = "Live build 388 · Sidebar: the Favorites section now sits right under 'My Profile' (after the top block) instead of at the very top.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34523,20 +34523,21 @@ function App(){
           </button>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1">
-          {/* Favorites — star any item below to pin it here. "Only" hides the
-              rest so you land on just your favorites on open / refresh. */}
-          {(favItems.length>0 || favOnly) && (
-            <div className="mb-1">
+          {/* Favorites render right AFTER the first block (Dashboard … My
+              Profile). Star any item to pin it here; "Only" hides the rest. */}
+          {(() => { const favBlock = (favItems.length>0 || favOnly) ? (
+            <div key="favs" className="mb-1">
               <div className="w-full px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-amber-400/80 font-semibold flex items-center gap-1.5 select-none">
                 <span>★</span><span className="flex-1 text-left">Favorites</span>
                 <button type="button" onClick={()=>setFavOnlyPersist(!favOnly)} title={favOnly?'Show all modules':'Show favorites only'} className={`text-[8px] rounded px-1.5 py-0.5 normal-case tracking-normal font-semibold ${favOnly?'bg-amber-500 text-white':'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>{favOnly?'Showing favorites · All ▸':'Only ▸'}</button>
               </div>
               {favItems.length>0 ? favItems.map(it=>NavBtn(it,'fav-')) : <div className="px-3 py-2 text-[11px] text-slate-500">No favorites yet — tap the ☆ next to any item.</div>}
             </div>
-          )}
-          {!favOnly && NAV.map((sec,si)=>{
+          ) : null;
+          return NAV.map((sec,si)=>{
+            if(si>0 && favOnly) return null;              // "Favorites only" hides other modules
             const isCollapsed = sec.group && collapsedGroups.has(sec.group);
-            return (
+            const block = (
               <div key={si} className="mb-1">
                 {sec.group && (
                   <button type="button" onClick={()=>toggleGroup(sec.group)} className="w-full px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-300 font-semibold flex items-center gap-1.5 select-none">
@@ -34548,7 +34549,8 @@ function App(){
                 {!isCollapsed && sec.items.map(it=>NavBtn(it))}
               </div>
             );
-          })}
+            return si===0 ? <React.Fragment key="s0">{block}{favBlock}</React.Fragment> : block;
+          }); })()}
           {favOnly && <button onClick={()=>setFavOnlyPersist(false)} className="w-full mt-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 text-left">▾ Show all modules</button>}
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
