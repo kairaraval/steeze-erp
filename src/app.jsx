@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 388 · Sidebar: the Favorites section now sits right under 'My Profile' (after the top block) instead of at the very top.";
+const BUILD = "Live build 389 · Fix: favorites now persist across refresh. They were saved under your user ID but read back before your profile loaded, so they looked empty on reload — the app now loads them once your profile is ready.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33429,8 +33429,16 @@ function App(){
   // you land on just your module + favorite lists. Persisted per profile.
   const favKey = `steeze.sidebar.favs.${profile?.id||'x'}`;
   const favOnlyKey = `steeze.sidebar.favOnly.${profile?.id||'x'}`;
-  const [favs,setFavs]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(favKey)||'[]'); }catch(_){ return []; } });
-  const [favOnly,setFavOnly]=useState(()=>{ try{ return localStorage.getItem(favOnlyKey)==='1'; }catch(_){ return false; } });
+  const [favs,setFavs]=useState([]);
+  const [favOnly,setFavOnly]=useState(false);
+  // IMPORTANT: `profile` is null on first render (loads async), so the state
+  // initializers can't read the correct per-user key yet. Load favorites once
+  // profile.id is available — otherwise they'd appear to vanish on every refresh.
+  useEffect(()=>{
+    if(!profile?.id) return;
+    try{ setFavs(JSON.parse(localStorage.getItem(`steeze.sidebar.favs.${profile.id}`)||'[]')); }catch(_){ setFavs([]); }
+    try{ setFavOnly(localStorage.getItem(`steeze.sidebar.favOnly.${profile.id}`)==='1'); }catch(_){}
+  },[profile?.id]);
   function toggleFav(k){ setFavs(prev=>{ const n=prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]; try{ localStorage.setItem(favKey, JSON.stringify(n)); }catch(_){} return n; }); }
   function setFavOnlyPersist(v){ setFavOnly(v); try{ localStorage.setItem(favOnlyKey, v?'1':'0'); }catch(_){} }
 
