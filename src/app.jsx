@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 381 · Purchasing Admin can now delete: Purchase Orders, Purchase Requests (including approved ones, now with a delete on the board cards too), and lines in the Materials Queue.";
+const BUILD = "Live build 382 · Cutting board: the Pattern Library now fetches the latest patterns live (on open + a ↻ Refresh button), so patterns logged elsewhere show up without a full app reload.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6986,6 +6986,16 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+  // The Pattern Library is a live reference — patterns logged by the pattern
+  // maker on another device won't be in the parent's cached `patterns` prop
+  // until a full reload. Fetch fresh here (on mount + when the tab opens + via
+  // the Refresh button) so newly-logged patterns always show up.
+  const [livePats,setLivePats]=useState(null);
+  const [patLoading,setPatLoading]=useState(false);
+  async function loadPatterns(){ setPatLoading(true); try { const { data }=await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); if(data) setLivePats(data); } catch(_){} setPatLoading(false); }
+  useEffect(()=>{ loadPatterns(); },[]);
+  useEffect(()=>{ if(tab==='patterns') loadPatterns(); },[tab]);
+  const patSrc = livePats || patterns || [];
 
   // Auto-seed a worklist row for any production job at a Cutting stage that
   // doesn't have one. Rows persist until marked Done.
@@ -6998,7 +7008,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
 
   const open=(cuttingWorklist||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
   const done=(cuttingWorklist||[]).filter(w=>w.status==='done');
-  const lib=(patterns||[]).filter(p=> (p.library||'production')==='production').filter(p=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase()));
+  const lib=(patSrc||[]).filter(p=> (p.library||'production')==='production').filter(p=> !search || `${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(search.toLowerCase()));
   async function reorderWorklist(list){ await Promise.all(list.map((w,i)=> sb.from('cutting_worklist').update({ position:i }).eq('id',w.id))); reload(); }
   function moveWork(w,dir){ const arr=open.slice(); const i=arr.findIndex(x=>x.id===w.id); const j=i+dir; if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; reorderWorklist(arr); }
 
@@ -7083,8 +7093,11 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
 
       {tab==='patterns' && (
         <div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search pattern code / name / item…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-80 mb-3" />
-          <p className="text-xs text-slate-500 mb-2">Reference — look up the pattern code &amp; sizes for what you're cutting.</p>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search pattern code / name / item…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-80" />
+            <button onClick={loadPatterns} disabled={patLoading} className="text-sm px-3 py-2 rounded-lg bg-white border border-slate-300 font-semibold hover:bg-slate-50 disabled:opacity-50">{patLoading?'Refreshing…':'↻ Refresh'}</button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">Reference — look up the pattern code &amp; sizes for what you're cutting. Shows the latest logged patterns.</p>
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
               <th className="text-left px-3 py-2">Pattern code</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Sizes</th>
@@ -7105,7 +7118,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
         </div>
       )}
 
-      {detail && <CuttingItemModal item={detail} patterns={patterns} lead={leadFor(detail.lead_id)} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {detail && <CuttingItemModal item={detail} patterns={patSrc} lead={leadFor(detail.lead_id)} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
     </div>
   );
 }
