@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 379 · Photos: when several photos are attached, opening one now lets you browse them all with ← / → arrows (and on-screen ‹ › buttons) instead of one at a time.";
+const BUILD = "Live build 380 · Purchase Requests: requester attachments now open inline (signed URLs) instead of showing a broken photo — and attachments everywhere now resolve a working link even if only a legacy public URL was stored.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -542,7 +542,10 @@ function AttachmentChip({ att, small, gallery }){
   const [url,setUrl]=useState(att.url||null);
   const [lightbox,setLightbox]=useState(false);
   const [galItems,setGalItems]=useState(null); // { items, index } when opened as a photo gallery
-  useEffect(()=>{ let on=true; if(att.path) signedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path]);
+  // Resolve a working (signed) URL. Handles path-based uploads AND legacy rows
+  // that only stored a public URL (which 403s on the private bucket) — we pull
+  // the storage key out of that URL and sign it.
+  useEffect(()=>{ let on=true; resolveAttUrl(att).then(u=>{ if(on&&u) setUrl(u); }).catch(()=>{}); return ()=>{on=false;}; },[att.path, att.url]);
   // Auto-detect image / PDF by extension if `type` is wrong (e.g. legacy 'link' on actual files).
   const ref=String(att.url||att.name||att.path||'').toLowerCase();
   const isImage = attIsImage(att);
@@ -21411,11 +21414,7 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
           <div>
             <label className="text-xs font-semibold text-slate-500">Attachments from requester</label>
             <div className="flex flex-wrap gap-2 mt-1">
-              {existing.attachments.map((a,i)=> /image/i.test(a.type||'') ? (
-                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name}><img src={a.url} alt={a.name} className="w-16 h-16 object-cover rounded border" /></a>
-              ) : (
-                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline border rounded px-2 py-1 bg-white">📎 {a.name||'file'}</a>
-              ))}
+              {existing.attachments.map((a,i)=><AttachmentChip key={i} att={a} small gallery={existing.attachments} />)}
             </div>
           </div>
         )}
