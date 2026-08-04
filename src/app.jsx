@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 391 · QC report now has 'Request replacement' — same as the process boards: part lines + qty, reason checklist, routed to a department for the Production Supervisor to approve.";
+const BUILD = "Live build 392 · Fix: stop the non-stop refresh/blinking loop. Added a loop-breaker that reloads at most once every 20 seconds, so a stuck service-worker version can no longer refresh the app endlessly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34922,6 +34922,16 @@ if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   function isTyping(){ const ae = document.activeElement; return !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)); }
   function safeReload(){
     if (reloading) return;
+    // LOOP BREAKER: never reload more than once per 20s. If controllerchange
+    // keeps firing (version ping-pong / stuck SW), this stops the endless
+    // "blinking / refreshing" loop after a single reload. The timestamp lives in
+    // sessionStorage so it survives the reload within the same tab.
+    try {
+      const now = Date.now();
+      const last = Number(sessionStorage.getItem('sw-last-reload') || 0);
+      if (now - last < 20000) { console.warn('SW reload suppressed (loop guard)'); return; }
+      sessionStorage.setItem('sw-last-reload', String(now));
+    } catch(_) {}
     if (isTyping()) { setTimeout(safeReload, 8000); return; }  // wait until they stop typing
     reloading = true;
     window.location.reload();
