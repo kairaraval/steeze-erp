@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 384 · Fix: Performance Reviews crashed (React #300) when opening Job-Role Evaluations — the tab switch now runs after all hooks. Job-Role Evaluations (weighted per-job-description templates, two-rater auto-compute, printable sign-off) is live.";
+const BUILD = "Live build 385 · No more surprise refreshes: when a new version deploys while you're working, the app now shows an 'Update now / Later' banner instead of reloading on its own — so your in-progress work is never wiped.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34781,20 +34781,38 @@ if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
     sessionStorage.setItem('sw-just-reloaded', '1');
     window.location.reload();
   });
+  // Show a small, non-intrusive banner when a new version is ready instead of
+  // reloading on our own. Forcing an immediate reload mid-work wiped whatever
+  // the user was typing — now THEY choose when to update.
+  function showUpdateBanner(worker){
+    if (!worker || document.getElementById('sw-update-banner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'sw-update-banner';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:99999;background:#1e293b;color:#fff;padding:10px 14px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.28);display:flex;align-items:center;gap:10px;font:600 13px system-ui,-apple-system,sans-serif;max-width:92vw;';
+    const msg = document.createElement('span'); msg.textContent = '🔄 A new version of Steeze OS is ready.';
+    const later = document.createElement('button'); later.textContent='Later'; later.style.cssText='background:transparent;color:#cbd5e1;border:0;font:600 13px system-ui;cursor:pointer;padding:6px 8px;';
+    later.onclick = ()=>{ bar.remove(); };
+    const btn = document.createElement('button'); btn.textContent='Update now'; btn.style.cssText='background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:7px 14px;font:700 13px system-ui;cursor:pointer;';
+    btn.onclick = ()=>{ btn.textContent='Updating…'; btn.disabled=true; try{ worker.postMessage({ type:'SKIP_WAITING' }); }catch(_){} };
+    bar.appendChild(msg); bar.appendChild(later); bar.appendChild(btn);
+    document.body.appendChild(bar);
+  }
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then(reg => {
       // Check for updates every 30 minutes the app is open.
       setInterval(() => reg.update().catch(()=>{}), 30 * 60 * 1000);
-      // If an update is already waiting at registration time, activate it.
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      // If an update is already waiting at registration time, offer it (only
+      // when a controller already exists — i.e. not the very first install).
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg.waiting);
       reg.addEventListener('updatefound', () => {
         const nw = reg.installing;
         if (!nw) return;
         nw.addEventListener('statechange', () => {
           if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            // A new SW finished installing while the old one still controls
-            // the page. Tell it to take over — controllerchange then reloads.
-            nw.postMessage({ type: 'SKIP_WAITING' });
+            // A new SW finished installing while the old one still controls the
+            // page. Do NOT auto-activate — offer the update via the banner so
+            // the user never loses in-progress work.
+            showUpdateBanner(nw);
           }
         });
       });
