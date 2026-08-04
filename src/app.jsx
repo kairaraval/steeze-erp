@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 382 · Cutting board: the Pattern Library now fetches the latest patterns live (on open + a ↻ Refresh button), so patterns logged elsewhere show up without a full app reload.";
+const BUILD = "Live build 383 · HR Performance Reviews: new Job-Role Evaluations — reusable weighted templates per job description (KPI + Competency, 1–5, two-rater A/B), answered in the OS with auto-computed grand score, appraisal band + recommended action, notes, managerial outcome, and a printable sign-off sheet. Seed the Sales Associate template with one click under Templates.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10278,7 +10278,478 @@ function applicableCriteria(criteria, emp){
   }).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
 }
 
-function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, hrReviewCriteria, reload }){
+/* ─────────── HR — Job-Description Evaluations (weighted templates) ───────────
+   A reusable evaluation template per job description (KPI + Competency, grouped
+   sub-sections with % weights, per-criterion weights, 1–5 scale). Filled in the
+   OS with two rater columns (A & B, auto-averaged); the grand score (out of 5)
+   and appraisal band are computed automatically. */
+const DEFAULT_EVAL_SCALE = [
+  { v:1, label:'Needs Improvement',    desc:'Performance is far below standards and targets. Requires immediate action and close monitoring.' },
+  { v:2, label:'Below Expectations',   desc:'Frequently falls short of targets or shows repeated errors. Needs guidance and improvement.' },
+  { v:3, label:'Meets Expectations',   desc:'Achieves the set targets and company standards. Performance is acceptable and satisfactory.' },
+  { v:4, label:'Exceeds Expectations', desc:'Often surpasses expectations and performs above standard. Minor errors may occur but are quickly corrected.' },
+  { v:5, label:'Exceptional',          desc:'Consistently exceeds targets with high-quality work. Almost no errors and performance is reliable and consistent.' },
+];
+const DEFAULT_EVAL_BANDS = [
+  { min:4.5, max:5.0,  level:'Excellent',            result:'Highly Recommended for Promotion / Salary Increase / Maximum Incentive' },
+  { min:3.5, max:4.49, level:'Exceeds Expectations', result:'Recommended for Incentive / Merit Increase' },
+  { min:2.5, max:3.49, level:'Meets Expectations',   result:'Satisfactory Performance / Regular Status Maintained' },
+  { min:1.5, max:2.49, level:'Below Expectations',   result:'Performance Improvement Plan (PIP) Required' },
+  { min:0,   max:1.49, level:'Needs Improvement',    result:'For Close Monitoring / Possible Probation Extension' },
+];
+const EVAL_OUTCOME_ACTIONS = ['Trainee','Probationary','Regularization','Promotion','Salary Increase','Lateral Transfer','End of Contract','Rehire','Project based','Others'];
+const SALES_ASSOCIATE_STRUCTURE = {
+  scale: DEFAULT_EVAL_SCALE, bands: DEFAULT_EVAL_BANDS,
+  categories: [
+    { key:'kpi', name:'I. KPI Performance', weight:0.60, groups:[
+      { name:'A. Sales & Customer Support (20%)', weight:0.20, criteria:[
+        { id:'c1', name:'Customer Inquiry Response & Handling', description:'Responds promptly and professionally to customer inquiries via phone, email, or in-person. Ensures issues are addressed and clients receive accurate information to support repeat business.', weight:0.10 },
+        { id:'c2', name:'Sales Support & Tech Pack Preparation', description:'Assists the sales team in preparing product samples, quotations, presentations, and tech packs. Ensures all sales documents meet client requirements and company standards.', weight:0.10 },
+      ]},
+      { name:'B. Order Processing & Coordination (15%)', weight:0.15, criteria:[
+        { id:'c3', name:'Order Accuracy & Documentation', description:'Ensures all sales orders are accurately prepared with correct product specifications, quantities, and delivery schedules. Maintains proper documentation for tracking and audit purposes.', weight:0.05 },
+        { id:'c4', name:'Coordination with Production & Logistics', description:'Effectively coordinates with Production, Warehouse, and Logistics teams to ensure timely order fulfillment and delivery. Escalates delays or issues to management as needed.', weight:0.05 },
+        { id:'c5', name:'Order Monitoring & Reporting', description:'Monitors order progress, updates clients or sales team on status, and ensures timely completion of orders.', weight:0.05 },
+      ]},
+      { name:'C. Client Records & Sales Documentation (10%)', weight:0.10, criteria:[
+        { id:'c6', name:'CRM, OS & Record Maintenance', description:'Keeps client information, sales activities, and repeat client details updated in the company database, OS or CRM system.', weight:0.05 },
+        { id:'c7', name:'Reporting & Documentation Accuracy', description:'Prepares accurate sales reports, order summaries, and related documentation. Ensures all records are complete and traceable.', weight:0.05 },
+      ]},
+      { name:'D. Attendance & Workplace Discipline (15%)', weight:0.15, criteria:[
+        { id:'c8', name:'Attendance, Punctuality & Reliability', description:'Maintains consistent attendance and punctuality. Reliable during peak periods or critical client-related activities.', weight:0.05 },
+        { id:'c9', name:'Workplace Organization & Cleanliness', description:'Maintains a clean, organized, and safe work environment. Ensures workstations, storage, and shared areas comply with company standards.', weight:0.05 },
+        { id:'c10', name:'SOP Compliance', description:'Strictly follows company Standard Operating Procedures (SOP) in documentation, reporting, and approval processes to ensure accountability, consistency, and proper coordination with Production and Management.', weight:0.05 },
+      ]},
+    ]},
+    { key:'competency', name:'II. Competency & Technical Skills', weight:0.40, groups:[
+      { name:'A. Technical Competency (20%)', weight:0.20, criteria:[
+        { id:'c11', name:'Sales & Product Knowledge', description:'Demonstrates thorough knowledge of products, sales processes, and company procedures to support clients and internal teams effectively.', weight:0.05 },
+        { id:'c12', name:'Attention to Detail', description:'Ensures accuracy in orders, quotations, tech packs, and reports. Minimizes errors that could affect production or client satisfaction.', weight:0.05 },
+        { id:'c13', name:'System & Documentation Skills', description:'Efficiently uses Steeze OS, CRM, spreadsheets, and filing systems for record-keeping and reporting.', weight:0.05 },
+        { id:'c14', name:'Problem Awareness & Initiative', description:'Quickly identifies issues in orders, client requests, or documentation. Takes initiative to resolve problems and suggests improvements to workflows.', weight:0.05 },
+      ]},
+      { name:'B. Work Behavior & Professionalism (20%)', weight:0.20, criteria:[
+        { id:'c15', name:'Work Efficiency & Time Management', description:'Manages multiple tasks and deadlines effectively without compromising quality or accuracy.', weight:0.05 },
+        { id:'c16', name:'Teamwork & Communication', description:'Communicates clearly and professionally with Sales, Production, and Management teams. Open to feedback and ensures alignment on tasks and client requirements.', weight:0.05 },
+        { id:'c17', name:'Attendance, Punctuality & Reliability', description:'Consistently present and on time. Can be relied upon during urgent client requests or critical deadlines.', weight:0.05 },
+        { id:'c18', name:'Adaptability, Work Attitude & Continuous Improvement', description:'Displays positive attitude, flexibility, and willingness to learn new tools, processes, and sales techniques. Actively seeks improvement and strictly follows company SOPs in all tasks.', weight:0.05 },
+      ]},
+    ]},
+  ],
+};
+function evalFlatCriteria(tpl){
+  const out=[]; ((tpl?.structure?.categories)||[]).forEach(cat=> (cat.groups||[]).forEach(g=> (g.criteria||[]).forEach(c=> out.push({ ...c, weight:Number(c.weight)||0, catKey:cat.key||cat.name, catName:cat.name, catWeight:Number(cat.weight)||0, groupName:g.name, groupWeight:Number(g.weight)||0 }))));
+  return out;
+}
+function evalRatingAvg(ans, two){ if(!ans) return null; const vals=[ans.a, two?ans.b:null].filter(v=>v!=null&&v!=='').map(Number).filter(v=>!isNaN(v)); if(!vals.length) return null; return vals.reduce((s,v)=>s+v,0)/vals.length; }
+function computeEval(tpl, answers, two){
+  const crits=evalFlatCriteria(tpl); let grand=0; const catTotals={}; const groupTotals={}; let rated=0;
+  crits.forEach(c=>{ const avg=evalRatingAvg((answers||{})[c.id], two); if(avg==null) return; rated++; const wt=avg*c.weight; grand+=wt; catTotals[c.catKey]=(catTotals[c.catKey]||0)+wt; groupTotals[c.catName+'||'+c.groupName]=(groupTotals[c.catName+'||'+c.groupName]||0)+wt; });
+  return { grand, catTotals, groupTotals, crits, rated, total:crits.length };
+}
+function evalBandOf(tpl, grand){ const bands=(tpl?.structure?.bands)||DEFAULT_EVAL_BANDS; return bands.find(b=> grand>=Number(b.min) && grand<=Number(b.max)) || bands[bands.length-1]; }
+function evalBandColor(level){ return level==='Excellent'?'bg-emerald-100 text-emerald-700':level==='Exceeds Expectations'?'bg-teal-100 text-teal-700':level==='Meets Expectations'?'bg-blue-100 text-blue-700':level==='Below Expectations'?'bg-amber-100 text-amber-700':'bg-rose-100 text-rose-700'; }
+
+function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalReviews, reload, onSwitchTab }){
+  const [sub,setSub]=useState('evals');
+  const [editTpl,setEditTpl]=useState(null);
+  const [fillRev,setFillRev]=useState(null);
+  const [printRev,setPrintRev]=useState(null);
+  const [starting,setStarting]=useState(false);
+  const canManage = ['admin','hr','manager'].includes(profile.role);
+  const tplName=(id)=>(evalTemplates||[]).find(t=>t.id===id)?.name||'—';
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  async function seedSalesAssociate(){
+    if((evalTemplates||[]).some(t=>(t.position||'').toLowerCase()==='sales associate' || (t.name||'').toLowerCase().includes('sales associate'))){
+      if(!confirm('A Sales Associate template already exists. Add another copy?')) return;
+    }
+    const { error }=await sb.from('eval_templates').insert({ name:'Sales Associate', position:'Sales Associate', description:'Performance Evaluation & KPI for Sales Associate', structure:SALES_ASSOCIATE_STRUCTURE, two_raters:true, created_by:profile.id });
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function delTpl(t){ if(!confirm(`Delete template "${t.name}"? Existing evaluations already made keep their own copy.`)) return; const { error }=await sb.from('eval_templates').delete().eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
+  async function delRev(r){ if(!confirm('Delete this evaluation?')) return; const { error }=await sb.from('eval_reviews').delete().eq('id',r.id); if(error){ alert(error.message); return; } reload(); }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📊 Performance Reviews</h1><p className="text-slate-500 text-sm">Job-description evaluations — weighted KPI + Competency scorecards, computed automatically.</p></div>
+          <div className="flex items-center gap-2">
+            {sub==='evals' && canManage && <button onClick={()=>setStarting(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New evaluation</button>}
+            {sub==='templates' && canManage && <>
+              <button onClick={seedSalesAssociate} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⬇ Seed Sales Associate</button>
+              <button onClick={()=>setEditTpl({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New template</button>
+            </>}
+          </div>
+        </div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+          <button onClick={()=>onSwitchTab&&onSwitchTab('cycles')} className="px-3 py-1.5 rounded-md text-slate-600">Review Cycles</button>
+          <button onClick={()=>setSub('evals')} className={`px-3 py-1.5 rounded-md ${sub==='evals'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Evaluations ({(evalReviews||[]).length})</button>
+          <button onClick={()=>setSub('templates')} className={`px-3 py-1.5 rounded-md ${sub==='templates'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Templates ({(evalTemplates||[]).length})</button>
+        </div>
+      </div>
+
+      {sub==='templates' ? (
+        <div className="space-y-2">
+          {(evalTemplates||[]).length===0 && <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No evaluation templates yet. Click “⬇ Seed Sales Associate” to load the one from your file, then add more per job description.</div>}
+          {(evalTemplates||[]).map(t=>{ const crits=evalFlatCriteria(t); const wsum=crits.reduce((s,c)=>s+c.weight,0); return (
+            <div key={t.id} className="bg-white border rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-slate-800">{t.name} {t.position && <span className="text-xs font-normal text-slate-400">· {t.position}</span>}</div>
+                <div className="text-xs text-slate-500">{crits.length} criteria · weights total {Math.round(wsum*100)}%{Math.abs(wsum-1)>0.001?<span className="text-rose-600 font-semibold"> — should be 100%</span>:''} · {t.two_raters?'two raters (A/B)':'single rating'}</div>
+              </div>
+              {canManage && <><button onClick={()=>setEditTpl(t)} className="text-xs px-2.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold">Edit</button>
+              <button onClick={()=>setEditTpl({ ...t, id:null, name:(t.name||'')+' (copy)' })} className="text-xs px-2.5 py-1.5 rounded bg-white border hover:bg-slate-50 font-semibold">Duplicate</button>
+              <button onClick={()=>delTpl(t)} className="text-slate-300 hover:text-rose-500 text-sm">✕</button></>}
+            </div>
+          ); })}
+        </div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          {(evalReviews||[]).length===0 ? <div className="px-4 py-12 text-center text-slate-400 text-sm">No evaluations yet. Click “+ New evaluation” to start one.</div> : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Template</th><th className="text-left px-3 py-2">Period</th><th className="text-center px-3 py-2">Score</th><th className="text-left px-3 py-2">Result</th><th className="text-left px-3 py-2">Status</th><th></th>
+              </tr></thead>
+              <tbody>{(evalReviews||[]).map(r=>(
+                <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setFillRev(r)}>
+                  <td className="px-3 py-2 font-medium">{empName(r.employee_id)}</td>
+                  <td className="px-3 py-2 text-xs">{r.template_name||tplName(r.template_id)}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{r.review_period||(r.evaluation_date?fmtDate(r.evaluation_date):'—')}</td>
+                  <td className="px-3 py-2 text-center">{r.grand_score!=null?<span className="text-xs font-bold px-2 py-1 rounded bg-indigo-100 text-indigo-700">{Number(r.grand_score).toFixed(2)}/5</span>:<span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-2">{r.band_level?<span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${evalBandColor(r.band_level)}`}>{r.band_level}</span>:'—'}</td>
+                  <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${r.status==='completed'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{r.status||'draft'}</span></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrintRev(r);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print / PDF">🖨</button>{canManage && <button onClick={(e)=>{e.stopPropagation(); delRev(r);}} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {starting && <EvalStartModal employees={employees} templates={evalTemplates} onClose={()=>setStarting(false)} onStart={(rev)=>{ setStarting(false); setFillRev(rev); }} />}
+      {fillRev && <EvalFillModal review={fillRev} template={(evalTemplates||[]).find(t=>t.id===fillRev.template_id)} profile={profile} profiles={profiles} employees={employees} onClose={()=>setFillRev(null)} onSaved={()=>{ setFillRev(null); reload(); }} onPrint={(r)=>{ setFillRev(null); setPrintRev(r); }} />}
+      {editTpl && <EvalTemplateModal tpl={editTpl} profile={profile} onClose={()=>setEditTpl(null)} onSaved={()=>{ setEditTpl(null); reload(); }} />}
+      {printRev && <EvalPrintView review={printRev} template={(evalTemplates||[]).find(t=>t.id===printRev.template_id)} employees={employees} profiles={profiles} onClose={()=>setPrintRev(null)} />}
+    </div>
+  );
+}
+
+function EvalStartModal({ employees, templates, onClose, onStart }){
+  const [empId,setEmpId]=useState(''); const [tplId,setTplId]=useState('');
+  const [period,setPeriod]=useState('');
+  const active=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const emp=active.find(e=>e.id===empId);
+  // Suggest the template whose position matches the employee.
+  const suggested = emp ? (templates||[]).find(t=>(t.position||'').toLowerCase()===(emp.position||'').toLowerCase()) : null;
+  useEffect(()=>{ if(suggested && !tplId) setTplId(suggested.id); },[empId]);
+  function start(){
+    if(!empId){ alert('Pick an employee.'); return; }
+    if(!tplId){ alert('Pick a template.'); return; }
+    const tpl=(templates||[]).find(t=>t.id===tplId);
+    onStart({ template_id:tplId, template_name:tpl?.name||null, employee_id:empId, position:emp?.position||null, two_raters: tpl?.two_raters!==false, review_period:period||null, evaluation_date:new Date().toISOString().slice(0,10), start_date: emp?.date_hired||null, employment_status: emp?.employment_status||emp?.status||null, answers:{}, status:'draft', outcome:{} });
+  }
+  return (
+    <Modal title="New evaluation" onClose={onClose}>
+      <div className="space-y-3">
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Employee *</div>
+          <select value={empId} onChange={e=>setEmpId(e.target.value)} className="input"><option value="">— pick —</option>{active.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}</select>
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Evaluation template *</div>
+          <select value={tplId} onChange={e=>setTplId(e.target.value)} className="input"><option value="">— pick —</option>{(templates||[]).map(t=><option key={t.id} value={t.id}>{t.name}{t.position?` · ${t.position}`:''}</option>)}</select>
+          {suggested && <div className="text-[11px] text-emerald-700 mt-1">Suggested for {emp?.position}: {suggested.name}</div>}
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Review period <span className="text-slate-300 normal-case">· optional</span></div>
+          <input value={period} onChange={e=>setPeriod(e.target.value)} placeholder="e.g. May to June 2026" className="input" />
+        </div>
+        <div className="flex gap-2 pt-2 border-t">
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button onClick={start} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Start</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EvalFillModal({ review, template, profile, profiles, employees, onClose, onSaved, onPrint }){
+  const emp=(employees||[]).find(e=>e.id===review.employee_id);
+  const tpl = template || { name:review.template_name, structure:{ scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:[] } };
+  const two = review.two_raters!==false;
+  const [answers,setAnswers]=useState(review.answers||{});
+  const [f,setF]=useState({ review_period:review.review_period||'', evaluation_date:review.evaluation_date||new Date().toISOString().slice(0,10), immediate_supervisor:review.immediate_supervisor||'', employment_status:review.employment_status||'', reviewer_id:review.reviewer_id||profile.id, areas_improvement:review.areas_improvement||'', strong_points:review.strong_points||'', employee_review:review.employee_review||'', status:review.status||'draft' });
+  const [outcome,setOutcome]=useState(review.outcome||{});
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function setRating(cid, key, val){ setAnswers(a=>({ ...a, [cid]:{ ...(a[cid]||{}), [key]: (a[cid]?.[key]===val?null:val) } })); }
+  const comp=computeEval(tpl, answers, two);
+  const band=evalBandOf(tpl, comp.grand);
+  const cats=(tpl?.structure?.categories)||[];
+
+  async function save(markComplete){
+    setBusy(true); setMsg('');
+    const payload={ ...review, template_id:review.template_id||template?.id||null, template_name:tpl.name||review.template_name||null, position: emp?.position||review.position||null,
+      two_raters:two, answers, reviewer_id:f.reviewer_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
+      grand_score:Number(comp.grand.toFixed(3)), kpi_score: comp.catTotals['kpi']!=null?Number(comp.catTotals['kpi'].toFixed(3)):null, competency_score: comp.catTotals['competency']!=null?Number(comp.catTotals['competency'].toFixed(3)):null,
+      band_level:band?.level||null, band_result:band?.result||null,
+      areas_improvement:f.areas_improvement||null, strong_points:f.strong_points||null, employee_review:f.employee_review||null, outcome,
+      status: markComplete?'completed':(f.status||'draft'), updated_at:new Date().toISOString() };
+    delete payload.id;
+    let error;
+    if(review.id){ ({ error }=await sb.from('eval_reviews').update(payload).eq('id',review.id)); }
+    else { ({ error }=await sb.from('eval_reviews').insert({ ...payload, created_by:profile.id })); }
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+
+  const RateCell=({cid,k})=> (
+    <div className="flex gap-0.5">{[1,2,3,4,5].map(n=>{ const on=answers[cid]?.[k]===n; return (
+      <button key={n} type="button" onClick={()=>setRating(cid,k,n)} className={`w-7 h-7 rounded text-[11px] font-bold border ${on?'bg-indigo-600 text-white border-indigo-600':'bg-white border-slate-300 text-slate-600 hover:border-indigo-400'}`}>{n}</button>
+    ); })}</div>
+  );
+
+  return (
+    <Modal title={`Evaluation — ${emp?fullName(emp):'employee'}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Employee</div><div className="font-medium">{emp?fullName(emp):'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Position</div><div className="font-medium">{emp?.position||review.position||'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Template</div><div className="font-medium truncate">{tpl.name||'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Employment status</div><input value={f.employment_status} onChange={e=>up('employment_status',e.target.value)} placeholder="e.g. Probationary" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Review period</div><input value={f.review_period} onChange={e=>up('review_period',e.target.value)} placeholder="May to June 2026" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluation date</div><input type="date" value={f.evaluation_date} onChange={e=>up('evaluation_date',e.target.value)} className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Immediate supervisor</div><input value={f.immediate_supervisor} onChange={e=>up('immediate_supervisor',e.target.value)} placeholder="Name" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluator</div><select value={f.reviewer_id||''} onChange={e=>up('reviewer_id',e.target.value)} className="input text-sm"><option value="">—</option>{(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></div>
+        </div>
+
+        {/* Live score summary */}
+        <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border border-indigo-200 rounded-lg px-3 py-2 flex items-center gap-3 flex-wrap">
+          <div className="text-sm">Grand score: <span className="font-bold text-indigo-700 text-lg">{comp.grand.toFixed(2)}</span><span className="text-slate-400"> / 5.00</span></div>
+          {band && <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${evalBandColor(band.level)}`}>{band.level}</span>}
+          <span className="text-xs text-slate-500">{comp.rated}/{comp.total} rated{two?' · A & B averaged':''}</span>
+          {band && <span className="text-xs text-slate-600 truncate">→ {band.result}</span>}
+        </div>
+
+        {cats.map((cat,ci)=>(
+          <div key={ci} className="border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-indigo-600 text-white flex items-center justify-between"><span className="font-bold text-sm">{cat.name}</span><span className="text-xs">{Math.round((Number(cat.weight)||0)*100)}% · subtotal {(comp.catTotals[cat.key||cat.name]||0).toFixed(2)}</span></div>
+            {(cat.groups||[]).map((g,gi)=>(
+              <div key={gi}>
+                <div className="px-3 py-1.5 bg-slate-100 text-[12px] font-semibold text-slate-700 flex items-center justify-between"><span>{g.name}</span><span className="text-slate-500 text-[11px]">subtotal {(comp.groupTotals[cat.name+'||'+g.name]||0).toFixed(2)}</span></div>
+                {(g.criteria||[]).map(c=>{ const avg=evalRatingAvg(answers[c.id], two); return (
+                  <div key={c.id} className="px-3 py-2 border-t">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{c.name} <span className="text-[10px] text-slate-400">· wt {Math.round((Number(c.weight)||0)*100)}%</span></div>
+                        {c.description && <div className="text-[11px] text-slate-500 mt-0.5">{c.description}</div>}
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="flex flex-col items-center gap-1"><span className="text-[9px] uppercase text-slate-400 font-bold">A</span><RateCell cid={c.id} k="a" /></div>
+                        {two && <div className="flex flex-col items-center gap-1"><span className="text-[9px] uppercase text-slate-400 font-bold">B</span><RateCell cid={c.id} k="b" /></div>}
+                        <div className="text-center w-14"><div className="text-[9px] uppercase text-slate-400 font-bold">Avg</div><div className="font-bold text-slate-700">{avg!=null?avg.toFixed(2):'—'}</div></div>
+                      </div>
+                    </div>
+                  </div>
+                ); })}
+              </div>
+            ))}
+          </div>
+        ))}
+        {cats.length===0 && <div className="text-center text-slate-400 text-sm py-6 border rounded-lg">This template has no criteria yet. Edit the template to add them.</div>}
+
+        <div className="grid md:grid-cols-2 gap-3">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement} onChange={e=>up('areas_improvement',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points} onChange={e=>up('strong_points',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Employee review / acknowledgment note</div><textarea value={f.employee_review} onChange={e=>up('employee_review',e.target.value)} placeholder="Employee's comments after the evaluation was discussed" className="input min-h-[50px] whitespace-pre-line" /></div>
+
+        {/* Managerial outcome */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Managerial section · Management &amp; HR</div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Recommended action</div>
+              <select value={outcome.action||''} onChange={e=>setOutcome(o=>({...o, action:e.target.value}))} className="input"><option value="">— select —</option>{EVAL_OUTCOME_ACTIONS.map(a=><option key={a} value={a}>{a}</option>)}</select>
+            </div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Salary increase / details <span className="text-slate-300 normal-case">· optional</span></div><input value={outcome.details||''} onChange={e=>setOutcome(o=>({...o, details:e.target.value}))} placeholder="e.g. +₱1,000 / month" className="input" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Evaluated by</div><input value={outcome.evaluated_by||''} onChange={e=>setOutcome(o=>({...o, evaluated_by:e.target.value}))} placeholder="Name & position" className="input" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reviewed by (HR)</div><input value={outcome.hr_name||''} onChange={e=>setOutcome(o=>({...o, hr_name:e.target.value}))} placeholder="HR name" className="input" /></div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-2 border-t flex-wrap">
+          {msg && <span className="text-xs text-rose-600">{msg}</span>}
+          {review.id && <button onClick={()=>onPrint&&onPrint(review)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">🖨 Print / PDF</button>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
+          <button disabled={busy} onClick={()=>save(false)} className="px-4 py-2 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy?'Saving…':'Save draft'}</button>
+          <button disabled={busy} onClick={()=>save(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">Save &amp; complete</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EvalTemplateModal({ tpl, profile, onClose, onSaved }){
+  const isEdit=!!tpl.id;
+  const [name,setName]=useState(tpl.name||'');
+  const [position,setPosition]=useState(tpl.position||'');
+  const [description,setDescription]=useState(tpl.description||'');
+  const [twoRaters,setTwoRaters]=useState(tpl.two_raters!==false);
+  const seed = tpl.structure && tpl.structure.categories ? tpl.structure : { scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:[] };
+  const [cats,setCats]=useState(()=> JSON.parse(JSON.stringify(seed.categories||[])));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const nextId=()=>'c'+Math.random().toString(36).slice(2,8);
+  function updCat(ci,patch){ setCats(cs=>cs.map((c,i)=>i===ci?{...c,...patch}:c)); }
+  function updGroup(ci,gi,patch){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:(c.groups||[]).map((g,j)=>j===gi?{...g,...patch}:g)})); }
+  function updCrit(ci,gi,ki,patch){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:(c.groups||[]).map((g,j)=>j!==gi?g:{...g, criteria:(g.criteria||[]).map((k,x)=>x===ki?{...k,...patch}:k)})})); }
+  function addCat(){ setCats(cs=>[...cs,{ key:nextId(), name:'New category', weight:0, groups:[] }]); }
+  function rmCat(ci){ setCats(cs=>cs.filter((_,i)=>i!==ci)); }
+  function addGroup(ci){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:[...(c.groups||[]), { name:'New group', weight:0, criteria:[] }]})); }
+  function rmGroup(ci,gi){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:(c.groups||[]).filter((_,j)=>j!==gi)})); }
+  function addCrit(ci,gi){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:(c.groups||[]).map((g,j)=>j!==gi?g:{...g, criteria:[...(g.criteria||[]), { id:nextId(), name:'', description:'', weight:0.05 }]})})); }
+  function rmCrit(ci,gi,ki){ setCats(cs=>cs.map((c,i)=>i!==ci?c:{...c, groups:(c.groups||[]).map((g,j)=>j!==gi?g:{...g, criteria:(g.criteria||[]).filter((_,x)=>x!==ki)})})); }
+  function loadSales(){ if(!confirm('Replace the current structure with the Sales Associate template?')) return; setCats(JSON.parse(JSON.stringify(SALES_ASSOCIATE_STRUCTURE.categories))); }
+  const wsum = cats.reduce((s,c)=>s+(c.groups||[]).reduce((a,g)=>a+(g.criteria||[]).reduce((b,k)=>b+(Number(k.weight)||0),0),0),0);
+
+  async function save(){
+    if(!name.trim()){ setMsg('Enter a template name.'); return; }
+    setBusy(true); setMsg('');
+    const structure={ scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:cats.map(c=>({ key:c.key||c.name, name:c.name, weight:Number(c.weight)||0, groups:(c.groups||[]).map(g=>({ name:g.name, weight:Number(g.weight)||0, criteria:(g.criteria||[]).map(k=>({ id:k.id||('c'+Math.random().toString(36).slice(2,7)), name:k.name, description:k.description||'', weight:Number(k.weight)||0 })) })) })) };
+    const payload={ name:name.trim(), position:position.trim()||null, description:description.trim()||null, structure, two_raters:twoRaters, updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('eval_templates').update(payload).eq('id',tpl.id)); }
+    else { ({ error }=await sb.from('eval_templates').insert({ ...payload, created_by:profile.id })); }
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={isEdit?'Edit evaluation template':'New evaluation template'} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="grid md:grid-cols-3 gap-2">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Template name *</div><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Sales Associate" className="input" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Job description / position</div><input value={position} onChange={e=>setPosition(e.target.value)} placeholder="Matches employee position" className="input" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Rating mode</div>
+            <label className="flex items-center gap-2 text-sm mt-1.5"><input type="checkbox" checked={twoRaters} onChange={e=>setTwoRaters(e.target.checked)} /> Two raters (A &amp; B, averaged)</label>
+          </div>
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Description</div><input value={description} onChange={e=>setDescription(e.target.value)} className="input" /></div>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className={`text-xs font-semibold ${Math.abs(wsum-1)<0.001?'text-emerald-600':'text-rose-600'}`}>Criteria weights total: {Math.round(wsum*100)}% {Math.abs(wsum-1)<0.001?'✓':'(should be 100%)'}</div>
+          <div className="flex gap-2"><button onClick={loadSales} className="text-xs px-2.5 py-1.5 rounded bg-white border font-semibold hover:bg-slate-50">Load Sales Associate structure</button><button onClick={addCat} className="text-xs px-2.5 py-1.5 rounded bg-slate-100 font-semibold hover:bg-slate-200">+ Category</button></div>
+        </div>
+
+        {cats.map((cat,ci)=>(
+          <div key={ci} className="border rounded-lg p-2 bg-slate-50/60">
+            <div className="flex items-center gap-2 mb-2">
+              <input value={cat.name} onChange={e=>updCat(ci,{name:e.target.value})} className="input flex-1 font-semibold" placeholder="Category name (e.g. KPI Performance)" />
+              <div className="flex items-center gap-1"><span className="text-[10px] text-slate-400">wt%</span><input type="number" value={Math.round((Number(cat.weight)||0)*100)} onChange={e=>updCat(ci,{weight:(Number(e.target.value)||0)/100})} className="input w-16 text-sm" /></div>
+              <button onClick={()=>rmCat(ci)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove category">✕</button>
+            </div>
+            {(cat.groups||[]).map((g,gi)=>(
+              <div key={gi} className="border rounded-lg p-2 mb-2 bg-white">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <input value={g.name} onChange={e=>updGroup(ci,gi,{name:e.target.value})} className="input flex-1 text-sm font-medium" placeholder="Sub-section (e.g. A. Sales & Customer Support)" />
+                  <div className="flex items-center gap-1"><span className="text-[10px] text-slate-400">wt%</span><input type="number" value={Math.round((Number(g.weight)||0)*100)} onChange={e=>updGroup(ci,gi,{weight:(Number(e.target.value)||0)/100})} className="input w-16 text-sm" /></div>
+                  <button onClick={()=>rmGroup(ci,gi)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove sub-section">✕</button>
+                </div>
+                {(g.criteria||[]).map((k,ki)=>(
+                  <div key={ki} className="flex items-start gap-2 mb-1.5">
+                    <div className="flex-1 space-y-1">
+                      <input value={k.name} onChange={e=>updCrit(ci,gi,ki,{name:e.target.value})} className="input text-sm" placeholder="Criterion" />
+                      <input value={k.description||''} onChange={e=>updCrit(ci,gi,ki,{description:e.target.value})} className="input text-xs" placeholder="Description" />
+                    </div>
+                    <div className="flex items-center gap-1 pt-1"><span className="text-[10px] text-slate-400">wt%</span><input type="number" value={Math.round((Number(k.weight)||0)*100)} onChange={e=>updCrit(ci,gi,ki,{weight:(Number(e.target.value)||0)/100})} className="input w-14 text-sm" /></div>
+                    <button onClick={()=>rmCrit(ci,gi,ki)} className="text-slate-300 hover:text-rose-500 text-sm pt-2" title="Remove">✕</button>
+                  </div>
+                ))}
+                <button onClick={()=>addCrit(ci,gi)} className="text-[11px] text-indigo-600 font-semibold hover:underline">+ Add criterion</button>
+              </div>
+            ))}
+            <button onClick={()=>addGroup(ci)} className="text-[11px] text-indigo-600 font-semibold hover:underline">+ Add sub-section</button>
+          </div>
+        ))}
+
+        <div className="flex items-center gap-2 pt-2 border-t">
+          {msg && <span className="text-xs text-rose-600">{msg}</span>}
+          <div className="flex-1"></div>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save template'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EvalPrintView({ review, template, employees, profiles, onClose }){
+  const emp=(employees||[]).find(e=>e.id===review.employee_id);
+  const tpl = template || { name:review.template_name, structure:{ categories:[] } };
+  const two = review.two_raters!==false;
+  const comp=computeEval(tpl, review.answers||{}, two);
+  const band=evalBandOf(tpl, review.grand_score!=null?Number(review.grand_score):comp.grand);
+  const grand = review.grand_score!=null?Number(review.grand_score):comp.grand;
+  const reviewer=(profiles||[]).find(p=>p.id===review.reviewer_id);
+  const LBL='text-[9px] uppercase font-bold text-slate-500 tracking-wider';
+  return ReactDOM.createPortal(
+    <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
+      <PortraitPagePrintStyle />
+      <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
+        <div className="font-bold text-slate-900 truncate">📊 Evaluation · {emp?fullName(emp):''}</div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
+        </div>
+      </div>
+      <div className="tp-print py-6">
+        <div className="po-page flow mx-auto bg-white shadow" style={{width:'7.9in', padding:'0.35in', fontSize:'10.5pt', color:'#222'}}>
+          <SteezeLetterhead docTitle="PERFORMANCE EVALUATION" />
+          <div className="text-center text-sm font-bold mt-1 mb-3">{tpl.name||'Performance Evaluation'}</div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] mb-3">
+            <div><span className={LBL}>Name:</span> <span className="font-medium">{emp?fullName(emp):'—'}</span></div>
+            <div><span className={LBL}>Position:</span> <span className="font-medium">{emp?.position||review.position||'—'}</span></div>
+            <div><span className={LBL}>Review period:</span> <span className="font-medium">{review.review_period||'—'}</span></div>
+            <div><span className={LBL}>Evaluation date:</span> <span className="font-medium">{review.evaluation_date?fmtDate(review.evaluation_date):'—'}</span></div>
+            <div><span className={LBL}>Employment status:</span> <span className="font-medium">{review.employment_status||'—'}</span></div>
+            <div><span className={LBL}>Immediate supervisor:</span> <span className="font-medium">{review.immediate_supervisor||'—'}</span></div>
+          </div>
+          <table className="w-full text-[10px] border-collapse mb-3">
+            <thead><tr className="bg-slate-800 text-white"><th className="text-left px-1.5 py-1">Standard</th><th className="px-1 py-1 w-10">WT</th><th className="px-1 py-1 w-8">A</th>{two&&<th className="px-1 py-1 w-8">B</th>}<th className="px-1 py-1 w-10">Avg</th><th className="px-1 py-1 w-12">Wt score</th></tr></thead>
+            <tbody>
+              {((tpl?.structure?.categories)||[]).map((cat,ci)=>(<React.Fragment key={ci}>
+                <tr className="bg-indigo-100"><td colSpan={two?6:5} className="px-1.5 py-1 font-bold">{cat.name} ({Math.round((Number(cat.weight)||0)*100)}%)</td></tr>
+                {(cat.groups||[]).map((g,gi)=>(<React.Fragment key={gi}>
+                  <tr className="bg-slate-100"><td colSpan={two?6:5} className="px-1.5 py-0.5 font-semibold text-[10px]">{g.name}</td></tr>
+                  {(g.criteria||[]).map(c=>{ const a=review.answers?.[c.id]; const avg=evalRatingAvg(a,two); const ws=avg!=null?avg*(Number(c.weight)||0):null; return (
+                    <tr key={c.id} className="border-b border-slate-200"><td className="px-1.5 py-1">{c.name}</td><td className="text-center">{Math.round((Number(c.weight)||0)*100)}%</td><td className="text-center">{a?.a??''}</td>{two&&<td className="text-center">{a?.b??''}</td>}<td className="text-center">{avg!=null?avg.toFixed(2):''}</td><td className="text-center">{ws!=null?ws.toFixed(2):''}</td></tr>
+                  ); })}
+                </React.Fragment>))}
+                <tr className="bg-slate-50 font-semibold"><td colSpan={two?5:4} className="px-1.5 py-1 text-right">Total {cat.name} ({Math.round((Number(cat.weight)||0)*100)}%)</td><td className="text-center">{(comp.catTotals[cat.key||cat.name]||0).toFixed(2)}</td></tr>
+              </React.Fragment>))}
+              <tr className="bg-slate-800 text-white font-bold"><td colSpan={two?5:4} className="px-1.5 py-1 text-right">GRAND TOTAL SCORE (out of 5.00)</td><td className="text-center">{grand.toFixed(2)}</td></tr>
+            </tbody>
+          </table>
+          <div className="border-2 border-slate-800 rounded p-2 mb-3 text-[11px] flex items-center justify-between">
+            <div><span className={LBL}>Final appraisal:</span> <span className="font-bold">{band?.level||'—'}</span></div>
+            <div className="text-right font-medium">{band?.result||''}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-[10px] mb-3">
+            <div><div className={LBL}>Areas for improvement</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.areas_improvement||'—'}</div></div>
+            <div><div className={LBL}>Strong points to maintain</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.strong_points||'—'}</div></div>
+          </div>
+          {(review.outcome?.action) && <div className="text-[10px] mb-3"><span className={LBL}>Recommended action:</span> <span className="font-semibold">{review.outcome.action}{review.outcome.details?` · ${review.outcome.details}`:''}</span></div>}
+          <div className="text-[10px] whitespace-pre-wrap mb-4"><div className={LBL}>Employee review / acknowledgment</div><div className="border rounded p-1.5 min-h-[36px]">{review.employee_review||''}</div></div>
+          <div className="grid grid-cols-3 gap-6 mt-8" style={{ breakInside:'avoid' }}>
+            <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Employee · Signature &amp; Date</div></div>
+            <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Evaluated by{review.outcome?.evaluated_by?` · ${review.outcome.evaluated_by}`:(reviewer?` · ${reviewer.name||reviewer.email}`:'')}</div></div>
+            <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Reviewed by — HR{review.outcome?.hr_name?` · ${review.outcome.hr_name}`:''}</div></div>
+          </div>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, hrReviewCriteria, evalTemplates, evalReviews, reload }){
+  const [mainTab,setMainTab]=useState('cycles');
+  if(mainTab==='evals') return <JobRoleEvaluations profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={reload} onSwitchTab={setMainTab} />;
   const [creatingCycle,setCreatingCycle]=useState(false);
   const [editingCycle,setEditingCycle]=useState(null);
   const [openCycleId,setOpenCycleId]=useState(null);
@@ -10315,6 +10786,10 @@ function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews
               <button onClick={()=>setManagingCriteria(true)} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⚙ Scorecard criteria</button>
               <button onClick={()=>setCreatingCycle(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New review cycle</button>
             </div>
+          </div>
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
+            <button className="px-3 py-1.5 rounded-md bg-white shadow-sm font-semibold">Review Cycles</button>
+            <button onClick={()=>setMainTab('evals')} className="px-3 py-1.5 rounded-md text-slate-600">Job-Role Evaluations ({(evalReviews||[]).length})</button>
           </div>
         </div>
         {managingCriteria && <CriteriaManagerModal criteria={hrReviewCriteria} employees={employees} profile={profile} onClose={()=>setManagingCriteria(false)} onSaved={()=>reload()} />}
@@ -32897,6 +33372,7 @@ function App(){
   // HR Tier 3: performance review cycles + reviews, job postings + applicants
   const [hrReviewCycles,setHrReviewCycles]=useState([]); const [hrReviews,setHrReviews]=useState([]);
   const [hrReviewCriteria,setHrReviewCriteria]=useState([]);
+  const [evalTemplates,setEvalTemplates]=useState([]); const [evalReviews,setEvalReviews]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrMovements,setHrMovements]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
@@ -33141,6 +33617,8 @@ function App(){
     try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
     try { const hmv = await sb.from('hr_movements').select('*').is('deleted_at',null).order('effective_date',{ascending:false}); setHrMovements(hmv && !hmv.error ? (hmv.data||[]) : []); } catch(_){ setHrMovements([]); }
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
+    try { const et = await sb.from('eval_templates').select('*').order('created_at',{ascending:false}); setEvalTemplates(et && !et.error ? (et.data||[]) : []); } catch(_){ setEvalTemplates([]); }
+    try { const er = await sb.from('eval_reviews').select('*').order('created_at',{ascending:false}); setEvalReviews(er && !er.error ? (er.data||[]) : []); } catch(_){ setEvalReviews([]); }
     try { const pat = await sb.from('patterns').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPatterns(pat && !pat.error ? (pat.data||[]) : []); } catch(_){ setPatterns([]); }
     try { const pts = await sb.from('pattern_tasks').select('*').order('created_at',{ascending:false}); setPatternTasks(pts && !pts.error ? (pts.data||[]) : []); } catch(_){ setPatternTasks([]); }
     try { const apv = await sb.from('ap_vouchers').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setApVouchers(apv && !apv.error ? (apv.data||[]) : []); } catch(_){ setApVouchers([]); }
@@ -34068,7 +34546,7 @@ function App(){
         {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} reload={loadAll} />}
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
-        {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} reload={loadAll} />}
+        {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
