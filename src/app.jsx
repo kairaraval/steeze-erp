@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 389 · Fix: favorites now persist across refresh. They were saved under your user ID but read back before your profile loaded, so they looked empty on reload — the app now loads them once your profile is ready.";
+const BUILD = "Live build 390 · Updates: reverted to reliable auto-update (no more stuck 'Updating…' banner). New builds apply automatically — but the reload waits until you stop typing, so an in-progress form isn't wiped. Also: favorites now persist across refresh.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34808,55 +34808,40 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 //      after a SW unregister and would loop us forever.
 //   2. Mark sessionStorage when we DO reload so the very next page-load
 //      ignores the immediate controllerchange that follows.
+// Update strategy: AUTO-UPDATE, reliably. A new build activates itself and the
+// page reloads to pick it up — this never gets "stuck" the way the manual
+// banner could. The one safety: we do NOT reload while the user is actively
+// typing in a field, so an in-progress form isn't wiped mid-keystroke; the
+// reload waits until they pause. No sessionStorage guards (they were the cause
+// of the stuck "Updating…" state).
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   let reloading = false;
-  // Clear any leftover flag from the OLD auto-reload logic so it can't block us.
   try { sessionStorage.removeItem('sw-just-reloaded'); } catch(_) {}
-  function doReload(){ if (reloading) return; reloading = true; window.location.reload(); }
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // A new SW took control (only happens after the user taps "Update now",
-    // since we never auto-skip-waiting). Reload to pick up the new build.
-    if (!navigator.serviceWorker.controller) return;     // initial SW install — no reload
-    doReload();
-  });
-  // Show a small, non-intrusive banner when a new version is ready instead of
-  // reloading on our own. Forcing an immediate reload mid-work wiped whatever
-  // the user was typing — now THEY choose when to update.
-  function showUpdateBanner(worker){
-    if (!worker || document.getElementById('sw-update-banner')) return;
-    const bar = document.createElement('div');
-    bar.id = 'sw-update-banner';
-    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:99999;background:#1e293b;color:#fff;padding:10px 14px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.28);display:flex;align-items:center;gap:10px;font:600 13px system-ui,-apple-system,sans-serif;max-width:92vw;';
-    const msg = document.createElement('span'); msg.textContent = '🔄 A new version of Steeze OS is ready.';
-    const later = document.createElement('button'); later.textContent='Later'; later.style.cssText='background:transparent;color:#cbd5e1;border:0;font:600 13px system-ui;cursor:pointer;padding:6px 8px;';
-    later.onclick = ()=>{ bar.remove(); };
-    const btn = document.createElement('button'); btn.textContent='Update now'; btn.style.cssText='background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:7px 14px;font:700 13px system-ui;cursor:pointer;';
-    btn.onclick = ()=>{
-      btn.textContent='Updating…'; btn.disabled=true;
-      try{ worker.postMessage({ type:'SKIP_WAITING' }); }catch(_){}
-      // Fallback: if controllerchange doesn't fire (e.g. the message is missed),
-      // reload anyway so the update always completes.
-      setTimeout(doReload, 2000);
-    };
-    bar.appendChild(msg); bar.appendChild(later); bar.appendChild(btn);
-    document.body.appendChild(bar);
+  function isTyping(){ const ae = document.activeElement; return !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)); }
+  function safeReload(){
+    if (reloading) return;
+    if (isTyping()) { setTimeout(safeReload, 8000); return; }  // wait until they stop typing
+    reloading = true;
+    window.location.reload();
   }
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!navigator.serviceWorker.controller) return;   // very first SW install — no reload
+    safeReload();
+  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then(reg => {
-      // Check for updates every 30 minutes the app is open.
-      setInterval(() => reg.update().catch(()=>{}), 30 * 60 * 1000);
-      // If an update is already waiting at registration time, offer it (only
-      // when a controller already exists — i.e. not the very first install).
-      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg.waiting);
+      setInterval(() => reg.update().catch(()=>{}), 30 * 60 * 1000);  // check every 30 min
+      // Activate an already-waiting worker immediately.
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
       reg.addEventListener('updatefound', () => {
         const nw = reg.installing;
         if (!nw) return;
         nw.addEventListener('statechange', () => {
+          // New build finished installing while the old one still controls the
+          // page → tell it to take over. controllerchange then triggers the
+          // (typing-aware) reload.
           if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            // A new SW finished installing while the old one still controls the
-            // page. Do NOT auto-activate — offer the update via the banner so
-            // the user never loses in-progress work.
-            showUpdateBanner(nw);
+            nw.postMessage({ type: 'SKIP_WAITING' });
           }
         });
       });
