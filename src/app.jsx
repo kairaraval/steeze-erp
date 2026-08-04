@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 385 · No more surprise refreshes: when a new version deploys while you're working, the app now shows an 'Update now / Later' banner instead of reloading on its own — so your in-progress work is never wiped.";
+const BUILD = "Live build 386 · Sidebar favorites: tap the ☆ next to any menu item to pin it to a Favorites section at the top. Turn on 'Only' to hide everything else and land on just your favorite lists on open/refresh. Saved per user.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33424,6 +33424,15 @@ function App(){
     catch(_) { return new Set(); }
   });
   function toggleGroup(g){ setCollapsedGroups(prev=>{ const n=new Set(prev); if(n.has(g)) n.delete(g); else n.add(g); try{ localStorage.setItem('steeze.sidebar.collapsed', JSON.stringify([...n])); }catch(_){} return n; }); }
+  // Per-user sidebar favorites: star any view to pin it to a Favorites section
+  // at the top. "Favorites only" hides everything else so, on open / refresh,
+  // you land on just your module + favorite lists. Persisted per profile.
+  const favKey = `steeze.sidebar.favs.${profile?.id||'x'}`;
+  const favOnlyKey = `steeze.sidebar.favOnly.${profile?.id||'x'}`;
+  const [favs,setFavs]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(favKey)||'[]'); }catch(_){ return []; } });
+  const [favOnly,setFavOnly]=useState(()=>{ try{ return localStorage.getItem(favOnlyKey)==='1'; }catch(_){ return false; } });
+  function toggleFav(k){ setFavs(prev=>{ const n=prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]; try{ localStorage.setItem(favKey, JSON.stringify(n)); }catch(_){} return n; }); }
+  function setFavOnlyPersist(v){ setFavOnly(v); try{ localStorage.setItem(favOnlyKey, v?'1':'0'); }catch(_){} }
 
   // Mobile drawer: sidebar slides in/out from the left on phones. On desktop
   // (md and up) it's always visible and this state has no effect.
@@ -34460,13 +34469,22 @@ function App(){
       return g;
     });
   }
-  function NavBtn([k,lbl,icon]){
+  function NavBtn([k,lbl,icon], keyPrefix){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
     // not error) so it stands out from inbox @mentions (which are rose).
     const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : k==='approvals'?pendingApprovals : k==='replacements'?replacementPending : 0;
     const badgeColor = k==='approvals' ? 'bg-amber-500' : 'bg-rose-500';
-    return <button key={k} onClick={()=>navTo(k)} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center">{icon}</span><span className="flex-1 text-left">{lbl}</span>{badge>0 && <span className={`text-[10px] ${badgeColor} text-white rounded-full px-1.5 py-0.5 font-bold`}>{badge}</span>}</button>;
+    const fav = favs.includes(k);
+    return (
+      <div key={(keyPrefix||'')+k} className="group/nav flex items-center">
+        <button onClick={()=>navTo(k)} className={`flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center shrink-0">{icon}</span><span className="flex-1 text-left truncate">{lbl}</span>{badge>0 && <span className={`text-[10px] ${badgeColor} text-white rounded-full px-1.5 py-0.5 font-bold shrink-0`}>{badge}</span>}</button>
+        <button onClick={()=>toggleFav(k)} title={fav?'Remove from favorites':'Add to favorites'} className={`shrink-0 w-6 text-center text-xs ${fav?'text-amber-400':'text-slate-600 opacity-0 group-hover/nav:opacity-100'} hover:text-amber-300`}>{fav?'★':'☆'}</button>
+      </div>
+    );
   }
+  // Flatten the nav to resolve a favorite key back to its [key,label,icon].
+  const navItemByKey={}; (NAV||[]).forEach(sec=> (sec.items||[]).forEach(it=>{ if(!navItemByKey[it[0]]) navItemByKey[it[0]]=it; }));
+  const favItems = favs.map(k=>navItemByKey[k]).filter(Boolean);
 
   return (
     <div className="app-root min-h-screen bg-slate-100">
@@ -34505,7 +34523,18 @@ function App(){
           </button>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1">
-          {NAV.map((sec,si)=>{
+          {/* Favorites — star any item below to pin it here. "Only" hides the
+              rest so you land on just your favorites on open / refresh. */}
+          {(favItems.length>0 || favOnly) && (
+            <div className="mb-1">
+              <div className="w-full px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-amber-400/80 font-semibold flex items-center gap-1.5 select-none">
+                <span>★</span><span className="flex-1 text-left">Favorites</span>
+                <button type="button" onClick={()=>setFavOnlyPersist(!favOnly)} title={favOnly?'Show all modules':'Show favorites only'} className={`text-[8px] rounded px-1.5 py-0.5 normal-case tracking-normal font-semibold ${favOnly?'bg-amber-500 text-white':'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>{favOnly?'Showing favorites · All ▸':'Only ▸'}</button>
+              </div>
+              {favItems.length>0 ? favItems.map(it=>NavBtn(it,'fav-')) : <div className="px-3 py-2 text-[11px] text-slate-500">No favorites yet — tap the ☆ next to any item.</div>}
+            </div>
+          )}
+          {!favOnly && NAV.map((sec,si)=>{
             const isCollapsed = sec.group && collapsedGroups.has(sec.group);
             return (
               <div key={si} className="mb-1">
@@ -34520,6 +34549,7 @@ function App(){
               </div>
             );
           })}
+          {favOnly && <button onClick={()=>setFavOnlyPersist(false)} className="w-full mt-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 text-left">▾ Show all modules</button>}
         </nav>
         <div className="px-3 py-3 border-t border-slate-800">
           <div className="flex items-center gap-2 mb-2"><Avatar profile={profile} size="sm" /><div className="min-w-0"><div className="text-xs font-medium text-white truncate">{profile.name||profile.email}</div><div className="text-[10px] text-slate-500">{roleLabel(profile.role)}</div></div></div>
