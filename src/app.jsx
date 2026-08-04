@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 380 · Purchase Requests: requester attachments now open inline (signed URLs) instead of showing a broken photo — and attachments everywhere now resolve a working link even if only a legacy public URL was stored.";
+const BUILD = "Live build 381 · Purchasing Admin can now delete: Purchase Orders, Purchase Requests (including approved ones, now with a delete on the board cards too), and lines in the Materials Queue.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21032,6 +21032,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
                       {r.status==='rejected' && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
                       <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
+                      {canDelete && <button onClick={()=>delPR(r)} className="text-[11px] text-slate-300 hover:text-rose-500" title="Send to Trash">🗑</button>}
                     </div>
                   </div>
                 ); })}
@@ -21554,6 +21555,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
   const isAdmin = profile.role === 'admin';
+  const canDelete = isAdmin || profile.role==='purchasing_admin';
   // Stock reservations so we can tell which lines are already covered on-hand.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   // Admin-only: remove a single line from a PR right inside the Materials
@@ -21740,7 +21742,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload
                     <div className="col-span-2 text-right font-semibold">{peso((Number(line.qty)||0)*(Number(line.est_cost)||0))}</div>
                     <div className="col-span-1 text-right text-[10px] text-slate-400 flex items-center justify-end gap-2" title={lead?`Lead: ${lead.title}`:''}>
                       <span className="truncate">{lead?lead.title.slice(0,18):'—'}{(pr.number?` · ${pr.number}`:'')}</span>
-                      {isAdmin && <button onClick={()=>deleteQueueLine(pr, lineIdx)} className="text-rose-400 hover:text-rose-600 text-sm opacity-0 group-hover:opacity-100 transition" title="Remove from queue (admin only)">✕</button>}
+                      {canDelete && <button onClick={()=>deleteQueueLine(pr, lineIdx)} className="text-rose-400 hover:text-rose-600 text-sm opacity-0 group-hover:opacity-100 transition" title="Remove from queue">✕</button>}
                     </div>
                   </div>
                 ))}
@@ -21775,9 +21777,10 @@ function nextPONumber(allOrders, dateStr){
 
 function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, reload, openFromPR, onClearPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
-  // Admin-only delete (soft-delete). PO goes to Settings → Trash and is
-  // recoverable from there.
+  // Delete (soft-delete) — Admin + Purchasing Admin. PO goes to Settings → Trash
+  // and is recoverable from there.
   const isAdmin = profile.role === 'admin';
+  const canDelete = isAdmin || profile.role==='purchasing_admin';
   async function deletePO(po){
     const isPaid = po.payment_status === 'paid';
     if(isPaid){
@@ -21823,7 +21826,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
                   : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
               ) : <span className="text-xs text-slate-300">—</span>}
             </td>
-            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{isAdmin && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash">Delete</button>}</td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
