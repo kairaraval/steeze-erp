@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 390 · Updates: reverted to reliable auto-update (no more stuck 'Updating…' banner). New builds apply automatically — but the reload waits until you stop typing, so an in-progress form isn't wiped. Also: favorites now persist across refresh.";
+const BUILD = "Live build 391 · QC report now has 'Request replacement' — same as the process boards: part lines + qty, reason checklist, routed to a department for the Production Supervisor to approve.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6824,6 +6824,106 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   );
 }
 
+// Shared "Replacement / repair requests" block — used by the QC report and the
+// process-board reports. Raises a pending replacement request (part lines + qty,
+// reason checklist, notes) routed to a department, and pings the Production
+// Supervisor for approval & routing.
+function ReplacementRequestsSection({ profile, worklistId, process, sourceLabel, leadId, item, clientName, projectQty }){
+  const [reqs,setReqs]=useState([]);
+  const [showReqForm,setShowReqForm]=useState(false);
+  const emptyReqForm={ department:'', lines:[{ part:'', qty:'' }], reasons:[], reasonOther:'', notes:'' };
+  const [rf,setRf]=useState(emptyReqForm);
+  function setLine(i,k,v){ setRf(f=>({ ...f, lines:f.lines.map((l,x)=> x===i?{...l,[k]:v}:l) })); }
+  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'' }] })); }
+  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'' }]:f.lines.filter((_,x)=>x!==i) })); }
+  function toggleReason(r){ setRf(f=>({ ...f, reasons:f.reasons.includes(r)?f.reasons.filter(x=>x!==r):[...f.reasons,r] })); }
+  async function loadReqs(){ if(!worklistId){ setReqs([]); return; } const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',worklistId).order('created_at',{ascending:false}); setReqs(data||[]); }
+  useEffect(()=>{ loadReqs(); },[worklistId]);
+  async function submitReq(){
+    if(!rf.department){ alert('Choose which department this request is for.'); return; }
+    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
+    if(!lines.length){ alert('Add at least one part that needs replacing.'); return; }
+    const otherChecked = rf.reasons.includes('Others');
+    if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
+    const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
+    const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
+    const { error }=await sb.from('replacement_requests').insert({ process:process||'qc', worklist_id:worklistId, lead_id:leadId||null, item:item||null, client_name:clientName||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, project_qty:projectQty>0?projectQty:null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    try {
+      const sup=await sb.from('profiles').select('id').eq('role','production_supervisor');
+      const ids=(sup.data||[]).map(p=>p.id).filter(id=>id!==profile.id);
+      if(ids.length){ const txt=`🔁 New replacement request from ${sourceLabel||'QC'} — ${item||''}${clientName?` (${clientName})`:''}. Needs your approval & routing.`; await sb.from('notifications').insert(ids.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'replacements', ref_type:'replacement_request', type:'system' }))); }
+    } catch(_){}
+    setRf(emptyReqForm); setShowReqForm(false); loadReqs();
+  }
+  async function delReq(r){ if(!confirm('Delete this replacement request?')) return; await sb.from('replacement_requests').delete().eq('id',r.id); loadReqs(); }
+  return (
+    <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] uppercase text-indigo-500 font-semibold">Replacement / repair requests</div>
+        {!showReqForm && <button onClick={()=>setShowReqForm(true)} className="text-xs px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🔁 Request replacement</button>}
+      </div>
+      {reqs.length>0 && (
+        <div className="space-y-1.5 mb-2">
+          {reqs.map(r=>{ const [sl,sc]=REPLACEMENT_STATUS_META[r.status]||REPLACEMENT_STATUS_META.pending; const lines=Array.isArray(r.lines)&&r.lines.length?r.lines:null; const reasons=[...(Array.isArray(r.reasons)?r.reasons:[]).filter(x=>x!=='Others'), ...(r.reason_other?[r.reason_other]:[])]; return (
+            <div key={r.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{sl}</span>
+                <span className="font-semibold">{r.department}</span>
+                {!lines && <span className="text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pc${r.qty===1?'':'s'}`:''}</span>}
+                <div className="flex-1"></div>
+                {r.status==='pending' && <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm" title="Cancel request">✕</button>}
+              </div>
+              {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+              {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
+              {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
+            </div>
+          ); })}
+        </div>
+      )}
+      {showReqForm && (
+        <div className="bg-white border rounded-lg p-2.5 space-y-2.5">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Request to department *</div>
+            <select value={rf.department} onChange={e=>setRf({...rf,department:e.target.value})} className="input"><option value="">— Select —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Parts needed — qty per part *</div>
+            <div className="space-y-1.5">
+              {rf.lines.map((l,i)=>(
+                <div key={i} className="flex items-center gap-1.5">
+                  <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-20 shrink-0" />
+                  <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1" />
+                  <button type="button" onClick={()=>rmLine(i)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 w-6" title="Remove line">✕</button>
+                </div>
+              ))}
+            </div>
+            <button type="button" onClick={addLine} className="mt-1.5 text-xs text-indigo-600 font-semibold hover:underline">+ Add part line</button>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reason for replacement <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+            <div className="flex flex-wrap gap-1.5">
+              {[...REPLACEMENT_REASONS,'Others'].map(rn=>{ const on=rf.reasons.includes(rn); return (
+                <button key={rn} type="button" onClick={()=>toggleReason(rn)} className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300 hover:text-rose-600'}`}>
+                  <span className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center text-[9px] ${on?'bg-white text-rose-500 border-white':'border-slate-300 text-transparent'}`}>✓</span>{rn}
+                </button>
+              ); })}
+            </div>
+            {rf.reasons.includes('Others') && <input value={rf.reasonOther} onChange={e=>setRf({...rf,reasonOther:e.target.value})} placeholder="Please specify the reason…" className="input mt-1.5" />}
+          </div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes <span className="text-slate-300 normal-case">· optional</span></div>
+            <input value={rf.notes} onChange={e=>setRf({...rf,notes:e.target.value})} placeholder="Extra details…" className="input" />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={submitReq} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Submit request</button>
+            <button onClick={()=>{ setShowReqForm(false); setRf(emptyReqForm); }} className="px-3 py-1.5 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          </div>
+        </div>
+      )}
+      {reqs.length===0 && !showReqForm && <div className="text-[11px] text-slate-400">No replacement requests. Raise one to route repairs to a department.</div>}
+    </div>
+  );
+}
+
 function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, onClose, reload }){
   const isSample = w.source_type==='sample';
   const [handlers,setHandlers]=useState(Array.isArray(w.qc_handlers)?w.qc_handlers:[]);
@@ -6967,6 +7067,8 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
             </div>
           </div>
         )}
+
+        <ReplacementRequestsSection profile={profile} worklistId={w.id} process="qc" sourceLabel="QC" leadId={w.lead_id} item={w.item||lead?.title} clientName={w.client_name} projectQty={projQty} />
 
         <div className="flex items-center gap-2 pt-2 border-t">
           {msg && <span className={`text-xs ${msg==='Saved ✓'?'text-emerald-600':'text-rose-600'}`}>{msg}</span>}
