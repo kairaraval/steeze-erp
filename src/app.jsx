@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 383 · HR Performance Reviews: new Job-Role Evaluations — reusable weighted templates per job description (KPI + Competency, 1–5, two-rater A/B), answered in the OS with auto-computed grand score, appraisal band + recommended action, notes, managerial outcome, and a printable sign-off sheet. Seed the Sales Associate template with one click under Templates.";
+const BUILD = "Live build 384 · Fix: Performance Reviews crashed (React #300) when opening Job-Role Evaluations — the tab switch now runs after all hooks. Job-Role Evaluations (weighted per-job-description templates, two-rater auto-compute, printable sign-off) is live.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10748,13 +10748,15 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
 }
 
 function HRReviewsView({ profile, profiles, employees, hrReviewCycles, hrReviews, hrReviewCriteria, evalTemplates, evalReviews, reload }){
+  // NOTE: all hooks must run every render — keep the mainTab switch AFTER every
+  // useState below (an early return before a hook triggers React error #300).
   const [mainTab,setMainTab]=useState('cycles');
-  if(mainTab==='evals') return <JobRoleEvaluations profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={reload} onSwitchTab={setMainTab} />;
   const [creatingCycle,setCreatingCycle]=useState(false);
   const [editingCycle,setEditingCycle]=useState(null);
   const [openCycleId,setOpenCycleId]=useState(null);
   const [editingReview,setEditingReview]=useState(null);
   const [managingCriteria,setManagingCriteria]=useState(false);
+  if(mainTab==='evals') return <JobRoleEvaluations profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={reload} onSwitchTab={setMainTab} />;
 
   const activeCycles = (hrReviewCycles||[]).filter(c => c.status==='active' || c.status==='planning');
   const allCycles = hrReviewCycles||[];
