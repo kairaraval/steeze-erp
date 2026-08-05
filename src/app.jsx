@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 400 · Fixed voided SO payments not reopening the balance. Voiding now reverses the bank entry and recomputes the order (Paid/Balance/status) so a corrected payment can be logged. Added a proper ⊘ Void button (with reason) to the Edit-payment modal, and repaired SO-2026-07-054 which was stuck Paid on a voided double-entry.";
+const BUILD = "Live build 401 · Employees: the Total / Active / Probationary / Steeze access tiles are now clickable to filter the directory, and the list opens showing active staff only (resigned / terminated / inactive are hidden by default — click Total to see everyone).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9471,6 +9471,9 @@ const EMP_STATUSES = [
   { key:'terminated',    label:'Terminated',    color:'bg-rose-100 text-rose-700' },
 ];
 function empStatusMeta(k){ return EMP_STATUSES.find(s=>s.key===k) || EMP_STATUSES[0]; }
+// Statuses that mean the person is no longer an active member of staff.
+const INACTIVE_EMP_STATUSES = ['resigned','terminated','inactive'];
+function isActiveEmp(e){ return !INACTIVE_EMP_STATUSES.includes(e?.status); }
 const MEMO_TYPES = [
   { key:'verbal_warning', label:'Verbal Warning',  color:'bg-amber-100 text-amber-700' },
   { key:'written_warning',label:'Written Warning', color:'bg-orange-100 text-orange-700' },
@@ -9592,6 +9595,9 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
   const [filterDept,setFilterDept]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
   const [filterAccess,setFilterAccess]=useState(''); // '' | 'has' | 'none'
+  // Default opening view hides inactive staff (resigned / terminated / inactive).
+  // 'active' = only active staff · 'all' = everyone. Toggled by the stat tiles.
+  const [scope,setScope]=useState('active');
   const [opening,setOpening]=useState(null); // employee record to view
   const [creating,setCreating]=useState(false);
 
@@ -9602,6 +9608,9 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
     (!search || `${fullName(e)} ${e.position||''} ${e.department||''} ${e.employee_number||''} ${e.nickname||''}`.toLowerCase().includes(search.toLowerCase()))
     && (!filterDept || e.department===filterDept)
     && (!filterStatus || e.status===filterStatus)
+    // Hide inactive staff by default — unless viewing "all", or a specific
+    // status is explicitly picked (so you can still list resigned/terminated).
+    && (scope==='all' || filterStatus!=='' || isActiveEmp(e))
     && (!filterAccess || (filterAccess==='has' ? !!e.profile_id : !e.profile_id))
   );
   async function toggleActive(e){
@@ -9612,7 +9621,7 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
 
   // Counts for tiles
   const totalCount = (employees||[]).length;
-  const activeCount = (employees||[]).filter(e => e.status!=='resigned' && e.status!=='terminated').length;
+  const activeCount = (employees||[]).filter(isActiveEmp).length;
   const probationaryCount = (employees||[]).filter(e => e.status==='probationary').length;
   const steezeAccessCount = (employees||[]).filter(e => e.profile_id).length;
   // Probationary employees due for regularization in the next 30 days
@@ -9634,13 +9643,21 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
         </div>
       </div>
 
-      {/* Stat tiles */}
+      {/* Stat tiles — click to filter the directory below. */}
+      {(()=>{
+        const selTotal  = scope==='all' && !filterStatus && !filterAccess;
+        const selActive = scope==='active' && !filterStatus && !filterAccess;
+        const selProb   = filterStatus==='probationary';
+        const selSteeze = filterAccess==='has';
+        return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-bold">Total</div><div className="text-2xl font-bold">{totalCount}</div></div>
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-[10px] uppercase text-emerald-700 font-bold">Active</div><div className="text-2xl font-bold text-emerald-800">{activeCount}</div></div>
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3"><div className="text-[10px] uppercase text-amber-700 font-bold">Probationary</div><div className="text-2xl font-bold text-amber-800">{probationaryCount}</div></div>
-        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3"><div className="text-[10px] uppercase text-indigo-700 font-bold">Steeze access</div><div className="text-2xl font-bold text-indigo-800">{steezeAccessCount}</div></div>
+        <button onClick={()=>{ setScope('all'); setFilterStatus(''); setFilterAccess(''); }} className={`text-left bg-white border rounded-xl p-3 hover:border-slate-400 ${selTotal?'ring-2 ring-slate-400 border-slate-400':''}`}><div className="text-[10px] uppercase text-slate-400 font-bold">Total</div><div className="text-2xl font-bold">{totalCount}</div></button>
+        <button onClick={()=>{ setScope('active'); setFilterStatus(''); setFilterAccess(''); }} className={`text-left bg-emerald-50 border border-emerald-200 rounded-xl p-3 hover:border-emerald-400 ${selActive?'ring-2 ring-emerald-400 border-emerald-400':''}`}><div className="text-[10px] uppercase text-emerald-700 font-bold">Active</div><div className="text-2xl font-bold text-emerald-800">{activeCount}</div></button>
+        <button onClick={()=>{ setFilterStatus('probationary'); setFilterAccess(''); }} className={`text-left bg-amber-50 border border-amber-200 rounded-xl p-3 hover:border-amber-400 ${selProb?'ring-2 ring-amber-400 border-amber-400':''}`}><div className="text-[10px] uppercase text-amber-700 font-bold">Probationary</div><div className="text-2xl font-bold text-amber-800">{probationaryCount}</div></button>
+        <button onClick={()=>{ setFilterAccess(filterAccess==='has'?'':'has'); setFilterStatus(''); }} className={`text-left bg-indigo-50 border border-indigo-200 rounded-xl p-3 hover:border-indigo-400 ${selSteeze?'ring-2 ring-indigo-400 border-indigo-400':''}`}><div className="text-[10px] uppercase text-indigo-700 font-bold">Steeze access</div><div className="text-2xl font-bold text-indigo-800">{steezeAccessCount}</div></button>
       </div>
+        );
+      })()}
 
       {/* Probation reminder panel */}
       {probationDueSoon.length > 0 && (
