@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 395 · New Sales Ticket Queue — a shared, self-claim task pool for the sales assistants. Tickets auto-appear at key lead stages (follow-up, sample coordination, techpack, delivery) and can be raised manually; any available assistant claims the next one. Live workload counters keep the load balanced across the team.";
+const BUILD = "Live build 396 · Sales tickets are now manual-only — turned off the stage-driven auto-creation. Managers raise a ticket straight from a lead via the new '🎫 New ticket' button in the lead details; it drops into the shared queue for any available assistant to claim.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1166,10 +1166,7 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
           await sb.from('lead_activity').insert({ lead_id:savedLeadId, actor_id:profile.id, type:'system', text:`Auto-created Sales Order ${newSO.number} for finance` });
         }
       }
-      // Sales tickets: auto-spawn stage-driven tasks into the shared queue.
-      if(savedLeadForPR){
-        try { await maybeAutoCreateTicketsForLead(profile, savedLeadForPR, isEdit?(existing?.stage||null):null, stage); } catch(_){}
-      }
+      // Sales tickets are created manually by managers — no auto-creation here.
       // 🎉 Celebrate when the deal lands in "Won" (and wasn't already Won).
       const justBecameWon = stage === 'won' && (!isEdit || existing?.stage !== 'won');
       if(justBecameWon){
@@ -2522,6 +2519,10 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   const [notesDraft,setNotesDraft]=useState(lead.notes||'');
   const [notesBusy,setNotesBusy]=useState(false);
   const [notesMsg,setNotesMsg]=useState('');
+  // Manual sales ticketing — managers raise a ticket for this lead into the
+  // shared queue for whichever assistant is free to claim.
+  const [showTicket,setShowTicket]=useState(false);
+  const canTicket = profile.role==='admin'||profile.role==='manager'||profile.role==='assistant'||lead.manager_id===profile.id;
   const notesDirty = (notesDraft||'') !== (lead.notes||'');
   useEffect(()=>{ setNotesDraft(lead.notes||''); setNotesMsg(''); },[lead.id, lead.notes]);
   async function saveNotes(){
@@ -2581,6 +2582,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate</button>
             ); })}
             {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
+            {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
@@ -2600,6 +2602,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
       </div>
       {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
       {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
+      {showTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} onClose={()=>setShowTicket(false)} onSaved={()=>setShowTicket(false)} />}
     </Modal>
   );
 }
@@ -8743,16 +8746,16 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
 // stages (and can be raised manually); any available assistant claims the next
 // one. Workload counters keep the load transparent so nobody drowns while
 // another sits idle.
-function TicketForm({ profile, leads, clients, existing, onClose, onSaved }){
+function TicketForm({ profile, leads, clients, existing, defaultLeadId, onClose, onSaved }){
   const isEdit=!!existing;
   const [title,setTitle]=useState(existing?.title||'');
   const [type,setType]=useState(existing?.task_type||'other');
   const [prio,setPrio]=useState(existing?.priority||'normal');
-  const [leadId,setLeadId]=useState(existing?.lead_id||'');
+  const [leadId,setLeadId]=useState(existing?.lead_id||defaultLeadId||'');
   const [due,setDue]=useState(existing?.due_date||'');
   const [notes,setNotes]=useState(existing?.notes||'');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const openLeads=(leads||[]).filter(l=>!['lost','delivered_paid'].includes(l.stage)).slice().sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+  const openLeads=(leads||[]).filter(l=>!['lost','delivered_paid'].includes(l.stage) || l.id===leadId).slice().sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
   async function save(){
     if(!title.trim()){ setMsg('Ticket title is required.'); return; }
     setBusy(true); setMsg('');
@@ -9022,9 +9025,8 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
         await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Sales Order ${newSO.number} for finance` });
       }
     }
-    // Sales tickets: auto-spawn stage-driven tasks (follow-up, sample coord,
-    // techpack, delivery) into the shared queue for whoever's free to claim.
-    try { await maybeAutoCreateTicketsForLead(profile, { ...l, ...patch }, l.stage, st); } catch(_){}
+    // Sales tickets are created MANUALLY by managers (per-lead "New ticket"
+    // button in the lead details) — no stage-driven auto-creation for now.
     // 🎉 Celebrate when a deal lands in the actual "Won" stage (skip the
     // later Delivered statuses — those aren't fresh closes).
     if(st === 'won' && l.stage !== 'won'){
