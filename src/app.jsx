@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 401 · Employees: the Total / Active / Probationary / Steeze access tiles are now clickable to filter the directory, and the list opens showing active staff only (resigned / terminated / inactive are hidden by default — click Total to see everyone).";
+const BUILD = "Live build 402 · Job-role evaluations: added an 'HR recommendation / notes' text box in the managerial section for HR to type remarks, and it now prints on the evaluation PDF.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11088,6 +11088,8 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
             <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Evaluated by</div><input value={outcome.evaluated_by||''} onChange={e=>setOutcome(o=>({...o, evaluated_by:e.target.value}))} placeholder="Name & position" className="input" /></div>
             <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reviewed by (HR)</div><input value={outcome.hr_name||''} onChange={e=>setOutcome(o=>({...o, hr_name:e.target.value}))} placeholder="HR name" className="input" /></div>
           </div>
+          <div className="mt-3"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">HR recommendation / notes <span className="text-slate-300 normal-case">· optional</span></div>
+            <textarea value={outcome.hr_notes||''} onChange={e=>setOutcome(o=>({...o, hr_notes:e.target.value}))} rows={3} placeholder="HR's recommendation, remarks, or follow-up notes for this evaluation…" className="input min-h-[64px]" /></div>
         </div>
 
         <div className="flex items-center gap-2 pt-2 border-t flex-wrap">
@@ -11250,6 +11252,7 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
             <div><div className={LBL}>Strong points to maintain</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.strong_points||'—'}</div></div>
           </div>
           {(review.outcome?.action) && <div className="text-[10px] mb-3"><span className={LBL}>Recommended action:</span> <span className="font-semibold">{review.outcome.action}{review.outcome.details?` · ${review.outcome.details}`:''}</span></div>}
+          {review.outcome?.hr_notes && <div className="text-[10px] whitespace-pre-wrap mb-3"><div className={LBL}>HR recommendation / notes</div><div className="border rounded p-1.5 min-h-[36px]">{review.outcome.hr_notes}</div></div>}
           <div className="text-[10px] whitespace-pre-wrap mb-4"><div className={LBL}>Employee review / acknowledgment</div><div className="border rounded p-1.5 min-h-[36px]">{review.employee_review||''}</div></div>
           <div className="grid grid-cols-3 gap-6 mt-8" style={{ breakInside:'avoid' }}>
             <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Employee · Signature &amp; Date</div></div>
