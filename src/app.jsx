@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 393 · New: tag a lead as Marketing Expense, Internal Use / Sizer, or Client Loaner. Non-sale leads still flow to Production but are excluded from revenue, forecast, commissions & A/R (no Sales Order). Added a Marketing & Internal Expenses report totalling their estimated cost by type and month.";
+const BUILD = "Live build 394 · Renamed 'Client Loaner' → 'Free Client Sample'. Non-sale leads (marketing, sizer, free sample) can now close won with ₱0 value — they flow to Production & Purchasing but skip the Sales Order & commissions. The ₱0-value block for Closed Won now only applies to actual Sale leads.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -90,7 +90,7 @@ const LEAD_TYPES = [
   { key:'sale',      label:'Sale',                 short:'Sale',      color:'bg-emerald-100 text-emerald-700' },
   { key:'marketing', label:'Marketing Expense',    short:'Marketing', color:'bg-pink-100 text-pink-700' },
   { key:'internal',  label:'Internal Use / Sizer', short:'Internal',  color:'bg-amber-100 text-amber-700' },
-  { key:'loaner',    label:'Client Loaner',        short:'Loaner',    color:'bg-sky-100 text-sky-700' },
+  { key:'loaner',    label:'Free Client Sample',   short:'Free Sample', color:'bg-sky-100 text-sky-700' },
 ];
 function isSaleLead(l){ return !l || !l.lead_type || l.lead_type==='sale'; }
 function leadTypeMeta(k){ return LEAD_TYPES.find(t=>t.key===(k||'sale')) || LEAD_TYPES[0]; }
@@ -1032,9 +1032,11 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     if(['sampling','won'].includes(stage) && (!contactPerson.trim() || !address.trim())){
       setMsg(`⚠ Add the Contact Person and Delivery Address before moving this lead to "${stageMeta(stage).label}".`); return;
     }
-    // Gate: a Closed Won deal can't have ₱0 value.
-    if(stage==='won' && !(value>0)){
-      setMsg('⚠ Deal value can\'t be ₱0 for Closed Won — add line items or a manual value first.'); return;
+    // Gate: a Closed Won *sale* can't have ₱0 value. Non-sale lead types
+    // (marketing expense, sizer, free client sample) don't carry a deal value,
+    // so they're allowed to close won and flow to Production / Purchasing.
+    if(stage==='won' && leadType==='sale' && !(value>0)){
+      setMsg('⚠ Deal value can\'t be ₱0 for Closed Won — add line items or a manual value first. (Marketing / sizer / free-sample leads don\'t need a value — just set the Lead type above.)'); return;
     }
     setBusy(true); setMsg('');
     try{ let finalClientId=clientId;
@@ -8736,9 +8738,11 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
         return;
       }
     }
-    // Gate: a Closed Won deal can't be ₱0.
-    if(st==='won' && l.stage!==st && !(Number(l.value)>0)){
-      alert(`⚠ "${l.title||'this lead'}" has ₱0 value. Add the deal value on the lead before moving it to Closed Won.`);
+    // Gate: a Closed Won *sale* can't be ₱0. Non-sale leads (marketing expense,
+    // sizer, free client sample) carry no deal value on purpose, so they're
+    // allowed through to Closed Won → Production / Purchasing without a value.
+    if(st==='won' && l.stage!==st && isSaleLead(l) && !(Number(l.value)>0)){
+      alert(`⚠ "${l.title||'this lead'}" has ₱0 value. Add the deal value on the lead before moving it to Closed Won.\n\n(If this is a marketing item, sizer, or free client sample, open the lead → Edit and set its Lead type — those don't need a value.)`);
       return;
     }
     const wasSold = SOLD_STAGES.includes(l.stage);
