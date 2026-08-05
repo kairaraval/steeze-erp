@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 392 · Fix: stop the non-stop refresh/blinking loop. Added a loop-breaker that reloads at most once every 20 seconds, so a stuck service-worker version can no longer refresh the app endlessly.";
+const BUILD = "Live build 393 · New: tag a lead as Marketing Expense, Internal Use / Sizer, or Client Loaner. Non-sale leads still flow to Production but are excluded from revenue, forecast, commissions & A/R (no Sales Order). Added a Marketing & Internal Expenses report totalling their estimated cost by type and month.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -82,6 +82,18 @@ const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 // Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
 const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
 function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
+// Lead type: a normal Sale vs a non-sale (marketing giveaway, internal sizer,
+// client loaner). Non-sale leads are excluded from revenue/forecast/commissions/
+// A/R and never auto-create a Sales Order — their estimated cost is tracked in
+// the Marketing & Internal Expenses report.
+const LEAD_TYPES = [
+  { key:'sale',      label:'Sale',                 short:'Sale',      color:'bg-emerald-100 text-emerald-700' },
+  { key:'marketing', label:'Marketing Expense',    short:'Marketing', color:'bg-pink-100 text-pink-700' },
+  { key:'internal',  label:'Internal Use / Sizer', short:'Internal',  color:'bg-amber-100 text-amber-700' },
+  { key:'loaner',    label:'Client Loaner',        short:'Loaner',    color:'bg-sky-100 text-sky-700' },
+];
+function isSaleLead(l){ return !l || !l.lead_type || l.lead_type==='sale'; }
+function leadTypeMeta(k){ return LEAD_TYPES.find(t=>t.key===(k||'sale')) || LEAD_TYPES[0]; }
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -912,6 +924,12 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
   const [clientId,setClientId]=useState(existing?.client_id||clients[0]?.id||'');
   const [newCompany,setNewCompany]=useState(''); const [newContact,setNewContact]=useState('');
   const [title,setTitle]=useState(existing?.title||''); const [stage,setStage]=useState(existing?.stage||'new');
+  // Lead type: a normal Sale, or a non-sale (marketing giveaway / internal
+  // sizer / client loaner). Non-sale leads are excluded from revenue, forecast,
+  // commissions and A/R, don't auto-create a Sales Order, but still flow to
+  // Production — their estimated cost feeds the Marketing & Internal Expenses report.
+  const [leadType,setLeadType]=useState(existing?.lead_type||'sale');
+  const [expenseCost,setExpenseCost]=useState(existing?.expense_cost!=null?String(existing.expense_cost):'');
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
   const [forecastClose,setForecastClose]=useState(existing?.forecast_close_date||'');
   // Payment terms set on the lead — flows through to the Sales Order on
@@ -1033,7 +1051,8 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
       }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0; const c=lineCalc(it); return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, vatInclusive:!!it.vatInclusive, lineTotal:c.total }; });
-      const payload={ client_id:finalClientId||null, title:title.trim(), value, subtotal_amount:hasItems?subtotal:value, vat_amount:hasItems?vat:0, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const nonSale = leadType!=='sale';
+      const payload={ client_id:finalClientId||null, title:title.trim(), value: nonSale?0:value, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -1154,6 +1173,16 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
             </div>))}
           </div>
           {hasItems && (<div className="mt-3 pt-2 border-t text-sm space-y-1"><div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{peso(subtotal)}</span></div><div className="flex justify-between text-slate-500"><span>VAT 12%</span><span>{peso(vat)}</span></div><div className="flex justify-between font-bold pt-1 border-t"><span>Total</span><span>{peso(total)}</span></div></div>)}
+        </div>
+        <div className={`rounded-lg border p-3 ${leadType==='sale'?'bg-slate-50 border-slate-200':'bg-pink-50/50 border-pink-200'}`}>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-[10px] text-slate-500 uppercase">Lead type</label>
+              <select className="input mt-0.5" value={leadType} onChange={e=>setLeadType(e.target.value)}>{LEAD_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+            </div>
+            {leadType!=='sale' && <div><label className="text-[10px] text-slate-500 uppercase">Estimated cost ₱ <span className="text-slate-400">· for expense report</span></label>
+              <input type="number" className="input mt-0.5" value={expenseCost} onChange={e=>setExpenseCost(e.target.value)} placeholder="e.g. 850" /></div>}
+          </div>
+          {leadType!=='sale' && <div className="text-[11px] text-pink-700 mt-1.5">Non-sale: excluded from revenue, forecast, commissions &amp; A/R and won't create a Sales Order — but still flows to Production. Its cost feeds the Marketing &amp; Internal Expenses report.</div>}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-[10px] text-slate-500 uppercase">{hasItems?'Value (auto)':'Value ₱ (manual)'}</label><input className={`input mt-0.5 ${hasItems?'bg-slate-100 text-slate-500':''}`} type="number" disabled={hasItems} value={hasItems?total:manualValue} onChange={e=>setManualValue(e.target.value)} /></div>
@@ -8548,6 +8577,125 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   );
 }
 
+/* ----------------------- Marketing & Internal Expenses ----------------------- */
+// Non-sale leads (marketing giveaways, internal sizers/samples, client loaners)
+// are produced but never billed. This report totals their estimated cost so the
+// company can monitor the true spend on non-revenue garments.
+function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead }){
+  const [typeFilter,setTypeFilter]=useState('all');
+  const [yearFilter,setYearFilter]=useState('all');
+  const clientName=(cid)=>{ const c=clients.find(x=>x.id===cid); return c?(c.company||c.name||'—'):'—'; };
+  const expenseDate=(l)=> l.won_at || (l.created_at? String(l.created_at).slice(0,10) : '');
+  // All non-sale leads.
+  const nonSale = leads.filter(l=>!isSaleLead(l));
+  const years = Array.from(new Set(nonSale.map(l=>expenseDate(l).slice(0,4)).filter(Boolean))).sort().reverse();
+  const rows = nonSale
+    .filter(l=> typeFilter==='all' || (l.lead_type||'sale')===typeFilter)
+    .filter(l=> yearFilter==='all' || expenseDate(l).slice(0,4)===yearFilter)
+    .slice()
+    .sort((a,b)=> expenseDate(b).localeCompare(expenseDate(a)));
+  const costOf=(l)=> Number(l.expense_cost)||0;
+  const grandTotal = rows.reduce((s,l)=>s+costOf(l),0);
+  const withCost = rows.filter(l=>l.expense_cost!=null).length;
+  const missingCost = rows.length - withCost;
+  // Totals per type.
+  const byType = LEAD_TYPES.filter(t=>t.key!=='sale').map(t=>{
+    const ls=rows.filter(l=>(l.lead_type||'sale')===t.key);
+    return { ...t, count:ls.length, total:ls.reduce((s,l)=>s+costOf(l),0) };
+  });
+  // Totals per month (YYYY-MM).
+  const monthAgg={};
+  rows.forEach(l=>{ const k=expenseDate(l).slice(0,7)||'—'; if(!monthAgg[k]) monthAgg[k]={count:0,total:0}; monthAgg[k].count++; monthAgg[k].total+=costOf(l); });
+  const months = Object.keys(monthAgg).filter(k=>k!=='—').sort().reverse();
+  const MONTH_NAMES=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const fmtMonth=(k)=>{ const [y,m]=k.split('-'); return `${MONTH_NAMES[Number(m)-1]||m} ${y}`; };
+  const qtyOf=(l)=>(l.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0);
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="flex items-start justify-between gap-4 flex-wrap mb-1">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">🎁 Marketing &amp; Internal Expenses</h1>
+          <p className="text-slate-500 text-sm">Garments produced as marketing spend, internal sizers, or client loaners — tracked at estimated cost, excluded from sales revenue.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select className="input" value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
+            <option value="all">All types</option>
+            {LEAD_TYPES.filter(t=>t.key!=='sale').map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+          </select>
+          <select className="input" value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>
+            <option value="all">All years</option>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-[11px] uppercase tracking-wide text-slate-400">Total expense</div>
+          <div className="text-2xl font-bold text-pink-600 mt-1">{peso(grandTotal)}</div>
+          <div className="text-[11px] text-slate-400 mt-1">{rows.length} item{rows.length===1?'':'s'}</div>
+        </div>
+        {byType.map(t=>(
+          <div key={t.key} className="bg-white rounded-xl border p-4">
+            <div className="flex items-center gap-1.5"><span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${t.color}`}>{t.short}</span></div>
+            <div className="text-xl font-bold text-slate-900 mt-1">{peso(t.total)}</div>
+            <div className="text-[11px] text-slate-400 mt-1">{t.count} item{t.count===1?'':'s'}</div>
+          </div>
+        ))}
+      </div>
+      {missingCost>0 && <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠ {missingCost} item{missingCost===1?'':'s'} {missingCost===1?'has':'have'} no estimated cost entered — open the lead and add one so the totals are complete.</div>}
+
+      {/* By month */}
+      {months.length>0 && (
+        <div className="bg-white rounded-xl border mt-5 overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 text-xs font-semibold uppercase text-slate-500">By month</div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2 font-medium">Month</th><th className="text-right px-4 py-2 font-medium">Items</th><th className="text-right px-4 py-2 font-medium">Expense</th></tr></thead>
+            <tbody>
+              {months.map(k=>(<tr key={k} className="border-t"><td className="px-4 py-2 text-slate-700">{fmtMonth(k)}</td><td className="px-4 py-2 text-right text-slate-600">{monthAgg[k].count}</td><td className="px-4 py-2 text-right font-semibold text-slate-900">{peso(monthAgg[k].total)}</td></tr>))}
+            </tbody>
+            <tfoot><tr className="border-t bg-slate-50"><td className="px-4 py-2 font-semibold text-slate-700">Total</td><td className="px-4 py-2 text-right font-semibold text-slate-700">{rows.length}</td><td className="px-4 py-2 text-right font-bold text-pink-600">{peso(grandTotal)}</td></tr></tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* Detail list */}
+      <div className="bg-white rounded-xl border mt-5 overflow-hidden">
+        <div className="px-4 py-2.5 border-b bg-slate-50 text-xs font-semibold uppercase text-slate-500">Items</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+              <th className="text-left px-4 py-2 font-medium">Date</th>
+              <th className="text-left px-3 py-2 font-medium">Item</th>
+              <th className="text-left px-3 py-2 font-medium">Type</th>
+              <th className="text-left px-3 py-2 font-medium">For / Client</th>
+              <th className="text-left px-3 py-2 font-medium">Stage</th>
+              <th className="text-right px-3 py-2 font-medium">Qty</th>
+              <th className="text-right px-4 py-2 font-medium">Est. cost</th>
+            </tr></thead>
+            <tbody>
+              {rows.length===0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No non-sale items yet. Tag a lead as Marketing, Internal, or Loaner to track it here.</td></tr>}
+              {rows.map(l=>{ const m=leadTypeMeta(l.lead_type); const q=qtyOf(l); return (
+                <tr key={l.id} className="border-t hover:bg-slate-50">
+                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{fmtDate(expenseDate(l))||'—'}</td>
+                  <td className="px-3 py-2.5"><button onClick={()=>onOpenLead&&onOpenLead(l)} className="font-medium text-slate-900 hover:text-pink-600 text-left">{l.title||'—'}</button></td>
+                  <td className="px-3 py-2.5"><span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${m.color}`}>{m.short}</span></td>
+                  <td className="px-3 py-2.5 text-slate-600 truncate max-w-[180px]">{clientName(l.client_id)}</td>
+                  <td className="px-3 py-2.5 text-slate-500 text-xs capitalize">{String(l.stage||'').replace('_',' ')}</td>
+                  <td className="px-3 py-2.5 text-right text-slate-600">{q>0?q:'—'}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{l.expense_cost!=null?peso(l.expense_cost):<span className="text-slate-300 font-normal">—</span>}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------- Pipeline ----------------------- */
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
@@ -8792,6 +8940,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                             <button onClick={()=>onOpenLead(l)} className="text-left flex items-center gap-1.5 min-w-0">
                               <span className={`w-2.5 h-2.5 rounded-full border-2 ${stageTextColor.replace('text-','border-')}`}></span>
                               <span className="font-medium text-slate-900 truncate" title={l.title}>{l.title}</span>
+                              {!isSaleLead(l) && <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded whitespace-nowrap ${leadTypeMeta(l.lead_type).color}`} title={leadTypeMeta(l.lead_type).label+' — non-sale, excluded from revenue'}>{leadTypeMeta(l.lead_type).short}</span>}
                               {attCount>0 && <span className="text-slate-400 text-xs whitespace-nowrap" title={attCount+' attachment'+(attCount===1?'':'s')}>📎{attCount}</span>}
                               {l.techpack && <span className="text-teal-600 text-xs" title="Has techpack">📋</span>}
                               {(l.notes||'').trim() && <span className="text-amber-500 text-xs" title="Has notes">📝</span>}
@@ -8801,7 +8950,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
                           <td className="px-3 py-2.5 text-slate-600 truncate max-w-[180px]" title={clientName(l.client_id)}>{clientName(l.client_id)}</td>
                           <td className="px-3 py-2.5 text-slate-600 text-xs">{firstItem ? <span className="inline-block px-2 py-0.5 rounded bg-pink-100 text-pink-700 font-medium">{itemSummary}</span> : <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-right text-slate-700 whitespace-nowrap">{totalQty>0 ? totalQty : <span className="text-slate-300">—</span>}</td>
-                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 whitespace-nowrap">{l.value?peso(l.value):<span className="text-slate-300 font-normal">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 whitespace-nowrap">{!isSaleLead(l) ? (l.expense_cost!=null ? <span className="text-pink-600 font-semibold" title="Estimated cost (non-sale)">{peso(l.expense_cost)}<span className="text-[9px] font-normal text-pink-400"> cost</span></span> : <span className="text-slate-300 font-normal">—</span>) : (l.value?peso(l.value):<span className="text-slate-300 font-normal">—</span>)}</td>
                           <td className="px-3 py-2.5">{mgr ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={mgr} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[100px]">{mgr.name||mgr.email}</span></div> : <span className="text-slate-300 text-xs">— Unassigned</span>}</td>
                           <td className="px-3 py-2.5">
                             {canEdit ? <select value={l.stage} onChange={e=>move(l,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white min-w-[110px]">{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
@@ -21073,6 +21222,9 @@ async function maybeAutoCreateProductionJobForLead(profile, lead, clients){
 // status). If one already exists for the lead, this is a no-op.
 async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
   if(!lead || !profile) return null;
+  // Non-sale leads (marketing / internal / loaner) never create a Sales Order —
+  // there's no revenue to bill and no commission to book.
+  if(!isSaleLead(lead)) return null;
   try {
     // Guard 1: lead already points at an SO — short-circuit.
     if(lead.sales_order_id) return null;
@@ -34533,7 +34685,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
@@ -34547,7 +34699,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -34707,6 +34859,7 @@ function App(){
           : <ClientsView profile={profile} profiles={profiles} clients={clients} leads={leads} onOpen={setSelectedClient} reload={loadAll} />)}
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} salesTargets={salesTargets} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
+        {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
