@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 394 · Renamed 'Client Loaner' → 'Free Client Sample'. Non-sale leads (marketing, sizer, free sample) can now close won with ₱0 value — they flow to Production & Purchasing but skip the Sales Order & commissions. The ₱0-value block for Closed Won now only applies to actual Sale leads.";
+const BUILD = "Live build 395 · New Sales Ticket Queue — a shared, self-claim task pool for the sales assistants. Tickets auto-appear at key lead stages (follow-up, sample coordination, techpack, delivery) and can be raised manually; any available assistant claims the next one. Live workload counters keep the load balanced across the team.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -94,6 +94,42 @@ const LEAD_TYPES = [
 ];
 function isSaleLead(l){ return !l || !l.lead_type || l.lead_type==='sale'; }
 function leadTypeMeta(k){ return LEAD_TYPES.find(t=>t.key===(k||'sale')) || LEAD_TYPES[0]; }
+
+// ── Sales ticket queue ────────────────────────────────────────────────────
+// A shared, self-claim task pool for the sales assistants. Every piece of work
+// on a project becomes a ticket; whoever is free claims the next one, so the
+// load levels out instead of being pinned to a fixed assistant per manager.
+const TICKET_TYPES = [
+  { key:'follow_up',    label:'Client follow-up',       short:'Follow-up', color:'bg-amber-100 text-amber-700' },
+  { key:'techpack',     label:'Techpack / artwork',     short:'Techpack',  color:'bg-teal-100 text-teal-700' },
+  { key:'sample_coord', label:'Sample coordination',    short:'Sample',    color:'bg-purple-100 text-purple-700' },
+  { key:'sizer_prep',   label:'Prepare sizers / samples', short:'Sizers',  color:'bg-pink-100 text-pink-700' },
+  { key:'delivery',     label:'Delivery / transmittal', short:'Delivery',  color:'bg-sky-100 text-sky-700' },
+  { key:'other',        label:'Other / general',        short:'Other',     color:'bg-slate-100 text-slate-600' },
+];
+function ticketTypeMeta(k){ return TICKET_TYPES.find(t=>t.key===k) || TICKET_TYPES[TICKET_TYPES.length-1]; }
+const TICKET_PRIORITY = [
+  { key:'urgent', label:'Urgent', rank:0, color:'bg-rose-100 text-rose-700' },
+  { key:'high',   label:'High',   rank:1, color:'bg-amber-100 text-amber-700' },
+  { key:'normal', label:'Normal', rank:2, color:'bg-slate-100 text-slate-600' },
+  { key:'low',    label:'Low',    rank:3, color:'bg-slate-100 text-slate-400' },
+];
+function ticketPrioMeta(k){ return TICKET_PRIORITY.find(p=>p.key===k) || TICKET_PRIORITY[2]; }
+const TICKET_STATUS = [
+  { key:'open',        label:'Open pool',   textColor:'text-slate-600',   pill:'bg-slate-100' },
+  { key:'in_progress', label:'In progress', textColor:'text-blue-700',    pill:'bg-blue-100' },
+  { key:'blocked',     label:'Blocked',     textColor:'text-rose-700',    pill:'bg-rose-100' },
+  { key:'done',        label:'Done',        textColor:'text-emerald-700', pill:'bg-emerald-100' },
+];
+function ticketStatusMeta(k){ return TICKET_STATUS.find(s=>s.key===k) || TICKET_STATUS[0]; }
+// Which tickets spawn automatically when a lead reaches a given stage. One
+// ticket per (rule, lead) thanks to the auto_key unique index — edit freely.
+const AUTO_TICKET_RULES = [
+  { stage:'proposal',          type:'follow_up',   prio:'high',   dueDays:3, title:l=>`Follow up on proposal — ${l.title||'lead'}` },
+  { stage:'sampling',          type:'sample_coord',prio:'normal', dueDays:2, title:l=>`Coordinate sample — ${l.title||'lead'}` },
+  { stage:'sampling',          type:'techpack',    prio:'normal', dueDays:2, when:l=>!l.techpack, title:l=>`Prepare techpack — ${l.title||'lead'}` },
+  { stage:'delivered_pending', type:'delivery',    prio:'high',   dueDays:1, title:l=>`Prepare delivery / transmittal — ${l.title||'lead'}` },
+];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -1129,6 +1165,10 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         if(newSO){
           await sb.from('lead_activity').insert({ lead_id:savedLeadId, actor_id:profile.id, type:'system', text:`Auto-created Sales Order ${newSO.number} for finance` });
         }
+      }
+      // Sales tickets: auto-spawn stage-driven tasks into the shared queue.
+      if(savedLeadForPR){
+        try { await maybeAutoCreateTicketsForLead(profile, savedLeadForPR, isEdit?(existing?.stage||null):null, stage); } catch(_){}
       }
       // 🎉 Celebrate when the deal lands in "Won" (and wasn't already Won).
       const justBecameWon = stage === 'won' && (!isEdit || existing?.stage !== 'won');
@@ -8698,6 +8738,200 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
   );
 }
 
+/* ----------------------- Sales Ticket Queue ----------------------- */
+// Shared, self-claim task pool. Tickets appear automatically at key lead
+// stages (and can be raised manually); any available assistant claims the next
+// one. Workload counters keep the load transparent so nobody drowns while
+// another sits idle.
+function TicketForm({ profile, leads, clients, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [title,setTitle]=useState(existing?.title||'');
+  const [type,setType]=useState(existing?.task_type||'other');
+  const [prio,setPrio]=useState(existing?.priority||'normal');
+  const [leadId,setLeadId]=useState(existing?.lead_id||'');
+  const [due,setDue]=useState(existing?.due_date||'');
+  const [notes,setNotes]=useState(existing?.notes||'');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const openLeads=(leads||[]).filter(l=>!['lost','delivered_paid'].includes(l.stage)).slice().sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+  async function save(){
+    if(!title.trim()){ setMsg('Ticket title is required.'); return; }
+    setBusy(true); setMsg('');
+    const lead=(leads||[]).find(l=>l.id===leadId);
+    const payload={
+      title:title.trim(), task_type:type, priority:prio,
+      lead_id:leadId||null, client_id:lead?.client_id||null,
+      requested_by: lead?.manager_id || existing?.requested_by || profile.id,
+      due_date:due||null, notes:notes.trim()||null,
+    };
+    try{
+      if(isEdit){ const {error}=await sb.from('sales_tickets').update({ ...payload, updated_at:new Date().toISOString() }).eq('id',existing.id); if(error) throw error; }
+      else { const {error}=await sb.from('sales_tickets').insert({ ...payload, number:'TKT-'+Date.now().toString().slice(-6), status:'open', created_by:profile.id }); if(error) throw error; }
+      onSaved();
+    }catch(err){ setMsg(err.message||String(err)); setBusy(false); }
+  }
+  return (
+    <Modal title={isEdit?'Edit ticket':'New ticket'} onClose={onClose}>
+      <div className="space-y-3">
+        <div><label className="text-[10px] text-slate-500 uppercase">Task</label><input className="input mt-0.5" placeholder="e.g. Follow up on quote for ABC Corp" value={title} onChange={e=>setTitle(e.target.value)} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-[10px] text-slate-500 uppercase">Type</label><select className="input mt-0.5" value={type} onChange={e=>setType(e.target.value)}>{TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Priority</label><select className="input mt-0.5" value={prio} onChange={e=>setPrio(e.target.value)}>{TICKET_PRIORITY.map(p=><option key={p.key} value={p.key}>{p.label}</option>)}</select></div>
+        </div>
+        <div><label className="text-[10px] text-slate-500 uppercase">Project / lead <span className="text-slate-400">· optional</span></label><select className="input mt-0.5" value={leadId} onChange={e=>setLeadId(e.target.value)}><option value="">— None —</option>{openLeads.map(l=><option key={l.id} value={l.id}>{l.title}</option>)}</select></div>
+        <div><label className="text-[10px] text-slate-500 uppercase">Due date <span className="text-slate-400">· optional</span></label><input type="date" className="input mt-0.5" value={due||''} onChange={e=>setDue(e.target.value)} /></div>
+        <div><label className="text-[10px] text-slate-500 uppercase">Notes</label><textarea className="input mt-0.5" rows={2} value={notes} onChange={e=>setNotes(e.target.value)} /></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:opacity-40" onClick={save}>{busy?'Saving…':(isEdit?'Save':'Create ticket')}</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function SalesTicketQueue({ profile, profiles, leads, clients }){
+  const [tickets,setTickets]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filterType,setFilterType]=useState('all');
+  const [mineOnly,setMineOnly]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [editTicket,setEditTicket]=useState(null);
+  const canManage = profile.role!=='assistant'; // admin + managers can edit/delete/reopen
+  const today=new Date().toISOString().slice(0,10);
+
+  async function load(){
+    setLoading(true);
+    const { data, error } = await sb.from('sales_tickets').select('*').is('deleted_at',null).order('created_at',{ascending:false});
+    if(!error) setTickets(data||[]);
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const clientName=(cid)=>{ const c=(clients||[]).find(x=>x.id===cid); return c?(c.company||c.name||''):''; };
+  const prof=(id)=>(profiles||[]).find(p=>p.id===id);
+  async function patch(t, changes, activity){
+    const { error } = await sb.from('sales_tickets').update({ ...changes, updated_at:new Date().toISOString() }).eq('id',t.id);
+    if(error){ alert(error.message); return; }
+    load();
+  }
+  const claim   =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
+  const markDone=(t)=>patch(t,{ status:'done', done_at:new Date().toISOString() });
+  const block   =(t)=>patch(t,{ status:'blocked' });
+  const unblock =(t)=>patch(t,{ status:'in_progress' });
+  const release =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
+  const reopen  =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
+  async function del(t){ if(!confirm('Delete this ticket?')) return; const {error}=await sb.from('sales_tickets').update({ deleted_at:new Date().toISOString() }).eq('id',t.id); if(error){ alert(error.message); return; } load(); }
+
+  // Filter + split into columns.
+  const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id));
+  const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
+  const byPrioDue=(a,b)=>{ const p=prioRank(a)-prioRank(b); if(p) return p; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
+  const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
+  const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
+  const blocked = visible.filter(t=>t.status==='blocked').sort(byPrioDue);
+  const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
+
+  // Workload counters — assistants (people who pull from the pool).
+  const assistants=(profiles||[]).filter(p=>p.role==='assistant');
+  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='in_progress'||t.status==='blocked')).length;
+  const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
+  const minActive = assistants.length ? Math.min(...assistants.map(a=>activeCount(a.id))) : 0;
+
+  function Card({ t }){
+    const type=ticketTypeMeta(t.task_type); const p=ticketPrioMeta(t.priority);
+    const asg=prof(t.assignee_id); const req=prof(t.requested_by);
+    const overdue = t.due_date && t.due_date<today && t.status!=='done';
+    const canAct = t.assignee_id===profile.id || canManage;
+    return (
+      <div className={`bg-white rounded-xl border p-3 ${overdue?'border-rose-300':''}`}>
+        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${type.color}`}>{type.short}</span>
+          {t.priority!=='normal' && <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${p.color}`}>{p.label}</span>}
+          {t.status==='open' && canManage && <span className="ml-auto flex items-center gap-1"><button onClick={()=>setEditTicket(t)} title="Edit" className="text-slate-300 hover:text-slate-600 text-xs">✎</button><button onClick={()=>del(t)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs">✕</button></span>}
+        </div>
+        <div className={`text-sm font-medium ${t.status==='done'?'text-slate-400 line-through':'text-slate-900'}`}>{t.title}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{[clientName(t.client_id), t.due_date?`due ${fmtDate(t.due_date)}`:''].filter(Boolean).join(' · ')||'—'}{overdue && <span className="text-rose-600 font-semibold"> · overdue</span>}</div>
+        {req && <div className="text-[11px] text-slate-400 mt-0.5">for {req.name||req.email}</div>}
+        {t.notes && <div className="text-[11px] text-slate-500 mt-1 bg-slate-50 rounded px-2 py-1">{t.notes}</div>}
+        <div className="flex items-center gap-2 mt-2">
+          {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{t.status==='done'?'':''}{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
+          <div className="ml-auto flex items-center gap-1.5">
+            {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
+            {t.status==='in_progress' && canAct && <><button onClick={()=>block(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Block</button><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button></>}
+            {t.status==='blocked' && canAct && <><button onClick={()=>unblock(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Unblock</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white">✓ Done</button></>}
+            {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const Column=({ title, icon, list, tint })=>(
+    <div>
+      <div className="flex items-center gap-2 mb-2 px-1">
+        <span className="text-sm">{icon}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</span>
+        <span className={`text-[11px] font-bold px-1.5 rounded ${tint}`}>{list.length}</span>
+      </div>
+      <div className="space-y-2">
+        {list.length===0 && <div className="text-[11px] text-slate-300 text-center py-6 border border-dashed rounded-xl">Empty</div>}
+        {list.map(t=><Card key={t.id} t={t} />)}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">🎫 Sales ticket queue</h1>
+          <p className="text-slate-500 text-sm">Shared task pool — claim the next available ticket. Work levels out across the team.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="px-3 py-1.5 text-sm rounded-lg border text-slate-600" title="Refresh">↻</button>
+          <button onClick={()=>setShowForm(true)} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white">+ New ticket</button>
+        </div>
+      </div>
+
+      {/* Workload counters */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <div className="bg-white rounded-lg border px-3 py-2 flex items-center gap-2">
+          <span className="text-[11px] uppercase text-slate-400">Open pool</span>
+          <span className="text-sm font-bold text-slate-900">{tickets.filter(t=>t.status==='open').length}</span>
+        </div>
+        {assistants.map(a=>{ const n=activeCount(a.id); const light = n===minActive && assistants.length>1; return (
+          <div key={a.id} className={`rounded-lg border px-3 py-2 flex items-center gap-2 ${light?'bg-emerald-50 border-emerald-200':'bg-white'}`} title={light?'Lightest load — next up':''}>
+            <Avatar profile={a} size="sm" />
+            <span className="text-xs text-slate-600">{a.name||a.email}</span>
+            <span className="text-sm font-bold text-slate-900">{n} active</span>
+            <span className="text-[11px] text-slate-400">· {doneToday(a.id)} done today</span>
+            {light && <span className="text-[9px] font-bold uppercase text-emerald-700">next up</span>}
+          </div>
+        ); })}
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <select className="input !w-auto" value={filterType} onChange={e=>setFilterType(e.target.value)}>
+          <option value="all">All types</option>
+          {TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> Only mine</label>
+      </div>
+
+      {loading ? <div className="text-center text-slate-400 py-12">Loading tickets…</div> : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <Column title="Open pool" icon="📥" list={open} tint="bg-slate-100 text-slate-600" />
+          <Column title="In progress" icon="▶" list={inprog} tint="bg-blue-100 text-blue-700" />
+          <Column title="Blocked" icon="⛔" list={blocked} tint="bg-rose-100 text-rose-700" />
+          <Column title="Done" icon="✓" list={done} tint="bg-emerald-100 text-emerald-700" />
+        </div>
+      )}
+
+      {showForm && <TicketForm profile={profile} leads={leads} clients={clients} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); }} />}
+      {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); }} />}
+    </div>
+  );
+}
+
 /* ----------------------- Pipeline ----------------------- */
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
@@ -8788,6 +9022,9 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
         await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Sales Order ${newSO.number} for finance` });
       }
     }
+    // Sales tickets: auto-spawn stage-driven tasks (follow-up, sample coord,
+    // techpack, delivery) into the shared queue for whoever's free to claim.
+    try { await maybeAutoCreateTicketsForLead(profile, { ...l, ...patch }, l.stage, st); } catch(_){}
     // 🎉 Celebrate when a deal lands in the actual "Won" stage (skip the
     // later Delivered statuses — those aren't fresh closes).
     if(st === 'won' && l.stage !== 'won'){
@@ -21144,6 +21381,41 @@ async function maybeAutoCreatePRForSample(profile, sample){
 // Idempotent auto-create. Skips if a PR already exists for this lead. Used by
 // every spot where a lead's stage transitions into a Won / Delivered status so
 // purchasing automatically gets a draft BOM to work from. Returns the new PR
+// Idempotent auto-create: sales tickets on lead stage transitions. Returns the
+// list of tickets created (empty if none). Each rule keys off a unique auto_key
+// so re-entering a stage won't duplicate a ticket that already exists.
+async function maybeAutoCreateTicketsForLead(profile, lead, prevStage, newStage){
+  if(!lead || !profile || prevStage===newStage) return [];
+  const made=[];
+  for(const rule of AUTO_TICKET_RULES){
+    if(rule.stage!==newStage) continue;
+    if(rule.when && !rule.when(lead)) continue;
+    const auto_key = `${rule.stage}:${rule.type}:${lead.id}`;
+    try {
+      const { data: existing } = await sb.from('sales_tickets').select('id').eq('auto_key', auto_key).is('deleted_at', null).limit(1);
+      if(existing && existing.length>0) continue;
+      const due = rule.dueDays!=null ? new Date(Date.now()+rule.dueDays*86400000).toISOString().slice(0,10) : null;
+      const payload = {
+        number: 'TKT-'+Date.now().toString().slice(-6)+String(made.length),
+        title: rule.title(lead),
+        task_type: rule.type,
+        lead_id: lead.id,
+        client_id: lead.client_id||null,
+        requested_by: lead.manager_id||null,
+        priority: rule.prio||'normal',
+        due_date: due,
+        status: 'open',
+        auto_key,
+        created_by: profile.id,
+      };
+      const { data, error } = await sb.from('sales_tickets').insert(payload).select().single();
+      if(error){ if(String(error.code||'').startsWith('23')) continue; console.warn('Ticket auto-create failed:', error.message); continue; }
+      if(data) made.push(data);
+    } catch(e){ console.warn('Ticket auto-create error:', e); }
+  }
+  return made;
+}
+
 // row (or null if skipped / errored).
 async function maybeAutoCreatePRForLead(profile, lead){
   if(!lead || !profile) return null;
@@ -33973,10 +34245,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -34679,7 +34951,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -34689,7 +34961,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
@@ -34703,7 +34975,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -34864,6 +35136,7 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} salesTargets={salesTargets} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
+        {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
