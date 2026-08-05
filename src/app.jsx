@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 399 · Accounting Officer can now process Requests for Payment just like the Accounting Supervisor — the RFP detail modal now shows her the Finance approve/reject and Create Voucher & Pay actions (admin approval still routes to the admin).";
+const BUILD = "Live build 400 · Fixed voided SO payments not reopening the balance. Voiding now reverses the bank entry and recomputes the order (Paid/Balance/status) so a corrected payment can be logged. Added a proper ⊘ Void button (with reason) to the Edit-payment modal, and repaired SO-2026-07-054 which was stuck Paid on a voided double-entry.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24452,9 +24452,22 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
     setBusy(true);
     const { error } = await sb.from('sales_order_payments').update({
       status:'voided', voided_by: profile.id, voided_at: new Date().toISOString(), void_reason: reason.trim(),
+      bank_transaction_id: null,
     }).eq('id', payment.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    // If this payment had already been VERIFIED, it credited the bank AND
+    // counted toward the SO balance. Voiding must reverse both: drop the bank
+    // transaction and recompute the order from the remaining verified payments
+    // so the balance reopens and a corrected payment can be logged.
+    if(payment.bank_transaction_id){ try { await sb.from('bank_transactions').delete().eq('id', payment.bank_transaction_id); } catch(_){} }
+    try {
+      const { data:allPays } = await sb.from('sales_order_payments').select('amount,status').eq('sales_order_id', so.id);
+      const newPaid = (allPays||[]).filter(p=>p.status==='verified').reduce((s,p)=>s+Number(p.amount||0),0);
+      const newBal = Math.max(0, Number(so.total||0)-newPaid);
+      const newStatus = newBal<=0.01 ? 'paid' : (newPaid>0.01 ? 'partial' : 'open');
+      await sb.from('sales_orders').update({ amount_paid:newPaid, balance_due:newBal, status:newStatus }).eq('id', so.id);
+    } catch(_){}
     setBusy(false);
-    if(error){ setMsg(error.message); return; }
     // Ping the sales agent who logged it with the rejection reason so they
     // can re-log correctly. Mentions = [logger].
     try {
@@ -24603,6 +24616,21 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
+  // Void (keep the row for the audit trail, marked VOIDED with a reason) instead
+  // of hard-deleting. Reverses the bank transaction and reopens the SO balance
+  // so a corrected payment can be logged. Use for double entries, wrong amounts.
+  async function voidPayment(){
+    const reason = (prompt('Void this payment? It stays on record marked VOIDED.\n\nGive a short reason (e.g. "double entry"):', '')||'').trim();
+    if(!reason){ if(reason!=='') alert('Reason is required to void.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      if(payment.bank_transaction_id){ try { await sb.from('bank_transactions').delete().eq('id', payment.bank_transaction_id); } catch(_){} }
+      await sb.from('sales_order_payments').update({ status:'voided', voided_by:profile.id, voided_at:new Date().toISOString(), void_reason:reason, bank_transaction_id:null }).eq('id', payment.id);
+      await recomputeSO();
+      try { await sb.from('sales_order_activity').insert({ sales_order_id:so.id, actor_id:profile.id, type:'system', text:`❌ Voided payment of ${peso(payment.amount)} — reason: ${reason}` }); } catch(_){}
+      setBusy(false); onSaved && onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
   return (
     <Modal title={`Edit payment — ${so.number}`} onClose={onClose}>
       <div className="space-y-3">
@@ -24623,6 +24651,7 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
         </TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
+          {payment.status!=='voided' && <button disabled={busy} onClick={voidPayment} className="py-2 px-3 rounded-lg border border-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-50 disabled:opacity-50" title="Mark as VOIDED (keeps the record), reverse the bank entry, and reopen the balance">⊘ Void</button>}
           <button disabled={busy} onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50">🗑 Delete</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="py-2 px-3 rounded-lg border text-slate-600 text-sm font-semibold hover:bg-slate-50">Cancel</button>
