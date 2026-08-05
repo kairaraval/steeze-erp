@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 396 · Sales tickets are now manual-only — turned off the stage-driven auto-creation. Managers raise a ticket straight from a lead via the new '🎫 New ticket' button in the lead details; it drops into the shared queue for any available assistant to claim.";
+const BUILD = "Live build 397 · Sales ticket cards now show the linked lead name as a clickable link — open the lead straight from a ticket to chat with the manager inside. Sales managers now open (and refresh) straight into the Sales Ticket queue.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8790,7 +8790,7 @@ function TicketForm({ profile, leads, clients, existing, defaultLeadId, onClose,
   );
 }
 
-function SalesTicketQueue({ profile, profiles, leads, clients }){
+function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   const [tickets,setTickets]=useState([]);
   const [loading,setLoading]=useState(true);
   const [filterType,setFilterType]=useState('all');
@@ -8810,6 +8810,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients }){
 
   const clientName=(cid)=>{ const c=(clients||[]).find(x=>x.id===cid); return c?(c.company||c.name||''):''; };
   const prof=(id)=>(profiles||[]).find(p=>p.id===id);
+  const leadOf=(id)=>(leads||[]).find(l=>l.id===id);
   async function patch(t, changes, activity){
     const { error } = await sb.from('sales_tickets').update({ ...changes, updated_at:new Date().toISOString() }).eq('id',t.id);
     if(error){ alert(error.message); return; }
@@ -8841,6 +8842,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients }){
   function Card({ t }){
     const type=ticketTypeMeta(t.task_type); const p=ticketPrioMeta(t.priority);
     const asg=prof(t.assignee_id); const req=prof(t.requested_by);
+    const lead=leadOf(t.lead_id);
     const overdue = t.due_date && t.due_date<today && t.status!=='done';
     const canAct = t.assignee_id===profile.id || canManage;
     return (
@@ -8851,6 +8853,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients }){
           {t.status==='open' && canManage && <span className="ml-auto flex items-center gap-1"><button onClick={()=>setEditTicket(t)} title="Edit" className="text-slate-300 hover:text-slate-600 text-xs">✎</button><button onClick={()=>del(t)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs">✕</button></span>}
         </div>
         <div className={`text-sm font-medium ${t.status==='done'?'text-slate-400 line-through':'text-slate-900'}`}>{t.title}</div>
+        {lead && <button onClick={()=>onOpenLead&&onOpenLead(lead)} className="text-xs font-medium text-indigo-600 hover:underline mt-0.5 flex items-center gap-1 text-left truncate max-w-full" title="Open the lead — chat with the manager inside">📁 {lead.title}</button>}
         <div className="text-xs text-slate-500 mt-0.5">{[clientName(t.client_id), t.due_date?`due ${fmtDate(t.due_date)}`:''].filter(Boolean).join(' · ')||'—'}{overdue && <span className="text-rose-600 font-semibold"> · overdue</span>}</div>
         {req && <div className="text-[11px] text-slate-400 mt-0.5">for {req.name||req.email}</div>}
         {t.notes && <div className="text-[11px] text-slate-500 mt-1 bg-slate-50 rounded px-2 py-1">{t.notes}</div>}
@@ -34347,6 +34350,16 @@ function App(){
     if(!allowed.has(view)) setView(fallback);
   },[profile, view]);
 
+  // Landing view: sales managers open (and refresh) straight into the Sales
+  // Ticket queue instead of the pipeline. Runs once when their profile loads,
+  // and only if they haven't navigated elsewhere (deep-links still win).
+  const didLandRef = useRef(false);
+  useEffect(()=>{
+    if(!profile || didLandRef.current) return;
+    didLandRef.current = true;
+    if(profile.role==='manager' && view==='pipeline') setView('sales-tickets');
+  },[profile]);
+
   // System notifications: when the tab is in the background (or phone screen
   // is on but Steeze OS isn't the active app), we fire a real OS notification
   // so people see they were @mentioned without keeping the app focused.
@@ -35138,7 +35151,7 @@ function App(){
         {view==='profile' && <ProfileView profile={profile} leads={leads} clients={clients} profiles={profiles} salesTargets={salesTargets} reload={loadAll} onSendToPR={sendLeadToPR} />}
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
-        {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} />}
+        {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
