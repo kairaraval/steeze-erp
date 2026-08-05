@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 398 · Sales ticket cards show the linked lead name as a clickable link — open the lead straight from a ticket to chat with the manager inside. Sales assistants now open (and refresh) straight into the Sales Ticket queue; managers stay on their pipeline.";
+const BUILD = "Live build 399 · Accounting Officer can now process Requests for Payment just like the Accounting Supervisor — the RFP detail modal now shows her the Finance approve/reject and Create Voucher & Pay actions (admin approval still routes to the admin).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25708,7 +25708,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const isAdmin = profile.role==='admin';
-  const isAccounting = profile.role==='accounting';
+  const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const po = orders.find(o=>o.id===rfp.po_id);
   const supplier = suppliers.find(s=>s.id===rfp.supplier_id);
   const requestedBy = profiles.find(p=>p.id===rfp.requested_by);
