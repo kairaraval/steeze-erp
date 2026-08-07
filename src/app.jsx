@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 407 · Graphic tickets now live as a Tickets tab inside the Graphic Design view (no separate menu, no change to the sales pipeline). Finishing a ticket moves it to the 'For approval' column within the graphic list and notifies whoever raised it — the sales lead's own stage is left untouched.";
+const BUILD = "Live build 408 · Every new graphic ticket now also drops a 'To Do' card on the Graphic Design board, linked to the ticket. Marking the ticket 'Ready for approval' moves that board card to 'For Approval' (and 'Send back' returns it to 'To Do') — the ticket board and design board stay in sync.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8793,7 +8793,26 @@ function TicketForm({ profile, leads, clients, existing, defaultLeadId, departme
     };
     try{
       if(isEdit){ const {error}=await sb.from('sales_tickets').update({ ...payload, updated_at:new Date().toISOString() }).eq('id',existing.id); if(error) throw error; }
-      else { const {error}=await sb.from('sales_tickets').insert({ ...payload, department, number:(department==='graphic'?'GTK-':'TKT-')+Date.now().toString().slice(-6), status:'open', created_by:profile.id }); if(error) throw error; }
+      else {
+        const { data:newT, error } = await sb.from('sales_tickets').insert({ ...payload, department, number:(department==='graphic'?'GTK-':'TKT-')+Date.now().toString().slice(-6), status:'open', created_by:profile.id }).select().single();
+        if(error) throw error;
+        // A new graphic ticket also drops a "To Do" card on the Graphic Design
+        // board, linked back to the ticket so the two stay in sync.
+        if(department==='graphic' && newT){
+          try{
+            const client=(clients||[]).find(c=>c.id===(lead?.client_id));
+            const typeLabel=(taskTypes.find(tt=>tt.key===type)||{}).label||'';
+            const { data:job } = await sb.from('graphic_design_jobs').insert({
+              number:'GD-'+Date.now().toString().slice(-6),
+              lead_id: leadId||null, source_lead_id: leadId||null,
+              client_name: client?(client.company||client.name||''):'',
+              item: title.trim(), graphic_type: typeLabel,
+              due_date: due||null, notes: notes.trim()||null, status:'to do',
+            }).select('id').single();
+            if(job) await sb.from('sales_tickets').update({ board_job_id: job.id }).eq('id', newT.id);
+          }catch(_){}
+        }
+      }
       onSaved();
     }catch(err){ setMsg(err.message||String(err)); setBusy(false); }
   }
@@ -8969,7 +8988,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
 // Wraps the existing Graphic Design board and the new ticket queue in two tabs
 // so the graphic artists keep one screen. Board is passed in as an element so we
 // don't have to re-thread all of DeptBoard's props.
-function GraphicView({ profile, profiles, clients, leads, onOpenLead, deptBoard }){
+function GraphicView({ profile, profiles, clients, leads, onOpenLead, deptBoard, reload }){
   const [tab,setTab]=useState('tickets');
   return (
     <div>
@@ -8980,7 +8999,7 @@ function GraphicView({ profile, profiles, clients, leads, onOpenLead, deptBoard 
         </div>
       </div>
       {tab==='tickets'
-        ? <GraphicTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={onOpenLead} />
+        ? <GraphicTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={onOpenLead} reload={reload} />
         : deptBoard}
     </div>
   );
@@ -9024,11 +9043,16 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   }
   const claim  =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
   const release=(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
+  // Keep the linked Design-board card in step with the ticket.
+  async function moveBoardJob(t, status){ if(!t.board_job_id) return; try{ await sb.from('graphic_design_jobs').update({ status }).eq('id', t.board_job_id); }catch(_){} }
   async function readyForApproval(t){
-    // Move the ticket into the "For approval" column of the graphic list and
-    // notify whoever raised it. (The sales lead's own stage is left untouched.)
+    // Move the ticket into the "For approval" column of the graphic list, move
+    // its To-Do card on the Design board to "For Approval", and notify whoever
+    // raised it. (The sales lead's own stage is left untouched.)
     await patch(t,{ status:'for_approval' });
+    await moveBoardJob(t, 'for approval');
     await notify(t.created_by || t.requested_by, `🎨 Graphic ticket "${t.title}" is ready for your approval.`, t.id);
+    reload && reload();
   }
   async function approve(t){
     await patch(t,{ status:'done', done_at:new Date().toISOString() });
@@ -9037,7 +9061,9 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   async function sendBack(t){
     const reason=(prompt('Send back for revision — add a short note for the artist (optional):','')||'').trim();
     await patch(t,{ status:'open', notes: reason ? ((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason) : t.notes });
+    await moveBoardJob(t, 'to do');
     await notify(t.assignee_id, `↺ Revisions needed on "${t.title}"${reason?': '+reason:''}. Back in the open pool.`, t.id);
+    reload && reload();
   }
   const reopen =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
   async function del(t){ if(!confirm('Delete this ticket?')) return; const {error}=await sb.from('sales_tickets').update({ deleted_at:new Date().toISOString() }).eq('id',t.id); if(error){ alert(error.message); return; } load(); }
@@ -9148,8 +9174,8 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
         </div>
       )}
 
-      {showForm && <TicketForm profile={profile} leads={leads} clients={clients} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); }} />}
-      {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); }} />}
+      {showForm && <TicketForm profile={profile} leads={leads} clients={clients} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); reload && reload(); }} />}
+      {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); reload && reload(); }} />}
     </div>
   );
 }
@@ -35453,7 +35479,7 @@ function App(){
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>setDetailLead(l)} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
+        {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
