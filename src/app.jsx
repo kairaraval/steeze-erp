@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 405 · Petty cash: the Outstanding column and per-custodian totals now add back released replenishments, so a float that's been topped up from the bank correctly reads its full amount again (matches the detail view). Note: a replenishment must be RELEASED from the bank — not just approved — before the cash is restored.";
+const BUILD = "Live build 406 · New Graphic Ticket queue — a shared self-claim pool for the graphic artists (2D, 3D, revisions, embroidery, print & sample files). Raise a design task from any lead or in the queue; the artist claims it, and when it's marked Ready for approval the linked lead moves to the new 'For Approval' stage and the person who raised the ticket is notified to review. Approve or send back for revisions.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -70,6 +70,7 @@ const STAGES = [
   { key: 'qualified',         label: 'Qualified',              color: 'bg-blue-100 text-blue-700' },
   { key: 'proposal',          label: 'Proposal Sent',          color: 'bg-indigo-100 text-indigo-700' },
   { key: 'negotiation',       label: 'Negotiation',            color: 'bg-amber-100 text-amber-700' },
+  { key: 'for_approval',      label: 'For Approval',           color: 'bg-cyan-100 text-cyan-700' },
   { key: 'sampling',          label: 'Sampling',               color: 'bg-purple-100 text-purple-700' },
   { key: 'won',               label: 'Closed Won',             color: 'bg-emerald-100 text-emerald-700' },
   { key: 'delivered_pending', label: 'Delivered - For Payment', color: 'bg-teal-100 text-teal-800' },
@@ -80,7 +81,7 @@ const STAGES = [
 const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
 const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 // Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
-const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
+const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, for_approval:0.72, sampling:0.80 };
 function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
 // Lead type: a normal Sale vs a non-sale (marketing giveaway, internal sizer,
 // client loaner). Non-sale leads are excluded from revenue/forecast/commissions/
@@ -130,6 +131,32 @@ const AUTO_TICKET_RULES = [
   { stage:'sampling',          type:'techpack',    prio:'normal', dueDays:2, when:l=>!l.techpack, title:l=>`Prepare techpack — ${l.title||'lead'}` },
   { stage:'delivered_pending', type:'delivery',    prio:'high',   dueDays:1, title:l=>`Prepare delivery / transmittal — ${l.title||'lead'}` },
 ];
+
+// ── Graphic ticket queue ──────────────────────────────────────────────────
+// Same shared self-claim pool, for the graphic artists. Flow adds a "For
+// approval" step: when the artist finishes, the ticket goes For approval, the
+// linked lead advances to the "For Approval" stage, and the person who raised
+// the ticket is notified to review it.
+const GRAPHIC_TICKET_TYPES = [
+  { key:'design_2d',   label:'2D design / artwork',   short:'2D',        color:'bg-pink-100 text-pink-700' },
+  { key:'mockup_3d',   label:'3D mockup',             short:'3D',        color:'bg-purple-100 text-purple-700' },
+  { key:'revisions',   label:'Revisions',             short:'Revisions', color:'bg-amber-100 text-amber-700' },
+  { key:'embroidery',  label:'Embroidery file',       short:'Embro',     color:'bg-teal-100 text-teal-700' },
+  { key:'print_file',  label:'Print file',            short:'Print',     color:'bg-sky-100 text-sky-700' },
+  { key:'sample_file', label:'Sample file',           short:'Sample',    color:'bg-indigo-100 text-indigo-700' },
+  { key:'other',       label:'Other / general',       short:'Other',     color:'bg-slate-100 text-slate-600' },
+];
+function graphicTypeMeta(k){ return GRAPHIC_TICKET_TYPES.find(t=>t.key===k) || GRAPHIC_TICKET_TYPES[GRAPHIC_TICKET_TYPES.length-1]; }
+const GRAPHIC_TICKET_STATUS = [
+  { key:'open',         label:'Open pool',    textColor:'text-slate-600',   pill:'bg-slate-100' },
+  { key:'in_progress',  label:'In progress',  textColor:'text-blue-700',    pill:'bg-blue-100' },
+  { key:'for_approval', label:'For approval', textColor:'text-cyan-700',    pill:'bg-cyan-100' },
+  { key:'done',         label:'Approved',     textColor:'text-emerald-700', pill:'bg-emerald-100' },
+];
+// When a graphic ticket is sent For approval we advance its lead to the
+// "For Approval" stage — but only from an earlier open stage, so we never drag
+// a lead that's already in Sampling / Won backward.
+const STAGES_BEFORE_APPROVAL = ['new','qualified','proposal','negotiation','for_approval'];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -2522,6 +2549,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   // Manual sales ticketing — managers raise a ticket for this lead into the
   // shared queue for whichever assistant is free to claim.
   const [showTicket,setShowTicket]=useState(false);
+  const [showGraphicTicket,setShowGraphicTicket]=useState(false);
   const canTicket = profile.role==='admin'||profile.role==='manager'||profile.role==='assistant'||lead.manager_id===profile.id;
   const notesDirty = (notesDraft||'') !== (lead.notes||'');
   useEffect(()=>{ setNotesDraft(lead.notes||''); setNotesMsg(''); },[lead.id, lead.notes]);
@@ -2583,6 +2611,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             ); })}
             {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
             {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
+            {canTicket && <button onClick={()=>setShowGraphicTicket(true)} className="py-2 px-3 rounded-lg bg-fuchsia-600 text-white text-sm font-semibold hover:bg-fuchsia-700" title="Raise a design task into the shared Graphic Ticket queue">🎨 Graphic ticket</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
             <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
@@ -2603,6 +2632,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
       {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
       {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
       {showTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} onClose={()=>setShowTicket(false)} onSaved={()=>setShowTicket(false)} />}
+      {showGraphicTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowGraphicTicket(false)} onSaved={()=>setShowGraphicTicket(false)} />}
     </Modal>
   );
 }
@@ -8746,10 +8776,10 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
 // stages (and can be raised manually); any available assistant claims the next
 // one. Workload counters keep the load transparent so nobody drowns while
 // another sits idle.
-function TicketForm({ profile, leads, clients, existing, defaultLeadId, onClose, onSaved }){
+function TicketForm({ profile, leads, clients, existing, defaultLeadId, department='sales', taskTypes=TICKET_TYPES, onClose, onSaved }){
   const isEdit=!!existing;
   const [title,setTitle]=useState(existing?.title||'');
-  const [type,setType]=useState(existing?.task_type||'other');
+  const [type,setType]=useState(existing?.task_type||taskTypes[taskTypes.length-1].key);
   const [prio,setPrio]=useState(existing?.priority||'normal');
   const [leadId,setLeadId]=useState(existing?.lead_id||defaultLeadId||'');
   const [due,setDue]=useState(existing?.due_date||'');
@@ -8768,16 +8798,16 @@ function TicketForm({ profile, leads, clients, existing, defaultLeadId, onClose,
     };
     try{
       if(isEdit){ const {error}=await sb.from('sales_tickets').update({ ...payload, updated_at:new Date().toISOString() }).eq('id',existing.id); if(error) throw error; }
-      else { const {error}=await sb.from('sales_tickets').insert({ ...payload, number:'TKT-'+Date.now().toString().slice(-6), status:'open', created_by:profile.id }); if(error) throw error; }
+      else { const {error}=await sb.from('sales_tickets').insert({ ...payload, department, number:(department==='graphic'?'GTK-':'TKT-')+Date.now().toString().slice(-6), status:'open', created_by:profile.id }); if(error) throw error; }
       onSaved();
     }catch(err){ setMsg(err.message||String(err)); setBusy(false); }
   }
   return (
-    <Modal title={isEdit?'Edit ticket':'New ticket'} onClose={onClose}>
+    <Modal title={isEdit?'Edit ticket':(department==='graphic'?'New graphic ticket':'New ticket')} onClose={onClose}>
       <div className="space-y-3">
-        <div><label className="text-[10px] text-slate-500 uppercase">Task</label><input className="input mt-0.5" placeholder="e.g. Follow up on quote for ABC Corp" value={title} onChange={e=>setTitle(e.target.value)} /></div>
+        <div><label className="text-[10px] text-slate-500 uppercase">Task</label><input className="input mt-0.5" placeholder={department==='graphic'?'e.g. 2D artwork for ABC jerseys':'e.g. Follow up on quote for ABC Corp'} value={title} onChange={e=>setTitle(e.target.value)} /></div>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-[10px] text-slate-500 uppercase">Type</label><select className="input mt-0.5" value={type} onChange={e=>setType(e.target.value)}>{TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Type</label><select className="input mt-0.5" value={type} onChange={e=>setType(e.target.value)}>{taskTypes.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Priority</label><select className="input mt-0.5" value={prio} onChange={e=>setPrio(e.target.value)}>{TICKET_PRIORITY.map(p=><option key={p.key} value={p.key}>{p.label}</option>)}</select></div>
         </div>
         <div><label className="text-[10px] text-slate-500 uppercase">Project / lead <span className="text-slate-400">· optional</span></label><select className="input mt-0.5" value={leadId} onChange={e=>setLeadId(e.target.value)}><option value="">— None —</option>{openLeads.map(l=><option key={l.id} value={l.id}>{l.title}</option>)}</select></div>
@@ -8803,7 +8833,9 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   async function load(){
     setLoading(true);
     const { data, error } = await sb.from('sales_tickets').select('*').is('deleted_at',null).order('created_at',{ascending:false});
-    if(!error) setTickets(data||[]);
+    // Only sales-department tickets belong on this board (graphic tickets have
+    // their own queue). Legacy rows have no department → treat as sales.
+    if(!error) setTickets((data||[]).filter(t=> (t.department||'sales')==='sales'));
     setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
@@ -8934,6 +8966,183 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
 
       {showForm && <TicketForm profile={profile} leads={leads} clients={clients} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); }} />}
       {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); }} />}
+    </div>
+  );
+}
+
+/* ----------------------- Graphic Ticket Queue ----------------------- */
+// Shared self-claim pool for the graphic artists. When an artist finishes,
+// the ticket goes "For approval", the linked lead advances to the For Approval
+// stage, and the person who raised the ticket is notified to review it.
+function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, reload }){
+  const [tickets,setTickets]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filterType,setFilterType]=useState('all');
+  const [mineOnly,setMineOnly]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [editTicket,setEditTicket]=useState(null);
+  const role=profile.role;
+  const canManage = ['admin','manager'].includes(role);
+  const isSalesSide = ['admin','manager','assistant'].includes(role);
+  const today=new Date().toISOString().slice(0,10);
+
+  async function load(){
+    setLoading(true);
+    const { data, error } = await sb.from('sales_tickets').select('*').is('deleted_at',null).eq('department','graphic').order('created_at',{ascending:false});
+    if(!error) setTickets(data||[]);
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const clientName=(cid)=>{ const c=(clients||[]).find(x=>x.id===cid); return c?(c.company||c.name||''):''; };
+  const prof=(id)=>(profiles||[]).find(p=>p.id===id);
+  const leadOf=(id)=>(leads||[]).find(l=>l.id===id);
+  async function notify(recipientId, text, ticketId){
+    if(!recipientId || recipientId===profile.id) return;
+    try{ await sb.from('notifications').insert({ recipient_id:recipientId, actor_id:profile.id, text, link_view:'graphic-tickets', ref_type:'graphic_ticket', ref_id:ticketId, type:'system' }); }catch(_){}
+  }
+  async function patch(t, changes){
+    const { error } = await sb.from('sales_tickets').update({ ...changes, updated_at:new Date().toISOString() }).eq('id',t.id);
+    if(error){ alert(error.message); return; }
+    load();
+  }
+  const claim  =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
+  const release=(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
+  async function readyForApproval(t){
+    await patch(t,{ status:'for_approval' });
+    // Advance the linked lead to the For Approval stage (only from an earlier
+    // open stage, so we never drag a sampling/won lead backward).
+    const lead=leadOf(t.lead_id);
+    if(lead && STAGES_BEFORE_APPROVAL.includes(lead.stage) && lead.stage!=='for_approval'){
+      try{
+        await sb.from('leads').update({ stage:'for_approval', stage_changed_at:new Date().toISOString() }).eq('id', lead.id);
+        await sb.from('lead_activity').insert({ lead_id:lead.id, actor_id:profile.id, type:'system', text:`Graphic work done — moved to "For Approval"` });
+      }catch(_){}
+    }
+    // Notify whoever raised the ticket that it's ready to review.
+    await notify(t.created_by || t.requested_by, `🎨 Graphic ticket "${t.title}" is ready for your approval.`, t.id);
+    reload && reload();
+  }
+  async function approve(t){
+    await patch(t,{ status:'done', done_at:new Date().toISOString() });
+    await notify(t.assignee_id, `✅ Your graphic work "${t.title}" was approved.`, t.id);
+  }
+  async function sendBack(t){
+    const reason=(prompt('Send back for revision — add a short note for the artist (optional):','')||'').trim();
+    await patch(t,{ status:'open', notes: reason ? ((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason) : t.notes });
+    await notify(t.assignee_id, `↺ Revisions needed on "${t.title}"${reason?': '+reason:''}. Back in the open pool.`, t.id);
+  }
+  const reopen =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
+  async function del(t){ if(!confirm('Delete this ticket?')) return; const {error}=await sb.from('sales_tickets').update({ deleted_at:new Date().toISOString() }).eq('id',t.id); if(error){ alert(error.message); return; } load(); }
+
+  const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id));
+  const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
+  const byPrioDue=(a,b)=>{ const pr=prioRank(a)-prioRank(b); if(pr) return pr; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
+  const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
+  const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
+  const forApproval = visible.filter(t=>t.status==='for_approval').sort(byPrioDue);
+  const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
+
+  const artists=(profiles||[]).filter(p=>p.role==='graphic');
+  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='in_progress'||t.status==='for_approval')).length;
+  const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
+  const minActive = artists.length ? Math.min(...artists.map(a=>activeCount(a.id))) : 0;
+
+  function Card({ t }){
+    const type=graphicTypeMeta(t.task_type); const pmeta=ticketPrioMeta(t.priority);
+    const asg=prof(t.assignee_id); const req=prof(t.created_by || t.requested_by);
+    const lead=leadOf(t.lead_id);
+    const overdue = t.due_date && t.due_date<today && t.status!=='done';
+    const canWork = t.assignee_id===profile.id || canManage;
+    const canApprove = isSalesSide || profile.id===t.created_by || profile.id===t.requested_by;
+    return (
+      <div className={`bg-white rounded-xl border p-3 ${overdue?'border-rose-300':''}`}>
+        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${type.color}`}>{type.short}</span>
+          {t.priority!=='normal' && <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${pmeta.color}`}>{pmeta.label}</span>}
+          {t.status==='open' && canManage && <span className="ml-auto flex items-center gap-1"><button onClick={()=>setEditTicket(t)} title="Edit" className="text-slate-300 hover:text-slate-600 text-xs">✎</button><button onClick={()=>del(t)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs">✕</button></span>}
+        </div>
+        <div className={`text-sm font-medium ${t.status==='done'?'text-slate-400 line-through':'text-slate-900'}`}>{t.title}</div>
+        {lead && <button onClick={()=>onOpenLead&&onOpenLead(lead)} className="text-xs font-medium text-indigo-600 hover:underline mt-0.5 flex items-center gap-1 text-left truncate max-w-full" title="Open the lead — chat with the requester inside">📁 {lead.title}</button>}
+        <div className="text-xs text-slate-500 mt-0.5">{[clientName(t.client_id), t.due_date?`due ${fmtDate(t.due_date)}`:''].filter(Boolean).join(' · ')||'—'}{overdue && <span className="text-rose-600 font-semibold"> · overdue</span>}</div>
+        {req && <div className="text-[11px] text-slate-400 mt-0.5">for {req.name||req.email}</div>}
+        {t.notes && <div className="text-[11px] text-slate-500 mt-1 bg-slate-50 rounded px-2 py-1 whitespace-pre-wrap">{t.notes}</div>}
+        <div className="flex items-center gap-2 mt-2">
+          {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
+          <div className="ml-auto flex items-center gap-1.5">
+            {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
+            {t.status==='in_progress' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>readyForApproval(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">✓ Ready for approval</button></>}
+            {t.status==='for_approval' && canApprove && <><button onClick={()=>sendBack(t)} className="text-xs px-2 py-1 rounded-lg border text-amber-700 border-amber-300">↺ Send back</button><button onClick={()=>approve(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Approve</button></>}
+            {t.status==='for_approval' && !canApprove && <span className="text-[10px] text-cyan-700 font-semibold">Awaiting approval</span>}
+            {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const Column=({ title, icon, list, tint })=>(
+    <div>
+      <div className="flex items-center gap-2 mb-2 px-1">
+        <span className="text-sm">{icon}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</span>
+        <span className={`text-[11px] font-bold px-1.5 rounded ${tint}`}>{list.length}</span>
+      </div>
+      <div className="space-y-2">
+        {list.length===0 && <div className="text-[11px] text-slate-300 text-center py-6 border border-dashed rounded-xl">Empty</div>}
+        {list.map(t=><Card key={t.id} t={t} />)}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">🎨 Graphic ticket queue</h1>
+          <p className="text-slate-500 text-sm">Shared design task pool — claim the next ticket. Finish it and it goes for the requester's approval.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="px-3 py-1.5 text-sm rounded-lg border text-slate-600" title="Refresh">↻</button>
+          <button onClick={()=>setShowForm(true)} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white">+ New ticket</button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        <div className="bg-white rounded-lg border px-3 py-2 flex items-center gap-2">
+          <span className="text-[11px] uppercase text-slate-400">Open pool</span>
+          <span className="text-sm font-bold text-slate-900">{tickets.filter(t=>t.status==='open').length}</span>
+        </div>
+        {artists.map(a=>{ const n=activeCount(a.id); const light = n===minActive && artists.length>1; return (
+          <div key={a.id} className={`rounded-lg border px-3 py-2 flex items-center gap-2 ${light?'bg-emerald-50 border-emerald-200':'bg-white'}`} title={light?'Lightest load — next up':''}>
+            <Avatar profile={a} size="sm" />
+            <span className="text-xs text-slate-600">{a.name||a.email}</span>
+            <span className="text-sm font-bold text-slate-900">{n} active</span>
+            <span className="text-[11px] text-slate-400">· {doneToday(a.id)} done today</span>
+            {light && <span className="text-[9px] font-bold uppercase text-emerald-700">next up</span>}
+          </div>
+        ); })}
+      </div>
+
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <select className="input !w-auto" value={filterType} onChange={e=>setFilterType(e.target.value)}>
+          <option value="all">All types</option>
+          {GRAPHIC_TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> Only mine</label>
+      </div>
+
+      {loading ? <div className="text-center text-slate-400 py-12">Loading tickets…</div> : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <Column title="Open pool" icon="📥" list={open} tint="bg-slate-100 text-slate-600" />
+          <Column title="In progress" icon="▶" list={inprog} tint="bg-blue-100 text-blue-700" />
+          <Column title="For approval" icon="👀" list={forApproval} tint="bg-cyan-100 text-cyan-700" />
+          <Column title="Approved" icon="✓" list={done} tint="bg-emerald-100 text-emerald-700" />
+        </div>
+      )}
+
+      {showForm && <TicketForm profile={profile} leads={leads} clients={clients} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); }} />}
+      {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); }} />}
     </div>
   );
 }
@@ -34326,10 +34535,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','graphic-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','graphic-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -34375,8 +34584,8 @@ function App(){
       allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
-      fallback = 'graphic';
+      allowed = new Set(['inbox','graphic-tickets','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      fallback = 'graphic-tickets';
     } else if(profile.role==='printing'){
       allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'printing';
@@ -34975,7 +35184,7 @@ function App(){
     // Production / Graphic Design / Printing teams all share the same nav —
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
+      { items:[ ['inbox','Inbox','📥'], ...(isGraphicTeam?[['graphic-tickets','Graphic Tickets','🎨']]:[]) ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -35054,7 +35263,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic-tickets','Graphic Tickets','🎨'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -35068,7 +35277,7 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic-tickets','Graphic Tickets','🎨'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
@@ -35228,6 +35437,7 @@ function App(){
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
+        {view==='graphic-tickets' && <GraphicTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
