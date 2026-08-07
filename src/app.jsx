@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 412 · Sales module: (1) a Due Date is now required before a lead can move to Closed Won; (2) Sales tickets can be archived (with a Show-archived toggle); (3) removed the Blocked column from the sales ticket queue; (4) added a company-wide 'Closed deals — pricing reference' list (client · item · qty · unit price) to the profile of admins, sales managers & assistants.";
+const BUILD = "Live build 413 · Profile: 'Closed deals — pricing reference' is now its own tab and shows only YOUR own closed-won deals (client · item · qty · unit price), not everyone's. (Plus the earlier build-412 changes: Due Date required for Closed Won, archivable sales tickets, and no Blocked column.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16414,6 +16414,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const isAdmin=profile.role==='admin';
   const [tgtEditing,setTgtEditing]=useState(false); const [tgtDraft,setTgtDraft]=useState(''); const [tgtBusy,setTgtBusy]=useState(false);
   const [dealSearch,setDealSearch]=useState('');
+  const [profTab,setProfTab]=useState('overview'); // 'overview' | 'deals'
   async function saveTarget(){
     const amt=Number(tgtDraft)||0; setTgtBusy(true);
     const { error }=await sb.from('sales_targets').upsert({ profile_id:profile.id, ym, amount:amt, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'profile_id,ym' });
@@ -16428,10 +16429,10 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const byItem={}; won.forEach(l=>{ (l.items||[]).forEach(it=>{ const k=(it.itemType||'—').trim()||'—'; if(!byItem[k]) byItem[k]={ name:k, qty:0, total:0 }; byItem[k].qty+=Number(it.quantity)||0; byItem[k].total+=Number(it.lineTotal)|| (Number(it.quantity)||0)*(Number(it.pricePerItem)||0); }); });
   const topItems=Object.values(byItem).sort((a,b)=>b.total-a.total).slice(0,6);
   const maxItem=Math.max(1,...topItems.map(i=>i.total));
-  // Closed-deal line items across the WHOLE company — a pricing reference so
-  // anyone can look up what we charged before (client · item · qty · unit ₱).
+  // This person's own closed-won deals, broken into line items — a pricing
+  // reference so they can look up what THEY charged before (client · item · qty · unit ₱).
   const closedLines=[];
-  (leads||[]).filter(l=>SOLD_STAGES.includes(l.stage)).forEach(l=>{
+  won.forEach(l=>{
     (l.items||[]).forEach(it=>{
       const unit = Number(it.pricePerItem) || (Number(it.quantity)>0 ? (Number(it.lineTotal)||0)/Number(it.quantity) : 0);
       closedLines.push({ id:l.id+'-'+((it.itemType||'')+(it.quantity||'')), date:l.won_at||l.stage_changed_at||(l.created_at? String(l.created_at).slice(0,10):''), client:clientName(l.client_id), title:l.title||'', item:(it.itemType||'').trim()||'—', qty:Number(it.quantity)||0, unit });
@@ -16460,6 +16461,13 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
       <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{roleLabel(profile.role)} · {profile.email}</p></div></div>
 
       {showSalesDash && (<>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mb-5">
+          <button onClick={()=>setProfTab('overview')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='overview'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>📊 Overview</button>
+          <button onClick={()=>setProfTab('deals')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='deals'?'bg-white shadow-sm text-emerald-700':'text-slate-600'}`}>💵 Closed deals {closedLines.length>0 && <span className="text-[10px] text-slate-400">({won.length})</span>}</button>
+        </div>
+      </>)}
+
+      {showSalesDash && profTab==='overview' && (<>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Open pipeline</div><div className="text-2xl font-bold mt-1">{peso(openVal)}</div><div className="text-xs text-slate-500">{open.length} lead{open.length===1?'':'s'}</div></div>
           <div className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase text-slate-400">Forecast (weighted)</div><div className="text-2xl font-bold mt-1 text-indigo-700">{peso(weightedNext6)}</div><div className="text-xs text-slate-500">of {peso(forecastNext6)} raw · 6 mo</div></div>
@@ -16554,41 +16562,6 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
           </div>
         </div>
 
-        {/* Closed deals — pricing reference (company-wide) */}
-        <div className="bg-white border rounded-xl p-4 mb-6">
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
-            <div>
-              <div className="font-semibold text-slate-900">💵 Closed deals — pricing reference</div>
-              <div className="text-xs text-slate-400">Every item on a closed deal (company-wide) — look up what we charged before.</div>
-            </div>
-            <input value={dealSearch} onChange={e=>setDealSearch(e.target.value)} placeholder="Search client / item…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 w-64" />
-          </div>
-          <div className="overflow-x-auto mt-2 border rounded-lg">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
-                <th className="text-left px-3 py-2 font-medium">Date</th>
-                <th className="text-left px-3 py-2 font-medium">Client</th>
-                <th className="text-left px-3 py-2 font-medium">Item</th>
-                <th className="text-right px-3 py-2 font-medium">Qty</th>
-                <th className="text-right px-3 py-2 font-medium">Unit ₱</th>
-              </tr></thead>
-              <tbody>
-                {dealRows.length===0 && <tr><td colSpan={5} className="text-center text-slate-400 py-6">No closed deals {dealSearch?'match':'yet'}.</td></tr>}
-                {dealRows.map(r=>(
-                  <tr key={r.id+r.date} className="border-t hover:bg-slate-50">
-                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{r.date?fmtDate(r.date):'—'}</td>
-                    <td className="px-3 py-2 text-slate-700 truncate max-w-[200px]" title={r.client}>{r.client}</td>
-                    <td className="px-3 py-2 text-slate-700">{r.item}<span className="text-[10px] text-slate-400"> · {r.title}</span></td>
-                    <td className="px-3 py-2 text-right text-slate-600">{r.qty?r.qty.toLocaleString('en-PH'):'—'}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.unit?peso(r.unit):'—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {closedLines.length>250 && <div className="text-[10px] text-slate-400 mt-1.5">Showing the latest 250 of {closedLines.length.toLocaleString('en-PH')} lines — search to narrow.</div>}
-        </div>
-
         <div className="bg-white border rounded-xl p-4 mb-6">
           <div className="font-semibold text-slate-900 mb-1">🎯 Quota vs actual — last 6 months</div>
           <div className="text-xs text-slate-400 mb-3">{hasAnyTarget?'Won value vs monthly target':'No targets set yet — set monthly targets in Team Overview or on the profile ring.'}</div>
@@ -16605,6 +16578,42 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
           <div className="text-[10px] text-slate-400 mt-2 flex gap-3"><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500"></span>Actual won</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-slate-200"></span>Target</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>Target hit</span></div>
         </div>
       </>)}
+
+      {showSalesDash && profTab==='deals' && (
+        <div className="bg-white border rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+            <div>
+              <div className="font-semibold text-slate-900">💵 My closed deals — pricing reference</div>
+              <div className="text-xs text-slate-400">Every item on your own closed-won deals — look up what you charged before.</div>
+            </div>
+            <input value={dealSearch} onChange={e=>setDealSearch(e.target.value)} placeholder="Search client / item…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 w-64" />
+          </div>
+          <div className="overflow-x-auto mt-2 border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+                <th className="text-left px-3 py-2 font-medium">Date</th>
+                <th className="text-left px-3 py-2 font-medium">Client</th>
+                <th className="text-left px-3 py-2 font-medium">Item</th>
+                <th className="text-right px-3 py-2 font-medium">Qty</th>
+                <th className="text-right px-3 py-2 font-medium">Unit ₱</th>
+              </tr></thead>
+              <tbody>
+                {dealRows.length===0 && <tr><td colSpan={5} className="text-center text-slate-400 py-6">No closed-won deals {dealSearch?'match':'yet'}.</td></tr>}
+                {dealRows.map(r=>(
+                  <tr key={r.id+r.date} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{r.date?fmtDate(r.date):'—'}</td>
+                    <td className="px-3 py-2 text-slate-700 truncate max-w-[200px]" title={r.client}>{r.client}</td>
+                    <td className="px-3 py-2 text-slate-700">{r.item}<span className="text-[10px] text-slate-400"> · {r.title}</span></td>
+                    <td className="px-3 py-2 text-right text-slate-600">{r.qty?r.qty.toLocaleString('en-PH'):'—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.unit?peso(r.unit):'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {closedLines.length>250 && <div className="text-[10px] text-slate-400 mt-1.5">Showing the latest 250 of {closedLines.length.toLocaleString('en-PH')} lines — search to narrow.</div>}
+        </div>
+      )}
 
       {!showSalesDash && (
         <div className="bg-white border rounded-xl p-5 text-sm text-slate-500 mb-6">
