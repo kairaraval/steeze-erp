@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 402 · Job-role evaluations: added an 'HR recommendation / notes' text box in the managerial section for HR to type remarks, and it now prints on the evaluation PDF.";
+const BUILD = "Live build 403 · Petty cash: receipt photos now show as inline thumbnails and open in an in-page viewer (with PDF support) instead of launching a new browser window.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28090,6 +28090,9 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   const isAdmin = profile.role==='admin';
   const isAcct = profile.role==='accounting' || profile.role==='accounting_officer';
   const [relBank,setRelBank]=useState((bankAccounts||[])[0]?.id||'');
+  // Receipt viewer — opens IN-PAGE (no new browser window/tab).
+  const [receiptView,setReceiptView]=useState(null); // { url, kind }
+  const receiptKind = (u)=> /\.pdf(\?|$)/i.test(String(u||'')) ? 'pdf' : 'image';
   const myRepl = (replenishments||[]).filter(r=>r.petty_cash_id===pc.id).slice().sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
   // Pull THE LATEST expenses snapshot from props each render.
   const linkedExpenses = (expensesAll||[]).filter(e => e.petty_cash_id === pc.id)
@@ -28239,7 +28242,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                       <td className="px-1 py-0.5"><input type="number" step="0.01" className="input !py-1 text-right" value={r.input_vat} onChange={e=>setRow(r.id,'input_vat',e.target.value)} placeholder="0.00" /></td>
                       <td className="px-1 py-0.5"><input type="number" step="0.01" className="input !py-1 text-right" value={r.amount} onChange={e=>setRow(r.id,'amount',e.target.value)} placeholder="0.00" /></td>
                       <td className="px-1 py-0.5 text-center">
-                        {r.receipt_url ? <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-emerald-600 hover:underline">✓ View</button>
+                        {r.receipt_url ? <button onClick={()=>setReceiptView({url:r.receipt_url, kind:receiptKind(r.receipt_url)})} className="text-[11px] text-emerald-600 hover:underline">✓ View</button>
                           : <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer">{uploadingId===r.id?'…':'📎'}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ handleReceipt(r.id, e.target.files?.[0]); e.target.value=''; }} /></label>}
                       </td>
                       <td className="px-1 py-0.5 text-center"><button onClick={()=>removeRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>
@@ -28286,7 +28289,14 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                 return withBal.slice().reverse().map(e => (
                   <tr key={e.id} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
-                    <td className="px-3 py-2">{e.description||'—'}{e.receipt_url && <button onClick={()=>openSignedAttachment(e.receipt_url)} className="ml-1.5 text-indigo-600 hover:underline" title="View receipt">📎</button>}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        {e.receipt_url && (receiptKind(e.receipt_url)==='image'
+                          ? <button onClick={()=>setReceiptView({url:e.receipt_url, kind:'image'})} title="View receipt" className="shrink-0"><SignedImg url={e.receipt_url} className="h-9 w-9 object-cover rounded border hover:ring-2 hover:ring-indigo-300" alt="receipt" /></button>
+                          : <button onClick={()=>setReceiptView({url:e.receipt_url, kind:'pdf'})} className="shrink-0 h-9 w-9 rounded border bg-slate-50 text-indigo-600 hover:bg-slate-100 text-xs font-semibold" title="View receipt (PDF)">PDF</button>)}
+                        <span>{e.description||'—'}</span>
+                      </div>
+                    </td>
                     <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{e.category||'—'}</span></td>
                     <td className="px-3 py-2 text-xs text-slate-600">{e.vendor||'—'}</td>
                     <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
@@ -28298,6 +28308,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
           )}
         </div>
       </div>
+      {receiptView && <MediaLightbox url={receiptView.url} kind={receiptView.kind} name="Receipt" onClose={()=>setReceiptView(null)} />}
     </Modal>
   );
 }
