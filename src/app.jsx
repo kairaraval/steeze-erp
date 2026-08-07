@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 411 · Cutting: the 'Pattern number to use' field is now a live search box — type a code, name, or item and pick from the patterns the pattern maker logged (fetched fresh each time you open a cutting item, so newly-logged patterns always appear).";
+const BUILD = "Live build 412 · Sales module: (1) a Due Date is now required before a lead can move to Closed Won; (2) Sales tickets can be archived (with a Show-archived toggle); (3) removed the Blocked column from the sales ticket queue; (4) added a company-wide 'Closed deals — pricing reference' list (client · item · qty · unit price) to the profile of admins, sales managers & assistants.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1095,6 +1095,11 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     // so they're allowed to close won and flow to Production / Purchasing.
     if(stage==='won' && leadType==='sale' && !(value>0)){
       setMsg('⚠ Deal value can\'t be ₱0 for Closed Won — add line items or a manual value first. (Marketing / sizer / free-sample leads don\'t need a value — just set the Lead type above.)'); return;
+    }
+    // Gate: a Due Date is required before a lead can close won (production &
+    // logistics need a target date the moment the deal is confirmed).
+    if(stage==='won' && !expectedClose){
+      setMsg('⚠ Add a Due Date before moving this lead to Closed Won.'); return;
     }
     setBusy(true); setMsg('');
     try{ let finalClientId=clientId;
@@ -8881,6 +8886,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   const [loading,setLoading]=useState(true);
   const [filterType,setFilterType]=useState('all');
   const [mineOnly,setMineOnly]=useState(false);
+  const [showArchived,setShowArchived]=useState(false);
   const [showForm,setShowForm]=useState(false);
   const [editTicket,setEditTicket]=useState(null);
   const canManage = profile.role!=='assistant'; // admin + managers can edit/delete/reopen
@@ -8906,24 +8912,25 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   }
   const claim   =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
   const markDone=(t)=>patch(t,{ status:'done', done_at:new Date().toISOString() });
-  const block   =(t)=>patch(t,{ status:'blocked' });
-  const unblock =(t)=>patch(t,{ status:'in_progress' });
   const release =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
-  const reopen  =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
+  const reopen  =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null, archived_at:null });
+  const archive =(t)=>patch(t,{ archived_at:new Date().toISOString() });
+  const unarchive=(t)=>patch(t,{ archived_at:null });
   async function del(t){ if(!confirm('Delete this ticket?')) return; const {error}=await sb.from('sales_tickets').update({ deleted_at:new Date().toISOString() }).eq('id',t.id); if(error){ alert(error.message); return; } load(); }
 
-  // Filter + split into columns.
+  // Filter + split into columns. Archived tickets are hidden unless toggled on.
   const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id));
   const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
   const byPrioDue=(a,b)=>{ const p=prioRank(a)-prioRank(b); if(p) return p; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
-  const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
-  const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
-  const blocked = visible.filter(t=>t.status==='blocked').sort(byPrioDue);
-  const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
+  const live = visible.filter(t=>!t.archived_at);
+  const open = live.filter(t=>t.status==='open').sort(byPrioDue);
+  const inprog = live.filter(t=>t.status==='in_progress').sort(byPrioDue);
+  const done = live.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
+  const archived = visible.filter(t=>t.archived_at).sort((a,b)=>String(b.archived_at||'').localeCompare(String(a.archived_at||''))).slice(0,50);
 
   // Workload counters — assistants (people who pull from the pool).
   const assistants=(profiles||[]).filter(p=>p.role==='assistant');
-  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='in_progress'||t.status==='blocked')).length;
+  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='in_progress' && !t.archived_at).length;
   const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
   const minActive = assistants.length ? Math.min(...assistants.map(a=>activeCount(a.id))) : 0;
 
@@ -8948,10 +8955,12 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
         <div className="flex items-center gap-2 mt-2">
           {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{t.status==='done'?'':''}{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
           <div className="ml-auto flex items-center gap-1.5">
+            {t.archived_at ? (canManage && <button onClick={()=>unarchive(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Unarchive</button>) : <>
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
-            {t.status==='in_progress' && canAct && <><button onClick={()=>block(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Block</button><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button></>}
-            {t.status==='blocked' && canAct && <><button onClick={()=>unblock(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Unblock</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white">✓ Done</button></>}
+            {t.status==='in_progress' && canAct && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button></>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
+            {t.status==='done' && canAct && <button onClick={()=>archive(t)} title="Archive — hide from the board" className="text-xs px-2 py-1 rounded-lg border text-slate-500">🗄 Archive</button>}
+            </>}
           </div>
         </div>
       </div>
@@ -9009,14 +9018,15 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
           {TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
         </select>
         <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> Only mine</label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)} /> Show archived {archived.length>0 && <span className="text-[10px] text-slate-400">({archived.length})</span>}</label>
       </div>
 
       {loading ? <div className="text-center text-slate-400 py-12">Loading tickets…</div> : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${showArchived?'xl:grid-cols-4':'xl:grid-cols-3'}`}>
           <Column title="Open pool" icon="📥" list={open} tint="bg-slate-100 text-slate-600" />
           <Column title="In progress" icon="▶" list={inprog} tint="bg-blue-100 text-blue-700" />
-          <Column title="Blocked" icon="⛔" list={blocked} tint="bg-rose-100 text-rose-700" />
           <Column title="Done" icon="✓" list={done} tint="bg-emerald-100 text-emerald-700" />
+          {showArchived && <Column title="Archived" icon="🗄" list={archived} tint="bg-slate-100 text-slate-500" />}
         </div>
       )}
 
@@ -9270,6 +9280,11 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
     // allowed through to Closed Won → Production / Purchasing without a value.
     if(st==='won' && l.stage!==st && isSaleLead(l) && !(Number(l.value)>0)){
       alert(`⚠ "${l.title||'this lead'}" has ₱0 value. Add the deal value on the lead before moving it to Closed Won.\n\n(If this is a marketing item, sizer, or free client sample, open the lead → Edit and set its Lead type — those don't need a value.)`);
+      return;
+    }
+    // Gate: a Due Date is required before Closed Won.
+    if(st==='won' && l.stage!==st && !l.expected_close){
+      alert(`⚠ "${l.title||'this lead'}" has no Due Date.\n\nOpen the lead → Edit → set the Due Date before moving it to Closed Won.`);
       return;
     }
     const wasSold = SOLD_STAGES.includes(l.stage);
@@ -16398,6 +16413,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const targetPct=target>0 ? Math.min(100, Math.round(wonMonthVal/target*100)) : 0;
   const isAdmin=profile.role==='admin';
   const [tgtEditing,setTgtEditing]=useState(false); const [tgtDraft,setTgtDraft]=useState(''); const [tgtBusy,setTgtBusy]=useState(false);
+  const [dealSearch,setDealSearch]=useState('');
   async function saveTarget(){
     const amt=Number(tgtDraft)||0; setTgtBusy(true);
     const { error }=await sb.from('sales_targets').upsert({ profile_id:profile.id, ym, amount:amt, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'profile_id,ym' });
@@ -16412,6 +16428,17 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const byItem={}; won.forEach(l=>{ (l.items||[]).forEach(it=>{ const k=(it.itemType||'—').trim()||'—'; if(!byItem[k]) byItem[k]={ name:k, qty:0, total:0 }; byItem[k].qty+=Number(it.quantity)||0; byItem[k].total+=Number(it.lineTotal)|| (Number(it.quantity)||0)*(Number(it.pricePerItem)||0); }); });
   const topItems=Object.values(byItem).sort((a,b)=>b.total-a.total).slice(0,6);
   const maxItem=Math.max(1,...topItems.map(i=>i.total));
+  // Closed-deal line items across the WHOLE company — a pricing reference so
+  // anyone can look up what we charged before (client · item · qty · unit ₱).
+  const closedLines=[];
+  (leads||[]).filter(l=>SOLD_STAGES.includes(l.stage)).forEach(l=>{
+    (l.items||[]).forEach(it=>{
+      const unit = Number(it.pricePerItem) || (Number(it.quantity)>0 ? (Number(it.lineTotal)||0)/Number(it.quantity) : 0);
+      closedLines.push({ id:l.id+'-'+((it.itemType||'')+(it.quantity||'')), date:l.won_at||l.stage_changed_at||(l.created_at? String(l.created_at).slice(0,10):''), client:clientName(l.client_id), title:l.title||'', item:(it.itemType||'').trim()||'—', qty:Number(it.quantity)||0, unit });
+    });
+  });
+  closedLines.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const dealRows = closedLines.filter(r=> !dealSearch || `${r.client} ${r.item} ${r.title}`.toLowerCase().includes(dealSearch.toLowerCase())).slice(0,250);
   // Conversion funnel — counts by current stage
   const FUNNEL=[{key:'new',label:'New',bar:'bg-slate-400'},{key:'qualified',label:'Qualified',bar:'bg-blue-400'},{key:'proposal',label:'Proposal',bar:'bg-indigo-400'},{key:'negotiation',label:'Negotiation',bar:'bg-amber-400'},{key:'sampling',label:'Sampling',bar:'bg-purple-400'},{key:'__won',label:'Won',bar:'bg-emerald-500'},{key:'lost',label:'Lost',bar:'bg-rose-400'}];
   const funnel=FUNNEL.map(s=>({ ...s, count: s.key==='__won' ? mine.filter(l=>SOLD_STAGES.includes(l.stage)).length : mine.filter(l=>l.stage===s.key).length }));
@@ -16525,6 +16552,41 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
             </div>
             <div className="text-[10px] text-slate-400 mt-2">Sales cycle = avg days from lead created → won ({cycleArr.length} deal{cycleArr.length===1?'':'s'} with dates).</div>
           </div>
+        </div>
+
+        {/* Closed deals — pricing reference (company-wide) */}
+        <div className="bg-white border rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+            <div>
+              <div className="font-semibold text-slate-900">💵 Closed deals — pricing reference</div>
+              <div className="text-xs text-slate-400">Every item on a closed deal (company-wide) — look up what we charged before.</div>
+            </div>
+            <input value={dealSearch} onChange={e=>setDealSearch(e.target.value)} placeholder="Search client / item…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 w-64" />
+          </div>
+          <div className="overflow-x-auto mt-2 border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+                <th className="text-left px-3 py-2 font-medium">Date</th>
+                <th className="text-left px-3 py-2 font-medium">Client</th>
+                <th className="text-left px-3 py-2 font-medium">Item</th>
+                <th className="text-right px-3 py-2 font-medium">Qty</th>
+                <th className="text-right px-3 py-2 font-medium">Unit ₱</th>
+              </tr></thead>
+              <tbody>
+                {dealRows.length===0 && <tr><td colSpan={5} className="text-center text-slate-400 py-6">No closed deals {dealSearch?'match':'yet'}.</td></tr>}
+                {dealRows.map(r=>(
+                  <tr key={r.id+r.date} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{r.date?fmtDate(r.date):'—'}</td>
+                    <td className="px-3 py-2 text-slate-700 truncate max-w-[200px]" title={r.client}>{r.client}</td>
+                    <td className="px-3 py-2 text-slate-700">{r.item}<span className="text-[10px] text-slate-400"> · {r.title}</span></td>
+                    <td className="px-3 py-2 text-right text-slate-600">{r.qty?r.qty.toLocaleString('en-PH'):'—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.unit?peso(r.unit):'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {closedLines.length>250 && <div className="text-[10px] text-slate-400 mt-1.5">Showing the latest 250 of {closedLines.length.toLocaleString('en-PH')} lines — search to narrow.</div>}
         </div>
 
         <div className="bg-white border rounded-xl p-4 mb-6">
