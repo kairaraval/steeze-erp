@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 404 · Petty cash: fixed the broken receipt previews — thumbnails and the in-page viewer now resolve the private-bucket signed URL (images + PDFs), so receipts display inline instead of showing a broken image.";
+const BUILD = "Live build 405 · Petty cash: the Outstanding column and per-custodian totals now add back released replenishments, so a float that's been topped up from the bank correctly reads its full amount again (matches the detail view). Note: a replenishment must be RELEASED from the bank — not just approved — before the cash is restored.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28336,6 +28336,15 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   // Sum expenses charged to each petty-cash row (matched by petty_cash_id).
   function expensesFor(row){ return (expenses||[]).filter(e => e.petty_cash_id === row.id); }
   function spentOn(row){ return expensesFor(row).reduce((s,e)=>s+Number(e.amount||0), 0); }
+  // Cash the bank has already put BACK into the float (released replenishments).
+  function replenishedOn(row){ return (replenishments||[]).filter(r => r.petty_cash_id===row.id && r.status==='released').reduce((s,r)=>s+Number(r.amount||0), 0); }
+  // Actual cash-on-hand for a float = issued − everything spent + everything the
+  // bank replenished − anything returned. Matches the detail modal's math so the
+  // list, the per-custodian totals, and the modal never disagree.
+  function onHandOf(row){
+    if((row.kind||'cash_advance')==='petty_cash') return Number(row.amount||0) - spentOn(row) + replenishedOn(row) - Number(row.amount_returned||0);
+    return Number(row.amount||0) - Number(row.amount_liquidated||0) - Number(row.amount_returned||0);
+  }
   const [filter,setFilter]=useState('open'); // default to open so the work-in-progress shows
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
@@ -28410,7 +28419,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   const custodianOpen = {};
   ofKind.filter(c=>c.status==='open').forEach(c=>{
     const k = c.custodian_id || c.custodian_name || 'unknown';
-    custodianOpen[k] = (custodianOpen[k]||0) + Number(c.amount||0) - Number(c.amount_liquidated||0) - Number(c.amount_returned||0);
+    custodianOpen[k] = (custodianOpen[k]||0) + onHandOf(c);
   });
   const totalOpen = Object.values(custodianOpen).reduce((s,n)=>s+n, 0);
 
@@ -28472,7 +28481,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
           // For Petty Cash, "Liquidated" is the running sum of linked
           // expenses; for Cash Advances it stays as the existing column.
           const linkedSpent = isPetty ? spentOn(c) : Number(c.amount_liquidated||0);
-          const outstanding = Number(c.amount||0) - linkedSpent - Number(c.amount_returned||0);
+          const outstanding = onHandOf(c);
           // Petty cash clicks open the detail/add-expense modal. Cash
           // advance clicks still open the edit form like before.
           const onRowClick = () => isPetty ? setDetail(c) : setEditing(c);
