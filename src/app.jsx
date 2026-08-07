@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 406 · New Graphic Ticket queue — a shared self-claim pool for the graphic artists (2D, 3D, revisions, embroidery, print & sample files). Raise a design task from any lead or in the queue; the artist claims it, and when it's marked Ready for approval the linked lead moves to the new 'For Approval' stage and the person who raised the ticket is notified to review. Approve or send back for revisions.";
+const BUILD = "Live build 407 · Graphic tickets now live as a Tickets tab inside the Graphic Design view (no separate menu, no change to the sales pipeline). Finishing a ticket moves it to the 'For approval' column within the graphic list and notifies whoever raised it — the sales lead's own stage is left untouched.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -70,7 +70,6 @@ const STAGES = [
   { key: 'qualified',         label: 'Qualified',              color: 'bg-blue-100 text-blue-700' },
   { key: 'proposal',          label: 'Proposal Sent',          color: 'bg-indigo-100 text-indigo-700' },
   { key: 'negotiation',       label: 'Negotiation',            color: 'bg-amber-100 text-amber-700' },
-  { key: 'for_approval',      label: 'For Approval',           color: 'bg-cyan-100 text-cyan-700' },
   { key: 'sampling',          label: 'Sampling',               color: 'bg-purple-100 text-purple-700' },
   { key: 'won',               label: 'Closed Won',             color: 'bg-emerald-100 text-emerald-700' },
   { key: 'delivered_pending', label: 'Delivered - For Payment', color: 'bg-teal-100 text-teal-800' },
@@ -81,7 +80,7 @@ const STAGES = [
 const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
 const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 // Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
-const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, for_approval:0.72, sampling:0.80 };
+const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
 function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
 // Lead type: a normal Sale vs a non-sale (marketing giveaway, internal sizer,
 // client loaner). Non-sale leads are excluded from revenue/forecast/commissions/
@@ -153,10 +152,6 @@ const GRAPHIC_TICKET_STATUS = [
   { key:'for_approval', label:'For approval', textColor:'text-cyan-700',    pill:'bg-cyan-100' },
   { key:'done',         label:'Approved',     textColor:'text-emerald-700', pill:'bg-emerald-100' },
 ];
-// When a graphic ticket is sent For approval we advance its lead to the
-// "For Approval" stage — but only from an earlier open stage, so we never drag
-// a lead that's already in Sampling / Won backward.
-const STAGES_BEFORE_APPROVAL = ['new','qualified','proposal','negotiation','for_approval'];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -8970,10 +8965,31 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   );
 }
 
+/* ----------------------- Graphic view (Board + Tickets tabs) ----------------------- */
+// Wraps the existing Graphic Design board and the new ticket queue in two tabs
+// so the graphic artists keep one screen. Board is passed in as an element so we
+// don't have to re-thread all of DeptBoard's props.
+function GraphicView({ profile, profiles, clients, leads, onOpenLead, deptBoard }){
+  const [tab,setTab]=useState('tickets');
+  return (
+    <div>
+      <div className="px-6 pt-5">
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+          <button onClick={()=>setTab('tickets')} className={`px-4 py-1.5 rounded-md font-medium ${tab==='tickets'?'bg-white shadow-sm text-fuchsia-700':'text-slate-600'}`}>🎫 Tickets</button>
+          <button onClick={()=>setTab('board')} className={`px-4 py-1.5 rounded-md font-medium ${tab==='board'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🎨 Design board</button>
+        </div>
+      </div>
+      {tab==='tickets'
+        ? <GraphicTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={onOpenLead} />
+        : deptBoard}
+    </div>
+  );
+}
+
 /* ----------------------- Graphic Ticket Queue ----------------------- */
-// Shared self-claim pool for the graphic artists. When an artist finishes,
-// the ticket goes "For approval", the linked lead advances to the For Approval
-// stage, and the person who raised the ticket is notified to review it.
+// Shared self-claim pool for the graphic artists. When an artist finishes, the
+// ticket moves to the "For approval" column and the person who raised it is
+// notified to review. The sales lead's own pipeline stage is left untouched.
 function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, reload }){
   const [tickets,setTickets]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -8999,7 +9015,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const leadOf=(id)=>(leads||[]).find(l=>l.id===id);
   async function notify(recipientId, text, ticketId){
     if(!recipientId || recipientId===profile.id) return;
-    try{ await sb.from('notifications').insert({ recipient_id:recipientId, actor_id:profile.id, text, link_view:'graphic-tickets', ref_type:'graphic_ticket', ref_id:ticketId, type:'system' }); }catch(_){}
+    try{ await sb.from('notifications').insert({ recipient_id:recipientId, actor_id:profile.id, text, link_view:'graphic', ref_type:'graphic_ticket', ref_id:ticketId, type:'system' }); }catch(_){}
   }
   async function patch(t, changes){
     const { error } = await sb.from('sales_tickets').update({ ...changes, updated_at:new Date().toISOString() }).eq('id',t.id);
@@ -9009,19 +9025,10 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const claim  =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
   const release=(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
   async function readyForApproval(t){
+    // Move the ticket into the "For approval" column of the graphic list and
+    // notify whoever raised it. (The sales lead's own stage is left untouched.)
     await patch(t,{ status:'for_approval' });
-    // Advance the linked lead to the For Approval stage (only from an earlier
-    // open stage, so we never drag a sampling/won lead backward).
-    const lead=leadOf(t.lead_id);
-    if(lead && STAGES_BEFORE_APPROVAL.includes(lead.stage) && lead.stage!=='for_approval'){
-      try{
-        await sb.from('leads').update({ stage:'for_approval', stage_changed_at:new Date().toISOString() }).eq('id', lead.id);
-        await sb.from('lead_activity').insert({ lead_id:lead.id, actor_id:profile.id, type:'system', text:`Graphic work done — moved to "For Approval"` });
-      }catch(_){}
-    }
-    // Notify whoever raised the ticket that it's ready to review.
     await notify(t.created_by || t.requested_by, `🎨 Graphic ticket "${t.title}" is ready for your approval.`, t.id);
-    reload && reload();
   }
   async function approve(t){
     await patch(t,{ status:'done', done_at:new Date().toISOString() });
@@ -34535,10 +34542,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','graphic-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','graphic-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -34584,8 +34591,8 @@ function App(){
       allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','graphic-tickets','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
-      fallback = 'graphic-tickets';
+      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
+      fallback = 'graphic';
     } else if(profile.role==='printing'){
       allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','logistics','delivery-receipts','budgets','profile']);
       fallback = 'printing';
@@ -35184,7 +35191,7 @@ function App(){
     // Production / Graphic Design / Printing teams all share the same nav —
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ...(isGraphicTeam?[['graphic-tickets','Graphic Tickets','🎨']]:[]) ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -35263,7 +35270,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic-tickets','Graphic Tickets','🎨'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -35277,7 +35284,7 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic-tickets','Graphic Tickets','🎨'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
@@ -35437,7 +35444,6 @@ function App(){
         {view==='team' && <TeamOverview profile={profile} profiles={profiles} leads={leads} clients={clients} salesTargets={salesTargets} reload={loadAll} />}
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
-        {view==='graphic-tickets' && <GraphicTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
@@ -35447,7 +35453,7 @@ function App(){
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='graphic' && <DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>setDetailLead(l)} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
