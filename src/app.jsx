@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 408 · Every new graphic ticket now also drops a 'To Do' card on the Graphic Design board, linked to the ticket. Marking the ticket 'Ready for approval' moves that board card to 'For Approval' (and 'Send back' returns it to 'To Do') — the ticket board and design board stay in sync.";
+const BUILD = "Live build 409 · Graphic tickets: creating one now lets you pick which lead attachments to send to the design-board card (same as Send to Graphic), and notifies the artists a new ticket arrived. Opening a lead from a graphic ticket now opens it in the design-board view (chat + attachments), not the sales pipeline — for both artists and the requester reviewing a For-Approval item.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2627,7 +2627,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
       {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
       {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
       {showTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} onClose={()=>setShowTicket(false)} onSaved={()=>setShowTicket(false)} />}
-      {showGraphicTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowGraphicTicket(false)} onSaved={()=>setShowGraphicTicket(false)} />}
+      {showGraphicTicket && <TicketForm profile={profile} profiles={profiles} leads={[lead]} clients={clients} defaultLeadId={lead.id} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowGraphicTicket(false)} onSaved={()=>setShowGraphicTicket(false)} />}
     </Modal>
   );
 }
@@ -8771,16 +8771,21 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
 // stages (and can be raised manually); any available assistant claims the next
 // one. Workload counters keep the load transparent so nobody drowns while
 // another sits idle.
-function TicketForm({ profile, leads, clients, existing, defaultLeadId, department='sales', taskTypes=TICKET_TYPES, onClose, onSaved }){
+function TicketForm({ profile, profiles, leads, clients, existing, defaultLeadId, department='sales', taskTypes=TICKET_TYPES, onClose, onSaved }){
   const isEdit=!!existing;
+  const isGraphic = department==='graphic';
   const [title,setTitle]=useState(existing?.title||'');
   const [type,setType]=useState(existing?.task_type||taskTypes[taskTypes.length-1].key);
   const [prio,setPrio]=useState(existing?.priority||'normal');
   const [leadId,setLeadId]=useState(existing?.lead_id||defaultLeadId||'');
   const [due,setDue]=useState(existing?.due_date||'');
   const [notes,setNotes]=useState(existing?.notes||'');
+  const [chosenAtts,setChosenAtts]=useState({}); // graphic: which lead attachments to send to the board
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const openLeads=(leads||[]).filter(l=>!['lost','delivered_paid'].includes(l.stage) || l.id===leadId).slice().sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+  const selLead=(leads||[]).find(l=>l.id===leadId);
+  const leadAtts=selLead?.attachments||[];
+  useEffect(()=>{ setChosenAtts({}); },[leadId]);
   async function save(){
     if(!title.trim()){ setMsg('Ticket title is required.'); return; }
     setBusy(true); setMsg('');
@@ -8802,14 +8807,21 @@ function TicketForm({ profile, leads, clients, existing, defaultLeadId, departme
           try{
             const client=(clients||[]).find(c=>c.id===(lead?.client_id));
             const typeLabel=(taskTypes.find(tt=>tt.key===type)||{}).label||'';
+            const chosen=(lead?.attachments||[]).filter((_,i)=>chosenAtts[i]);
             const { data:job } = await sb.from('graphic_design_jobs').insert({
               number:'GD-'+Date.now().toString().slice(-6),
               lead_id: leadId||null, source_lead_id: leadId||null,
               client_name: client?(client.company||client.name||''):'',
-              item: title.trim(), graphic_type: typeLabel,
-              due_date: due||null, notes: notes.trim()||null, status:'to do',
+              item: title.trim(), items: lead?.items||[], quantity:(lead?.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0),
+              graphic_type: typeLabel, attachments: chosen,
+              due_date: due||lead?.delivery_date||lead?.expected_close||null, notes: notes.trim()||null, status:'to do',
             }).select('id').single();
             if(job) await sb.from('sales_tickets').update({ board_job_id: job.id }).eq('id', newT.id);
+          }catch(_){}
+          // Notify the graphic artists that a new ticket is in the pool.
+          try{
+            const artists=(profiles||[]).filter(p=>p.role==='graphic' && p.id!==profile.id).map(p=>p.id);
+            if(artists.length) await sb.from('notifications').insert(artists.map(id=>({ recipient_id:id, actor_id:profile.id, text:`🎨 New graphic ticket: "${title.trim()}"`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:newT.id, type:'system' })));
           }catch(_){}
         }
       }
@@ -8827,6 +8839,17 @@ function TicketForm({ profile, leads, clients, existing, defaultLeadId, departme
         <div><label className="text-[10px] text-slate-500 uppercase">Project / lead <span className="text-slate-400">· optional</span></label><select className="input mt-0.5" value={leadId} onChange={e=>setLeadId(e.target.value)}><option value="">— None —</option>{openLeads.map(l=><option key={l.id} value={l.id}>{l.title}</option>)}</select></div>
         <div><label className="text-[10px] text-slate-500 uppercase">Due date <span className="text-slate-400">· optional</span></label><input type="date" className="input mt-0.5" value={due||''} onChange={e=>setDue(e.target.value)} /></div>
         <div><label className="text-[10px] text-slate-500 uppercase">Notes</label><textarea className="input mt-0.5" rows={2} value={notes} onChange={e=>setNotes(e.target.value)} /></div>
+        {isGraphic && !isEdit && (
+          <div className="border rounded-lg p-3 bg-fuchsia-50/50 border-fuchsia-200">
+            <div className="text-[11px] font-semibold text-fuchsia-700 uppercase mb-1.5">📎 Attachments to send to the design board</div>
+            {!leadId ? <div className="text-xs text-slate-400">Pick a project / lead above to choose its attachments.</div>
+              : leadAtts.length===0 ? <div className="text-xs text-slate-400">This lead has no attachments — the board card is still created.</div>
+              : <div className="space-y-1">
+                  <label className="flex items-center gap-2 text-xs text-slate-500 pb-1 border-b"><input type="checkbox" checked={leadAtts.length>0&&leadAtts.every((_,i)=>chosenAtts[i])} onChange={e=>{ const all={}; if(e.target.checked) leadAtts.forEach((_,i)=>all[i]=true); setChosenAtts(all); }} />Select all</label>
+                  {leadAtts.map((a,i)=>(<label key={i} className="flex items-center gap-2 text-sm bg-white border rounded px-2 py-1 cursor-pointer"><input type="checkbox" checked={!!chosenAtts[i]} onChange={e=>setChosenAtts(pp=>({...pp,[i]:e.target.checked}))} /><span>{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="truncate flex-1">{a.name||'attachment'}</span></label>))}
+                </div>}
+          </div>
+        )}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:opacity-40" onClick={save}>{busy?'Saving…':(isEdit?'Save':'Create ticket')}</button></div>
       </div>
@@ -9174,8 +9197,8 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
         </div>
       )}
 
-      {showForm && <TicketForm profile={profile} leads={leads} clients={clients} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); reload && reload(); }} />}
-      {editTicket && <TicketForm profile={profile} leads={leads} clients={clients} existing={editTicket} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); reload && reload(); }} />}
+      {showForm && <TicketForm profile={profile} profiles={profiles} leads={leads} clients={clients} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowForm(false)} onSaved={()=>{ setShowForm(false); load(); reload && reload(); }} />}
+      {editTicket && <TicketForm profile={profile} profiles={profiles} leads={leads} clients={clients} existing={editTicket} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setEditTicket(null)} onSaved={()=>{ setEditTicket(null); load(); reload && reload(); }} />}
     </div>
   );
 }
@@ -35479,7 +35502,7 @@ function App(){
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
-        {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
+        {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>openLeadFromDept({ lead:l, job:(graphicJobs||[]).find(j=>j.lead_id===l.id && !j.deleted_at), jobType:'graphic', canSendToPrinting:true })} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
