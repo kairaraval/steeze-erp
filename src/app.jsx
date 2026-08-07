@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 413 · Profile: 'Closed deals — pricing reference' is now its own tab and shows only YOUR own closed-won deals (client · item · qty · unit price), not everyone's. (Plus the earlier build-412 changes: Due Date required for Closed Won, archivable sales tickets, and no Blocked column.)";
+const BUILD = "Live build 414 · Lead form: contact person is now a pick-or-type dropdown of the client's saved contacts, and delivery address offers a dropdown of the client's saved / previously-used addresses. Sales ticket queue: managers no longer see the Done button. In-House Cutting rows now show the order quantity. QC Team Leader (Mayflor) can now view the Sampling Board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -976,7 +976,7 @@ function Thread(props){
 }
 
 /* ----------------------- Lead form ----------------------- */
-function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
+function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSaved }){
   const isEdit=!!existing;
   const [clientMode,setClientMode]=useState(isEdit?'existing':(clients.length?'existing':'new'));
   const [clientId,setClientId]=useState(existing?.client_id||clients[0]?.id||'');
@@ -1020,6 +1020,11 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
     if(c){ setContactPerson(c.contact||''); setContactPhone(c.phone||''); setAddress(c.address||''); }
   }, [clientId, clientMode]);
   const existingClientContacts = (()=>{ const c=(clients||[]).find(x=>x.id===clientId); return Array.isArray(c?.contacts)?c.contacts:[]; })();
+  // Saved contacts & addresses for the currently-selected client — offered as
+  // dropdowns so sales can pick instead of retyping.
+  const selClientForOpts = (clients||[]).find(x=>x.id===clientId);
+  const contactOptions = (()=>{ const out=[]; const push=(n,ph)=>{ const nm=String(n||'').trim(); if(nm && !out.some(x=>x.name.toLowerCase()===nm.toLowerCase())) out.push({name:nm, phone:String(ph||'').trim()}); }; if(selClientForOpts){ push(selClientForOpts.contact, selClientForOpts.phone); (Array.isArray(selClientForOpts.contacts)?selClientForOpts.contacts:[]).forEach(c=>push(c.name, c.phone)); } return out; })();
+  const addressOptions = (()=>{ const set=new Set(); if(selClientForOpts?.address) set.add(String(selClientForOpts.address).trim()); (leads||[]).filter(l=>l.client_id===clientId && String(l.delivery_address||'').trim()).forEach(l=>set.add(String(l.delivery_address).trim())); return Array.from(set).filter(Boolean); })();
   const [manualValue,setManualValue]=useState(isEdit&&(!existing.items||existing.items.length===0)?String(existing.value||''):'');
   const [items,setItems]=useState((existing?.items&&existing.items.length)?existing.items.map((it,i)=>({ id:'i'+i, itemType:it.itemType||'', category:it.category||'', description:it.description||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat, vatInclusive:!!it.vatInclusive })):[{ id:'i0', itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]);
   const [attachments,setAttachments]=useState(existing?.attachments||[]); const [reading,setReading]=useState(false);
@@ -1212,10 +1217,15 @@ function LeadForm({ profile, profiles, clients, existing, onClose, onSaved }){
         <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 space-y-2">
           <div className="text-xs font-semibold text-slate-700">📇 Contact &amp; delivery address <span className="font-normal text-slate-400">· saved to the client · required for Sampling / Closed Won</span></div>
           <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[10px] text-slate-500 uppercase">Contact person</label><input className="input mt-0.5" value={contactPerson} onChange={e=>setContactPerson(e.target.value)} placeholder="Name" /></div>
+            <div><label className="text-[10px] text-slate-500 uppercase">Contact person {contactOptions.length>0 && <span className="text-slate-400 normal-case">· pick or type</span>}</label>
+              <input className="input mt-0.5" list="lead-contact-opts" value={contactPerson} onChange={e=>{ const v=e.target.value; setContactPerson(v); const m=contactOptions.find(c=>c.name.toLowerCase()===v.trim().toLowerCase()); if(m) setContactPhone(m.phone||''); }} placeholder="Name" autoComplete="off" />
+              <datalist id="lead-contact-opts">{contactOptions.map((c,i)=><option key={i} value={c.name}>{c.phone?`${c.name} · ${c.phone}`:c.name}</option>)}</datalist>
+            </div>
             <div><label className="text-[10px] text-slate-500 uppercase">Contact phone</label><input className="input mt-0.5" value={contactPhone} onChange={e=>setContactPhone(e.target.value)} placeholder="Mobile / landline" /></div>
           </div>
-          <div><label className="text-[10px] text-slate-500 uppercase">Delivery address</label><textarea className="input mt-0.5 min-h-[52px]" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Full delivery address" /></div>
+          <div><label className="text-[10px] text-slate-500 uppercase">Delivery address</label>
+            {addressOptions.length>0 && <select className="input mt-0.5 mb-1" value={addressOptions.includes((address||'').trim())?(address||'').trim():''} onChange={e=>{ if(e.target.value) setAddress(e.target.value); }}><option value="">📍 Choose a saved address…</option>{addressOptions.map((a,i)=><option key={i} value={a}>{a.length>70?a.slice(0,70)+'…':a}</option>)}</select>}
+            <textarea className="input mt-0.5 min-h-[52px]" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Full delivery address" /></div>
           {existingClientContacts.length>0 && <div className="text-[10px] text-slate-500">Other contacts on file: {existingClientContacts.map(c=>`${c.name||''}${c.phone?` (${c.phone})`:''}`).join(' · ')}</div>}
           <div className="grid grid-cols-2 gap-2">
             <div><label className="text-[10px] text-slate-500 uppercase">Secondary contact (optional)</label><input className="input mt-0.5" value={secondaryContact} onChange={e=>setSecondaryContact(e.target.value)} placeholder="Different contact for this order" /></div>
@@ -7192,6 +7202,8 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+  // Order quantity for a cutting item — from its production job, else the lead's items.
+  function qtyForWork(w){ const j=w.source_job_id?(prodJobs||[]).find(x=>x.id===w.source_job_id):null; if(j && Number(j.quantity)>0) return Number(j.quantity); const l=leadFor(w.lead_id); if(l) return (l.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0); return 0; }
   // The Pattern Library is a live reference — patterns logged by the pattern
   // maker on another device won't be in the parent's cached `patterns` prop
   // until a full reload. Fetch fresh here (on mount + when the tab opens + via
@@ -7225,7 +7237,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
 
-  const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (
+  const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; const qty=qtyForWork(w); return (
     <div key={w.id} className="border-t px-3 py-2.5">
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex flex-col shrink-0 -my-1">
@@ -7236,7 +7248,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
         <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
           <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div>
-          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.pattern_number?` · Pattern ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty.toLocaleString('en-PH')} pcs`:''}{w.pattern_number?` · Pattern ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
         </button>
         <button onClick={()=>setDetail(w)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold shrink-0">Open ▸</button>
         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
@@ -8957,7 +8969,8 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
           <div className="ml-auto flex items-center gap-1.5">
             {t.archived_at ? (canManage && <button onClick={()=>unarchive(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Unarchive</button>) : <>
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
-            {t.status==='in_progress' && canAct && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button></>}
+            {t.status==='in_progress' && canAct && <button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button>}
+            {t.status==='in_progress' && canAct && profile.role!=='manager' && <button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
             {t.status==='done' && canAct && <button onClick={()=>archive(t)} title="Archive — hide from the board" className="text-xs px-2 py-1 rounded-lg border text-slate-500">🗄 Archive</button>}
             </>}
@@ -34700,8 +34713,8 @@ function App(){
       allowed = new Set(['inbox','my-tasks','qc','techpacks','profile']);
       fallback = 'qc';
     } else if(profile.role==='qc_leader'){
-      // QC Team Leader — Quality Control + the Production board (+ techpacks for reference).
-      allowed = new Set(['inbox','my-tasks','qc','prod','techpacks','profile']);
+      // QC Team Leader — Quality Control + the Production & Sampling boards (+ techpacks for reference).
+      allowed = new Set(['inbox','my-tasks','qc','prod','sampling','techpacks','profile']);
       fallback = 'qc';
     } else if(profile.role==='qc_personnel'){
       // QC Personnel — Quality Control only (+ techpacks for reference).
@@ -35274,7 +35287,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isQcPersonnel){
@@ -35682,7 +35695,7 @@ function App(){
           </button>
         </div>
       )}
-      {showNew && <LeadForm profile={profile} profiles={profiles} clients={clients} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
+      {showNew && <LeadForm profile={profile} profiles={profiles} clients={clients} leads={leads} onClose={()=>setShowNew(false)} onSaved={()=>{ setShowNew(false); loadAll(); }} />}
       {liveDetail && !editLead && !activityLead && !sendGraphicLead && !sendPrintLead && (
         <LeadDetail profile={profile} profiles={profiles} reload={loadAll} lead={liveDetail} clients={clients} estimates={estimates} invoices={invoices} salesOrders={salesOrders} activityCount={activityCounts[liveDetail.id]}
           onEdit={()=>setEditLead(liveDetail)} onOpenActivity={()=>setActivityLead(liveDetail)}
@@ -35734,7 +35747,7 @@ function App(){
       )}
       {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onOpenSnapshot={(snap)=>setTechpackSnapView({ lead:(leads.find(l=>l.id===techpackLead.id)||techpackLead), snap })} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
       {techpackSnapView && <TechpackEditor key={'snap-'+techpackSnapView.snap.id} profile={profile} profiles={profiles} lead={techpackSnapView.lead} client={clients.find(c=>c.id===techpackSnapView.lead.client_id)} reload={loadAll} readOnly overrideTechpack={techpackSnapView.snap.data} snapshotMeta={techpackSnapView.snap} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>setTechpackSnapView(null)} />}
-      {editLead && <LeadForm key={editLead.id || 'new'} profile={profile} profiles={profiles} clients={clients} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
+      {editLead && <LeadForm key={editLead.id || 'new'} profile={profile} profiles={profiles} clients={clients} leads={leads} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
       {sendGraphicLead && <SendToGraphicModal profile={profile} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
