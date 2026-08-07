@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 416 · Lead form: removed the Secondary contact fields. Now just type a new name (+ phone) in the Contact person field and it's automatically saved to that client's contact directory — building up each client's contacts over time. Existing contacts are never overwritten.";
+const BUILD = "Live build 417 · Quality Control: added a Repairs box (minor / major counts), a 'Sewn by' picker (In-house or Subcon — with a subcon dropdown), and a 'human error' reject count. Also hardened the list against duplicate entries. All of it shows in the QC list summary.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6879,8 +6879,11 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
     } else { reload(); }
   })(); },[prodJobs, sampleJobs, qcReports]);
 
-  const open=(qcReports||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
-  const done=(qcReports||[]).filter(w=>w.status==='done');
+  // Defensive de-dupe: never show the same production/sample job twice, even if
+  // a transient duplicate slips in before the DB unique index / reload catches it.
+  const dedupe=(arr)=>{ const seen=new Set(); const out=[]; for(const w of arr){ const k=w.source_job_id||('id:'+w.id); if(seen.has(k)) continue; seen.add(k); out.push(w); } return out; };
+  const open=dedupe((qcReports||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0))));
+  const done=dedupe((qcReports||[]).filter(w=>w.status==='done'));
 
   async function markDone(w){ if(!(Array.isArray(w.qc_handlers)&&w.qc_handlers.length)){ if(!confirm('No QC handler recorded yet. Mark as done anyway?')) return; } const { error }=await sb.from('qc_reports').update({ status:'done', done_at:new Date().toISOString(), done_by:profile.id }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('qc_reports').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
@@ -6889,7 +6892,9 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
   const summaryLine=(w)=>{ const bits=[];
     if(w.source_type==='sample'){ if(w.sample_result) bits.push(w.sample_result==='passed'?'✅ Passed':w.sample_result==='failed'?'❌ Failed':w.sample_result); if(w.recommendation) bits.push('Rec: '+w.recommendation); }
-    else if(w.reject_count!=null) bits.push(`${w.reject_count} reject${w.reject_count===1?'':'s'}`);
+    else if(w.reject_count!=null) bits.push(`${w.reject_count} reject${w.reject_count===1?'':'s'}${w.human_error_count?` (${w.human_error_count} human err)`:''}`);
+    { const rep=[]; if(w.minor_repairs) rep.push(`${w.minor_repairs} minor`); if(w.major_repairs) rep.push(`${w.major_repairs} major`); if(rep.length) bits.push('🔧 '+rep.join(' / ')+' repair'); }
+    if(w.sewer_type) bits.push(w.sewer_type==='subcon'?'🧵 Subcon':(w.sewer_name?`🏠 ${w.sewer_name}`:'🏠 In-house'));
     if(Array.isArray(w.reject_types)&&w.reject_types.length) bits.push('⚠ '+w.reject_types.join(', '));
     if(Array.isArray(w.qc_handlers)&&w.qc_handlers.length) bits.push('QC: '+w.qc_handlers.map(id=>{const e=(employees||[]).find(x=>x.id===id);return e?fullName(e):'—';}).join(', '));
     return bits.join(' · ');
@@ -7062,6 +7067,14 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   const [rejectCount,setRejectCount]=useState(w.reject_count!=null?String(w.reject_count):'');
   const [rejectReason,setRejectReason]=useState(w.reject_reason||'');
   const [rejectTypes,setRejectTypes]=useState(Array.isArray(w.reject_types)?w.reject_types:[]);
+  const [humanErr,setHumanErr]=useState(w.human_error_count!=null?String(w.human_error_count):'');
+  const [minorRepairs,setMinorRepairs]=useState(w.minor_repairs!=null?String(w.minor_repairs):'');
+  const [majorRepairs,setMajorRepairs]=useState(w.major_repairs!=null?String(w.major_repairs):'');
+  const [sewerType,setSewerType]=useState(w.sewer_type||'');
+  const [subconId,setSubconId]=useState(w.subcon_id||'');
+  const [sewerName,setSewerName]=useState(w.sewer_name||'');
+  const [subcons,setSubcons]=useState([]);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('subcons').select('id,name').order('name'); if(data) setSubcons(data); }catch(_){} })(); },[]);
   const [sampleResult,setSampleResult]=useState(w.sample_result||'');
   const [recommendation,setRecommendation]=useState(w.recommendation||'');
   const [empSearch,setEmpSearch]=useState('');
@@ -7090,6 +7103,12 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
       reject_types: rejectTypes.length?rejectTypes:null,
       reject_count: isSample?null:(rejectCount===''?null:Number(rejectCount)),
       reject_reason: isSample?null:(rejectReason||null),
+      human_error_count: isSample?null:(humanErr===''?null:Number(humanErr)),
+      minor_repairs: minorRepairs===''?null:Number(minorRepairs),
+      major_repairs: majorRepairs===''?null:Number(majorRepairs),
+      sewer_type: sewerType||null,
+      subcon_id: sewerType==='subcon'?(subconId||null):null,
+      sewer_name: sewerType==='inhouse'?(sewerName.trim()||null):null,
       sample_result: isSample?(sampleResult||null):null,
       recommendation: isSample?(recommendation||null):null,
     };
@@ -7150,6 +7169,25 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           </div>
         </div>
 
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="rounded-lg border p-3 bg-slate-50/60">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by</div>
+            <div className="flex gap-2 mb-2">
+              <button type="button" onClick={()=>setSewerType('inhouse')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='inhouse'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🏠 In-house</button>
+              <button type="button" onClick={()=>setSewerType('subcon')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='subcon'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🧵 Subcon</button>
+            </div>
+            {sewerType==='subcon' && <select value={subconId} onChange={e=>setSubconId(e.target.value)} className="input text-sm"><option value="">— Choose subcon —</option>{subcons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+            {sewerType==='inhouse' && <input value={sewerName} onChange={e=>setSewerName(e.target.value)} placeholder="Sewer name (optional)" className="input text-sm" />}
+          </div>
+          <div className="rounded-lg border p-3 bg-amber-50/50 border-amber-100">
+            <div className="text-[10px] uppercase text-amber-600 font-semibold mb-1.5">Repairs needed</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><div className="text-[10px] text-slate-500 mb-0.5">Minor</div><input type="number" min="0" value={minorRepairs} onChange={e=>setMinorRepairs(e.target.value)} placeholder="0" className="input text-sm" /></div>
+              <div><div className="text-[10px] text-slate-500 mb-0.5">Major</div><input type="number" min="0" value={majorRepairs} onChange={e=>setMajorRepairs(e.target.value)} placeholder="0" className="input text-sm" /></div>
+            </div>
+          </div>
+        </div>
+
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Issue / reject type <span className="text-slate-300 normal-case">· tick all that apply</span></div>
           <div className="flex flex-wrap gap-1.5">
@@ -7186,10 +7224,14 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
             </div>
           </div>
         ) : (
-          <div className="grid md:grid-cols-3 gap-3 bg-rose-50/40 border border-rose-100 rounded-lg p-3">
+          <div className="grid md:grid-cols-4 gap-3 bg-rose-50/40 border border-rose-100 rounded-lg p-3">
             <div>
               <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Rejects (qty)</div>
               <input type="number" min="0" value={rejectCount} onChange={e=>setRejectCount(e.target.value)} placeholder="0" className="input" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1" title="How many of the rejects were caused by human error">· human error</div>
+              <input type="number" min="0" value={humanErr} onChange={e=>setHumanErr(e.target.value)} placeholder="0" className="input" />
             </div>
             <div className="md:col-span-2">
               <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Reject reason</div>
