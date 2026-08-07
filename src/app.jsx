@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 409 · Graphic tickets: creating one now lets you pick which lead attachments to send to the design-board card (same as Send to Graphic), and notifies the artists a new ticket arrived. Opening a lead from a graphic ticket now opens it in the design-board view (chat + attachments), not the sales pipeline — for both artists and the requester reviewing a For-Approval item.";
+const BUILD = "Live build 410 · Fix: new graphic tickets' To-Do cards now show on the Design board without a full refresh — opening the Design board tab reloads the latest jobs. (The cards were being created; the board was just showing a stale list.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9013,12 +9013,15 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
 // don't have to re-thread all of DeptBoard's props.
 function GraphicView({ profile, profiles, clients, leads, onOpenLead, deptBoard, reload }){
   const [tab,setTab]=useState('tickets');
+  // Opening the Design board pulls fresh data so tickets raised moments ago
+  // (which drop a "To Do" card) show up without needing a full page refresh.
+  function openBoard(){ setTab('board'); reload && reload(); }
   return (
     <div>
       <div className="px-6 pt-5">
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
           <button onClick={()=>setTab('tickets')} className={`px-4 py-1.5 rounded-md font-medium ${tab==='tickets'?'bg-white shadow-sm text-fuchsia-700':'text-slate-600'}`}>🎫 Tickets</button>
-          <button onClick={()=>setTab('board')} className={`px-4 py-1.5 rounded-md font-medium ${tab==='board'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🎨 Design board</button>
+          <button onClick={openBoard} className={`px-4 py-1.5 rounded-md font-medium ${tab==='board'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🎨 Design board</button>
         </div>
       </div>
       {tab==='tickets'
