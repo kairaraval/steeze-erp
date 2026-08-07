@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 414 · Lead form: contact person is now a pick-or-type dropdown of the client's saved contacts, and delivery address offers a dropdown of the client's saved / previously-used addresses. Sales ticket queue: managers no longer see the Done button. In-House Cutting rows now show the order quantity. QC Team Leader (Mayflor) can now view the Sampling Board.";
+const BUILD = "Live build 415 · Lead form: the Contact person dropdown now always lists ALL of the client's saved contacts (tap the ▾ or focus the field) — the old auto-complete hid them when the box already had a name. Pick one to fill the name + phone.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1022,6 +1022,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   const existingClientContacts = (()=>{ const c=(clients||[]).find(x=>x.id===clientId); return Array.isArray(c?.contacts)?c.contacts:[]; })();
   // Saved contacts & addresses for the currently-selected client — offered as
   // dropdowns so sales can pick instead of retyping.
+  const [showContacts,setShowContacts]=useState(false);
   const selClientForOpts = (clients||[]).find(x=>x.id===clientId);
   const contactOptions = (()=>{ const out=[]; const push=(n,ph)=>{ const nm=String(n||'').trim(); if(nm && !out.some(x=>x.name.toLowerCase()===nm.toLowerCase())) out.push({name:nm, phone:String(ph||'').trim()}); }; if(selClientForOpts){ push(selClientForOpts.contact, selClientForOpts.phone); (Array.isArray(selClientForOpts.contacts)?selClientForOpts.contacts:[]).forEach(c=>push(c.name, c.phone)); } return out; })();
   const addressOptions = (()=>{ const set=new Set(); if(selClientForOpts?.address) set.add(String(selClientForOpts.address).trim()); (leads||[]).filter(l=>l.client_id===clientId && String(l.delivery_address||'').trim()).forEach(l=>set.add(String(l.delivery_address).trim())); return Array.from(set).filter(Boolean); })();
@@ -1218,8 +1219,20 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           <div className="text-xs font-semibold text-slate-700">📇 Contact &amp; delivery address <span className="font-normal text-slate-400">· saved to the client · required for Sampling / Closed Won</span></div>
           <div className="grid grid-cols-2 gap-2">
             <div><label className="text-[10px] text-slate-500 uppercase">Contact person {contactOptions.length>0 && <span className="text-slate-400 normal-case">· pick or type</span>}</label>
-              <input className="input mt-0.5" list="lead-contact-opts" value={contactPerson} onChange={e=>{ const v=e.target.value; setContactPerson(v); const m=contactOptions.find(c=>c.name.toLowerCase()===v.trim().toLowerCase()); if(m) setContactPhone(m.phone||''); }} placeholder="Name" autoComplete="off" />
-              <datalist id="lead-contact-opts">{contactOptions.map((c,i)=><option key={i} value={c.name}>{c.phone?`${c.name} · ${c.phone}`:c.name}</option>)}</datalist>
+              <div className="relative mt-0.5">
+                <input className="input pr-8" value={contactPerson} onChange={e=>{ const v=e.target.value; setContactPerson(v); const m=contactOptions.find(c=>c.name.toLowerCase()===v.trim().toLowerCase()); if(m) setContactPhone(m.phone||''); }} onFocus={()=>setShowContacts(true)} onBlur={()=>setTimeout(()=>setShowContacts(false),150)} placeholder="Name" autoComplete="off" />
+                {contactOptions.length>0 && <button type="button" onMouseDown={e=>{ e.preventDefault(); setShowContacts(s=>!s); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" title="Saved contacts">▾</button>}
+                {showContacts && contactOptions.length>0 && (
+                  <div className="absolute z-30 left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-auto">
+                    {contactOptions.map((c,i)=>(
+                      <button key={i} type="button" onMouseDown={e=>{ e.preventDefault(); setContactPerson(c.name); setContactPhone(c.phone||''); setShowContacts(false); }} className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 border-b last:border-b-0">
+                        <div className="text-sm text-slate-800">{c.name}</div>
+                        {c.phone && <div className="text-[11px] text-slate-400">{c.phone}</div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div><label className="text-[10px] text-slate-500 uppercase">Contact phone</label><input className="input mt-0.5" value={contactPhone} onChange={e=>setContactPhone(e.target.value)} placeholder="Mobile / landline" /></div>
           </div>
