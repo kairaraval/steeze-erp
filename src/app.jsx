@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 415 · Lead form: the Contact person dropdown now always lists ALL of the client's saved contacts (tap the ▾ or focus the field) — the old auto-complete hid them when the box already had a name. Pick one to fill the name + phone.";
+const BUILD = "Live build 416 · Lead form: removed the Secondary contact fields. Now just type a new name (+ phone) in the Contact person field and it's automatically saved to that client's contact directory — building up each client's contacts over time. Existing contacts are never overwritten.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1007,8 +1007,6 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   const [contactPerson,setContactPerson]=useState(existing?.contact_person || initClient?.contact || '');
   const [contactPhone,setContactPhone]=useState(existing?.contact_phone || initClient?.phone || '');
   const [address,setAddress]=useState(existing?.delivery_address || initClient?.address || '');
-  const [secondaryContact,setSecondaryContact]=useState('');
-  const [secondaryPhone,setSecondaryPhone]=useState('');
   // When the user PICKS A DIFFERENT existing client, load that client's
   // contact/phone/address. Skip the first render so we don't clobber the lead's
   // own saved values when editing.
@@ -1110,14 +1108,22 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
     setBusy(true); setMsg('');
     try{ let finalClientId=clientId;
       if(clientMode==='new'){ if(!newCompany.trim()){ setMsg('New client needs a company.'); setBusy(false); return; }
-        const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:contactPerson.trim()||null, phone:contactPhone.trim()||null, address:address.trim()||null, manager_id:profile.id, contacts: secondaryContact.trim()?[{name:secondaryContact.trim(), phone:secondaryPhone.trim()||null}]:[] }).select().single(); if(error) throw error; finalClientId=data.id; }
-      // Write the contact + address through to the client record (source of truth).
+        const {data,error}=await sb.from('clients').insert({ company:newCompany.trim(), contact:contactPerson.trim()||null, phone:contactPhone.trim()||null, address:address.trim()||null, manager_id:profile.id, contacts: contactPerson.trim()?[{name:contactPerson.trim(), phone:contactPhone.trim()||null}]:[] }).select().single(); if(error) throw error; finalClientId=data.id; }
+      // Write the address + contact through to the client record (source of truth).
+      // If the contact person entered isn't already saved on the client, ADD them
+      // to the client's contact list (so we build up the client's directory).
       if(finalClientId && clientMode!=='new'){
-        const patch={ contact:contactPerson.trim()||null, phone:contactPhone.trim()||null, address:address.trim()||null };
-        if(secondaryContact.trim()){
-          const c=(clients||[]).find(x=>x.id===finalClientId); const cur=Array.isArray(c?.contacts)?c.contacts:[];
-          const dup=cur.some(x=>String(x.name||'').toLowerCase()===secondaryContact.trim().toLowerCase());
-          patch.contacts = dup?cur:[...cur, {name:secondaryContact.trim(), phone:secondaryPhone.trim()||null}];
+        const c=(clients||[]).find(x=>x.id===finalClientId);
+        let cur=Array.isArray(c?.contacts)?c.contacts.slice():[];
+        if(cur.length===0 && (c?.contact||c?.phone)) cur.push({ name:c.contact||'', phone:c.phone||null });
+        const nm=contactPerson.trim();
+        const patch={ address: address.trim()||null };
+        if(nm){
+          const idx=cur.findIndex(x=>String(x.name||'').toLowerCase()===nm.toLowerCase());
+          if(idx<0) cur.push({ name:nm, phone:contactPhone.trim()||null });
+          else if(contactPhone.trim() && !String(cur[idx].phone||'').trim()) cur[idx]={ ...cur[idx], phone:contactPhone.trim() };
+          patch.contacts=cur;
+          if(cur.length){ patch.contact=cur[0].name||null; patch.phone=cur[0].phone||null; }
         }
         try { await sb.from('clients').update(patch).eq('id', finalClientId); } catch(_){}
       }
@@ -1239,11 +1245,8 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           <div><label className="text-[10px] text-slate-500 uppercase">Delivery address</label>
             {addressOptions.length>0 && <select className="input mt-0.5 mb-1" value={addressOptions.includes((address||'').trim())?(address||'').trim():''} onChange={e=>{ if(e.target.value) setAddress(e.target.value); }}><option value="">📍 Choose a saved address…</option>{addressOptions.map((a,i)=><option key={i} value={a}>{a.length>70?a.slice(0,70)+'…':a}</option>)}</select>}
             <textarea className="input mt-0.5 min-h-[52px]" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Full delivery address" /></div>
-          {existingClientContacts.length>0 && <div className="text-[10px] text-slate-500">Other contacts on file: {existingClientContacts.map(c=>`${c.name||''}${c.phone?` (${c.phone})`:''}`).join(' · ')}</div>}
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[10px] text-slate-500 uppercase">Secondary contact (optional)</label><input className="input mt-0.5" value={secondaryContact} onChange={e=>setSecondaryContact(e.target.value)} placeholder="Different contact for this order" /></div>
-            <div><label className="text-[10px] text-slate-500 uppercase">Secondary phone</label><input className="input mt-0.5" value={secondaryPhone} onChange={e=>setSecondaryPhone(e.target.value)} placeholder="Phone" /></div>
-          </div>
+          {existingClientContacts.length>0 && <div className="text-[10px] text-slate-500">Contacts on file: {existingClientContacts.map(c=>`${c.name||''}${c.phone?` (${c.phone})`:''}`).join(' · ')}</div>}
+          {clientMode!=='new' && contactPerson.trim() && !contactOptions.some(c=>c.name.toLowerCase()===contactPerson.trim().toLowerCase()) && <div className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">➕ "{contactPerson.trim()}" is a new contact — it'll be saved to this client's contact list.</div>}
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
