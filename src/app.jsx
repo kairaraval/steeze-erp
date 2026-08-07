@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 410 · Fix: new graphic tickets' To-Do cards now show on the Design board without a full refresh — opening the Design board tab reloads the latest jobs. (The cards were being created; the board was just showing a stale list.)";
+const BUILD = "Live build 411 · Cutting: the 'Pattern number to use' field is now a live search box — type a code, name, or item and pick from the patterns the pattern maker logged (fetched fresh each time you open a cutting item, so newly-logged patterns always appear).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7339,7 +7339,14 @@ function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved
   const [total,setTotal]=useState(w.total_consumption??'');
   const [notes,setNotes]=useState(w.notes||'');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const matchedPattern=(patterns||[]).find(p=> (p.pattern_code||'').trim().toLowerCase()===(patternNumber||'').trim().toLowerCase() && !p.deleted_at);
+  // Always work off the freshest pattern list so a pattern logged moments ago by
+  // the pattern maker is searchable here (falls back to the passed-in list).
+  const [patList,setPatList]=useState(patterns||[]);
+  const [showPatList,setShowPatList]=useState(false);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('patterns').select('*').is('deleted_at',null).order('pattern_code',{ascending:true}); if(data) setPatList(data); }catch(_){} })(); },[]);
+  const matchedPattern=(patList||[]).find(p=> (p.pattern_code||'').trim().toLowerCase()===(patternNumber||'').trim().toLowerCase() && !p.deleted_at);
+  const patQuery=(patternNumber||'').trim().toLowerCase();
+  const patMatches=patQuery ? (patList||[]).filter(p=>`${p.pattern_code||''} ${p.name||''} ${p.item_type||''}`.toLowerCase().includes(patQuery)).slice(0,12) : [];
   const rowTotal=(r)=> (Number(r.per_pc)||0)*(Number(r.qty)||0);
   const fabricTotal=(f)=> (f.rows||[]).reduce((s,r)=>s+rowTotal(r),0);
   const grandTotal = fabrics.reduce((s,f)=>s+fabricTotal(f),0);
@@ -7384,8 +7391,20 @@ function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved
         </div>
 
         <TpLbl t="Pattern number to use">
-          <input className="input" value={patternNumber} onChange={e=>setPatternNumber(e.target.value)} placeholder="e.g. 195" />
-          {patternNumber.trim() && (matchedPattern ? <div className="text-[11px] text-emerald-700 mt-1">✓ {matchedPattern.item_type||''} — {matchedPattern.name||''}</div> : <div className="text-[11px] text-amber-600 mt-1">No matching pattern code in the library (that's OK — it's saved as-is).</div>)}
+          <div className="relative">
+            <input className="input" value={patternNumber} onChange={e=>{ setPatternNumber(e.target.value); setShowPatList(true); }} onFocus={()=>setShowPatList(true)} onBlur={()=>setTimeout(()=>setShowPatList(false),150)} placeholder="Search pattern code / name / item…" autoComplete="off" />
+            {showPatList && patMatches.length>0 && !matchedPattern && (
+              <div className="absolute z-30 left-0 right-0 mt-1 bg-white border rounded-lg shadow-lg max-h-56 overflow-auto">
+                {patMatches.map(p=>(
+                  <button key={p.id} type="button" onMouseDown={e=>{ e.preventDefault(); setPatternNumber(p.pattern_code||''); setShowPatList(false); }} className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 border-b last:border-b-0">
+                    <span className="font-mono text-xs font-semibold text-slate-800">{p.pattern_code||'—'}</span>
+                    <span className="text-xs text-slate-500 ml-2">{p.item_type?p.item_type+' · ':''}{p.name||''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {patternNumber.trim() && (matchedPattern ? <div className="text-[11px] text-emerald-700 mt-1">✓ {matchedPattern.item_type||''} — {matchedPattern.name||''}</div> : <div className="text-[11px] text-amber-600 mt-1">Pick from the list, or type a code — it's saved as-is.</div>)}
         </TpLbl>
 
         <div className="flex items-center justify-between">
