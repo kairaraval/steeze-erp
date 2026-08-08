@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 417 · Quality Control: added a Repairs box (minor / major counts), a 'Sewn by' picker (In-house or Subcon — with a subcon dropdown), and a 'human error' reject count. Also hardened the list against duplicate entries. All of it shows in the QC list summary.";
+const BUILD = "Live build 418 · Inventory items can now carry a photo — thumbnails show in the list and open in an in-page viewer. In the techpack Materials & Trims, a '📦 From inventory' button pulls an item's name + photo straight from the inventory library. New searchable dropdown (type to filter) — applied to the client picker in the lead form to start.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -470,6 +470,33 @@ function SignedImg({ url, path, className, alt }){
   },[url,path]);
   if(!src) return null;
   return <img src={src} alt={alt||''} className={className} />;
+}
+// Searchable dropdown — type to filter, click to pick. A drop-in upgrade for a
+// plain <select> where the option list is long (clients, suppliers, etc.).
+// options: [{ value, label }]. Pass className to size it like an .input.
+function SearchSelect({ value, onChange, options, placeholder='Select…', className='', allowClear=false }){
+  const [open,setOpen]=useState(false);
+  const [q,setQ]=useState('');
+  const opts=options||[];
+  const sel=opts.find(o=>String(o.value)===String(value));
+  const filtered=(q ? opts.filter(o=>String(o.label||'').toLowerCase().includes(q.toLowerCase())) : opts).slice(0,80);
+  return (
+    <div className="relative">
+      <input className={`input ${className}`} value={open?q:(sel?sel.label:'')} placeholder={sel?sel.label:placeholder}
+        onFocus={()=>{ setOpen(true); setQ(''); }}
+        onChange={e=>{ setQ(e.target.value); setOpen(true); }}
+        onBlur={()=>setTimeout(()=>setOpen(false),150)} autoComplete="off" />
+      {open && (
+        <div className="absolute z-40 left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
+          {allowClear && <button type="button" onMouseDown={e=>{ e.preventDefault(); onChange(''); setOpen(false); setQ(''); }} className="w-full text-left px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-50 border-b">— None —</button>}
+          {filtered.length===0 && <div className="px-3 py-2 text-xs text-slate-400">No matches</div>}
+          {filtered.map(o=>(
+            <button key={String(o.value)} type="button" onMouseDown={e=>{ e.preventDefault(); onChange(o.value); setOpen(false); setQ(''); }} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-indigo-50 ${String(o.value)===String(value)?'bg-indigo-50/60 font-semibold text-indigo-700':'text-slate-700'}`}>{o.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 const AVA_COLORS=['bg-blue-500','bg-emerald-500','bg-amber-500','bg-purple-500','bg-rose-500','bg-cyan-500','bg-indigo-500','bg-pink-500','bg-teal-500','bg-orange-500'];
 function avaColor(id){ if(!id) return 'bg-slate-400'; let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return AVA_COLORS[h%AVA_COLORS.length]; }
@@ -1217,7 +1244,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
     <Modal title={isEdit?'Edit lead':'New lead'} onClose={onClose}>
       <div className="space-y-3" onPaste={onPasteLead}>
         {!isEdit && (<div className="flex gap-2 text-xs"><button onClick={()=>setClientMode('existing')} disabled={!clients.length} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='existing'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'} disabled:opacity-40`}>Existing client</button><button onClick={()=>setClientMode('new')} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='new'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>+ New client</button></div>)}
-        {clientMode==='existing' ? (<select className="input" value={clientId} onChange={e=>setClientId(e.target.value)}>{clients.map(c=><option key={c.id} value={c.id}>{c.company}</option>)}</select>) : (<input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} />)}
+        {clientMode==='existing' ? (<SearchSelect value={clientId} onChange={setClientId} options={(clients||[]).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(c=>({value:c.id,label:c.company}))} placeholder="Search client…" />) : (<input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} />)}
         <input className="input" placeholder="Lead title" value={title} onChange={e=>setTitle(e.target.value)} />
         {/* Contact person + delivery address — saved to the client record and
            required before moving to Sampling or Closed Won. */}
@@ -19635,6 +19662,13 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   // pickingChart is null when closed, or a slot key ('chartImage'|'chartImage2')
   // identifying which image slot the library pick should populate.
   const [pickingChart,setPickingChart]=useState(null);
+  // Inventory library picker for the Materials / Trims sections — pull an item's
+  // name + photo straight from Inventory. pickInv holds { section, index } of the
+  // column to fill; invItems is the (photo-bearing) inventory list.
+  const [invItems,setInvItems]=useState([]);
+  const [pickInv,setPickInv]=useState(null);
+  const [invSearch,setInvSearch]=useState('');
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('items').select('id,name,image_path,bucket,color,category,unit').order('name'); if(data) setInvItems(data); }catch(_){} })(); },[]);
   async function saveChartToLibrary(){
     const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return;
     const garment=(prompt('Garment type (optional):')||'').trim();
@@ -19783,8 +19817,8 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
           </TpRow>
         </div>
       );
-      case 'materials': return (<div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" /><input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /><input className="input text-xs" placeholder="Color code" value={c.colorCode} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,colorCode:e.target.value}:x)})} /></div>))}<button onClick={()=>setSec('materials',{columns:[...sec.columns,{title:'',name:'',colorCode:'',image:''}]})} className="text-xs text-indigo-600 self-start">+ Add material</button></div>);
-      case 'trims': return (<div className="space-y-3"><div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" /><input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /></div>))}</div><div className="border rounded-lg p-2 grid grid-cols-3 gap-2"><input className="input text-xs" value={sec.packaging.title} onChange={e=>setSec('trims',{packaging:{...sec.packaging,title:e.target.value}})} /><input className="input text-xs" value={sec.packaging.type} onChange={e=>setSec('trims',{packaging:{...sec.packaging,type:e.target.value}})} /><input className="input text-xs" placeholder="Size" value={sec.packaging.size} onChange={e=>setSec('trims',{packaging:{...sec.packaging,size:e.target.value}})} /></div></div>);
+      case 'materials': return (<div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" />{!ro && <button onClick={()=>{ setInvSearch(''); setPickInv({section:'materials',index:i}); }} className="text-[11px] w-full px-2 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">📦 From inventory</button>}<input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /><input className="input text-xs" placeholder="Color code" value={c.colorCode} onChange={e=>setSec('materials',{columns:sec.columns.map((x,j)=>j===i?{...x,colorCode:e.target.value}:x)})} /></div>))}<button onClick={()=>setSec('materials',{columns:[...sec.columns,{title:'',name:'',colorCode:'',image:''}]})} className="text-xs text-indigo-600 self-start">+ Add material</button></div>);
+      case 'trims': return (<div className="space-y-3"><div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input text-xs font-semibold" value={c.title} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,title:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" />{!ro && <button onClick={()=>{ setInvSearch(''); setPickInv({section:'trims',index:i}); }} className="text-[11px] w-full px-2 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">📦 From inventory</button>}<input className="input text-xs" placeholder="Name" value={c.name} onChange={e=>setSec('trims',{columns:sec.columns.map((x,j)=>j===i?{...x,name:e.target.value}:x)})} /></div>))}</div><div className="border rounded-lg p-2 grid grid-cols-3 gap-2"><input className="input text-xs" value={sec.packaging.title} onChange={e=>setSec('trims',{packaging:{...sec.packaging,title:e.target.value}})} /><input className="input text-xs" value={sec.packaging.type} onChange={e=>setSec('trims',{packaging:{...sec.packaging,type:e.target.value}})} /><input className="input text-xs" placeholder="Size" value={sec.packaging.size} onChange={e=>setSec('trims',{packaging:{...sec.packaging,size:e.target.value}})} /></div></div>);
       case 'graphicFront': case 'graphicBack': { const k=pageType; return (<div className="space-y-3"><TpRow><TpImage scope={scope} label="Artwork" value={sec.artworkImage} onChange={v=>setSec(k,{artworkImage:v})} /><TpImage scope={scope} label="Placement" value={sec.placementImage} onChange={v=>setSec(k,{placementImage:v})} /></TpRow><TpLbl t="Width label"><input className="input" value={sec.widthLabel} onChange={e=>setSec(k,{widthLabel:e.target.value})} /></TpLbl>{['cw1','cw2'].map(cw=>(<div key={cw} className="border rounded-lg p-2"><div className="text-[10px] uppercase text-slate-400 mb-1">{cw==='cw1'?'Colourway 1':'Colourway 2'}</div><div className="grid grid-cols-2 gap-2">{['technique','position','size','extra'].map(f=>(<input key={f} className="input text-xs" placeholder={f} value={sec[cw][f]} onChange={e=>setSec(k,{[cw]:{...sec[cw],[f]:e.target.value}})} />))}</div></div>))}</div>); }
       case 'bom': return (<div className="space-y-2"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-left text-slate-400">{['Item','Description','Color','Supplier','Qty','Unit','Unit ₱',''].map(h=><th key={h} className="py-1 pr-1">{h}</th>)}</tr></thead><tbody>{(sec.rows||[]).map((r,i)=>(<tr key={i}>{['item','description','color','supplier','qty','unit','price'].map(f=><td key={f} className="pr-1 py-0.5"><input className="input text-xs px-1 py-1" value={r[f]||''} onChange={e=>setSec('bom',{rows:sec.rows.map((x,j)=>j===i?{...x,[f]:e.target.value}:x)})} /></td>)}<td><button onClick={()=>setSec('bom',{rows:sec.rows.filter((_,j)=>j!==i)})} className="text-rose-400 px-1">✕</button></td></tr>))}</tbody></table></div><button onClick={()=>setSec('bom',{rows:[...(sec.rows||[]),{item:'',description:'',color:'',supplier:'',qty:'',unit:'',price:''}]})} className="text-xs text-indigo-600">+ Add row</button></div>);
       case 'signatures': {
@@ -20307,6 +20341,23 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         </div>
       </Modal>}
 
+      {pickInv && <Modal title="📦 Pick from inventory" onClose={()=>setPickInv(null)} wide>
+        <div className="space-y-3">
+          <input value={invSearch} onChange={e=>setInvSearch(e.target.value)} placeholder="Search item name / category / color…" className="input" autoFocus />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[60vh] overflow-auto">
+            {invItems.filter(it=> !invSearch || `${it.name||''} ${it.category||''} ${it.color||''}`.toLowerCase().includes(invSearch.toLowerCase())).slice(0,120).map(it=>(
+              <button key={it.id} onClick={()=>{ const {section,index}=pickInv; const cols=(tp[section]?.columns||[]); setSec(section,{ columns: cols.map((x,j)=> j===index ? { ...x, name: it.name||x.name, title: x.title||it.category||'', image: it.image_path||x.image } : x) }); setPickInv(null); }} className="border rounded-lg p-2 bg-white hover:border-teal-500 text-left">
+                <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mb-1">{it.image_path ? <TImg path={it.image_path} maxH="5.5rem" /> : <span className="text-slate-300 text-xs">no photo</span>}</div>
+                <div className="text-xs font-semibold truncate">{it.name}</div>
+                <div className="text-[10px] text-slate-500 truncate">{[it.category,it.color].filter(Boolean).join(' · ')||'—'}</div>
+              </button>
+            ))}
+            {invItems.filter(it=> !invSearch || `${it.name||''} ${it.category||''} ${it.color||''}`.toLowerCase().includes(invSearch.toLowerCase())).length===0 && <div className="col-span-4 text-center text-slate-400 py-8 text-sm">No inventory items match. Add photos on items in the Inventory module.</div>}
+          </div>
+          <div className="text-[11px] text-slate-400">Pulls the item's name + photo into this {pickInv.section==='trims'?'trim':'material'} column — you can still edit them after.</div>
+        </div>
+      </Modal>}
+
       {pickingMockup && <Modal title="Garment mockup library" onClose={()=>setPickingMockup(false)} wide>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {(garmentMockups||[]).map(m=>(
@@ -20518,6 +20569,12 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
   const [showLow,setShowLow]=useState(false);
   const [importing,setImporting]=useState(false);
   const [stockingIn,setStockingIn]=useState(false);
+  // Item photo viewer — opens IN-PAGE only (resolve the private-bucket signed URL).
+  const [imgView,setImgView]=useState(null);
+  async function openImg(path){ if(!path) return; try{ const u=await signedUrl(path); setImgView({url:u}); }catch(_){} }
+  const Thumb=({ it })=> it.image_path
+    ? <button onClick={()=>openImg(it.image_path)} title="View photo" className="shrink-0"><SignedImg path={it.image_path} className="h-9 w-9 object-cover rounded border hover:ring-2 hover:ring-indigo-300" alt={it.name} /></button>
+    : <div className="h-9 w-9 rounded border bg-slate-50 flex items-center justify-center text-slate-300 text-[9px]">—</div>;
   // Precompute per-bucket stats so each tab header can show its own counts.
   const stats = INV_BUCKETS.reduce((acc,b)=>{ acc[b.key]={ count:0, value:0, low:0 }; return acc; },{});
   (items||[]).forEach(i=>{
@@ -20634,7 +20691,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
             const availLow = snap.available <= Number(i.reorder||0) && Number(i.reorder||0) > 0;
             return (
               <tr key={g.key} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
-                <td></td>
+                <td className="px-2 py-1.5"><Thumb it={i} /></td>
                 <td className="px-3 py-2 font-mono text-xs">{i.sku||'—'}</td>
                 <td className="px-3 py-2 font-medium">{i.name}<div className="text-[10px] text-slate-500">{[i.brand,i.model,i.color,i.size].filter(Boolean).join(' · ')}</div></td>
                 <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
@@ -20673,7 +20730,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
               const availLow = snap.available <= Number(i.reorder||0) && Number(i.reorder||0) > 0;
               return (
                 <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
-                  <td></td>
+                  <td className="px-2 py-1.5"><Thumb it={i} /></td>
                   <td className="px-3 py-2 font-mono text-xs pl-6">{i.sku||'—'}</td>
                   <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div></td>
                   <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
@@ -20695,6 +20752,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
       {bulkAdding && <BulkColorItemForm defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>setBulkAdding(false)} onSaved={()=>{ setBulkAdding(false); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
       {stockingIn && <StockInModal profile={profile} items={items} onClose={()=>setStockingIn(false)} onSaved={()=>{ setStockingIn(false); reload(); }} />}
+      {imgView && <MediaLightbox url={imgView.url} kind="image" name="Item photo" onClose={()=>setImgView(null)} />}
     </div>
   );
 }
@@ -20996,13 +21054,26 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
     return [...(suppliers||[]), ...extraSuppliers.filter(s=>!seen.has(s.id))];
   })();
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const [uploadingImg,setUploadingImg]=useState(false);
+  async function handleImage(file){ if(!file) return; setUploadingImg(true); setMsg('');
+    try{ const ext=((file.name||'').includes('.')?file.name.split('.').pop():(file.type||'').split('/')[1]||'jpg').toLowerCase(); const key=`inventory/${Date.now()}-${crypto.randomUUID()}.${ext}`; const { error }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined }); if(error) throw error; up('image_path', key); }
+    catch(e){ setMsg('Photo upload failed: '+(e.message||e)); }
+    setUploadingImg(false);
+  }
   async function save(){ if(!f.name.trim()){ setMsg('Name is required.'); return; } setBusy(true); setMsg('');
-    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'' };
+    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null };
     const { data, error } = existing ? await sb.from('items').update(payload).eq('id',existing.id).select().single() : await sb.from('items').insert(payload).select().single();
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(data); }
   return (
     <Modal title={existing?'Edit item':'New item'} onClose={onClose} wide>
       <div className="space-y-3">
+        <TpLbl t="Photo">
+          <div className="flex items-center gap-3 mt-0.5">
+            {f.image_path ? <SignedImg path={f.image_path} className="h-16 w-16 object-cover rounded border" alt="item" /> : <div className="h-16 w-16 rounded border bg-slate-50 flex items-center justify-center text-slate-300 text-2xl">📦</div>}
+            <label className="text-xs text-indigo-600 hover:underline cursor-pointer font-medium">{uploadingImg?'Uploading…':(f.image_path?'Replace photo':'📷 Upload photo')}<input type="file" accept="image/*" className="hidden" onChange={e=>{ handleImage(e.target.files?.[0]); e.target.value=''; }} /></label>
+            {f.image_path && <button type="button" onClick={()=>up('image_path',null)} className="text-xs text-rose-500 hover:underline">Remove</button>}
+          </div>
+        </TpLbl>
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Bucket *">
             <select className="input" value={f.bucket||'other'} onChange={e=>up('bucket',e.target.value)}>
