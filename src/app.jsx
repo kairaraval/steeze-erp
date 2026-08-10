@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 419 · Suppliers are now split into two lists: Purchasing sees Material suppliers only, Accounting gets an 'Expense Payees' list (BIR, utilities, etc.). Existing suppliers were auto-sorted (review & re-tag via Edit → List/type). Admin can toggle between the two.";
+const BUILD = "Live build 420 · Purchasing: fulfilling a PR from stock now also clears its production job from the Stock Out queue (no double stock-out). Delete on PRs & POs is now admin-only; Purchasing gets a Cancel action instead (marks the PR/PO Cancelled without deleting; reopenable).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22435,6 +22435,15 @@ async function issuePRFromStock(pr, items, profile){
   const newLines = (pr.lines||[]).map(l=> l.item_id ? { ...l, qty:0, stock_allocated:0 } : l);
   const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
   if(error) throw error;
+  // The materials were just issued from stock for this order — take its linked
+  // production job OUT of the Stock Out queue so it isn't stocked out twice.
+  if(pr.linked_lead_id){
+    try{
+      const { data:jobs } = await sb.from('production_jobs').select('id,materials_complete_at').eq('lead_id', pr.linked_lead_id).is('deleted_at', null);
+      const target=(jobs||[]).find(j=>!j.materials_complete_at);
+      if(target) await sb.from('production_jobs').update({ materials_complete_at:new Date().toISOString(), materials_complete_by:profile.id }).eq('id', target.id);
+    }catch(_){}
+  }
 }
 
 // Reusable stock-visibility strip that renders under a PR/PO line item.
@@ -22486,6 +22495,7 @@ const PR_STATUSES=[
   { key:'approved',  label:'Approved',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
   { key:'fulfilled_stock', label:'Fulfilled from Stock', color:'bg-teal-100 text-teal-700' },
+  { key:'cancelled', label:'Cancelled', color:'bg-slate-200 text-slate-600' },
   { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
 // Statuses that represent a new, not-yet-actioned request awaiting approval.
@@ -22530,13 +22540,18 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     try { await issuePRFromStock(pr, items, profile); reload(); }
     catch(err){ alert(err.message||String(err)); }
   }
-  // Soft-delete a PR — sends it to Trash so admin can restore from Settings.
-  // Admin + Accounting + Purchasing can delete. Once ordered, the PR is locked
-  // (it's already been converted to a PO).
+  // Delete (send to Trash) is ADMIN-ONLY. Purchasing / Purchasing Admin can
+  // CANCEL a PR instead — that keeps the record, just marks it cancelled.
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
   const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
-  const canDelete = isAdmin || isAccounting || isPurchasing;
+  const canDelete = isAdmin;
+  const canCancel = isAdmin || isPurchasing;
+  async function cancelPR(pr){
+    if(!confirm(`Cancel PR ${pr.number||''}?\n\nThis keeps the record but marks it Cancelled — nothing is deleted. You can reopen it later.`)) return;
+    const { error } = await sb.from('purchase_requests').update({ status:'cancelled' }).eq('id', pr.id);
+    if(error){ alert(error.message); return; } reload();
+  }
   async function delPR(pr){
     if(pr.status === 'ordered'){
       if(!confirm(`PR ${pr.number} is already ORDERED — its lines are on a PO.\n\nDeleting now removes the PR record but leaves the PO untouched. Continue?`)) return;
@@ -22596,9 +22611,10 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       </>}
                       {r.status==='approved' && prFullyCovered(r, items, prReservations) && <button onClick={()=>fulfillFromStock(r)} className="text-[11px] text-teal-600 hover:underline font-medium" title="No PO needed — draw from stock">📦 From stock</button>}
                       {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
-                      {r.status==='rejected' && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
+                      {(r.status==='rejected'||r.status==='cancelled') && canCancel && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
                       <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
-                      {canDelete && <button onClick={()=>delPR(r)} className="text-[11px] text-slate-300 hover:text-rose-500" title="Send to Trash">🗑</button>}
+                      {canCancel && !['cancelled','ordered','fulfilled_stock','rejected'].includes(r.status) && <button onClick={()=>cancelPR(r)} className="text-[11px] text-slate-400 hover:text-amber-600" title="Cancel this PR (keeps the record)">⊘ Cancel</button>}
+                      {canDelete && <button onClick={()=>delPR(r)} className="text-[11px] text-slate-300 hover:text-rose-500" title="Delete (admin only — sends to Trash)">🗑</button>}
                     </div>
                   </div>
                 ); })}
@@ -22632,7 +22648,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
               <td className="px-3 py-2 text-right font-medium">{d.totalQty || '—'}</td>
               <td className="px-3 py-2 text-xs font-mono">{d.tpNo || <span className="text-slate-400">—</span>}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-              <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{ e.stopPropagation(); setPrinting(r); }} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{ e.stopPropagation(); setEditing(r); }} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{canDelete && <button onClick={(e)=>{ e.stopPropagation(); delPR(r); }} className="text-xs text-rose-500 hover:underline" title="Send to Trash">Delete</button>}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{ e.stopPropagation(); setPrinting(r); }} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{ e.stopPropagation(); setEditing(r); }} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{canCancel && !['cancelled','ordered','fulfilled_stock','rejected'].includes(r.status) && <button onClick={(e)=>{ e.stopPropagation(); cancelPR(r); }} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{ e.stopPropagation(); delPR(r); }} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
             </tr>
           );
         })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
@@ -23343,10 +23359,17 @@ function nextPONumber(allOrders, dateStr){
 
 function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, reload, openFromPR, onClearPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
-  // Delete (soft-delete) — Admin + Purchasing Admin. PO goes to Settings → Trash
-  // and is recoverable from there.
+  // Delete (soft-delete) is ADMIN-ONLY. Purchasing / Purchasing Admin can CANCEL
+  // a PO instead — keeps the record, just marks it Cancelled.
   const isAdmin = profile.role === 'admin';
-  const canDelete = isAdmin || profile.role==='purchasing_admin';
+  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
+  const canDelete = isAdmin;
+  const canCancel = isAdmin || isPurchasing;
+  async function cancelPO(po){
+    if(!confirm(`Cancel PO ${po.number||''}?\n\nThis keeps the record but marks it Cancelled — nothing is deleted.`)) return;
+    const { error } = await sb.from('purchase_orders').update({ status:'cancelled' }).eq('id', po.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
   async function deletePO(po){
     const isPaid = po.payment_status === 'paid';
     if(isPaid){
@@ -23392,7 +23415,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
                   : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
               ) : <span className="text-xs text-slate-300">—</span>}
             </td>
-            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash">Delete</button>}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
