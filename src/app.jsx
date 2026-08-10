@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 421 · Stock Out: new 📤 Manual stock out (issue any item — trims, thread, ready blocks — with optional job tag, multi-line) and ✂ Cut to blocks (convert fabric rolls into ready blocks, keeping on-hand accurate). Both log proper stock movements.";
+const BUILD = "Live build 422 · Purchasing polish: raise a top-up PR for an existing project (project picker + ➕ Add PR); reverse any stock movement; waste% on cut-to-blocks; ⚠ no-techpack badge on PRs; PO expected-arrival ETA (overdue flag) + received-short warning. (Reorder alerts already cover blocks/thread — just set a min-stock value.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5468,6 +5468,7 @@ function ManualStockOutModal({ profile, items, prodJobs, onClose, onSaved }){
 function ConvertStockModal({ profile, items, onClose, onSaved }){
   const [srcId,setSrcId]=useState(''); const [srcQty,setSrcQty]=useState('');
   const [dstId,setDstId]=useState(''); const [dstQty,setDstQty]=useState('');
+  const [waste,setWaste]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const itemOpts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(i=>({ value:i.id, label:`${i.name}${i.color?' · '+i.color:''}  (on-hand ${i.qty??0} ${i.unit||''})` }));
   const itemOf=(id)=>(items||[]).find(x=>x.id===id);
@@ -5479,9 +5480,10 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
     setBusy(true); setMsg('');
     try{
       const date=new Date().toISOString().slice(0,10);
+      const wastePart = Number(waste)>0 ? ` · ${Number(waste)}% waste` : '';
       const movs=[
-        { item_id:srcId, type:'out', qty:Number(srcQty), reason:`convert → ${dst?.name||'product'}`, ref_type:'convert', ref_id:null, actor_id:profile.id, date },
-        { item_id:dstId, type:'in',  qty:Number(dstQty), reason:`convert ← ${src?.name||'source'}`, ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+        { item_id:srcId, type:'out', qty:Number(srcQty), reason:`convert → ${dst?.name||'product'}${wastePart}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+        { item_id:dstId, type:'in',  qty:Number(dstQty), reason:`convert ← ${src?.name||'source'}${wastePart}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
       ];
       const { error }=await sb.from('stock_movements').insert(movs);
       if(error){ const stripped=movs.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
@@ -5505,6 +5507,7 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
           <SearchSelect value={dstId} onChange={setDstId} options={itemOpts} placeholder="Search block item…" />
           <input type="number" min="0" step="0.01" className="input" value={dstQty} onChange={e=>setDstQty(e.target.value)} placeholder="Qty produced (e.g. 120 blocks)" />
         </div>
+        <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Waste % <span className="text-slate-300 normal-case">· optional — recorded for costing</span></label><input type="number" min="0" max="100" step="0.1" className="input mt-0.5" value={waste} onChange={e=>setWaste(e.target.value)} placeholder="e.g. 8" /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-4 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-40" onClick={save}>{busy?'Converting…':'✂ Convert'}</button></div>
       </div>
@@ -5517,7 +5520,21 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
    production issuances). The Stock Out tab is for action ("issue materials");
    this view is for review ("did everything land correctly today?").
 */
-function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements, requests, leads, clients, sampleJobs }){
+function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements, requests, leads, clients, sampleJobs, reload }){
+  const canReverse = ['admin','purchasing','purchasing_admin','accounting','accounting_officer'].includes(profile?.role);
+  async function reverseMovement(s){
+    if(String(s.reason||'').startsWith('↩')){ alert('This is already a reversal entry.'); return; }
+    if(!confirm(`Reverse this ${s.type==='in'?'STOCK-IN':'STOCK-OUT'} of ${Number(s.qty||0).toFixed(2)} ${s._item?.unit||''} · ${s._item?.name||'item'}?\n\nA counter-entry is posted and on-hand is corrected. Nothing is deleted.`)) return;
+    try{
+      const oppType = s.type==='in' ? 'out' : 'in';
+      const mv={ item_id:s.item_id, type:oppType, qty:Number(s.qty||0), reason:`↩ reversal of ${s._ref||s.reason||'entry'}`.slice(0,120), ref_type:'reversal', ref_id:s.id, actor_id:profile.id, date:new Date().toISOString().slice(0,10) };
+      let { error }=await sb.from('stock_movements').insert(mv);
+      if(error){ const { date, ...rest }=mv; const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
+      const it=(items||[]).find(x=>x.id===s.item_id);
+      if(it){ const delta = s.type==='in' ? -Number(s.qty||0) : Number(s.qty||0); await sb.from('items').update({ qty: Number(it.qty||0)+delta }).eq('id', s.item_id); }
+      reload && reload();
+    }catch(e){ alert(e.message||String(e)); }
+  }
   const [type,setType]=useState('');         // '' | 'in' | 'out'
   const [search,setSearch]=useState('');
   const [from,setFrom]=useState('');
@@ -5672,10 +5689,12 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
           <th className="text-left px-3 py-2">Reference</th>
           <th className="text-left px-3 py-2">Client / Notes</th>
           <th className="text-left px-3 py-2">By</th>
+          <th></th>
         </tr></thead>
         <tbody>{filtered.map(s=>{
           const isIn = s.type==='in';
           const actor = s.actor_id ? (profiles||[]).find(p=>p.id===s.actor_id) : null;
+          const isReversal = String(s.reason||'').startsWith('↩');
           return (
             <tr key={s.id} className={`border-t hover:bg-slate-50 ${isIn?'bg-emerald-50/30':'bg-rose-50/20'}`}>
               <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtTime(s.created_at)}</td>
@@ -5686,10 +5705,11 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
               <td className="px-3 py-2 text-xs font-mono">{s._ref || '—'}</td>
               <td className="px-3 py-2 text-xs">{s._client || s.notes || '—'}</td>
               <td className="px-3 py-2 text-xs">{actor ? <span className="text-slate-700 font-medium">{actor.name||actor.email}</span> : <span className="text-slate-400">{s.actor_id?'unknown':'—'}</span>}</td>
+              <td className="px-3 py-2 text-right">{canReverse && !isReversal && <button onClick={()=>reverseMovement(s)} className="text-[11px] text-slate-400 hover:text-amber-600" title="Reverse this movement (posts a counter-entry)">↩ Reverse</button>}</td>
             </tr>
           );
         })}
-        {filtered.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No movements match this filter.</td></tr>}
+        {filtered.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No movements match this filter.</td></tr>}
         </tbody>
       </table></div></div>
     </div>
@@ -22621,7 +22641,7 @@ function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 const PR_URGENCIES=['normal','high','urgent'];
 
 function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack }){
-  const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
+  const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [createLeadId,setCreateLeadId]=useState(''); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
   const [layout,setLayout]=useState('board');       // 'board' | 'list'
   const [sourceFilter,setSourceFilter]=useState(''); // '' | production | sampling | manual
   const counts=PR_STATUSES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>r.status===s.key).length; return a; },{});
@@ -22645,7 +22665,8 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     const firstItemName = (()=>{ if(!firstLine) return '—'; if(firstLine.item_id){ const it=(items||[]).find(i=>i.id===firstLine.item_id); if(it) return it.name+(it.color?` - ${it.color}`:''); } return firstLine.description || '—'; })();
     const moreCount = Math.max(0, lines.length-1);
     const totalQty = lines.reduce((s,l)=>s+(Number(l.qty)||0), 0);
-    return { src, clientName, tpNo, firstItemName, moreCount, totalQty };
+    const noTechpack = !!r.linked_lead_id && !!lead && !lead.techpack;
+    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack };
   }
   async function setPRStatus(pr, s){
     const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
@@ -22720,6 +22741,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       {d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}
                       <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.clientName}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
                       {d.tpNo && <div className="text-[10px] font-mono text-slate-400 mt-0.5">TP {d.tpNo}</div>}
+                      {d.noTechpack && <div className="text-[9px] font-bold uppercase inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="This project has no techpack yet">⚠ no techpack</div>}
                     </button>
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t">
                       {PR_AWAITING.includes(r.status) && <>
@@ -22728,6 +22750,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       </>}
                       {r.status==='approved' && prFullyCovered(r, items, prReservations) && <button onClick={()=>fulfillFromStock(r)} className="text-[11px] text-teal-600 hover:underline font-medium" title="No PO needed — draw from stock">📦 From stock</button>}
                       {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
+                      {r.linked_lead_id && <button onClick={()=>{ setCreateLeadId(r.linked_lead_id); setCreating(true); }} className="text-[11px] text-teal-600 hover:underline font-medium" title="Buy more for this same project — opens a new PR pre-linked to it">➕ Add PR</button>}
                       {(r.status==='rejected'||r.status==='cancelled') && canCancel && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
                       <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
                       {canCancel && !['cancelled','ordered','fulfilled_stock','rejected'].includes(r.status) && <button onClick={()=>cancelPR(r)} className="text-[11px] text-slate-400 hover:text-amber-600" title="Cancel this PR (keeps the record)">⊘ Cancel</button>}
@@ -22771,7 +22794,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
         })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
       </table></div></div>
       )}
-      {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
+      {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
   );
@@ -22920,7 +22943,7 @@ function PurchaseIntakeView({ profile }){
   );
 }
 
-function PurchaseRequestForm({ profile, existing, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
+function PurchaseRequestForm({ profile, existing, prefillLeadId, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
   // When the user picks "+ Add new inventory item" on a line, this stores the
   // line index so we can auto-select the new item on that line after save.
   const [addingItemForLine, setAddingItemForLine] = useState(null);
@@ -22949,8 +22972,11 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
     try { await issuePRFromStock({ ...existing, lines:f.lines }, items, profile); setBusy(false); onSaved(); }
     catch(err){ setBusy(false); setMsg(err.message||String(err)); }
   }
+  // Project link — an additional/top-up PR can be tied to an existing lead so
+  // its costs roll up to the right deal. Editable only when creating.
+  const [leadId,setLeadId]=useState(existing?.linked_lead_id||prefillLeadId||'');
   // Resolve linked lead → client → techpack for the header banner.
-  const linkedLead = existing&&existing.linked_lead_id ? (leads||[]).find(l=>l.id===existing.linked_lead_id) : null;
+  const linkedLead = leadId ? (leads||[]).find(l=>l.id===leadId) : null;
   const client = linkedLead && linkedLead.client_id ? (clients||[]).find(c=>c.id===linkedLead.client_id) : null;
   const techpackNumber = linkedLead?.techpack?.prodFormNo || linkedLead?.techpack_number || '';
   const styleName = linkedLead?.techpack?.styleName || linkedLead?.title || '';
@@ -23048,7 +23074,7 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
     return { toBuy, fromStock, shortLines };
   })();
   async function save(){ if(!f.lines.some(l=>l.item_id||l.description)){ setMsg('Add at least one item line.'); return; } setBusy(true); setMsg('');
-    const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status:f.status, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines };
+    const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status:f.status, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines, linked_lead_id: leadId||null };
     if(!isEdit) payload.number='PR-'+Date.now().toString().slice(-5);
     const { error } = isEdit ? await sb.from('purchase_requests').update(payload).eq('id',existing.id) : await sb.from('purchase_requests').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
@@ -23059,9 +23085,16 @@ function PurchaseRequestForm({ profile, existing, items, suppliers, departments,
     ? `PR ${existing.number||existing.id.slice(0,6)}${client?` — ${client.company}`:''}${techpackNumber?` · TP ${techpackNumber}`:''}`
     : `New purchase request${client?` — ${client.company}`:''}`;
 
+  const openLeadsForPR=(leads||[]).filter(l=>!['lost'].includes(l.stage) || l.id===leadId).slice().sort((a,b)=>String(b.stage_changed_at||b.created_at||'').localeCompare(String(a.stage_changed_at||a.created_at||'')));
   return (
     <Modal title={titleText} onClose={onClose} wide>
       <div className="space-y-3">
+        {!isEdit && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
+            <label className="text-[10px] uppercase text-indigo-700 font-semibold">Link to a project / deal <span className="text-slate-400 normal-case">· optional — use this to add more materials to an existing order</span></label>
+            <SearchSelect value={leadId} onChange={setLeadId} options={openLeadsForPR.map(l=>({ value:l.id, label:`${l.title||'Untitled'}${(clients||[]).find(c=>c.id===l.client_id)?.company?' · '+(clients||[]).find(c=>c.id===l.client_id).company:''}` }))} placeholder="Search a project to attach this PR to…" allowClear />
+          </div>
+        )}
         {/* BOM header — make the connection to the deal obvious at a glance.
             Surfaces what's being made (items + qty) and the fabric callout
             from the techpack so Purchasing can sanity-check the BOM against
@@ -23517,14 +23550,24 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PO#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72 mb-4" />
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">PO#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Lines</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Payment</th><th></th></tr></thead>
-        <tbody>{rows.map(o=>{ const meta=poMeta(o.status); const isFinalized=o.status!=='draft' && o.status!=='cancelled'; const isPaid=o.payment_status==='paid'; return (
+        <tbody>{rows.map(o=>{ const meta=poMeta(o.status); const isFinalized=o.status!=='draft' && o.status!=='cancelled'; const isPaid=o.payment_status==='paid';
+          const totOrdered=(o.lines||[]).reduce((s,l)=>s+Number(l.qty||0),0);
+          const totRecv=(o.lines||[]).reduce((s,l)=>s+Number(l.qty_received||0),0);
+          const short = o.status==='received' && totRecv < totOrdered-0.001;
+          const today=new Date().toISOString().slice(0,10);
+          const showEta = o.expected_date && ['open','partial'].includes(o.status);
+          const overdue = showEta && o.expected_date < today;
+          return (
           <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(o)}>
             <td className="px-3 py-2 font-mono text-xs">{o.number||o.id.slice(0,6)}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(o.date)}</td>
             <td className="px-3 py-2">{suppName(o.supplier_id)}</td>
             <td className="px-3 py-2 text-right">{(o.lines||[]).length}</td>
             <td className="px-3 py-2 text-right font-semibold">{peso(o.total)}</td>
-            <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+            <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>
+              {showEta && <div className={`text-[10px] mt-0.5 ${overdue?'text-rose-600 font-semibold':'text-slate-400'}`}>ETA {fmtDate(o.expected_date)}{overdue?' · overdue':''}</div>}
+              {short && <div className="text-[10px] mt-0.5 text-amber-700 font-semibold" title="Received less than ordered">⚠ short {totRecv}/{totOrdered}</div>}
+            </td>
             <td className="px-3 py-2">
               {isFinalized ? (
                 isPaid
@@ -23561,6 +23604,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   const initLines = isEdit ? (existing.lines||[]) : (fromPR ? (fromPR.lines||[]).map(l=>({ item_id:l.item_id||null, description:l.description||'', qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 })) : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
     date: isEdit?existing.date:new Date().toISOString().slice(0,10),
+    expected_date: isEdit?(existing.expected_date||''):'',
     supplier_id: isEdit?existing.supplier_id:null,
     pr_id: isEdit?existing.pr_id:(fromPR?fromPR.id:null),
     status: isEdit?existing.status:'draft',
@@ -23638,7 +23682,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!f.supplier_id){ setMsg('Pick a supplier.'); return; }
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
     setBusy(true); setMsg('');
-    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
+    const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
       vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0 };
@@ -23655,7 +23699,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
     if(!confirm('Finalize this PO?\n\nOnce finalized:\n• Lines are locked for editing\n• The total goes to finance\n• Use the Receive button later to record deliveries\n\nMake sure quantities match what you actually bought.')) return;
     setBusy(true); setMsg('');
-    const payload={ date:f.date, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id,
+    const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id,
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
       vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
@@ -23751,6 +23795,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
           <TpLbl t="Purchasing date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} disabled={locked} /></TpLbl>
           <TpLbl t="Supplier *"><select className="input" value={f.supplier_id||''} onChange={e=>{ if(e.target.value==='__new__'){ setAddingSupplier(true); return; } up('supplier_id',e.target.value||null); }} disabled={locked}><option value="">—</option><option value="__new__" style={{fontWeight:'bold', color:'#4f46e5'}}>+ Add new supplier…</option>{allSuppliers.slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select></TpLbl>
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{PO_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
+          <TpLbl t="Expected arrival"><input type="date" className="input" value={f.expected_date||''} onChange={e=>up('expected_date',e.target.value)} disabled={locked} /></TpLbl>
         </div>
 
         <div className={`border rounded-lg p-3 ${locked?'bg-slate-100':'bg-slate-50'}`}>
@@ -35918,7 +35963,7 @@ function App(){
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
-        {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} />}
+        {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
         {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
