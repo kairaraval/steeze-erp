@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 420 · Purchasing: fulfilling a PR from stock now also clears its production job from the Stock Out queue (no double stock-out). Delete on PRs & POs is now admin-only; Purchasing gets a Cancel action instead (marks the PR/PO Cancelled without deleting; reopenable).";
+const BUILD = "Live build 421 · Stock Out: new 📤 Manual stock out (issue any item — trims, thread, ready blocks — with optional job tag, multi-line) and ✂ Cut to blocks (convert fabric rolls into ready blocks, keeping on-hand accurate). Both log proper stock movements.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5240,6 +5240,8 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
 const PROD_ACTIVE_STATUSES_FOR_PULL = ['materials to purchase','materials in','cutting - in house','sewing','printing/embroidery','quality control'];
 function StockOutView({ profile, profiles, prodJobs, leads, items, requests, stockMovements, reload }){
   const [pulling,setPulling]=useState(null);
+  const [manualOut,setManualOut]=useState(false);
+  const [converting,setConverting]=useState(false);
   const [jobSearch,setJobSearch]=useState('');
   const [histSearch,setHistSearch]=useState('');
   const [tab,setTab]=useState('jobs'); // 'jobs' | 'history'
@@ -5305,6 +5307,10 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
           <div>
             <h1 className="text-2xl font-bold">📤 Stock Out</h1>
             <p className="text-slate-500 text-sm">Issue materials from inventory to production. {activeJobs.length} active job{activeJobs.length===1?'':'s'} · {totalIssuedThisMonth} issuances this month</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>setConverting(true)} className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50" title="Cut fabric rolls into ready blocks">✂ Cut to blocks</button>
+            <button onClick={()=>setManualOut(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Issue any item (trims, thread, blocks) without a job's BOM">📤 Manual stock out</button>
           </div>
         </div>
         <div className="flex gap-1 mt-3">
@@ -5391,7 +5397,118 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
       )}
 
       {pulling && <PullMaterialsModal job={pulling} items={items} requests={requests} profile={profile} onClose={()=>setPulling(null)} onSaved={()=>{ setPulling(null); reload(); alert('Materials issued. Inventory updated.'); }} />}
+      {manualOut && <ManualStockOutModal profile={profile} items={items} prodJobs={prodJobs} onClose={()=>setManualOut(false)} onSaved={()=>{ setManualOut(false); reload(); }} />}
+      {converting && <ConvertStockModal profile={profile} items={items} onClose={()=>setConverting(false)} onSaved={()=>{ setConverting(false); reload(); }} />}
     </div>
+  );
+}
+
+// Manual stock-out — issue ANY inventory item (trims, thread, ready blocks…)
+// without going through a production job's BOM. Optionally tag it to a job.
+function ManualStockOutModal({ profile, items, prodJobs, onClose, onSaved }){
+  const [rows,setRows]=useState([{ id:'r0', item_id:'', qty:'' }]);
+  const [jobId,setJobId]=useState('');
+  const [reason,setReason]=useState('production');
+  const [note,setNote]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const itemOpts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(i=>({ value:i.id, label:`${i.name}${i.color?' · '+i.color:''}${i.qty!=null?`  (on-hand ${i.qty} ${i.unit||''})`:''}` }));
+  const activeJobs=(prodJobs||[]).filter(j=>!PRODUCTION_DONE.includes(j.status)).slice().sort((a,b)=>String(b.number||'').localeCompare(String(a.number||'')));
+  const jobOpts=activeJobs.map(j=>({ value:j.id, label:`${j.number} · ${j.item||''}${j.client_name?' · '+j.client_name:''}` }));
+  const REASONS=['production','sample','sublimation blocks','wastage / spoilage','return to supplier','adjustment','other'];
+  function setRow(id,k,v){ setRows(rs=>rs.map(r=>r.id===id?{...r,[k]:v}:r)); }
+  function addRow(){ setRows(rs=>[...rs,{ id:'r'+Date.now(), item_id:'', qty:'' }]); }
+  function delRow(id){ setRows(rs=>rs.length===1?rs:rs.filter(r=>r.id!==id)); }
+  const itemOf=(id)=>(items||[]).find(x=>x.id===id);
+  async function save(){
+    const valid=rows.filter(r=>r.item_id && Number(r.qty)>0);
+    if(!valid.length){ setMsg('Add at least one item with a quantity.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const job=activeJobs.find(j=>j.id===jobId);
+      const date=new Date().toISOString().slice(0,10);
+      const reasonText = note.trim() ? `${reason} — ${note.trim()}` : reason;
+      const movements=valid.map(r=>({ item_id:r.item_id, type:'out', qty:Number(r.qty), reason:reasonText, ref_type: job?'production_job':'manual', ref_id: job?job.id:null, actor_id:profile.id, date }));
+      const { error } = await sb.from('stock_movements').insert(movements);
+      if(error){ const stripped=movements.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
+      for(const r of valid){ const it=itemOf(r.item_id); await sb.from('items').update({ qty: Number(it?.qty||0) - Number(r.qty) }).eq('id', r.item_id); }
+      onSaved();
+    }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
+  }
+  return (
+    <Modal title="📤 Manual stock out" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Issue items straight from inventory — trims, thread, ready blocks, etc. On-hand drops and a stock-out is logged. Tag a job if it's for a specific order.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-400 font-semibold">For job <span className="text-slate-300">· optional</span></label><SearchSelect value={jobId} onChange={setJobId} options={jobOpts} placeholder="— None / general —" allowClear /></div>
+          <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Reason</label><select className="input mt-0.5" value={reason} onChange={e=>setReason(e.target.value)}>{REASONS.map(r=><option key={r} value={r}>{r}</option>)}</select></div>
+        </div>
+        <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Note <span className="text-slate-300">· optional</span></label><input className="input mt-0.5" value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. thread for Winston polo run" /></div>
+        <div className="border rounded-lg p-2 space-y-2 bg-slate-50/50">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold">Items to issue</div>
+          {rows.map(r=>{ const it=itemOf(r.item_id); const over=it && Number(r.qty)>Number(it.qty||0); return (
+            <div key={r.id} className="flex items-center gap-2">
+              <div className="flex-1"><SearchSelect value={r.item_id} onChange={v=>setRow(r.id,'item_id',v)} options={itemOpts} placeholder="Search item…" /></div>
+              <input type="number" min="0" step="0.01" className="input !w-28" value={r.qty} onChange={e=>setRow(r.id,'qty',e.target.value)} placeholder="Qty" />
+              <span className="text-[10px] text-slate-400 w-16">{it?`${it.unit||''}`:''}</span>
+              <button onClick={()=>delRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button>
+              {over && <span className="text-[10px] text-rose-600 font-semibold">over stock</span>}
+            </div>
+          ); })}
+          <button onClick={addRow} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-4 py-1.5 text-sm rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-40" onClick={save}>{busy?'Issuing…':'📤 Issue from stock'}</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Cut / convert — turn one item (e.g. a fabric roll) into another (e.g. ready
+// blocks). Records a stock-out of the source and a stock-in of the product.
+function ConvertStockModal({ profile, items, onClose, onSaved }){
+  const [srcId,setSrcId]=useState(''); const [srcQty,setSrcQty]=useState('');
+  const [dstId,setDstId]=useState(''); const [dstQty,setDstQty]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const itemOpts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(i=>({ value:i.id, label:`${i.name}${i.color?' · '+i.color:''}  (on-hand ${i.qty??0} ${i.unit||''})` }));
+  const itemOf=(id)=>(items||[]).find(x=>x.id===id);
+  const src=itemOf(srcId), dst=itemOf(dstId);
+  async function save(){
+    if(!srcId||!(Number(srcQty)>0)){ setMsg('Pick the source material and how much is consumed.'); return; }
+    if(!dstId||!(Number(dstQty)>0)){ setMsg('Pick the product (e.g. blocks) and how many are produced.'); return; }
+    if(srcId===dstId){ setMsg('Source and product must be different items.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const date=new Date().toISOString().slice(0,10);
+      const movs=[
+        { item_id:srcId, type:'out', qty:Number(srcQty), reason:`convert → ${dst?.name||'product'}`, ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+        { item_id:dstId, type:'in',  qty:Number(dstQty), reason:`convert ← ${src?.name||'source'}`, ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+      ];
+      const { error }=await sb.from('stock_movements').insert(movs);
+      if(error){ const stripped=movs.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
+      await sb.from('items').update({ qty: Number(src?.qty||0) - Number(srcQty) }).eq('id', srcId);
+      await sb.from('items').update({ qty: Number(dst?.qty||0) + Number(dstQty) }).eq('id', dstId);
+      onSaved();
+    }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
+  }
+  return (
+    <Modal title="✂ Cut / convert to blocks" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Cut fabric rolls into ready blocks (or any conversion). The source is stocked out and the product stocked in, so on-hand stays accurate. Create the block item first in Inventory if it doesn't exist.</div>
+        <div className="rounded-lg border p-3 bg-rose-50/40 border-rose-100 space-y-2">
+          <div className="text-[10px] uppercase text-rose-600 font-semibold">Consume (source)</div>
+          <SearchSelect value={srcId} onChange={setSrcId} options={itemOpts} placeholder="Search roll / fabric…" />
+          <input type="number" min="0" step="0.01" className="input" value={srcQty} onChange={e=>setSrcQty(e.target.value)} placeholder={`Qty used ${src?`(on-hand ${src.qty??0} ${src.unit||''})`:''}`} />
+        </div>
+        <div className="text-center text-slate-400">↓</div>
+        <div className="rounded-lg border p-3 bg-emerald-50/40 border-emerald-100 space-y-2">
+          <div className="text-[10px] uppercase text-emerald-600 font-semibold">Produce (blocks / product)</div>
+          <SearchSelect value={dstId} onChange={setDstId} options={itemOpts} placeholder="Search block item…" />
+          <input type="number" min="0" step="0.01" className="input" value={dstQty} onChange={e=>setDstQty(e.target.value)} placeholder="Qty produced (e.g. 120 blocks)" />
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-4 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-40" onClick={save}>{busy?'Converting…':'✂ Convert'}</button></div>
+      </div>
+    </Modal>
   );
 }
 
