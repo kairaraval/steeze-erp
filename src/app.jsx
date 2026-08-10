@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 418 · Inventory items can now carry a photo — thumbnails show in the list and open in an in-page viewer. In the techpack Materials & Trims, a '📦 From inventory' button pulls an item's name + photo straight from the inventory library. New searchable dropdown (type to filter) — applied to the client picker in the lead form to start.";
+const BUILD = "Live build 419 · Suppliers are now split into two lists: Purchasing sees Material suppliers only, Accounting gets an 'Expense Payees' list (BIR, utilities, etc.). Existing suppliers were auto-sorted (review & re-tag via Edit → List/type). Admin can toggle between the two.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21015,6 +21015,7 @@ function SupplierQuickAdd({ defaultName, onClose, onSaved }){
       contact: contact.trim() || null,
       phone: phone.trim() || null,
       email: email.trim() || null,
+      kind: 'materials', // quick-add is always from the Purchasing / inventory context
     };
     if(leadTime.trim()){ payload.default_lead_time_days = Number(leadTime) || null; }
     const { data, error } = await sb.from('suppliers').insert(payload).select().single();
@@ -21114,8 +21115,18 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
   );
 }
 
-function SuppliersView({ suppliers, orders, bankAccounts, onOpen, reload }){
+function SuppliersView({ profile, suppliers, orders, bankAccounts, onOpen, reload }){
   const [search,setSearch]=useState(''); const [creating,setCreating]=useState(false); const [importing,setImporting]=useState(false);
+  // Two separate lists in one table: Purchasing sees Material suppliers only,
+  // Accounting sees Expense payees only, Admin can toggle between them.
+  const role=profile?.role;
+  const isPurchasing=['purchasing','purchasing_admin'].includes(role);
+  const isAccounting=['accounting','accounting_officer'].includes(role);
+  const fixedKind = isPurchasing?'materials':isAccounting?'expense':null; // null = admin (sees a toggle)
+  const [kindFilter,setKindFilter]=useState(fixedKind||'materials');
+  const effKind = fixedKind || kindFilter; // 'materials' | 'expense'
+  const listTitle = effKind==='expense'?'Expense Payees':'Material Suppliers';
+  const kindOf=(s)=> s.kind||'materials';
   // Precompute total spend + order count per supplier from PO totals.
   const spendBy = (suppliers||[]).reduce((acc,s)=>{ acc[s.id]={ total:0, count:0 }; return acc; },{});
   (orders||[]).forEach(o=>{
@@ -21123,16 +21134,18 @@ function SuppliersView({ suppliers, orders, bankAccounts, onOpen, reload }){
     spendBy[o.supplier_id].total += Number(o.total)||0;
     spendBy[o.supplier_id].count += 1;
   });
-  const rows=(suppliers||[]).filter(s=>!search||`${s.company} ${s.contact} ${s.email}`.toLowerCase().includes(search.toLowerCase()));
+  const kindList=(suppliers||[]).filter(s=>kindOf(s)===effKind);
+  const rows=kindList.filter(s=>!search||`${s.company} ${s.contact} ${s.email}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">⚒ Suppliers</h1><p className="text-slate-500 text-sm">{suppliers.length} supplier{suppliers.length===1?'':'s'} · click a row to see details</p></div>
+          <div><h1 className="text-2xl font-bold">⚒ {listTitle}</h1><p className="text-slate-500 text-sm">{kindList.length} {effKind==='expense'?'payee':'supplier'}{kindList.length===1?'':'s'} · {effKind==='expense'?'accounting expense payees':'production / materials vendors'} · click a row for details</p></div>
           <div className="flex items-center gap-2">
+            {!fixedKind && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs"><button onClick={()=>setKindFilter('materials')} className={`px-3 py-1.5 rounded-md font-semibold ${effKind==='materials'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>Materials</button><button onClick={()=>setKindFilter('expense')} className={`px-3 py-1.5 rounded-md font-semibold ${effKind==='expense'?'bg-white shadow-sm text-amber-700':'text-slate-600'}`}>Expense</button></div>}
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-60" />
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
-            <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New supplier</button>
+            <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {effKind==='expense'?'payee':'supplier'}</button>
           </div>
         </div>
       </div>
@@ -21156,8 +21169,8 @@ function SuppliersView({ suppliers, orders, bankAccounts, onOpen, reload }){
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No suppliers yet. Click "+ New supplier" to add one.</td></tr>}</tbody>
       </table></div></div>
-      {creating && <SupplierForm bankAccounts={bankAccounts} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
-      {importing && <SupplierImportModal suppliers={suppliers} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
+      {creating && <SupplierForm defaultKind={effKind} bankAccounts={bankAccounts} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+      {importing && <SupplierImportModal suppliers={suppliers} defaultKind={effKind} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
     </div>
   );
 }
@@ -21255,7 +21268,7 @@ function SupplierDetail({ supplier, orders, items, profile, bankAccounts, reload
   );
 }
 
-function SupplierImportModal({ suppliers, onClose, onDone }){
+function SupplierImportModal({ suppliers, defaultKind='materials', onClose, onDone }){
   const TEMPLATE = 'company,contact,email,phone,address,payment_terms,notes\nTexstyle Trading,Anna Cruz,anna@texstyle.com,+63 917 123 4567,Quezon City,30 Days,Main fabric supplier\nYKK Manila,Boy Reyes,sales@ykk.com.ph,+63 2 8888 1234,Makati,COD,';
   const [csv,setCsv]=useState(''); const [parsed,setParsed]=useState(null);
   const [step,setStep]=useState('paste'); // paste | preview | importing | done
@@ -21292,6 +21305,7 @@ function SupplierImportModal({ suppliers, onClose, onDone }){
         address: getVal(r,headers,'address'),
         payment_terms: getVal(r,headers,'payment_terms') || getVal(r,headers,'payment terms'),
         notes:   getVal(r,headers,'notes'),
+        kind: defaultKind,
       });
     }
     setProgress({ done:0, total:payloads.length });
@@ -21375,8 +21389,8 @@ function SupplierImportModal({ suppliers, onClose, onDone }){
   );
 }
 
-function SupplierForm({ existing, bankAccounts, onClose, onSaved }){
-  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'', default_payment_method:'', default_payment_method_detail:'', vat_enabled:false, withholding_tax_enabled:false, withholding_tax_rate:1.0, default_bank_id:null });
+function SupplierForm({ existing, defaultKind='materials', bankAccounts, onClose, onSaved }){
+  const [f,setF]=useState(existing||{ company:'', contact:'', email:'', phone:'', address:'', payment_terms:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'', default_payment_method:'', default_payment_method_detail:'', vat_enabled:false, withholding_tax_enabled:false, withholding_tax_rate:1.0, default_bank_id:null, kind:defaultKind });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){ if(!f.company.trim()){ setMsg('Company is required.'); return; } setBusy(true); setMsg('');
@@ -21391,12 +21405,19 @@ function SupplierForm({ existing, bankAccounts, onClose, onSaved }){
       withholding_tax_enabled:!!f.withholding_tax_enabled,
       withholding_tax_rate:Number(f.withholding_tax_rate)||0,
       default_bank_id:f.default_bank_id||null,
+      kind: f.kind||'materials',
     };
     const { error } = existing ? await sb.from('suppliers').update(payload).eq('id',existing.id) : await sb.from('suppliers').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
   return (
     <Modal title={existing?'Edit supplier':'New supplier'} onClose={onClose} wide>
       <div className="space-y-3">
+        <TpLbl t="List / type">
+          <div className="flex gap-2 mt-0.5">
+            <button type="button" onClick={()=>up('kind','materials')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${(f.kind||'materials')==='materials'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>📦 Material supplier (Purchasing)</button>
+            <button type="button" onClick={()=>up('kind','expense')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${f.kind==='expense'?'bg-amber-600 text-white border-amber-600':'bg-white text-slate-600'}`}>🧾 Expense payee (Accounting)</button>
+          </div>
+        </TpLbl>
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Company *"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} /></TpLbl>
           <TpLbl t="Contact name"><input className="input" value={f.contact} onChange={e=>up('contact',e.target.value)} /></TpLbl>
@@ -35511,6 +35532,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       FINANCE_FULL,
+      { group:'Payees', items:[ ['suppliers','Expense Payees','🧾'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'] ] },
       LOGISTICS_GROUP,
@@ -35749,7 +35771,7 @@ function App(){
         {view==='inventory' && <InventoryView profile={profile} suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
-          : <SuppliersView suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
+          : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
