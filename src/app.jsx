@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 442 · Fix: polybag slip with many sizes no longer splits/doubles across pages when printing 2-per-sheet — a slip that won't fit now moves whole to the next page. (Also: vouchers no longer bounce back after approval; admin Approve & Sign fully approves + posts, and edits only void the signature on a material change.)";
+const BUILD = "Live build 443 · Subli/DTF Pressing now track DAILY output. Open a project's report to log each day's Machine (2 hydraulic + 2 rotary presses), Operator(s) and pcs pressed — with a running 'pressed so far / project qty' and per-day capacity. The 📊 Reports tab shows daily output (pcs/day), by machine, by operator, and a per-project monitor with start/last day + avg/day.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7709,6 +7709,83 @@ function ProgressReport({ rows, dims=[], qtyLabel='pcs', showQty=false, showReje
   );
 }
 
+// Pressing report — daily output (capacity), by machine, by operator, and a
+// per-project monitor. Fed by process_output_logs (daily machine+operator+pcs).
+function PressReport({ logs, rows }){
+  const [range,setRange]=useState('month');
+  const [from,setFrom]=useState(''); const [to,setTo]=useState('');
+  const list=Array.isArray(logs)?logs:[];
+  let lo=null, hi=null;
+  if(range==='custom'){ if(from) lo=new Date(from+'T00:00:00'); if(to){ hi=new Date(to+'T00:00:00'); hi.setDate(hi.getDate()+1); } }
+  else { const b=progRangeBounds(range); if(b){ lo=b[0]; hi=b[1]; } }
+  const inRange=(d)=>{ if(!lo&&!hi) return true; const x=new Date((d||'')+'T00:00:00'); if(isNaN(x)) return false; if(lo&&x<lo) return false; if(hi&&x>=hi) return false; return true; };
+  const f=list.filter(l=>inRange(l.log_date));
+  const totalPcs=f.reduce((s,l)=>s+(Number(l.qty_done)||0),0);
+  const days=new Set(f.map(l=>l.log_date).filter(Boolean));
+  const nDays=days.size;
+  const avgDay=nDays?Math.round(totalPcs/nDays):0;
+  // By day
+  const byDay={}; f.forEach(l=>{ const k=l.log_date||'—'; const g=byDay[k]||(byDay[k]={ key:k, pcs:0, machines:new Set(), ops:new Set() }); g.pcs+=Number(l.qty_done)||0; if(l.machine) g.machines.add(l.machine); (Array.isArray(l.operators)?l.operators:[]).forEach(o=>o&&o.name&&g.ops.add(o.name)); });
+  const dayRows=Object.values(byDay).sort((a,b)=>String(b.key).localeCompare(String(a.key)));
+  // By machine
+  const byMach={}; f.forEach(l=>{ const k=l.machine||'—'; const g=byMach[k]||(byMach[k]={ key:k, pcs:0, days:new Set() }); g.pcs+=Number(l.qty_done)||0; if(l.log_date) g.days.add(l.log_date); });
+  const machRows=Object.values(byMach).sort((a,b)=>b.pcs-a.pcs);
+  // By operator
+  const byOp={}; f.forEach(l=>{ (Array.isArray(l.operators)?l.operators:[]).forEach(o=>{ if(!o||!o.name) return; const g=byOp[o.name]||(byOp[o.name]={ key:o.name, pcs:0, days:new Set() }); g.pcs+=Number(l.qty_done)||0; if(l.log_date) g.days.add(l.log_date); }); });
+  const opRows=Object.values(byOp).sort((a,b)=>b.pcs-a.pcs);
+  // By project (worklist_id)
+  const byProj={}; f.forEach(l=>{ const k=l.worklist_id||l.item||'—'; const g=byProj[k]||(byProj[k]={ key:k, item:l.item||'—', client:l.client_name||'', pcs:0, days:new Set(), first:l.log_date, last:l.log_date }); g.pcs+=Number(l.qty_done)||0; if(l.log_date){ g.days.add(l.log_date); if(l.log_date<g.first) g.first=l.log_date; if(l.log_date>g.last) g.last=l.log_date; } });
+  const projRows=Object.values(byProj).sort((a,b)=>String(b.last||'').localeCompare(String(a.last||'')));
+  const rangeBtns=[['month','This month'],['week','This week'],['lastmonth','Last month'],['lastweek','Last week'],['year','This year'],['all','All time'],['custom','Custom']];
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-3 flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase font-semibold text-slate-400">Range</span>
+        <div className="flex flex-wrap rounded-lg border overflow-hidden text-[11px] font-semibold">
+          {rangeBtns.map(([k,l])=><button key={k} onClick={()=>setRange(k)} className={`px-2.5 py-1 ${range===k?'bg-indigo-600 text-white':'bg-white text-slate-600 hover:bg-slate-50'}`}>{l}</button>)}
+        </div>
+        {range==='custom' && <span className="flex items-center gap-1 text-xs"><input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="border rounded px-1.5 py-1 text-xs" /><span className="text-slate-400">→</span><input type="date" value={to} onChange={e=>setTo(e.target.value)} className="border rounded px-1.5 py-1 text-xs" /></span>}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Pcs pressed</div><div className="text-2xl font-bold">{totalPcs.toLocaleString()}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Days worked</div><div className="text-2xl font-bold">{nDays}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Avg / day</div><div className="text-2xl font-bold text-emerald-700">{avgDay.toLocaleString()}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Projects</div><div className="text-2xl font-bold">{projRows.length}</div></div>
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-3 py-2 bg-slate-50 text-xs uppercase font-semibold text-slate-500">Daily output — capacity per day</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Machines</th><th className="text-left px-3 py-2">Operators</th><th className="text-right px-3 py-2">Pcs pressed</th></tr></thead>
+          <tbody>{dayRows.map(d=>(<tr key={d.key} className="border-t"><td className="px-3 py-2 font-medium whitespace-nowrap">{fmtDateShort(d.key)}</td><td className="px-3 py-2 text-xs">{[...d.machines].join(', ')||'—'}</td><td className="px-3 py-2 text-xs">{[...d.ops].join(', ')||'—'}</td><td className="px-3 py-2 text-right font-semibold">{d.pcs.toLocaleString()}</td></tr>))}{dayRows.length===0 && <tr><td colSpan="4" className="text-center text-slate-400 py-8">No output logged in this range.</td></tr>}</tbody>
+        </table></div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-3 py-2 bg-slate-50 text-xs uppercase font-semibold text-slate-500">By machine</div>
+          <table className="w-full text-sm"><thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Machine</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Pcs</th></tr></thead>
+          <tbody>{machRows.map(m=>(<tr key={m.key} className="border-t"><td className="px-3 py-2 font-medium">{m.key}</td><td className="px-3 py-2 text-right">{m.days.size}</td><td className="px-3 py-2 text-right font-semibold">{m.pcs.toLocaleString()}</td></tr>))}{machRows.length===0 && <tr><td colSpan="3" className="text-center text-slate-400 py-6">—</td></tr>}</tbody></table>
+        </div>
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-3 py-2 bg-slate-50 text-xs uppercase font-semibold text-slate-500">By operator</div>
+          <table className="w-full text-sm"><thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Operator</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Pcs</th></tr></thead>
+          <tbody>{opRows.map(o=>(<tr key={o.key} className="border-t"><td className="px-3 py-2 font-medium">{o.key}</td><td className="px-3 py-2 text-right">{o.days.size}</td><td className="px-3 py-2 text-right font-semibold">{o.pcs.toLocaleString()}</td></tr>))}{opRows.length===0 && <tr><td colSpan="3" className="text-center text-slate-400 py-6">—</td></tr>}</tbody></table>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-3 py-2 bg-slate-50 text-xs uppercase font-semibold text-slate-500">Per-project monitor</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Client</th><th className="text-right px-3 py-2">Pcs pressed</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Avg/day</th><th className="text-left px-3 py-2">Start</th><th className="text-left px-3 py-2">Last</th></tr></thead>
+          <tbody>{projRows.map(p=>{ const nd=p.days.size; return (<tr key={p.key} className="border-t"><td className="px-3 py-2 font-medium">{p.item}</td><td className="px-3 py-2">{p.client||'—'}</td><td className="px-3 py-2 text-right font-semibold">{p.pcs.toLocaleString()}</td><td className="px-3 py-2 text-right">{nd}</td><td className="px-3 py-2 text-right text-emerald-700">{nd?Math.round(p.pcs/nd).toLocaleString():'—'}</td><td className="px-3 py-2 text-xs">{fmtDateShort(p.first)}</td><td className="px-3 py-2 text-xs">{fmtDateShort(p.last)}</td></tr>); })}{projRows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No projects pressed in this range.</td></tr>}</tbody>
+        </table></div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────── QUALITY CONTROL (QC) ───────────
 // Mirrors the Cutting worklist: production jobs AND samples auto-seed a QC row
 // when their status is set to "Quality Check (QC)". QC opens each to log
@@ -8586,6 +8663,10 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
   async function loadBatches(){ if(!showBatches) return; const { data }=await sb.from('sorting_batches').select('*').eq('process',process).is('deleted_at',null).order('released_at',{ascending:false}).order('created_at',{ascending:false}); setBatches(data||[]); }
   useEffect(()=>{ loadBatches(); },[process, tab]);
   async function toggleReturned(bt){ const upd = bt.status==='returned' ? { status:'released', returned_at:null } : { status:'returned', returned_at:new Date().toISOString().slice(0,10) }; await sb.from('sorting_batches').update(upd).eq('id',bt.id); loadBatches(); }
+  const showPress=isPressingProcess(process);
+  const [pressLogs,setPressLogs]=useState([]);
+  async function loadPressLogs(){ if(!showPress) return; const { data }=await sb.from('process_output_logs').select('*').eq('process',process).is('deleted_at',null).order('log_date',{ascending:false}); setPressLogs(data||[]); }
+  useEffect(()=>{ loadPressLogs(); },[process, tab]);
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
@@ -8711,9 +8792,11 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
           )}
         </div>
       ) : tab==='reports' ? (
-        <ProgressReport
-          rows={rows.map(x=>({ date:x.done_at||x.start_date||x.created_at, done:x.status==='done', item:x.item||x.title, client:x.client_name, qty:Number(x.qty_done)||0, rejects:Number(x.reject_count)||0, people:(Array.isArray(x.handled_by)?x.handled_by:[]).map(id=>{ const e=(employees||[]).find(y=>y.id===id); return e?fullName(e):null; }).filter(Boolean), subcon:null }))}
-          dims={['person']} qtyLabel="pcs" showQty showRejects doneLabel="Done" />
+        showPress
+          ? <PressReport logs={pressLogs} rows={rows} />
+          : <ProgressReport
+              rows={rows.map(x=>({ date:x.done_at||x.start_date||x.created_at, done:x.status==='done', item:x.item||x.title, client:x.client_name, qty:Number(x.qty_done)||0, rejects:Number(x.reject_count)||0, people:(Array.isArray(x.handled_by)?x.handled_by:[]).map(id=>{ const e=(employees||[]).find(y=>y.id===id); return e?fullName(e):null; }).filter(Boolean), subcon:null }))}
+              dims={['person']} qtyLabel="pcs" showQty showRejects doneLabel="Done" />
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done — finished (start → finished date/time)</div>
@@ -8780,6 +8863,27 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
   async function loadBatches(){ if(!showBatches) return; const { data }=await sb.from('sorting_batches').select('*').eq('worklist_id',w.id).is('deleted_at',null).order('batch_no',{ascending:true}); setBatches(data||[]); }
   useEffect(()=>{ loadBatches(); },[w.id]);
   async function delBatch(bt){ if(!confirm(`Delete batch ${bt.batch_no||''}?`)) return; await sb.from('sorting_batches').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',bt.id); loadBatches(); }
+
+  // Daily output log — pressing boards only. Each entry: date + machine +
+  // operators + pcs done that day (tracks daily capacity on big projects).
+  const showPress=isPressingProcess(process);
+  const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffRegex(process).test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const [logs,setLogs]=useState([]);
+  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'' };
+  const [lf,setLf]=useState(emptyLog);
+  async function loadLogs(){ if(!showPress) return; const { data }=await sb.from('process_output_logs').select('*').eq('worklist_id',w.id).is('deleted_at',null).order('log_date',{ascending:false}).order('created_at',{ascending:false}); setLogs(data||[]); }
+  useEffect(()=>{ loadLogs(); },[w.id]);
+  function addLogOperator(id){ if(!id) return; const e=(employees||[]).find(x=>x.id===id); if(!e||lf.operators.some(o=>o.id===id)) return; setLf(f=>({ ...f, operators:[...f.operators,{id,name:fullName(e)}] })); }
+  async function saveLog(){
+    if(!lf.machine){ alert('Pick the machine used.'); return; }
+    if(!(Number(lf.qty)>0)){ alert('Enter how many pcs were pressed.'); return; }
+    const { error }=await sb.from('process_output_logs').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, log_date:lf.log_date||null, machine:lf.machine, operators:lf.operators, qty_done:Number(lf.qty)||0, notes:lf.notes.trim()||null, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    setLf(emptyLog); loadLogs(); onSaved && onSaved();
+  }
+  async function delLog(l){ if(!confirm('Delete this daily log entry?')) return; await sb.from('process_output_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); loadLogs(); }
+  const pressedTotal=logs.reduce((s,l)=>s+(Number(l.qty_done)||0),0);
+  const logDays=new Set(logs.map(l=>l.log_date).filter(Boolean)).size;
   async function submitReq(){
     if(!rf.department){ alert('Choose which department this request is for.'); return; }
     const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
@@ -8859,8 +8963,37 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
           </div>
         )}
 
-        {/* Process handled by — hidden for sorting (the sorter is captured per batch out). */}
-        {!showBatches && (
+        {/* Daily output log — pressing boards only. Machine + operators + pcs/day. */}
+        {showPress && (
+          <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase text-orange-600 font-semibold">🔥 Daily output log {logs.length>0 && <span className="text-orange-400">({logs.length})</span>}</div>
+              <div className="text-[11px] text-slate-500">Pressed so far: <span className="font-bold text-slate-700">{pressedTotal.toLocaleString()}</span>{projQty>0?` / ${projQty.toLocaleString()} pcs`:''}{logDays>0?` · ${logDays} day${logDays===1?'':'s'} · ~${Math.round(pressedTotal/logDays).toLocaleString()}/day`:''}</div>
+            </div>
+            {/* Add-a-day form */}
+            <div className="bg-white border rounded-lg p-2.5 grid md:grid-cols-2 gap-2 mb-2">
+              <label className="text-[10px] uppercase font-semibold text-slate-400">Date<input type="date" value={lf.log_date} onChange={e=>setLf(f=>({...f,log_date:e.target.value}))} className="input text-sm mt-0.5" /></label>
+              <label className="text-[10px] uppercase font-semibold text-slate-400">Machine<select value={lf.machine} onChange={e=>setLf(f=>({...f,machine:e.target.value}))} className="input text-sm mt-0.5"><option value="">— Choose machine —</option>{PRESS_MACHINES.map(m=><option key={m} value={m}>{m}</option>)}</select></label>
+              <label className="text-[10px] uppercase font-semibold text-slate-400">Pcs pressed today<input type="number" min="0" value={lf.qty} onChange={e=>setLf(f=>({...f,qty:e.target.value}))} placeholder="0" className="input text-sm mt-0.5" /></label>
+              <div>
+                <div className="text-[10px] uppercase font-semibold text-slate-400">Operator(s)</div>
+                {lf.operators.length>0 && <div className="flex flex-wrap gap-1 my-1">{lf.operators.map(o=>(<span key={o.id} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">{o.name}<button onClick={()=>setLf(f=>({...f,operators:f.operators.filter(x=>x.id!==o.id)}))} className="text-teal-400 hover:text-rose-600 font-bold">×</button></span>))}</div>}
+                <select value="" onChange={e=>{ addLogOperator(e.target.value); e.target.value=''; }} className="input text-sm mt-0.5"><option value="">＋ Add operator…</option>{pressStaff.filter(e=>!lf.operators.some(o=>o.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/head/i.test(e.position||'')?' (Head)':''}</option>)}</select>
+              </div>
+              <input value={lf.notes} onChange={e=>setLf(f=>({...f,notes:e.target.value}))} placeholder="Notes (optional)" className="input text-sm md:col-span-2" />
+              <div className="md:col-span-2 flex justify-end"><button onClick={saveLog} className="text-xs px-3 py-1.5 rounded-lg bg-orange-600 text-white font-semibold hover:bg-orange-700">＋ Log today's output</button></div>
+            </div>
+            {logs.length===0 ? <div className="text-[11px] text-slate-400">No daily output logged yet. Add a row each day with the machine, operators and pcs pressed.</div> : (
+              <div className="overflow-x-auto"><table className="w-full text-sm bg-white rounded-lg overflow-hidden">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Machine</th><th className="text-left px-2 py-1.5">Operators</th><th className="text-right px-2 py-1.5">Pcs</th><th></th></tr></thead>
+                <tbody>{logs.map(l=>(<tr key={l.id} className="border-t"><td className="px-2 py-1.5 whitespace-nowrap">{fmtDateShort(l.log_date)}</td><td className="px-2 py-1.5">{l.machine||'—'}</td><td className="px-2 py-1.5 text-xs">{(Array.isArray(l.operators)?l.operators:[]).map(o=>o.name).join(', ')||'—'}</td><td className="px-2 py-1.5 text-right font-semibold">{(Number(l.qty_done)||0).toLocaleString()}</td><td className="px-2 py-1.5 text-right"><button onClick={()=>delLog(l)} className="text-slate-300 hover:text-rose-500 text-xs">✕</button></td></tr>))}</tbody>
+              </table></div>
+            )}
+          </div>
+        )}
+
+        {/* Process handled by — hidden for sorting (captured per batch) & pressing (per daily log). */}
+        {!showBatches && !showPress && (
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">{title} handled by</div>
           {handlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{handlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{empName(id)}<button onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
@@ -8989,6 +9122,13 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
 // "batch out" with a printable, signable receipt.
 const SORTING_PROCESSES=['trad_sorting','subli_sorting'];
 function isSortingProcess(p){ return SORTING_PROCESSES.includes(p); }
+// Pressing boards log DAILY output (machine + operators + pcs) so we can track
+// daily capacity on big multi-day projects.
+const PRESSING_PROCESSES=['subli_pressing','dtf_pressing'];
+function isPressingProcess(p){ return PRESSING_PROCESSES.includes(p); }
+const PRESS_MACHINES=['Hydraulic Press 1','Hydraulic Press 2','Rotary Press 1','Rotary Press 2'];
+// Which employees can be picked as pressing operators, by process.
+function pressingStaffRegex(process){ return process==='subli_pressing' ? /subli.*press|sublimation.*press/i : /dtf.*press|dtf\/subli.*press/i; }
 // Which employees can be picked as the releasing sorter, by process.
 function sortingStaffRegex(process){ return process==='subli_sorting' ? /subli.*sort/i : /sorting.*trad|trad.*sort|traditional.*sort/i; }
 function batchGarmentTotal(b){ const sizes=Array.isArray(b.garment_sizes)?b.garment_sizes:[]; const s=sizes.reduce((x,r)=>x+(Number(r.qty)||0),0); return s>0?s:(Number(b.garment_qty)||0); }
