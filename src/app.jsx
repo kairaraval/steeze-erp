@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 444 · Subli/DTF Pressing upgrades: the board is now a To Do → In Progress → Done kanban; operator picker now correctly lists the Sublimation Pressing team (2+ operators can be added, e.g. for hydraulic); the daily output log takes an Item / description (quick-pick) so multi-item projects are tracked per item; and clicking a project name opens its daily output log.";
+const BUILD = "Live build 445 · Pressing report cleanup: removed the old Quantity Done / Rejects / Issue-type section — that data now lives in the Daily Output Log. Pressing report is just project details, daily output log, notes and replacement. (Board is a To Do/In Progress/Done kanban; operator picker lists the Sublimation Pressing team; per-item daily logging.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9057,7 +9057,8 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
         </div>
         )}
 
-        {/* Quantity done + rejects */}
+        {/* Quantity done + rejects + issue types — hidden for pressing (daily output log covers it). */}
+        {!showPress && (<>
         <div className="grid md:grid-cols-3 gap-3">
           <div>
             <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Quantity done</div>
@@ -9079,6 +9080,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
             ); })}
           </div>
         </div>
+        </>)}
 
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes / findings</div>
