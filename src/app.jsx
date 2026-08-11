@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 441 · Fix: approved vouchers no longer bounce back into the approval queue. Admin 'Approve & Sign' now fully approves — advances the money-approval, posts the bank transaction for officer drafts, and stamps the signature in one click. And editing a voucher only voids the signature when a financially material field (amount/payee/bank/type/check no./date) changes, so tweaking a note no longer un-approves it.";
+const BUILD = "Live build 442 · Fix: polybag slip with many sizes no longer splits/doubles across pages when printing 2-per-sheet — a slip that won't fit now moves whole to the next page. (Also: vouchers no longer bounce back after approval; admin Approve & Sign fully approves + posts, and edits only void the signature on a material change.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5818,6 +5818,10 @@ function PolybagSlipModal({ job, only, onClose }){
         .no-print { display:none !important; }
         .pb-page { page-break-after: always; }
         .pb-page:last-child { page-break-after: auto; }
+        /* Never split an individual slip (or its rows) across a page — a slip
+           that won't fit in the remaining space moves whole to the next page. */
+        .pb-slip { page-break-inside: avoid; break-inside: avoid; }
+        .pb-slip table, .pb-slip tr, .pb-slip thead, .pb-slip tfoot { page-break-inside: avoid; break-inside: avoid; }
       }`}</style>
       <div className="space-y-4">
         <div className="no-print flex justify-end gap-2">
