@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 426 · New Packing board: moving a production job to Packing drops a To-Do card here. Assign packers (Packing Operator / Head), log polybags with a per-size breakdown + contents note, and 🖨 print a per-polybag slip (Steeze Corporation, total items, size breakdown, delivery date). Log 🔁 replacement requests. The 📊 Report shows who packed, polybags & items used, replacements, and a deliveries count by day / week / month.";
+const BUILD = "Live build 427 · Fix: the polybag print view now prints ONLY the slip (Steeze Corporation, size breakdown, total, delivery date) — the editor behind it no longer bleeds onto the page. Packing board: assign packers, log polybags, print slips, replacement requests, and a deliveries report by day / week / month.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5759,20 +5759,29 @@ function PackingReplacementModal({ job, profile, onClose, onSaved }){
   );
 }
 
-// Printable slip(s). Rendered inside a Modal so window.print() prints just the
-// slip (the modal is a body-portal sibling of #root; @media print hides #root).
+// Printable slip(s). Uses a visibility-based print stylesheet scoped to
+// `.polybag-sheet` so ONLY the slip prints — this is important because this
+// modal is opened on top of the polybag editor modal, and a plain @media-print
+// hide-#root rule would print both stacked modals. Hiding everything by
+// visibility and re-showing only the sheet avoids that.
 function PolybagSlipModal({ job, only, onClose }){
-  const bags=jobPolybags(job); const show = (only!=null)? bags.filter((b,i)=>i===only) : bags;
-  const startIndex = (only!=null)? only : 0;
+  const bags=jobPolybags(job); const show = (only!=null)? bags.map((b,i)=>({b,i})).filter(x=>x.i===only) : bags.map((b,i)=>({b,i}));
   return (
     <Modal onClose={onClose} title="Polybag slip" >
+      <style>{`@media print {
+        body * { visibility:hidden !important; }
+        .polybag-sheet, .polybag-sheet * { visibility:visible !important; }
+        .polybag-sheet { position:absolute; left:0; top:0; width:100%; }
+        .no-print { display:none !important; }
+      }`}</style>
       <div className="space-y-4">
         <div className="no-print flex justify-end gap-2">
           <button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button>
         </div>
         {show.length===0 && <div className="text-sm text-slate-400 text-center py-6">No polybags logged yet.</div>}
-        {show.map((pb,idx)=>{ const n=(only!=null)?startIndex:idx; const total=polybagTotal(pb); return (
-          <div key={pb.id||n} className="border rounded-xl p-5" style={{pageBreakAfter:'always'}}>
+        <div className="polybag-sheet space-y-4">
+        {show.map(({b:pb,i:n},idx)=>{ const total=polybagTotal(pb); const isLast=idx===show.length-1; return (
+          <div key={pb.id||n} className="border rounded-xl p-5" style={isLast?undefined:{pageBreakAfter:'always'}}>
             <div className="flex items-start justify-between border-b pb-3 mb-3">
               <div>
                 <div className="text-xl font-extrabold tracking-tight">STEEZE CORPORATION</div>
@@ -5780,13 +5789,13 @@ function PolybagSlipModal({ job, only, onClose }){
               </div>
               <div className="text-right text-xs">
                 <div className="font-mono">{job.number||''}</div>
-                <div className="text-slate-500">Polybag {(only!=null?only:idx)+1} of {bags.length}</div>
+                <div className="text-slate-500">Polybag {n+1} of {bags.length}</div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm mb-3">
               <div><span className="text-[10px] uppercase text-slate-400 block">Client</span>{job.client_name||'—'}</div>
               <div><span className="text-[10px] uppercase text-slate-400 block">Item</span>{job.item||'—'}</div>
-              <div><span className="text-[10px] uppercase text-slate-400 block">Bag label</span>{pb.label||('Polybag '+((only!=null?only:idx)+1))}</div>
+              <div><span className="text-[10px] uppercase text-slate-400 block">Bag label</span>{pb.label||('Polybag '+(n+1))}</div>
               <div><span className="text-[10px] uppercase text-slate-400 block">Date of delivery</span>{fmtDateShort(job.delivery_date)}</div>
             </div>
             <table className="w-full text-sm border-t">
@@ -5800,6 +5809,7 @@ function PolybagSlipModal({ job, only, onClose }){
             {pb.note && <div className="mt-3 text-xs"><span className="text-[10px] uppercase text-slate-400 block">Contents / notes</span>{pb.note}</div>}
           </div>
         ); })}
+        </div>
       </div>
     </Modal>
   );
