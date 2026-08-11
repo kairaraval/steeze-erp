@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 433 · Batch QC: a QC report can now be split per sewing batch — since a project is often sewn by different subcons / in-house. Open a QC report, add a batch QC per sewer (or click a sewing batch-out already sent from sorting to auto-seed it), and record qty checked/passed, rejects, minor/major repairs and issue types per batch. Batch totals roll up in the report.";
+const BUILD = "Live build 434 · Cleaned up the production QC report — now just project details, the Batch QC section (＋ New batch QC), findings notes, and the replacement request. The old overall handled-by / sewn-by / repairs / issue-type / sizing fields are gone for production (still there for sample QC). Everything per-sewer lives in Batch QC.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8032,6 +8032,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           )}
         </div>
 
+        {isSample && (
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">QC handled by</div>
           {handlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{handlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{empName(id)}<button onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
@@ -8046,6 +8047,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
             {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">{empSearch?'No QC staff match.':'No QC staff found — only employees with a QC / Quality Control position can be tagged here.'}</div>}
           </div>
         </div>
+        )}
 
         {/* Per-batch QC — check each sewing batch (subcon / in-house) separately */}
         {!isSample && (
@@ -8081,10 +8083,11 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           </div>
         )}
 
-        {/* Overall summary — optional single-line sewn-by + repairs (kept for simple jobs) */}
+        {/* Overall sewn-by / repairs / issue types — sample only; production uses Batch QC. */}
+        {isSample && (<>
         <div className="grid md:grid-cols-2 gap-3">
           <div className="rounded-lg border p-3 bg-slate-50/60">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by <span className="text-slate-300 normal-case">· overall (use Batch QC above for split projects)</span></div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by</div>
             <div className="flex gap-2 mb-2">
               <button type="button" onClick={()=>setSewerType('inhouse')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='inhouse'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🏠 In-house</button>
               <button type="button" onClick={()=>setSewerType('subcon')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='subcon'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🧵 Subcon</button>
@@ -8111,17 +8114,20 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
             ); })}
           </div>
         </div>
+        </>)}
 
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Findings / comments</div>
           <textarea value={comments} onChange={e=>setComments(e.target.value)} placeholder="General QC findings on the sample / project…" className="input min-h-[70px] whitespace-pre-line" />
         </div>
+        {isSample && (
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sizing notes</div>
           <textarea value={sizing} onChange={e=>setSizing(e.target.value)} placeholder="Sizing observations — e.g. runs small, sleeve length off, chest measurement…" className="input min-h-[50px] whitespace-pre-line" />
         </div>
+        )}
 
-        {isSample ? (
+        {isSample && (
           <div className="grid md:grid-cols-2 gap-3 bg-purple-50/50 border border-purple-100 rounded-lg p-3">
             <div>
               <div className="text-[10px] uppercase text-purple-500 font-semibold mb-1">Sample result</div>
@@ -8134,21 +8140,6 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
             <div>
               <div className="text-[10px] uppercase text-purple-500 font-semibold mb-1">Recommendation</div>
               <input value={recommendation} onChange={e=>setRecommendation(e.target.value)} placeholder="e.g. Change size, adjust collar…" className="input" />
-            </div>
-          </div>
-        ) : (
-          <div className="grid md:grid-cols-4 gap-3 bg-rose-50/40 border border-rose-100 rounded-lg p-3">
-            <div>
-              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Rejects (qty)</div>
-              <input type="number" min="0" value={rejectCount} onChange={e=>setRejectCount(e.target.value)} placeholder="0" className="input" />
-            </div>
-            <div>
-              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1" title="How many of the rejects were caused by human error">· human error</div>
-              <input type="number" min="0" value={humanErr} onChange={e=>setHumanErr(e.target.value)} placeholder="0" className="input" />
-            </div>
-            <div className="md:col-span-2">
-              <div className="text-[10px] uppercase text-rose-500 font-semibold mb-1">Reject reason</div>
-              <input value={rejectReason} onChange={e=>setRejectReason(e.target.value)} placeholder="e.g. Stitching defect, wrong size, misprint…" className="input" />
             </div>
           </div>
         )}
