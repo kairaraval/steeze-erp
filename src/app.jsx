@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 424 · New Sewing board: moving a production job to Sewing In-House drops a To-Do card here. Assign a sewer (Sewer / Sewing Head), hit ▶ Start / ✓ Finish to stamp times (auto-calculates hours), and log 🔁 fabric-damage replacement requests with a reason + qty. A 📊 Report tab rolls up finished projects, hours per project, and replacement counts per sewer.";
+const BUILD = "Live build 425 · Sewing board now supports multiple sewers per project — add as many as needed via the ＋ Add sewer picker (chips with ✕ to remove); the project keeps one shared Start/Finish timeline and status. The Report credits each sewer on a shared project with that project's pcs & hours.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5485,6 +5485,8 @@ function fmtDT(v){ if(!v) return '—'; const d=new Date(v); if(isNaN(d)) return
 // Convert an ISO timestamp to the value a <input type="datetime-local"> wants
 // (local time, no seconds/zone). Returns '' for null.
 function toLocalInput(v){ if(!v) return ''; const d=new Date(v); if(isNaN(d)) return ''; const off=d.getTimezoneOffset(); const local=new Date(d.getTime()-off*60000); return local.toISOString().slice(0,16); }
+// Sewers on a job (list), with fallback to the legacy single-sewer fields.
+function sewJobSewers(j){ return (Array.isArray(j.sewers)&&j.sewers.length) ? j.sewers : ((j.sewer_id||j.sewer_name) ? [{ id:j.sewer_id||null, name:j.sewer_name||'—' }] : []); }
 
 function SewingReplacementModal({ job, profile, onClose, onSaved }){
   const [reason,setReason]=useState(''); const [qty,setQty]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -5533,10 +5535,14 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   const sewers=(employees||[]).filter(e=> e.is_active!==false && /sew/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item} ${j.sewer_name||''}`.toLowerCase().includes(search.toLowerCase()));
 
+  // A project can be handled by several sewers (shared timeline + status).
+  // Stored as a list on the job; falls back to the legacy single-sewer fields.
+  const jobSewers=sewJobSewers;
   async function patch(j, upd){ const { error }=await sb.from('sewing_jobs').update(upd).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function move(j,st){ await patch(j,{ status:st }); }
-  async function assignSewer(j, empId){ const e=(employees||[]).find(x=>x.id===empId); await patch(j,{ sewer_id: empId||null, sewer_name: e?fullName(e):null }); }
-  async function startJob(j){ if(!j.sewer_id && !j.sewer_name){ if(!confirm('No sewer assigned yet. Start anyway?')) return; } await patch(j,{ start_at: new Date().toISOString(), status: (j.status==='to do'?'in progress':j.status) }); }
+  async function addSewer(j, empId){ if(!empId) return; const e=(employees||[]).find(x=>x.id===empId); if(!e) return; const cur=jobSewers(j); if(cur.some(s=>s.id===empId)) return; const next=[...cur, { id:empId, name:fullName(e) }]; await patch(j,{ sewers: next, sewer_id: next[0].id||null, sewer_name: next.map(s=>s.name).join(', ') }); }
+  async function removeSewer(j, empId){ const next=jobSewers(j).filter(s=>s.id!==empId); await patch(j,{ sewers: next, sewer_id: next[0]?.id||null, sewer_name: next.length? next.map(s=>s.name).join(', ') : null }); }
+  async function startJob(j){ if(jobSewers(j).length===0){ if(!confirm('No sewer assigned yet. Start anyway?')) return; } await patch(j,{ start_at: new Date().toISOString(), status: (j.status==='to do'?'in progress':j.status) }); }
   async function finishJob(j){ if(!j.start_at){ if(!confirm('This project has no start time. Mark it done anyway?')) return; } await patch(j,{ end_at: new Date().toISOString(), status:'done' }); }
   async function setTime(j, field, localVal){ await patch(j,{ [field]: localVal? new Date(localVal).toISOString() : null }); }
   async function del(id){ if(!confirm('Send this sewing job to Trash?')) return; await sb.from('sewing_jobs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',id); reload(); }
@@ -5578,13 +5584,22 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                       {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold" title="Replacement requests">🔁 {repls.length}</span>}
                     </div>
-                    {/* Sewer assignment */}
+                    {/* Sewers — a project can be handled by several people. */}
                     <div className="mt-2">
-                      <label className="block text-[9px] uppercase font-semibold text-slate-400">Sewer</label>
-                      <select value={j.sewer_id||''} onChange={e=>assignSewer(j, e.target.value)} className="text-[11px] border rounded px-1 py-1 w-full bg-slate-50">
-                        <option value="">— Assign sewer —</option>
-                        {sewers.map(e=><option key={e.id} value={e.id}>{fullName(e)}{/sewing head/i.test(e.position||'')?' (Head)':''}</option>)}
-                        {j.sewer_id && !sewers.find(e=>e.id===j.sewer_id) && <option value={j.sewer_id}>{j.sewer_name||'(assigned)'}</option>}
+                      <label className="block text-[9px] uppercase font-semibold text-slate-400">Sewers {jobSewers(j).length>0 && <span className="text-slate-300">({jobSewers(j).length})</span>}</label>
+                      {jobSewers(j).length>0 && (
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {jobSewers(j).map(s=>(
+                            <span key={s.id||s.name} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                              {s.name}
+                              <button onClick={()=>removeSewer(j, s.id)} title="Remove" className="text-indigo-400 hover:text-rose-600 font-bold leading-none">×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <select value="" onChange={e=>{ addSewer(j, e.target.value); e.target.value=''; }} className="text-[11px] border rounded px-1 py-1 w-full bg-slate-50">
+                        <option value="">＋ Add sewer…</option>
+                        {sewers.filter(e=>!jobSewers(j).some(s=>s.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/sewing head/i.test(e.position||'')?' (Head)':''}</option>)}
                       </select>
                     </div>
                     {/* Start / Finish + times */}
@@ -5633,10 +5648,12 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
 function SewingReport({ jobs, replacements, sewers }){
   const done=jobs.filter(j=>SEWING_DONE.includes(j.status)).slice().sort((a,b)=>String(b.end_at||'').localeCompare(String(a.end_at||'')));
   const replByJob={}; replacements.forEach(r=>{ replByJob[r.sewing_job_id]=(replByJob[r.sewing_job_id]||0)+1; });
-  const replByName={}; const replQtyByName={}; replacements.forEach(r=>{ const k=r.sewer_name||'—'; replByName[k]=(replByName[k]||0)+1; replQtyByName[k]=(replQtyByName[k]||0)+(Number(r.qty)||0); });
-  // Per-sewer rollup keyed by sewer_name (snapshot on the job).
+  // Per-sewer rollup. A project can have several sewers on a shared timeline, so
+  // each sewer on a job is credited that project's pcs/hours (totals may overlap
+  // when people share a project — the top cards stay project-based, not summed).
   const roll={};
-  jobs.forEach(j=>{ const k=j.sewer_name||'— Unassigned'; const r=roll[k]||(roll[k]={ name:k, projects:0, done:0, pcs:0, ms:0 }); r.projects++; if(SEWING_DONE.includes(j.status)){ r.done++; r.pcs+=Number(j.quantity)||0; if(j.start_at&&j.end_at){ const d=new Date(j.end_at)-new Date(j.start_at); if(d>0) r.ms+=d; } } });
+  jobs.forEach(j=>{ const list=sewJobSewers(j); const names=list.length?list.map(s=>s.name):['— Unassigned']; const isDone=SEWING_DONE.includes(j.status); const ms=(j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0; const repl=replByJob[j.id]||0;
+    names.forEach(k=>{ const r=roll[k]||(roll[k]={ name:k, projects:0, done:0, pcs:0, ms:0, repl:0 }); r.projects++; r.repl+=repl; if(isDone){ r.done++; r.pcs+=Number(j.quantity)||0; r.ms+=ms; } }); });
   const rollRows=Object.values(roll).sort((a,b)=>b.done-a.done);
   const totalDone=done.length; const totalPcs=done.reduce((s,j)=>s+(Number(j.quantity)||0),0);
   const totalMs=done.reduce((s,j)=>s+((j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0),0);
@@ -5650,7 +5667,7 @@ function SewingReport({ jobs, replacements, sewers }){
       </div>
 
       <div className="bg-white border rounded-xl overflow-hidden">
-        <div className="px-3 py-2 text-xs uppercase font-semibold text-slate-500 bg-slate-50">Per-sewer summary</div>
+        <div className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50"><span className="uppercase">Per-sewer summary</span> <span className="normal-case text-[10px] text-slate-400">— when several sewers share one project, each is credited that project's pcs &amp; hours, so rows can overlap</span></div>
         <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
             <th className="text-left px-3 py-2">Sewer</th><th className="text-right px-3 py-2">Active</th><th className="text-right px-3 py-2">Finished</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Total hrs</th><th className="text-right px-3 py-2">Avg hrs/project</th><th className="text-right px-3 py-2">Replacements</th>
@@ -5663,7 +5680,7 @@ function SewingReport({ jobs, replacements, sewers }){
               <td className="px-3 py-2 text-right">{r.pcs.toLocaleString()}</td>
               <td className="px-3 py-2 text-right">{fmtHrs(r.ms)}</td>
               <td className="px-3 py-2 text-right">{r.done?fmtHrs(r.ms/r.done):'—'}</td>
-              <td className="px-3 py-2 text-right text-rose-600">{replByName[r.name]||0}{replQtyByName[r.name]?` (${replQtyByName[r.name]} pc)`:''}</td>
+              <td className="px-3 py-2 text-right text-rose-600">{r.repl||0}</td>
             </tr>
           ))}{rollRows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No sewing projects yet.</td></tr>}</tbody>
         </table></div>
@@ -5680,7 +5697,7 @@ function SewingReport({ jobs, replacements, sewers }){
               <td className="px-3 py-2 font-mono text-xs">{j.number}</td>
               <td className="px-3 py-2">{j.client_name}</td>
               <td className="px-3 py-2 font-medium">{j.item}</td>
-              <td className="px-3 py-2">{j.sewer_name||'—'}</td>
+              <td className="px-3 py-2">{sewJobSewers(j).map(s=>s.name).join(', ')||'—'}</td>
               <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.start_at)}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.end_at)}</td>
