@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 445 · Pressing report cleanup: removed the old Quantity Done / Rejects / Issue-type section — that data now lives in the Daily Output Log. Pressing report is just project details, daily output log, notes and replacement. (Board is a To Do/In Progress/Done kanban; operator picker lists the Sublimation Pressing team; per-item daily logging.)";
+const BUILD = "Live build 446 · Pattern, In-House Cutting, Trad Sorting, Subli Sorting and Quality Control are now To Do → In Progress → Done kanban boards. Drag a card's status dropdown to move it; click a card to open its report/detail. Their old Worklist + Done tabs are merged into the board (other tabs like Library, Size Charts, Reports remain).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7431,6 +7431,8 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
   async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('pattern_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function markDone(w){ const { error }=await sb.from('pattern_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('pattern_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('pattern_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  const boardItems=(patternWorklist||[]).slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
   async function delItem(w){ if(!confirm('Remove this from the worklist?')) return; const { error }=await sb.from('pattern_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   async function delPattern(p){ if(!confirm(`Delete pattern ${p.pattern_code||''}?`)) return; const { error }=await sb.from('patterns').update({ deleted_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload(); }
@@ -7503,8 +7505,7 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
           <button onClick={()=>{ setPrefill(null); setEditing({}); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New pattern</button>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
-          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Patterns ({done.length})</button>
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
           <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({prodCount})</button>
           <button onClick={()=>setTab('sample')} className={`px-3 py-1.5 rounded-md ${tab==='sample'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sample Patterns ({sampleCount})</button>
           <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
@@ -7516,25 +7517,25 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
       {tab==='reports' && <ProgressReport rows={(patternWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Done" />}
 
       {tab==='worklist' && (
-        <div className="space-y-4">
-          <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🧵 To work on</div>
-            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing on the worklist. Items appear here when a Production or Sample job hits the "For Pattern" stage.</div> : open.map((w,i)=>worklistRow(w,i))}
-          </div>
-          <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="space-y-3">
+          <KanbanBoard items={boardItems} onMove={moveStatus}
+            renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (<div>
+              <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>{p && <span className="text-[9px] text-emerald-700 font-semibold">✓ {p.pattern_code||'logged'}</span>}</div>
+              <div className="font-semibold text-sm leading-tight">{w.item||w.title||'—'}</div>
+              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}</div>
+              <div className="flex flex-wrap items-center gap-1 mt-1">
+                {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+                {!p && <button onClick={()=>logFromWorklist(w)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
+              </div>
+            </div>); }}
+            extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
+          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
             <div className="p-2 flex gap-1.5">
               <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add a pattern to work on…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
               <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
             </div>
           </div>
-        </div>
-      )}
-
-      {tab==='done' && (
-        <div className="bg-white border rounded-xl overflow-hidden">
-          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done Patterns — finished (start → finished date/time)</div>
-          {done.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">Nothing finished yet. Click "✓ Done" on a worklist item to move it here.</div> : done.map(doneRow)}
         </div>
       )}
 
@@ -7623,6 +7624,35 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
 }
 
 /* ─────────── CUTTING DEPARTMENT ─────────── */
+// ─────────── Reusable kanban board (To Do / In Progress / Done) ───────────
+// Used by Pattern, Cutting, QC and the process boards. Items carry a `status`
+// of 'open' | 'in_progress' | 'done'; onMove(w, status) persists the change.
+const KANBAN_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
+function kbStatusOf(w){ return w.status==='done'?'done':w.status==='in_progress'?'in_progress':'open'; }
+function KanbanBoard({ items, onMove, renderCard, extraActions }){
+  return (
+    <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
+      {KANBAN_COLS.map(([key,label,color])=>{ const col=(items||[]).filter(w=>kbStatusOf(w)===key); return (
+        <div key={key} className="flex-shrink-0 w-72 flex flex-col">
+          <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
+          <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
+            {col.map(w=>(
+              <div key={w.id} className="bg-white border rounded-lg shadow-sm p-2.5">
+                {renderCard(w)}
+                <div className="mt-2 flex items-center gap-1">
+                  <select value={kbStatusOf(w)} onChange={e=>onMove(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
+                  {extraActions && extraActions(w)}
+                </div>
+              </div>
+            ))}
+            {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
+          </div>
+        </div>
+      ); })}
+    </div>
+  );
+}
+
 // ─────────── Reusable progress / output report ───────────
 // Feeds off a normalized row set so every department board can drop in a
 // "Reports" tab. Row shape: { date, done, item, client, qty, rejects,
@@ -7855,6 +7885,8 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
 
   async function markDone(w){ if(!(Array.isArray(w.qc_handlers)&&w.qc_handlers.length)){ if(!confirm('No QC handler recorded yet. Mark as done anyway?')) return; } const { error }=await sb.from('qc_reports').update({ status:'done', done_at:new Date().toISOString(), done_by:profile.id }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('qc_reports').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null, done_by: st==='done'? profile.id : null }; const { error }=await sb.from('qc_reports').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  const boardItems=dedupe((qcReports||[]));
   async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
 
   const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
@@ -7893,8 +7925,7 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
           <p className="text-slate-500 text-sm">{open.length} to check · {done.length} done · Production jobs & samples land here when set to “Quality Check (QC)”.</p>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>To Check ({open.length})</button>
-          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
           <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📐 Size Charts ({sizers.length})</button>
           <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
         </div>
@@ -7919,10 +7950,16 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-xl border overflow-hidden">
-          {tab==='worklist' ? (open.length?open.map(row):<div className="px-3 py-10 text-center text-slate-400 text-sm">Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.</div>)
-                            : (done.length?done.map(row):<div className="px-3 py-10 text-center text-slate-400 text-sm">No completed QC reports yet.</div>)}
-        </div>
+        boardItems.length===0
+          ? <div className="bg-white rounded-xl border px-3 py-10 text-center text-slate-400 text-sm">Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.</div>
+          : <KanbanBoard items={boardItems} onMove={moveStatus}
+              renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=typeBadge(w.source_type); const sm=summaryLine(w); return (<div>
+                <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
+                <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||'—'}</div></button>
+                <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{sm?` · ${sm}`:''}</div>
+                {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+              </div>); }}
+              extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open QC report">QC ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
       )}
       {detail && <QCDetailModal w={detail} profile={profile} profiles={profiles} employees={employees} leads={leads} openTechpack={openTechpack} onClose={()=>setDetail(null)} reload={reload} />}
       {sizerLightbox && <MediaLightbox url={sizerLightbox.url} path={sizerLightbox.path} name={sizerLightbox.name} kind={sizerLightbox.kind} onClose={()=>setSizerLightbox(null)} />}
@@ -8393,6 +8430,8 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('cutting_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function markDone(w){ const { error }=await sb.from('cutting_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('cutting_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  const boardItems=(cuttingWorklist||[]).slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
@@ -8437,8 +8476,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
           <p className="text-slate-500 text-sm">{open.length} to cut · {done.length} done</p>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
-          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Cutting ({done.length})</button>
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
           <button onClick={()=>setTab('patterns')} className={`px-3 py-1.5 rounded-md ${tab==='patterns'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({lib.length})</button>
           <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
           <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md inline-flex items-center gap-1.5 ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement{replCount>0 && <span className="text-[10px] rounded-full px-1.5 py-0.5 font-bold bg-rose-500 text-white">{replCount}</span>}</button>
@@ -8449,25 +8487,22 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
       {tab==='reports' && <ProgressReport rows={(cuttingWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Cut" />}
 
       {tab==='worklist' && (
-        <div className="space-y-4">
-          <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">🔪 To cut</div>
-            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to cut. Items appear here when a Production job hits the "Cutting - In House" stage.</div> : open.map((w,i)=>worklistRow(w,i))}
-          </div>
-          <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="space-y-3">
+          <KanbanBoard items={boardItems} onMove={moveStatus}
+            renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const qty=qtyForWork(w); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (<div>
+              <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
+              <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
+              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty.toLocaleString('en-PH')} pcs`:''}{w.pattern_number?` · Pat ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}</div>
+              {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+            </div>); }}
+            extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open">Open ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
+          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
             <div className="p-2 flex gap-1.5">
               <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add something to cut…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
               <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
             </div>
           </div>
-        </div>
-      )}
-
-      {tab==='done' && (
-        <div className="bg-white border rounded-xl overflow-hidden">
-          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done Cutting — finished (start → finished date/time)</div>
-          {done.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">Nothing finished yet. Click "✓ Done" on a worklist item to move it here.</div> : done.map(doneRow)}
         </div>
       )}
 
@@ -8754,14 +8789,13 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
           <p className="text-slate-500 text-sm">{open.length} to do · {done.length} done · items appear here when a Production job hits the “{title}” stage.</p>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{showPress?`Board (${open.length})`:`Worklist (${open.length})`}</button>
-          {!showPress && <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>}
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({rows.length})</button>
           {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
           <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
         </div>
       </div>
 
-      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : (tab==='worklist' && showPress) ? (
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='worklist' ? (
         <div className="space-y-3">
           <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
             {PRESS_COLS.map(([key,label,color])=>{ const col=pressCol(key); return (
@@ -8774,12 +8808,12 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
                       <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
                       <div className="text-xs text-slate-500 truncate">{w.client_name||''}</div>
                       <div className="flex flex-wrap items-center gap-1 mt-1">
-                        {pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
+                        {showPress && pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
                         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                       </div>
                       <div className="mt-2 flex items-center gap-1">
                         <select value={w.status==='in_progress'?'in_progress':w.status==='done'?'done':'open'} onChange={e=>moveStatus(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
-                        <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open daily output log">🔥 Log</button>
+                        <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open report">{showPress?'🔥 Log':'Open ▸'}</button>
                         <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
                       </div>
                     </div>
@@ -8790,20 +8824,6 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
             ); })}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden max-w-md">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
-            <div className="p-2 flex gap-1.5">
-              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder={`Add something to ${title.toLowerCase()}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
-            </div>
-          </div>
-        </div>
-      ) : tab==='worklist' ? (
-        <div className="space-y-4">
-          <div className="bg-white border rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">{icon} To do</div>
-            {open.length===0 ? <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing here. Items appear when a Production job hits the “{title}” stage.</div> : open.map((w,i)=>worklistRow(w,i))}
-          </div>
-          <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
             <div className="p-2 flex gap-1.5">
               <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder={`Add something to ${title.toLowerCase()}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
