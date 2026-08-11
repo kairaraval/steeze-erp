@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 429 · Trad & Subli Sorting: open a project's Report to add ‘batches out’ — split the sewing across multiple subcons / in-house sewers. Each batch records garments (with size breakdown), a full trims breakdown, polybags to dispatch, destination, released-by sorter, and expected due date, and prints a signable dispatch receipt (Steeze Corporation, released/received signature lines). New 📦 Released tab lists every batch out for tracking, with a returned toggle.";
+const BUILD = "Live build 430 · Sorting report: removed the ‘handled by’ staff picker (the sorter is now captured per batch out). Trad & Subli Sorting batches-out — split sewing across subcons / in-house, garment+trims+polybag breakdown, signable dispatch receipts, and a 📦 Released tracking tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8600,7 +8600,8 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
           </div>
         )}
 
-        {/* Process handled by */}
+        {/* Process handled by — hidden for sorting (the sorter is captured per batch out). */}
+        {!showBatches && (
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">{title} handled by</div>
           {handlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{handlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{empName(id)}<button onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
@@ -8615,6 +8616,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
             {filteredEmps.length===0 && <div className="px-2 py-2 text-xs text-slate-400">No staff match.</div>}
           </div>
         </div>
+        )}
 
         {/* Quantity done + rejects */}
         <div className="grid md:grid-cols-3 gap-3">
