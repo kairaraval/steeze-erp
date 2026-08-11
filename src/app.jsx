@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 428 · Polybag slips: both slips now look identical, and they print 2-per-sheet (half page each, with a ✂ cut line) to save paper. Packing board: assign packers, log polybags, print slips, replacement requests, deliveries report by day / week / month.";
+const BUILD = "Live build 429 · Trad & Subli Sorting: open a project's Report to add ‘batches out’ — split the sewing across multiple subcons / in-house sewers. Each batch records garments (with size breakdown), a full trims breakdown, polybags to dispatch, destination, released-by sorter, and expected due date, and prints a signable dispatch receipt (Steeze Corporation, released/received signature lines). New 📦 Released tab lists every batch out for tracking, with a returned toggle.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8323,10 +8323,16 @@ const PROCESS_BOARDS = [
   { key:'dtf-pressing',   process:'dtf_pressing',   title:'DTF Pressing',   icon:'🔥', seedStatus:'dtf pressing',   role:'dtf_pressing_head' },
   { key:'subli-pressing', process:'subli_pressing', title:'Subli Pressing', icon:'🔥', seedStatus:'subli pressing', role:'subli_pressing_head' },
 ];
-function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack, process, title, icon, seedStatus }){
+function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, openTechpack, process, title, icon, seedStatus }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState('worklist');
+  const showBatches=isSortingProcess(process);
+  const [batches,setBatches]=useState([]);
+  const [batchReceipt,setBatchReceipt]=useState(null);
+  async function loadBatches(){ if(!showBatches) return; const { data }=await sb.from('sorting_batches').select('*').eq('process',process).is('deleted_at',null).order('released_at',{ascending:false}).order('created_at',{ascending:false}); setBatches(data||[]); }
+  useEffect(()=>{ loadBatches(); },[process, tab]);
+  async function toggleReturned(bt){ const upd = bt.status==='returned' ? { status:'released', returned_at:null } : { status:'returned', returned_at:new Date().toISOString().slice(0,10) }; await sb.from('sorting_batches').update(upd).eq('id',bt.id); loadBatches(); }
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
@@ -8410,6 +8416,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+          {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
         </div>
       </div>
 
@@ -8427,6 +8434,28 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack
             </div>
           </div>
         </div>
+      ) : tab==='released' ? (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>📦 Released batches — everything sent out to subcon / in-house sewing</span><span className="text-xs text-slate-400 font-normal">{batches.length} batch{batches.length===1?'':'es'}</span></div>
+          {batches.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">No batches released yet. Open a project's Report and add a “batch out”.</div> : (
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Released</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Sent to</th><th className="text-right px-3 py-2">Garments</th><th className="text-right px-3 py-2">Polybags</th><th className="text-left px-3 py-2">Due</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+              <tbody>{batches.map(bt=>{ const g=batchGarmentTotal(bt); const returned=bt.status==='returned'; return (
+                <tr key={bt.id} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDateShort(bt.released_at)}<div className="text-[10px] text-slate-400 font-mono">{bt.number||''}{bt.batch_no?` · B${bt.batch_no}`:''}</div></td>
+                  <td className="px-3 py-2 font-medium">{bt.item||'—'}</td>
+                  <td className="px-3 py-2">{bt.client_name||'—'}</td>
+                  <td className="px-3 py-2">{bt.destination_type==='inhouse'?'🏠 In-house':`🧵 ${bt.subcon_name||'Subcon'}`}</td>
+                  <td className="px-3 py-2 text-right">{g}</td>
+                  <td className="px-3 py-2 text-right">{Number(bt.polybags)||0}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDateShort(bt.expected_due_date)}</td>
+                  <td className="px-3 py-2"><button onClick={()=>toggleReturned(bt)} className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${returned?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`} title="Toggle returned">{returned?'✓ Returned':'Out'}</button></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setBatchReceipt(bt)} className="text-xs text-slate-700 hover:underline font-semibold">🖨 Receipt</button></td>
+                </tr>
+              ); })}</tbody>
+            </table></div>
+          )}
+        </div>
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done — finished (start → finished date/time)</div>
@@ -8434,7 +8463,8 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, openTechpack
         </div>
       )}
 
-      {detail && <ProcessReportModal w={detail} profile={profile} employees={employees} leads={leads} process={process} title={title} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); load(); }} />}
+      {detail && <ProcessReportModal w={detail} profile={profile} employees={employees} leads={leads} subcons={subcons} process={process} title={title} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); load(); loadBatches(); }} />}
+      {batchReceipt && <SortingBatchReceiptModal batch={batchReceipt} subcons={subcons} onClose={()=>setBatchReceipt(null)} />}
     </div>
   );
 }
@@ -8452,8 +8482,9 @@ const REPLACEMENT_STATUS_META={ pending:['Pending approval','bg-amber-100 text-a
 // Reasons for a replacement / repair (tick all that apply; "Others" opens a box).
 const REPLACEMENT_REASONS=['Fabric damage','Print damage','Print error','Machine error','Cold spot'];
 
-function ProcessReportModal({ w, profile, employees, leads, process, title, openTechpack, onClose, onSaved }){
+function ProcessReportModal({ w, profile, employees, leads, subcons, process, title, openTechpack, onClose, onSaved }){
   const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
+  const showBatches=isSortingProcess(process);
   const projItems=Array.isArray(lead?.items)?lead.items:[];
   const projQty=projItems.reduce((s,it)=>s+(Number(it.quantity)||0),0);
   const projDelivery=lead?.delivery_date||lead?.expected_close||null;
@@ -8483,6 +8514,14 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
   function toggleReason(r){ setRf(f=>({ ...f, reasons:f.reasons.includes(r)?f.reasons.filter(x=>x!==r):[...f.reasons,r] })); }
   async function loadReqs(){ const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',w.id).order('created_at',{ascending:false}); setReqs(data||[]); }
   useEffect(()=>{ loadReqs(); },[w.id]);
+
+  // Batch-outs (dispatch to subcon / in-house) — sorting boards only.
+  const [batches,setBatches]=useState([]);
+  const [batchModal,setBatchModal]=useState(null);   // {} for new, batch obj for edit
+  const [batchReceipt,setBatchReceipt]=useState(null);
+  async function loadBatches(){ if(!showBatches) return; const { data }=await sb.from('sorting_batches').select('*').eq('worklist_id',w.id).is('deleted_at',null).order('batch_no',{ascending:true}); setBatches(data||[]); }
+  useEffect(()=>{ loadBatches(); },[w.id]);
+  async function delBatch(bt){ if(!confirm(`Delete batch ${bt.batch_no||''}?`)) return; await sb.from('sorting_batches').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',bt.id); loadBatches(); }
   async function submitReq(){
     if(!rf.department){ alert('Choose which department this request is for.'); return; }
     const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
@@ -8534,6 +8573,32 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
             </div>
           )}
         </div>
+
+        {/* Batch-outs — dispatch cut panels to subcons / in-house (sorting only) */}
+        {showBatches && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase text-blue-600 font-semibold">📦 Batches out · sent for sewing {batches.length>0 && <span className="text-blue-400">({batches.length})</span>}</div>
+              <button onClick={()=>setBatchModal({})} className="text-xs px-2.5 py-1 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700">＋ New batch out</button>
+            </div>
+            {batches.length===0 ? <div className="text-[11px] text-slate-400">No batches yet. Split this project into batches per subcon / in-house sewer and print a signable receipt for each.</div> : (
+              <div className="space-y-1.5">
+                {batches.map(bt=>{ const g=batchGarmentTotal(bt); const trimLines=(Array.isArray(bt.trims)?bt.trims:[]).filter(t=>t.name||t.qty).length; return (
+                  <div key={bt.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-2 flex-wrap">
+                    <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Batch {bt.batch_no||'?'}</span>
+                    <span className="font-semibold">{bt.destination_type==='inhouse'?'🏠 In-house':`🧵 ${bt.subcon_name||'Subcon'}`}</span>
+                    <span className="text-slate-500 text-xs">{g} pcs · {Number(bt.polybags)||0} polybags · {trimLines} trim line{trimLines===1?'':'s'}</span>
+                    {bt.expected_due_date && <span className="text-[10px] text-blue-600">due {fmtDateShort(bt.expected_due_date)}</span>}
+                    <div className="flex-1"></div>
+                    <button onClick={()=>setBatchReceipt(bt)} className="text-xs text-slate-700 hover:underline font-semibold" title="Print receipt">🖨 Receipt</button>
+                    <button onClick={()=>setBatchModal(bt)} className="text-xs text-indigo-600 hover:underline">Edit</button>
+                    <button onClick={()=>delBatch(bt)} className="text-slate-300 hover:text-rose-500 text-sm" title="Delete">✕</button>
+                  </div>
+                ); })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Process handled by */}
         <div>
@@ -8649,6 +8714,183 @@ function ProcessReportModal({ w, profile, employees, leads, process, title, open
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
           <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save report'}</button>
+        </div>
+      </div>
+      {batchModal && <SortingBatchModal batch={batchModal.id?batchModal:null} worklistItem={w} process={process} title={title} profile={profile} employees={employees} subcons={subcons} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadBatches(); }} />}
+      {batchReceipt && <SortingBatchReceiptModal batch={batchReceipt} subcons={subcons} onClose={()=>setBatchReceipt(null)} />}
+    </Modal>
+  );
+}
+
+// ── Sorting batch-outs (dispatch to subcon / in-house sewing) ──────────────
+// Trad & subli sorting release cut panels to subcons or in-house sewing. One
+// project can be split across several destinations, so each release is its own
+// "batch out" with a printable, signable receipt.
+const SORTING_PROCESSES=['trad_sorting','subli_sorting'];
+function isSortingProcess(p){ return SORTING_PROCESSES.includes(p); }
+// Which employees can be picked as the releasing sorter, by process.
+function sortingStaffRegex(process){ return process==='subli_sorting' ? /subli.*sort/i : /sorting.*trad|trad.*sort|traditional.*sort/i; }
+function batchGarmentTotal(b){ const sizes=Array.isArray(b.garment_sizes)?b.garment_sizes:[]; const s=sizes.reduce((x,r)=>x+(Number(r.qty)||0),0); return s>0?s:(Number(b.garment_qty)||0); }
+
+function SortingBatchModal({ batch, worklistItem, process, title, profile, employees, subcons, onClose, onSaved }){
+  const w=worklistItem; const editing=!!batch;
+  const [destType,setDestType]=useState(batch?.destination_type||'subcon');
+  const [subconId,setSubconId]=useState(batch?.subcon_id||'');
+  const [garmentQty,setGarmentQty]=useState(batch?.garment_qty!=null?String(batch.garment_qty):'');
+  const [sizes,setSizes]=useState(Array.isArray(batch?.garment_sizes)&&batch.garment_sizes.length?batch.garment_sizes.map(s=>({...s})):[{size:'',qty:''}]);
+  const [trims,setTrims]=useState(Array.isArray(batch?.trims)&&batch.trims.length?batch.trims.map(t=>({...t})):[{name:'',qty:'',unit:'pcs'}]);
+  const [polybags,setPolybags]=useState(batch?.polybags!=null?String(batch.polybags):'');
+  const [releasedAt,setReleasedAt]=useState(batch?.released_at||new Date().toISOString().slice(0,10));
+  const [dueDate,setDueDate]=useState(batch?.expected_due_date||'');
+  const [releasedBy,setReleasedBy]=useState(Array.isArray(batch?.released_by)?batch.released_by:[]);
+  const [notes,setNotes]=useState(batch?.notes||'');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const staff=(employees||[]).filter(e=> e.is_active!==false && sortingStaffRegex(process).test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const subconList=(subcons||[]).filter(s=>!s.deleted_at && s.active!==false).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  function setSize(i,k,v){ setSizes(a=>a.map((s,x)=>x===i?{...s,[k]:v}:s)); }
+  function setTrim(i,k,v){ setTrims(a=>a.map((t,x)=>x===i?{...t,[k]:v}:t)); }
+  const sizeSum=sizes.reduce((s,r)=>s+(Number(r.qty)||0),0);
+  function addPerson(id){ if(!id) return; const e=(employees||[]).find(x=>x.id===id); if(!e||releasedBy.some(p=>p.id===id)) return; setReleasedBy(p=>[...p,{id,name:fullName(e)}]); }
+  async function save(){
+    if(destType==='subcon' && !subconId){ setMsg('Choose a subcon.'); return; }
+    setBusy(true); setMsg('');
+    const sc=subconList.find(s=>s.id===subconId);
+    const cleanSizes=sizes.map(s=>({ size:(s.size||'').trim(), qty:Number(s.qty)||0 })).filter(s=>s.size||s.qty);
+    const cleanTrims=trims.map(t=>({ name:(t.name||'').trim(), qty:Number(t.qty)||0, unit:(t.unit||'pcs').trim() })).filter(t=>t.name||t.qty);
+    const payload={ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null,
+      destination_type:destType, subcon_id:destType==='subcon'?(subconId||null):null, subcon_name:destType==='subcon'?(sc?.name||null):'In-house sewing',
+      garment_qty:Number(garmentQty)||sizeSum||0, garment_sizes:cleanSizes, trims:cleanTrims, polybags:Number(polybags)||0,
+      released_by:releasedBy, released_at:releasedAt||null, expected_due_date:dueDate||null, notes:notes.trim()||null };
+    let error;
+    if(editing){ ({ error }=await sb.from('sorting_batches').update(payload).eq('id',batch.id)); }
+    else {
+      const { count }=await sb.from('sorting_batches').select('id',{count:'exact',head:true}).eq('worklist_id',w.id).is('deleted_at',null);
+      payload.batch_no=(count||0)+1; payload.number='SB-'+Date.now().toString().slice(-6); payload.created_by=profile.id;
+      ({ error }=await sb.from('sorting_batches').insert(payload));
+    }
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved && onSaved();
+  }
+  return (
+    <Modal title={`${editing?'Edit':'New'} batch out · ${w.item||w.title||''}`} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="rounded-lg border bg-slate-50 px-3 py-2 text-xs text-slate-500">{w.client_name||'—'} · {title} dispatch</div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Send to</div>
+            <div className="flex gap-2 mb-1">
+              <button type="button" onClick={()=>setDestType('subcon')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${destType==='subcon'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🧵 Subcon</button>
+              <button type="button" onClick={()=>setDestType('inhouse')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${destType==='inhouse'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🏠 In-house</button>
+            </div>
+            {destType==='subcon' && <select value={subconId} onChange={e=>setSubconId(e.target.value)} className="input text-sm"><option value="">— Choose subcon —</option>{subconList.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[10px] uppercase text-slate-400 font-semibold">Date released<input type="date" value={releasedAt} onChange={e=>setReleasedAt(e.target.value)} className="input text-sm mt-0.5" /></label>
+            <label className="text-[10px] uppercase text-slate-400 font-semibold">Expected due<input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} className="input text-sm mt-0.5" /></label>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-3">
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Garment pcs</div>
+            <input type="number" min="0" value={garmentQty} onChange={e=>setGarmentQty(e.target.value)} placeholder={sizeSum?String(sizeSum):'0'} className="input text-sm" />
+            <div className="mt-1.5 space-y-1">
+              {sizes.map((s,i)=>(<div key={i} className="flex items-center gap-1.5"><input value={s.size} onChange={e=>setSize(i,'size',e.target.value)} placeholder="Size" className="input text-xs w-24" /><input type="number" min="0" value={s.qty} onChange={e=>setSize(i,'qty',e.target.value)} placeholder="Qty" className="input text-xs w-20" /><button onClick={()=>setSizes(a=>a.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-600 text-xs">remove</button></div>))}
+              <button onClick={()=>setSizes(a=>[...a,{size:'',qty:''}])} className="text-xs text-indigo-600 hover:underline">＋ Add size</button>
+              {sizeSum>0 && <div className="text-[10px] text-slate-400">Size breakdown sums to {sizeSum} pcs</div>}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Polybags to dispatch</div>
+            <input type="number" min="0" value={polybags} onChange={e=>setPolybags(e.target.value)} placeholder="0" className="input text-sm" />
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1 mt-3">Released by (sorter)</div>
+            {releasedBy.length>0 && <div className="flex flex-wrap gap-1 mb-1">{releasedBy.map(p=>(<span key={p.id} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">{p.name}<button onClick={()=>setReleasedBy(rb=>rb.filter(x=>x.id!==p.id))} className="text-teal-400 hover:text-rose-600 font-bold">×</button></span>))}</div>}
+            <select value="" onChange={e=>{ addPerson(e.target.value); e.target.value=''; }} className="input text-sm"><option value="">＋ Add sorter…</option>{staff.filter(e=>!releasedBy.some(p=>p.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/head/i.test(e.position||'')?' (Head)':''}</option>)}</select>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Trims sent out — breakdown</div>
+          <div className="space-y-1">
+            {trims.map((t,i)=>(<div key={i} className="flex items-center gap-1.5"><input value={t.name} onChange={e=>setTrim(i,'name',e.target.value)} placeholder="Trim (e.g. buttons, zipper, label)" className="input text-xs flex-1" /><input type="number" min="0" value={t.qty} onChange={e=>setTrim(i,'qty',e.target.value)} placeholder="Qty" className="input text-xs w-20" /><input value={t.unit} onChange={e=>setTrim(i,'unit',e.target.value)} placeholder="unit" className="input text-xs w-16" /><button onClick={()=>setTrims(a=>a.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-600 text-xs">remove</button></div>))}
+            <button onClick={()=>setTrims(a=>[...a,{name:'',qty:'',unit:'pcs'}])} className="text-xs text-indigo-600 hover:underline">＋ Add trim</button>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes</div>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Extra instructions for this batch…" className="input text-sm w-full" />
+        </div>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-1.5 text-sm rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-40">{busy?'Saving…':(editing?'💾 Update batch':'💾 Save batch')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Printable, signable dispatch receipt for one batch out.
+function SortingBatchReceiptModal({ batch, subcons, onClose }){
+  const b=batch; const sc=(subcons||[]).find(s=>s.id===b.subcon_id)||null;
+  const garment=batchGarmentTotal(b); const sizes=Array.isArray(b.garment_sizes)?b.garment_sizes:[]; const trims=Array.isArray(b.trims)?b.trims:[];
+  const rel=(Array.isArray(b.released_by)?b.released_by:[]).map(p=>p.name).join(', ');
+  return (
+    <Modal title="Dispatch receipt" onClose={onClose} wide>
+      <style>{`@media print {
+        body * { visibility:hidden !important; }
+        .sortbatch-sheet, .sortbatch-sheet * { visibility:visible !important; }
+        .sortbatch-sheet { position:absolute; left:0; top:0; width:100%; }
+        .no-print { display:none !important; }
+      }`}</style>
+      <div className="space-y-4">
+        <div className="no-print flex justify-end"><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="sortbatch-sheet bg-white p-5 text-sm">
+          <div className="flex items-start justify-between border-b pb-3 mb-3">
+            <div>
+              <div className="text-xl font-extrabold tracking-tight">STEEZE CORPORATION</div>
+              <div className="text-[11px] text-slate-500">Cut-panel dispatch receipt · For sewing</div>
+            </div>
+            <div className="text-right text-xs">
+              <div className="font-mono">{b.number||''}{b.batch_no?` · Batch ${b.batch_no}`:''}</div>
+              <div className="text-slate-500">Released {fmtDateShort(b.released_at)}</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div><span className="text-[10px] uppercase text-slate-400 block">Project</span>{b.item||'—'}</div>
+            <div><span className="text-[10px] uppercase text-slate-400 block">Client</span>{b.client_name||'—'}</div>
+            <div><span className="text-[10px] uppercase text-slate-400 block">Sent to</span>{b.destination_type==='inhouse'?'In-house sewing':(b.subcon_name||sc?.name||'—')}{sc?.contact_name?` · Attn: ${sc.contact_name}`:''}</div>
+            <div><span className="text-[10px] uppercase text-slate-400 block">Expected due</span>{fmtDateShort(b.expected_due_date)}</div>
+            {sc?.address && <div className="col-span-2"><span className="text-[10px] uppercase text-slate-400 block">Address</span>{sc.address}</div>}
+          </div>
+          <div className="grid grid-cols-2 gap-4 mb-3">
+            <div>
+              <div className="text-[10px] uppercase text-slate-400 font-semibold border-b pb-1 mb-1">Garments — {garment} pcs</div>
+              <table className="w-full text-xs">
+                <tbody>{sizes.filter(s=>s.size||s.qty).map((s,i)=>(<tr key={i} className="border-b"><td className="py-0.5">{s.size||'—'}</td><td className="py-0.5 text-right">{s.qty||0}</td></tr>))}{sizes.length===0 && <tr><td className="py-1 text-slate-400 text-[11px]">No size breakdown.</td></tr>}</tbody>
+                <tfoot><tr className="font-bold border-t-2"><td className="py-0.5">Total garments</td><td className="py-0.5 text-right">{garment}</td></tr></tfoot>
+              </table>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-slate-400 font-semibold border-b pb-1 mb-1">Trims</div>
+              <table className="w-full text-xs">
+                <tbody>{trims.filter(t=>t.name||t.qty).map((t,i)=>(<tr key={i} className="border-b"><td className="py-0.5">{t.name||'—'}</td><td className="py-0.5 text-right">{t.qty||0} {t.unit||''}</td></tr>))}{trims.length===0 && <tr><td className="py-1 text-slate-400 text-[11px]">No trims listed.</td></tr>}</tbody>
+              </table>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mb-4 text-sm">
+            <div className="border rounded-lg px-3 py-2"><span className="text-[10px] uppercase text-slate-400 block">Polybags dispatched</span><span className="text-lg font-bold">{Number(b.polybags)||0}</span></div>
+            <div className="border rounded-lg px-3 py-2"><span className="text-[10px] uppercase text-slate-400 block">Total garments</span><span className="text-lg font-bold">{garment}</span></div>
+            <div className="border rounded-lg px-3 py-2"><span className="text-[10px] uppercase text-slate-400 block">Trim lines</span><span className="text-lg font-bold">{trims.filter(t=>t.name||t.qty).length}</span></div>
+          </div>
+          {b.notes && <div className="mb-4 text-xs"><span className="text-[10px] uppercase text-slate-400 block">Notes</span>{b.notes}</div>}
+          <div className="grid grid-cols-2 gap-8 mt-8 text-xs">
+            <div><div className="border-t border-slate-400 pt-1">Released by (Steeze){rel?` — ${rel}`:''}</div><div className="text-slate-400 mt-0.5">Signature over printed name / date</div></div>
+            <div><div className="border-t border-slate-400 pt-1">Received by ({b.destination_type==='inhouse'?'Sewing':(b.subcon_name||'Subcon')})</div><div className="text-slate-400 mt-0.5">Signature over printed name / date</div></div>
+          </div>
         </div>
       </div>
     </Modal>
@@ -36626,7 +36868,7 @@ function App(){
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
-        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} employees={employees} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
+        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
