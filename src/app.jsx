@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 438 · Person avatars across the OS (Inbox, sidebar, leads, tasks, team, profile) now show each user's 201 photo instead of coloured initials — pulled from their linked employee record. Falls back to initials for accounts with no linked photo (e.g. Production Viewer).";
+const BUILD = "Live build 439 · Polybags can now be split by delivery location. Set a 'Deliver to' location per polybag; bags are then numbered per location (Polybag 1 of 1 for each), and the printed slip shows the location. A project delivering to 2 sites now prints correct 'x of n' counts per site.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5771,11 +5771,15 @@ function PackingReplacementModal({ job, profile, onClose, onSaved }){
 // visibility and re-showing only the sheet avoids that.
 function PolybagSlipModal({ job, only, onClose }){
   const bags=jobPolybags(job);
+  // Per-location numbering — a project can deliver to several locations, so each
+  // location's bags are numbered independently (Polybag 1 of 1 per location).
+  const locCount={}; bags.forEach(b=>{ const k=((b.location||'').trim())||'—'; locCount[k]=(locCount[k]||0)+1; });
+  const seq={}; const meta=bags.map(b=>{ const k=((b.location||'').trim())||'—'; seq[k]=(seq[k]||0)+1; return { loc:(b.location||'').trim(), idx:seq[k], count:locCount[k] }; });
   const show = (only!=null)? bags.map((b,i)=>({b,i})).filter(x=>x.i===only) : bags.map((b,i)=>({b,i}));
   // Group slips 2-per-sheet so we don't waste paper — each slip is a half page,
   // cut along the dashed line. A shared render fn guarantees both look identical.
   const pages=[]; for(let i=0;i<show.length;i+=2) pages.push(show.slice(i,i+2));
-  const renderSlip=(pb,n)=>{ const total=polybagTotal(pb); return (
+  const renderSlip=(pb,n)=>{ const total=polybagTotal(pb); const m=meta[n]||{ idx:n+1, count:bags.length, loc:'' }; return (
     <div className="pb-slip bg-white p-5" style={{minHeight:'4.7in'}}>
       <div className="flex items-start justify-between border-b pb-3 mb-3">
         <div>
@@ -5784,13 +5788,14 @@ function PolybagSlipModal({ job, only, onClose }){
         </div>
         <div className="text-right text-xs">
           <div className="font-mono">{job.number||''}</div>
-          <div className="text-slate-500">Polybag {n+1} of {bags.length}</div>
+          <div className="text-slate-500">Polybag {m.idx} of {m.count}</div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 text-sm mb-3">
         <div><span className="text-[10px] uppercase text-slate-400 block">Client</span>{job.client_name||'—'}</div>
         <div><span className="text-[10px] uppercase text-slate-400 block">Item</span>{job.item||'—'}</div>
-        <div><span className="text-[10px] uppercase text-slate-400 block">Bag label</span>{pb.label||('Polybag '+(n+1))}</div>
+        {m.loc && <div><span className="text-[10px] uppercase text-slate-400 block">Deliver to</span><span className="font-semibold">{m.loc}</span></div>}
+        <div><span className="text-[10px] uppercase text-slate-400 block">Bag label</span>{pb.label||('Polybag '+m.idx)}</div>
         <div><span className="text-[10px] uppercase text-slate-400 block">Date of delivery</span>{fmtDateShort(job.delivery_date)}</div>
       </div>
       <table className="w-full text-sm border-t">
@@ -5837,7 +5842,7 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
   const [bags,setBags]=useState(()=>jobPolybags(job).map(b=>({ ...b, sizes:(b.sizes||[]).map(s=>({...s})) })));
   const [delivery,setDelivery]=useState(job.delivery_date||'');
   const [busy,setBusy]=useState(false); const [slipOnly,setSlipOnly]=useState(null); const [showSlips,setShowSlips]=useState(false);
-  function addBag(){ setBags(bs=>[...bs, { id:'pb-'+Date.now().toString().slice(-6), label:'', sizes:[{size:'',qty:''}], note:'' }]); }
+  function addBag(){ setBags(bs=>[...bs, { id:'pb-'+Date.now().toString().slice(-6), label:'', location:(bs[bs.length-1]?.location||''), sizes:[{size:'',qty:''}], note:'' }]); }
   function removeBag(i){ setBags(bs=>bs.filter((_,x)=>x!==i)); }
   function setBag(i,patch){ setBags(bs=>bs.map((b,x)=>x===i?{...b,...patch}:b)); }
   function addSize(i){ setBags(bs=>bs.map((b,x)=>x===i?{...b,sizes:[...(b.sizes||[]),{size:'',qty:''}]}:b)); }
@@ -5845,6 +5850,7 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
   function removeSize(i,si){ setBags(bs=>bs.map((b,x)=>x===i?{...b,sizes:(b.sizes||[]).filter((_,y)=>y!==si)}:b)); }
   async function save(){ setBusy(true); const clean=bags.map(b=>({ ...b, sizes:(b.sizes||[]).map(s=>({ size:(s.size||'').trim(), qty:Number(s.qty)||0 })).filter(s=>s.size||s.qty) })); const { error }=await sb.from('packing_jobs').update({ polybags:clean, delivery_date:delivery||null }).eq('id',job.id); setBusy(false); if(error){ alert(error.message); return; } reload(); onClose(); }
   const grandTotal=bags.reduce((s,b)=>s+polybagTotal(b),0);
+  const locs=[...new Set(bags.map(b=>(b.location||'').trim()).filter(Boolean))];
   const liveJob={ ...job, polybags:bags, delivery_date:delivery };
   return (
     <Modal onClose={onClose} title={`📦 Polybags — ${job.number||''}`} wide>
@@ -5856,7 +5862,7 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
           </label>
         </div>
         <div className="flex items-center justify-between">
-          <div className="text-xs text-slate-500">{bags.length} polybag{bags.length===1?'':'s'} · {grandTotal} items logged</div>
+          <div className="text-xs text-slate-500">{bags.length} polybag{bags.length===1?'':'s'} · {grandTotal} items logged{locs.length>0?` · ${locs.length} location${locs.length===1?'':'s'}: ${locs.join(', ')}`:''}</div>
           <div className="flex gap-2">
             <button onClick={()=>{ setSlipOnly(null); setShowSlips(true); }} className="text-xs px-2 py-1 rounded bg-slate-800 text-white font-semibold hover:bg-slate-900">🖨 Print all slips</button>
             <button onClick={addBag} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Add polybag</button>
@@ -5871,6 +5877,10 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
                 <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">{total} pcs</span>
                 <button onClick={()=>{ setSlipOnly(i); setShowSlips(true); }} title="Print this polybag" className="text-xs px-2 py-1 rounded bg-white border font-semibold hover:bg-slate-100">🖨</button>
                 <button onClick={()=>removeBag(i)} title="Remove" className="text-rose-500 hover:text-rose-700 font-bold px-1">✕</button>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] uppercase font-semibold text-slate-400 shrink-0">🚚 Deliver to</span>
+                <input value={b.location||''} onChange={e=>setBag(i,{location:e.target.value})} placeholder="Delivery location (e.g. DSO Sta. Rosa) — bags are numbered per location" className="input text-xs flex-1" />
               </div>
               <div className="space-y-1">
                 {(b.sizes||[]).map((s,si)=>(
