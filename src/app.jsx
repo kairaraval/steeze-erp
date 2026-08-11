@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 446 · Pattern, In-House Cutting, Trad Sorting, Subli Sorting and Quality Control are now To Do → In Progress → Done kanban boards. Drag a card's status dropdown to move it; click a card to open its report/detail. Their old Worklist + Done tabs are merged into the board (other tabs like Library, Size Charts, Reports remain).";
+const BUILD = "Live build 447 · Replacement Requests: the production supervisor can now ✓ Mark done a routed request manually, and Report to HR is now a per-ticket button on each request (prefills the escalation with that ticket) — plus a General HR report button for ad-hoc escalations.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9503,14 +9503,15 @@ function ReplacementQueueView({ profile, profiles, employees }){
     await sb.from('replacement_requests').update({ status:'approved', department:dept, routed_by:profile.id, routed_at:new Date().toISOString() }).eq('id',r.id); load();
   }
   async function decline(r){ if(!confirm('Decline this replacement request?')) return; await sb.from('replacement_requests').update({ status:'declined' }).eq('id',r.id); load(); }
-  async function reopen(r){ await sb.from('replacement_requests').update({ status:'pending', routed_by:null, routed_at:null }).eq('id',r.id); load(); }
+  async function reopen(r){ await sb.from('replacement_requests').update({ status:'pending', routed_by:null, routed_at:null, done_at:null }).eq('id',r.id); load(); }
+  async function markDone(r){ await sb.from('replacement_requests').update({ status:'done', done_at:new Date().toISOString() }).eq('id',r.id); load(); }
   const list = tab==='pending'?pending : tab==='routed'?routed : tab==='done'?done : declined;
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">🔁 Replacement Requests</h1><p className="text-slate-500 text-sm">Repair / replacement requests from the production floor. {canApprove?'Approve & route each to the department that will fix it.':'View-only.'}</p></div>
-          {canApprove && <button onClick={()=>setHrFor({})} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700">⚠ Report to HR</button>}
+          {canApprove && <button onClick={()=>setHrFor({})} className="px-3 py-2 rounded-lg bg-white border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50" title="File a general HR report not tied to a specific ticket">⚠ General HR report</button>}
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('pending')} className={`px-3 py-1.5 rounded-md ${tab==='pending'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pending ({pending.length})</button>
@@ -9534,6 +9535,8 @@ function ReplacementQueueView({ profile, profiles, employees }){
                   <button onClick={()=>decline(r)} className="text-[11px] px-2 py-1 rounded bg-white border text-rose-600 font-semibold hover:bg-rose-50">Decline</button>
                 </div>
               )}
+              {canApprove && (r.status==='approved'||r.status==='in_progress') && <button onClick={()=>markDone(r)} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Mark done</button>}
+              {canApprove && r.status!=='done' && <button onClick={()=>setHrFor(r)} className="text-[11px] px-2 py-1 rounded bg-white border border-rose-200 text-rose-600 font-semibold hover:bg-rose-50" title="Escalate this ticket to HR">⚠ Report to HR</button>}
               {tab!=='pending' && canApprove && r.status!=='pending' && <button onClick={()=>reopen(r)} className="text-[11px] text-slate-400 hover:underline">Send back to pending</button>}
             </ReplacementCard>
           ))}
