@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 440 · Production & Sampling boards: the Sales Owner column now shows just the person's photo (name on hover) instead of the full name — the face is enough. Polybags can be split per delivery location with per-location numbering on the printed slip.";
+const BUILD = "Live build 441 · Fix: approved vouchers no longer bounce back into the approval queue. Admin 'Approve & Sign' now fully approves — advances the money-approval, posts the bank transaction for officer drafts, and stamps the signature in one click. And editing a voucher only voids the signature when a financially material field (amount/payee/bank/type/check no./date) changes, so tweaking a note no longer un-approves it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28330,8 +28330,17 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
       if(isEdit){
         // EDIT MODE: update the voucher + reconcile the linked bank_transaction
         // (amount/bank/date/payee/particulars/reference may have changed).
-        // Also auto-void any signature so the edited doc must be re-approved.
-        const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, signed_at: null, approved_by: null, approved_at: null }).eq('id', existing.id);
+        // Only void an existing admin signature when a FINANCIALLY MATERIAL field
+        // changed (amount / payee / bank / type / check no. / date) — so tweaking
+        // notes or a category doesn't silently un-approve an already-signed voucher.
+        const material = (Number(existing.amount||0)!==Number(f.amount||0))
+          || ((existing.payee||'')!==(f.payee||''))
+          || ((existing.bank_id||null)!==(f.bank_id||null))
+          || ((existing.type||'')!==(f.type||''))
+          || ((existing.check_number||'')!==(f.check_number||''))
+          || (String(existing.date||'')!==String(f.date||''));
+        const clearApproval = (existing.approved_at && material) ? { signed_at: null, approved_by: null, approved_at: null } : {};
+        const { error: vErr } = await sb.from('vouchers').update({ ...voucherPatch, ...clearApproval }).eq('id', existing.id);
         if(vErr) throw vErr;
         // A still-pending Officer draft has no bank movement yet — leave the
         // bank untouched (it posts only on final admin approval).
@@ -28607,12 +28616,26 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, costCent
     }
     setApproving(true);
     const now = new Date().toISOString();
-    const { error } = await sb.from('vouchers').update({
-      approved_by: profile.id, approved_at: now, signed_at: now,
-    }).eq('id', v.id);
-    setApproving(false);
-    if(error){ alert(error.message); return; }
-    onSaved && onSaved();
+    try {
+      const patch = {
+        approved_by: profile.id, approved_at: now, signed_at: now,
+        admin_approved_by: profile.id, admin_approved_at: now,
+        approval_status: 'approved',
+      };
+      if(v.bank_id && !v.bank_transaction_id && !v.void_at){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id: v.bank_id, date: v.date, direction: 'out', amount: Number(v.amount||0),
+          description: `${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
+          ref_type: 'voucher', ref_id: v.id, reference_number: v.check_number||v.number, created_by: profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr;
+        patch.bank_transaction_id = btx.id; patch.released_at = now;
+      }
+      const { error } = await sb.from('vouchers').update(patch).eq('id', v.id);
+      if(error) throw error;
+      setApproving(false);
+      onSaved && onSaved();
+    } catch(err){ setApproving(false); alert(err.message||String(err)); }
   }
   // Reject — mirrors the RFP reject. Records a reason, removes the voucher from
   // the approval queue, and reverses any side-effects so nothing stays "paid"
@@ -29137,17 +29160,36 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   // every disbursement goes through Admin sign-off.
   const pendingVouchers = (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at);
   const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length;
-  // One-click approve + sign — same logic as the VoucherViewModal's button.
+  // One-click FULL admin approval + signature. This advances the money-approval
+  // (approval_status → 'approved'), posts the bank transaction for officer drafts
+  // that haven't posted yet, and stamps the admin signature — so an approved
+  // voucher is fully settled and won't bounce back into this queue.
   async function approveVoucher(v){
     if(!profile?.signature_data){
       if(!confirm("You don't have an e-signature on file yet. Approve without a signature? Set one up via My Profile to sign documents.")) return;
     }
     const now = new Date().toISOString();
-    const { error } = await sb.from('vouchers').update({
-      approved_by: profile.id, approved_at: now, signed_at: now,
-    }).eq('id', v.id);
-    if(error){ alert(error.message); return; }
-    reload && reload();
+    try {
+      const patch = {
+        approved_by: profile.id, approved_at: now, signed_at: now,
+        admin_approved_by: profile.id, admin_approved_at: now,
+        approval_status: 'approved',
+      };
+      // Post the disbursement to the bank register if it hasn't been posted yet
+      // (officer drafts hold off on the bank movement until final approval).
+      if(v.bank_id && !v.bank_transaction_id && !v.void_at){
+        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+          bank_id: v.bank_id, date: v.date, direction: 'out', amount: Number(v.amount||0),
+          description: `${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
+          ref_type: 'voucher', ref_id: v.id, reference_number: v.check_number||v.number, created_by: profile.id,
+        }).select('id').single();
+        if(btErr) throw btErr;
+        patch.bank_transaction_id = btx.id; patch.released_at = now;
+      }
+      const { error } = await sb.from('vouchers').update(patch).eq('id', v.id);
+      if(error) throw error;
+      reload && reload();
+    } catch(err){ alert(err.message||String(err)); }
   }
   return (
     <div className="p-6">
