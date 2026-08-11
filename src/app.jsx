@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 443 · Subli/DTF Pressing now track DAILY output. Open a project's report to log each day's Machine (2 hydraulic + 2 rotary presses), Operator(s) and pcs pressed — with a running 'pressed so far / project qty' and per-day capacity. The 📊 Reports tab shows daily output (pcs/day), by machine, by operator, and a per-project monitor with start/last day + avg/day.";
+const BUILD = "Live build 444 · Subli/DTF Pressing upgrades: the board is now a To Do → In Progress → Done kanban; operator picker now correctly lists the Sublimation Pressing team (2+ operators can be added, e.g. for hydraulic); the daily output log takes an Item / description (quick-pick) so multi-item projects are tracked per item; and clicking a project name opens its daily output log.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8704,6 +8704,12 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
   async function saveNotes(w,val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('process_worklist').update({ notes:val||null }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function markDone(w){ const { error }=await sb.from('process_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function reopenItem(w){ const { error }=await sb.from('process_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  // Kanban status move (To Do / In Progress / Done) for the pressing board.
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString() : null }; if(st!=='done' && !w.start_date && st==='in_progress') patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('process_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  // Pcs pressed per project (from the daily output logs) — for the board cards.
+  const pressedByWork={}; (pressLogs||[]).forEach(l=>{ if(l.worklist_id) pressedByWork[l.worklist_id]=(pressedByWork[l.worklist_id]||0)+(Number(l.qty_done)||0); });
+  const PRESS_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
+  const pressCol=(key)=> key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done');
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
@@ -8748,14 +8754,50 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
           <p className="text-slate-500 text-sm">{open.length} to do · {done.length} done · items appear here when a Production job hits the “{title}” stage.</p>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
-          <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
+          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{showPress?`Board (${open.length})`:`Worklist (${open.length})`}</button>
+          {!showPress && <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>}
           {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
           <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
         </div>
       </div>
 
-      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='worklist' ? (
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : (tab==='worklist' && showPress) ? (
+        <div className="space-y-3">
+          <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
+            {PRESS_COLS.map(([key,label,color])=>{ const col=pressCol(key); return (
+              <div key={key} className="flex-shrink-0 w-72 flex flex-col">
+                <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
+                <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
+                  {col.map(w=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const pressed=pressedByWork[w.id]||0; return (
+                    <div key={w.id} className="bg-white border rounded-lg shadow-sm p-2.5">
+                      <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
+                      <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
+                      <div className="text-xs text-slate-500 truncate">{w.client_name||''}</div>
+                      <div className="flex flex-wrap items-center gap-1 mt-1">
+                        {pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
+                        {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+                      </div>
+                      <div className="mt-2 flex items-center gap-1">
+                        <select value={w.status==='in_progress'?'in_progress':w.status==='done'?'done':'open'} onChange={e=>moveStatus(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
+                        <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open daily output log">🔥 Log</button>
+                        <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
+                      </div>
+                    </div>
+                  ); })}
+                  {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
+                </div>
+              </div>
+            ); })}
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
+            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
+            <div className="p-2 flex gap-1.5">
+              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder={`Add something to ${title.toLowerCase()}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+            </div>
+          </div>
+        </div>
+      ) : tab==='worklist' ? (
         <div className="space-y-4">
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">{icon} To do</div>
@@ -8867,9 +8909,9 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
   // Daily output log — pressing boards only. Each entry: date + machine +
   // operators + pcs done that day (tracks daily capacity on big projects).
   const showPress=isPressingProcess(process);
-  const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffRegex(process).test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffMatch(process, e)).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   const [logs,setLogs]=useState([]);
-  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'' };
+  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'', item_label:'' };
   const [lf,setLf]=useState(emptyLog);
   async function loadLogs(){ if(!showPress) return; const { data }=await sb.from('process_output_logs').select('*').eq('worklist_id',w.id).is('deleted_at',null).order('log_date',{ascending:false}).order('created_at',{ascending:false}); setLogs(data||[]); }
   useEffect(()=>{ loadLogs(); },[w.id]);
@@ -8877,7 +8919,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
   async function saveLog(){
     if(!lf.machine){ alert('Pick the machine used.'); return; }
     if(!(Number(lf.qty)>0)){ alert('Enter how many pcs were pressed.'); return; }
-    const { error }=await sb.from('process_output_logs').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, log_date:lf.log_date||null, machine:lf.machine, operators:lf.operators, qty_done:Number(lf.qty)||0, notes:lf.notes.trim()||null, created_by:profile.id });
+    const { error }=await sb.from('process_output_logs').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, item_label:lf.item_label.trim()||null, client_name:w.client_name||null, log_date:lf.log_date||null, machine:lf.machine, operators:lf.operators, qty_done:Number(lf.qty)||0, notes:lf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
     setLf(emptyLog); loadLogs(); onSaved && onSaved();
   }
@@ -8972,6 +9014,11 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
             </div>
             {/* Add-a-day form */}
             <div className="bg-white border rounded-lg p-2.5 grid md:grid-cols-2 gap-2 mb-2">
+              <div className="md:col-span-2">
+                <div className="text-[10px] uppercase font-semibold text-slate-400">Item / description <span className="text-slate-300 normal-case">· a project can have several items</span></div>
+                {projItems.length>0 && <div className="flex flex-wrap gap-1 my-1">{projItems.map((it,i)=>{ const lbl=it.itemType||it.description||it.category||'Item'; return <button key={i} type="button" onClick={()=>setLf(f=>({...f,item_label:lbl}))} className={`text-[11px] px-2 py-0.5 rounded-full border ${lf.item_label===lbl?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{lbl}{Number(it.quantity)>0?` ×${it.quantity}`:''}</button>; })}</div>}
+                <input value={lf.item_label} onChange={e=>setLf(f=>({...f,item_label:e.target.value}))} placeholder="Which item was pressed (optional)" className="input text-sm mt-0.5" />
+              </div>
               <label className="text-[10px] uppercase font-semibold text-slate-400">Date<input type="date" value={lf.log_date} onChange={e=>setLf(f=>({...f,log_date:e.target.value}))} className="input text-sm mt-0.5" /></label>
               <label className="text-[10px] uppercase font-semibold text-slate-400">Machine<select value={lf.machine} onChange={e=>setLf(f=>({...f,machine:e.target.value}))} className="input text-sm mt-0.5"><option value="">— Choose machine —</option>{PRESS_MACHINES.map(m=><option key={m} value={m}>{m}</option>)}</select></label>
               <label className="text-[10px] uppercase font-semibold text-slate-400">Pcs pressed today<input type="number" min="0" value={lf.qty} onChange={e=>setLf(f=>({...f,qty:e.target.value}))} placeholder="0" className="input text-sm mt-0.5" /></label>
@@ -8985,8 +9032,8 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
             </div>
             {logs.length===0 ? <div className="text-[11px] text-slate-400">No daily output logged yet. Add a row each day with the machine, operators and pcs pressed.</div> : (
               <div className="overflow-x-auto"><table className="w-full text-sm bg-white rounded-lg overflow-hidden">
-                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Machine</th><th className="text-left px-2 py-1.5">Operators</th><th className="text-right px-2 py-1.5">Pcs</th><th></th></tr></thead>
-                <tbody>{logs.map(l=>(<tr key={l.id} className="border-t"><td className="px-2 py-1.5 whitespace-nowrap">{fmtDateShort(l.log_date)}</td><td className="px-2 py-1.5">{l.machine||'—'}</td><td className="px-2 py-1.5 text-xs">{(Array.isArray(l.operators)?l.operators:[]).map(o=>o.name).join(', ')||'—'}</td><td className="px-2 py-1.5 text-right font-semibold">{(Number(l.qty_done)||0).toLocaleString()}</td><td className="px-2 py-1.5 text-right"><button onClick={()=>delLog(l)} className="text-slate-300 hover:text-rose-500 text-xs">✕</button></td></tr>))}</tbody>
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Item</th><th className="text-left px-2 py-1.5">Machine</th><th className="text-left px-2 py-1.5">Operators</th><th className="text-right px-2 py-1.5">Pcs</th><th></th></tr></thead>
+                <tbody>{logs.map(l=>(<tr key={l.id} className="border-t"><td className="px-2 py-1.5 whitespace-nowrap">{fmtDateShort(l.log_date)}</td><td className="px-2 py-1.5 text-xs">{l.item_label||'—'}</td><td className="px-2 py-1.5">{l.machine||'—'}</td><td className="px-2 py-1.5 text-xs">{(Array.isArray(l.operators)?l.operators:[]).map(o=>o.name).join(', ')||'—'}</td><td className="px-2 py-1.5 text-right font-semibold">{(Number(l.qty_done)||0).toLocaleString()}</td><td className="px-2 py-1.5 text-right"><button onClick={()=>delLog(l)} className="text-slate-300 hover:text-rose-500 text-xs">✕</button></td></tr>))}</tbody>
               </table></div>
             )}
           </div>
@@ -9127,8 +9174,15 @@ function isSortingProcess(p){ return SORTING_PROCESSES.includes(p); }
 const PRESSING_PROCESSES=['subli_pressing','dtf_pressing'];
 function isPressingProcess(p){ return PRESSING_PROCESSES.includes(p); }
 const PRESS_MACHINES=['Hydraulic Press 1','Hydraulic Press 2','Rotary Press 1','Rotary Press 2'];
-// Which employees can be picked as pressing operators, by process.
-function pressingStaffRegex(process){ return process==='subli_pressing' ? /subli.*press|sublimation.*press/i : /dtf.*press|dtf\/subli.*press/i; }
+// Which employees can be picked as pressing operators, by process. Operators are
+// tagged mainly by DEPARTMENT ("Sublimation Pressing" / "DTF Pressing"); their
+// position may just be "Machine Operator", so we match on position + department.
+function pressingStaffMatch(process, e){
+  const hay=`${e.position||''} ${e.department||''}`.toLowerCase();
+  if(!hay.includes('press')) return false; // must be pressing (not printing/sorting)
+  if(process==='subli_pressing') return hay.includes('subli')||hay.includes('sublimation');
+  return hay.includes('dtf');
+}
 // Which employees can be picked as the releasing sorter, by process.
 function sortingStaffRegex(process){ return process==='subli_sorting' ? /subli.*sort/i : /sorting.*trad|trad.*sort|traditional.*sort/i; }
 function batchGarmentTotal(b){ const sizes=Array.isArray(b.garment_sizes)?b.garment_sizes:[]; const s=sizes.reduce((x,r)=>x+(Number(r.qty)||0),0); return s>0?s:(Number(b.garment_qty)||0); }
