@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 437 · Linked 24 of 27 Steeze OS accounts to their 201 employee records, and the Employees list now shows each person's 201 photo as a round thumbnail (initials fallback if no photo). Still unlinked: Bing Vazquez & Production Viewer (no 201 record) and Jay-Ann Valdez (verify vs Jay-Anne Rabang).";
+const BUILD = "Live build 438 · Person avatars across the OS (Inbox, sidebar, leads, tasks, team, profile) now show each user's 201 photo instead of coloured initials — pulled from their linked employee record. Falls back to initials for accounts with no linked photo (e.g. Production Viewer).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -517,6 +517,9 @@ const AVA_COLORS=['bg-blue-500','bg-emerald-500','bg-amber-500','bg-purple-500',
 function avaColor(id){ if(!id) return 'bg-slate-400'; let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return AVA_COLORS[h%AVA_COLORS.length]; }
 function Avatar({ profile, size='md' }){
   const cls = size==='sm' ? 'w-7 h-7 text-[10px]' : 'w-9 h-9 text-xs';
+  // Show the person's 201 photo when their OS account is linked to an employee
+  // record that has one; otherwise fall back to coloured initials.
+  if(profile && profile.photo_url) return <SignedImg url={profile.photo_url} alt={profile.name||''} className={`${cls} rounded-full object-cover shrink-0`} />;
   const initials = ((profile&&profile.name)||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
   return <div className={`${cls} rounded-full ${avaColor(profile&&profile.id)} text-white flex items-center justify-center font-bold shrink-0`}>{initials}</div>;
 }
@@ -36138,7 +36141,9 @@ function App(){
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
     setPendingInvites(pi && pi.data ? pi.data : []);
-    if(pf.data) setProfile(pf.data); setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return (pr.data||[]).map(p=> sig[p.id]!==undefined?{...p,signature_data:sig[p.id]}:p); }); setClients(cl.data||[]); setLeads(ld.data||[]);
+    // Map each OS account to its linked 201 photo so avatars can show the person.
+    const photoByProfile={}; (emp && emp.data ? emp.data : []).forEach(e=>{ if(e.profile_id && e.photo_url) photoByProfile[e.profile_id]=e.photo_url; });
+    if(pf.data) setProfile(pf.data.photo_url ? pf.data : (photoByProfile[pf.data.id] ? { ...pf.data, photo_url: photoByProfile[pf.data.id] } : pf.data)); setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return (pr.data||[]).map(p=>{ const withSig = sig[p.id]!==undefined?{...p,signature_data:sig[p.id]}:p; return photoByProfile[p.id] ? { ...withSig, photo_url: photoByProfile[p.id] } : withSig; }); }); setClients(cl.data||[]); setLeads(ld.data||[]);
     const leadMentions=(lm.data||[]).map(r=>({ ...r, source:'lead' }));
     const deptMentions=(dm.data||[]).map(r=>({ ...r, source:r.job_type }));
     // Sales-order mentions: same shape, source='sales_order'. Graceful-fail
