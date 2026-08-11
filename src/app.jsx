@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 439 · Polybags can now be split by delivery location. Set a 'Deliver to' location per polybag; bags are then numbered per location (Polybag 1 of 1 for each), and the printed slip shows the location. A project delivering to 2 sites now prints correct 'x of n' counts per site.";
+const BUILD = "Live build 440 · Production & Sampling boards: the Sales Owner column now shows just the person's photo (name on hover) instead of the full name — the face is enough. Polybags can be split per delivery location with per-location numbering on the printed slip.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7079,9 +7079,8 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
               </div>
             </td>
             <td className="px-3 py-2">
-              {owner ? <div className="flex items-center gap-1.5 min-w-0" title={`Sales owner: ${owner.name||owner.email} (locked from the lead)`}>
+              {owner ? <div className="flex items-center" title={`Sales owner: ${owner.name||owner.email} (locked from the lead)`}>
                 <Avatar profile={owner} size="sm" />
-                <span className="text-xs text-slate-700 truncate max-w-[8rem]">{owner.name||owner.email}</span>
               </div> : <span className="text-xs text-slate-300">— unassigned —</span>}
             </td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -7155,7 +7154,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                             {di.label && <span className={`text-[10px] ${di.cls}`}>{di.label}{dueIsFromLead?' · from lead':''}</span>}
                           </div>
                         </td>
-                        <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0" title={`Sales owner: ${owner.name||owner.email} (locked from the lead)`}><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-700 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
+                        <td className="px-3 py-2.5">{owner ? <div className="flex items-center" title={`Sales owner: ${owner.name||owner.email} (locked from the lead)`}><Avatar profile={owner} size="sm" /></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select disabled={readOnly} value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs border rounded px-2 py-1 bg-white ${readOnly?'cursor-default text-slate-500':''}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           {!readOnly && <button onClick={()=>setPlanning(j)} className="text-xs mr-2 text-emerald-700 hover:underline font-semibold" title="Open production planning board">📊 Plan</button>}
@@ -9525,7 +9524,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2">{canEditDue
               ? <input type="date" value={j.due_date||''} onChange={e=>saveDue(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border bg-white ${di.overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-300'}`} title="Edit sample due date" />
               : <span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span>}</td>
-            <td className="px-3 py-2">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
+            <td className="px-3 py-2">{owner ? <div className="flex items-center" title={`Sales owner: ${owner.name||owner.email}`}><Avatar profile={owner} size="sm" /></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
@@ -9578,7 +9577,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
                         <td className="px-3 py-2.5">{canEditDue
                           ? <input type="date" value={j.due_date||''} onChange={e=>saveDue(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border bg-white ${di.overdue?'border-rose-300 text-rose-700 font-semibold':'border-slate-300'}`} title="Edit sample due date" />
                           : <span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span>}</td>
-                        <td className="px-3 py-2.5">{owner ? <div className="flex items-center gap-1.5 min-w-0"><Avatar profile={owner} size="sm" /><span className="text-xs text-slate-600 truncate max-w-[8rem]">{owner.name||owner.email}</span></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
+                        <td className="px-3 py-2.5">{owner ? <div className="flex items-center" title={`Sales owner: ${owner.name||owner.email}`}><Avatar profile={owner} size="sm" /></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
