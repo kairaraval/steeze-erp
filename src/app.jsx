@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 431 · Dispatch receipt redesigned — full-page, cleaner letterhead + bordered sections, and it now always prints TWO copies (Sewer's copy + Sorting Head's copy) so both parties can sign. Sorting batches-out with garment+trims+polybag breakdown and a 📦 Released tracking tab.";
+const BUILD = "Live build 432 · Sorting batch-outs now take an Item / description — quick-pick from the project's items (e.g. Volleyball Jersey Set, Basketball Jersey Set) or type your own, so a multi-item project can be split & sorted per item. The item shows on the batch list, the Released tab, and the printed receipt.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8443,7 +8443,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
               <tbody>{batches.map(bt=>{ const g=batchGarmentTotal(bt); const returned=bt.status==='returned'; return (
                 <tr key={bt.id} className="border-t hover:bg-slate-50">
                   <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDateShort(bt.released_at)}<div className="text-[10px] text-slate-400 font-mono">{bt.number||''}{bt.batch_no?` · B${bt.batch_no}`:''}</div></td>
-                  <td className="px-3 py-2 font-medium">{bt.item||'—'}</td>
+                  <td className="px-3 py-2 font-medium">{bt.item||'—'}{bt.item_label && <div className="text-[11px] text-indigo-600 font-normal">{bt.item_label}</div>}</td>
                   <td className="px-3 py-2">{bt.client_name||'—'}</td>
                   <td className="px-3 py-2">{bt.destination_type==='inhouse'?'🏠 In-house':`🧵 ${bt.subcon_name||'Subcon'}`}</td>
                   <td className="px-3 py-2 text-right">{g}</td>
@@ -8586,6 +8586,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
                 {batches.map(bt=>{ const g=batchGarmentTotal(bt); const trimLines=(Array.isArray(bt.trims)?bt.trims:[]).filter(t=>t.name||t.qty).length; return (
                   <div key={bt.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-2 flex-wrap">
                     <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Batch {bt.batch_no||'?'}</span>
+                    {bt.item_label && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">{bt.item_label}</span>}
                     <span className="font-semibold">{bt.destination_type==='inhouse'?'🏠 In-house':`🧵 ${bt.subcon_name||'Subcon'}`}</span>
                     <span className="text-slate-500 text-xs">{g} pcs · {Number(bt.polybags)||0} polybags · {trimLines} trim line{trimLines===1?'':'s'}</span>
                     {bt.expected_due_date && <span className="text-[10px] text-blue-600">due {fmtDateShort(bt.expected_due_date)}</span>}
@@ -8718,7 +8719,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
           <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save report'}</button>
         </div>
       </div>
-      {batchModal && <SortingBatchModal batch={batchModal.id?batchModal:null} worklistItem={w} process={process} title={title} profile={profile} employees={employees} subcons={subcons} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadBatches(); }} />}
+      {batchModal && <SortingBatchModal batch={batchModal.id?batchModal:null} worklistItem={w} projItems={projItems} process={process} title={title} profile={profile} employees={employees} subcons={subcons} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadBatches(); }} />}
       {batchReceipt && <SortingBatchReceiptModal batch={batchReceipt} subcons={subcons} onClose={()=>setBatchReceipt(null)} />}
     </Modal>
   );
@@ -8734,8 +8735,10 @@ function isSortingProcess(p){ return SORTING_PROCESSES.includes(p); }
 function sortingStaffRegex(process){ return process==='subli_sorting' ? /subli.*sort/i : /sorting.*trad|trad.*sort|traditional.*sort/i; }
 function batchGarmentTotal(b){ const sizes=Array.isArray(b.garment_sizes)?b.garment_sizes:[]; const s=sizes.reduce((x,r)=>x+(Number(r.qty)||0),0); return s>0?s:(Number(b.garment_qty)||0); }
 
-function SortingBatchModal({ batch, worklistItem, process, title, profile, employees, subcons, onClose, onSaved }){
+function SortingBatchModal({ batch, worklistItem, projItems, process, title, profile, employees, subcons, onClose, onSaved }){
   const w=worklistItem; const editing=!!batch;
+  const itemChips=(Array.isArray(projItems)?projItems:[]).map(it=>({ label:(it.itemType||it.description||it.category||'Item'), qty:Number(it.quantity)||0 }));
+  const [itemLabel,setItemLabel]=useState(batch?.item_label||'');
   const [destType,setDestType]=useState(batch?.destination_type||'subcon');
   const [subconId,setSubconId]=useState(batch?.subcon_id||'');
   const [garmentQty,setGarmentQty]=useState(batch?.garment_qty!=null?String(batch.garment_qty):'');
@@ -8759,7 +8762,7 @@ function SortingBatchModal({ batch, worklistItem, process, title, profile, emplo
     const sc=subconList.find(s=>s.id===subconId);
     const cleanSizes=sizes.map(s=>({ size:(s.size||'').trim(), qty:Number(s.qty)||0 })).filter(s=>s.size||s.qty);
     const cleanTrims=trims.map(t=>({ name:(t.name||'').trim(), qty:Number(t.qty)||0, unit:(t.unit||'pcs').trim() })).filter(t=>t.name||t.qty);
-    const payload={ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null,
+    const payload={ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, item_label:itemLabel.trim()||null, client_name:w.client_name||null,
       destination_type:destType, subcon_id:destType==='subcon'?(subconId||null):null, subcon_name:destType==='subcon'?(sc?.name||null):'In-house sewing',
       garment_qty:Number(garmentQty)||sizeSum||0, garment_sizes:cleanSizes, trims:cleanTrims, polybags:Number(polybags)||0,
       released_by:releasedBy, released_at:releasedAt||null, expected_due_date:dueDate||null, notes:notes.trim()||null };
@@ -8778,6 +8781,16 @@ function SortingBatchModal({ batch, worklistItem, process, title, profile, emplo
     <Modal title={`${editing?'Edit':'New'} batch out · ${w.item||w.title||''}`} onClose={onClose} wide>
       <div className="space-y-3 text-sm">
         <div className="rounded-lg border bg-slate-50 px-3 py-2 text-xs text-slate-500">{w.client_name||'—'} · {title} dispatch</div>
+        {/* Which item is this batch for? A project can have several items. */}
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Item / description this batch is for</div>
+          {itemChips.length>0 && (
+            <div className="flex flex-wrap gap-1 mb-1.5">
+              {itemChips.map((c,i)=>(<button key={i} type="button" onClick={()=>setItemLabel(c.label)} className={`text-[11px] px-2 py-0.5 rounded-full border ${itemLabel===c.label?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{c.label}{c.qty?` ×${c.qty}`:''}</button>))}
+            </div>
+          )}
+          <input value={itemLabel} onChange={e=>setItemLabel(e.target.value)} placeholder="e.g. Volleyball Jersey Set — or type a custom description" className="input text-sm" />
+        </div>
         <div className="grid md:grid-cols-2 gap-3">
           <div>
             <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Send to</div>
@@ -8862,8 +8875,8 @@ function SortingBatchReceiptModal({ batch, subcons, onClose }){
 
       {/* Meta grid */}
       <div className="grid grid-cols-2 border border-slate-300 rounded-lg divide-x divide-slate-200 mb-3">
-        <div className="divide-y divide-slate-200">{cell('Project', b.item)}{cell('Sent to', <>{sentTo}{sc?.contact_name?` · Attn: ${sc.contact_name}`:''}</>)}</div>
-        <div className="divide-y divide-slate-200">{cell('Client', b.client_name)}{cell('Expected due date', fmtDateShort(b.expected_due_date))}</div>
+        <div className="divide-y divide-slate-200">{cell('Project', b.item)}{cell('Item / description', b.item_label)}{cell('Sent to', <>{sentTo}{sc?.contact_name?` · Attn: ${sc.contact_name}`:''}</>)}</div>
+        <div className="divide-y divide-slate-200">{cell('Client', b.client_name)}{cell('Date released', fmtDateShort(b.released_at))}{cell('Expected due date', fmtDateShort(b.expected_due_date))}</div>
       </div>
       {sc?.address && <div className="text-[11px] text-slate-500 mb-3 px-1"><span className="uppercase text-[9px] font-semibold text-slate-400">Address: </span>{sc.address}</div>}
 
