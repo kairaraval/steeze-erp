@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 436 · New role: Packing Head (owns Packing + view-only Production Board + inbox). Trad Sorting / Subli Sorting / DTF Pressing / Subli Pressing Heads now also get a view-only Production Board alongside their own board + inbox. On the production board these roles can see everything but can't change statuses, plan, create DRs or delete.";
+const BUILD = "Live build 437 · Linked 24 of 27 Steeze OS accounts to their 201 employee records, and the Employees list now shows each person's 201 photo as a round thumbnail (initials fallback if no photo). Still unlinked: Bing Vazquez & Production Viewer (no 201 record) and Jay-Ann Valdez (verify vs Jay-Anne Rabang).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11387,9 +11387,16 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
             <tr key={e.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpening(e)}>
               <td className="px-3 py-2 font-mono text-xs">{e.employee_number||'—'}</td>
               <td className="px-3 py-2">
-                <div className="font-semibold">{fullName(e)}</div>
-                {e.nickname && <div className="text-[10px] text-slate-500">"{e.nickname}"</div>}
-                <div className="text-[10px] text-slate-400">{docCount>0?`📎 ${docCount}`:''}{memoCount>0?`  📝 ${memoCount}`:''}</div>
+                <div className="flex items-center gap-2.5">
+                  {e.photo_url
+                    ? <SignedImg url={e.photo_url} alt={fullName(e)} className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0" />
+                    : <div className="w-9 h-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-[11px] font-semibold text-slate-400 shrink-0">{(fullName(e).match(/\b\w/g)||[]).slice(0,2).join('').toUpperCase()||'—'}</div>}
+                  <div className="min-w-0">
+                    <div className="font-semibold">{fullName(e)}</div>
+                    {e.nickname && <div className="text-[10px] text-slate-500">"{e.nickname}"</div>}
+                    <div className="text-[10px] text-slate-400">{docCount>0?`📎 ${docCount}`:''}{memoCount>0?`  📝 ${memoCount}`:''}</div>
+                  </div>
+                </div>
               </td>
               <td className="px-3 py-2 text-xs">{e.position||'—'}</td>
               <td className="px-3 py-2 text-xs">{e.department||'—'}</td>
