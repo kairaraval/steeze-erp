@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 432 · Sorting batch-outs now take an Item / description — quick-pick from the project's items (e.g. Volleyball Jersey Set, Basketball Jersey Set) or type your own, so a multi-item project can be split & sorted per item. The item shows on the batch list, the Released tab, and the printed receipt.";
+const BUILD = "Live build 433 · Batch QC: a QC report can now be split per sewing batch — since a project is often sewn by different subcons / in-house. Open a QC report, add a batch QC per sewer (or click a sewing batch-out already sent from sorting to auto-seed it), and record qty checked/passed, rejects, minor/major repairs and issue types per batch. Batch totals roll up in the report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7833,6 +7833,95 @@ function ReplacementRequestsSection({ profile, worklistId, process, sourceLabel,
   );
 }
 
+// Common QC reject / issue types (shared by the report + per-batch QC).
+const QC_REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on print','Reject on embroidery','Wrong print details','Stitching defect','Stain / dirt marks','Color mismatch','Loose threads','Measurement out of tolerance','Missing parts / accessories'];
+
+// Add / edit a single batch QC entry. A project can be sewn in batches by
+// different subcons / in-house sewers, so QC checks each batch separately.
+function QCBatchModal({ batch, qcReport, lead, projItems, subcons, sourceBatch, profile, onClose, onSaved }){
+  const seed=batch||{};
+  const src=sourceBatch||null;
+  const [sewerType,setSewerType]=useState(seed.sewer_type || src?.destination_type || '');
+  const [subconId,setSubconId]=useState(seed.subcon_id || (src?.destination_type==='subcon'?src?.subcon_id:'') || '');
+  const [sewerName,setSewerName]=useState(seed.sewer_name || (src && src.destination_type!=='subcon'?'':'') || '');
+  const [itemLabel,setItemLabel]=useState(seed.item_label || src?.item_label || '');
+  const [qtyChecked,setQtyChecked]=useState(seed.qty_checked!=null?String(seed.qty_checked):(src?String(batchGarmentTotal(src)):''));
+  const [qtyPassed,setQtyPassed]=useState(seed.qty_passed!=null?String(seed.qty_passed):'');
+  const [minor,setMinor]=useState(seed.minor_repairs!=null?String(seed.minor_repairs):'');
+  const [major,setMajor]=useState(seed.major_repairs!=null?String(seed.major_repairs):'');
+  const [rejectCount,setRejectCount]=useState(seed.reject_count!=null?String(seed.reject_count):'');
+  const [humanErr,setHumanErr]=useState(seed.human_error_count!=null?String(seed.human_error_count):'');
+  const [rejectTypes,setRejectTypes]=useState(Array.isArray(seed.reject_types)?seed.reject_types:[]);
+  const [findings,setFindings]=useState(seed.findings||'');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const itemChips=(Array.isArray(projItems)?projItems:[]).map(it=>(it.itemType||it.description||it.category||'Item'));
+  const subconList=(subcons||[]).filter(s=>!s.deleted_at).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  function toggleType(t){ setRejectTypes(r=> r.includes(t)?r.filter(x=>x!==t):[...r,t]); }
+  async function save(){
+    if(!sewerType){ setMsg('Choose who sewed this batch (in-house / subcon).'); return; }
+    if(sewerType==='subcon' && !subconId){ setMsg('Choose the subcon.'); return; }
+    setBusy(true); setMsg('');
+    const sc=subconList.find(s=>s.id===subconId);
+    const payload={ qc_report_id:qcReport.id, lead_id:qcReport.lead_id||null, item:qcReport.item||lead?.title||null, item_label:itemLabel.trim()||null, client_name:qcReport.client_name||null,
+      source_batch_id: src?.id || seed.source_batch_id || null,
+      sewer_type:sewerType, subcon_id: sewerType==='subcon'?(subconId||null):null,
+      sewer_name: sewerType==='subcon'?(sc?.name||null):(sewerName.trim()||null),
+      qty_checked:Number(qtyChecked)||0, qty_passed:Number(qtyPassed)||0, reject_count:Number(rejectCount)||0,
+      minor_repairs:Number(minor)||0, major_repairs:Number(major)||0, human_error_count:Number(humanErr)||0,
+      reject_types:rejectTypes, findings:findings.trim()||null };
+    let error;
+    if(batch?.id){ ({ error }=await sb.from('qc_batches').update(payload).eq('id',batch.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('qc_batches').insert(payload)); }
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved && onSaved();
+  }
+  return (
+    <Modal title={`${batch?.id?'Edit':'New'} batch QC`} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Item / description this batch is for</div>
+          {itemChips.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{itemChips.map((c,i)=>(<button key={i} type="button" onClick={()=>setItemLabel(c)} className={`text-[11px] px-2 py-0.5 rounded-full border ${itemLabel===c?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{c}</button>))}</div>}
+          <input value={itemLabel} onChange={e=>setItemLabel(e.target.value)} placeholder="e.g. Basketball Jersey Set" className="input text-sm" />
+        </div>
+        <div className="rounded-lg border p-3 bg-slate-50/60">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by</div>
+          <div className="flex gap-2 mb-2">
+            <button type="button" onClick={()=>setSewerType('inhouse')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='inhouse'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🏠 In-house</button>
+            <button type="button" onClick={()=>setSewerType('subcon')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='subcon'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🧵 Subcon</button>
+          </div>
+          {sewerType==='subcon' && <select value={subconId} onChange={e=>setSubconId(e.target.value)} className="input text-sm"><option value="">— Choose subcon —</option>{subconList.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+          {sewerType==='inhouse' && <input value={sewerName} onChange={e=>setSewerName(e.target.value)} placeholder="Sewer name (optional)" className="input text-sm" />}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-0.5">Qty checked</div><input type="number" min="0" value={qtyChecked} onChange={e=>setQtyChecked(e.target.value)} placeholder="0" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-emerald-600 font-semibold mb-0.5">Qty passed</div><input type="number" min="0" value={qtyPassed} onChange={e=>setQtyPassed(e.target.value)} placeholder="0" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-rose-500 font-semibold mb-0.5">Rejects</div><input type="number" min="0" value={rejectCount} onChange={e=>setRejectCount(e.target.value)} placeholder="0" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-rose-500 font-semibold mb-0.5">· human error</div><input type="number" min="0" value={humanErr} onChange={e=>setHumanErr(e.target.value)} placeholder="0" className="input text-sm" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 bg-amber-50/50 border border-amber-100 rounded-lg p-3">
+          <div><div className="text-[10px] uppercase text-amber-600 font-semibold mb-0.5">Minor repairs</div><input type="number" min="0" value={minor} onChange={e=>setMinor(e.target.value)} placeholder="0" className="input text-sm" /></div>
+          <div><div className="text-[10px] uppercase text-amber-600 font-semibold mb-0.5">Major repairs</div><input type="number" min="0" value={major} onChange={e=>setMajor(e.target.value)} placeholder="0" className="input text-sm" /></div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Issue / reject type <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+          <div className="flex flex-wrap gap-1.5">
+            {QC_REJECT_TYPES.map(t=>{ const on=rejectTypes.includes(t); return (
+              <button key={t} type="button" onClick={()=>toggleType(t)} className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300 hover:text-rose-600'}`}><span className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center text-[9px] ${on?'bg-white text-rose-500 border-white':'border-slate-300 text-transparent'}`}>✓</span>{t}</button>
+            ); })}
+          </div>
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Findings for this batch</div><textarea value={findings} onChange={e=>setFindings(e.target.value)} rows={2} placeholder="QC findings on this batch…" className="input text-sm w-full" /></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-1.5 text-sm rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-40">{busy?'Saving…':(batch?.id?'💾 Update batch QC':'💾 Save batch QC')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, onClose, reload }){
   const isSample = w.source_type==='sample';
   const [handlers,setHandlers]=useState(Array.isArray(w.qc_handlers)?w.qc_handlers:[]);
@@ -7859,6 +7948,21 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   const projQty=projItems.reduce((s,it)=>s+(Number(it.quantity)||0),0);
   const projDelivery=lead?.delivery_date||lead?.expected_close||null;
   const projTerms=lead?.payment_terms||null;
+  // Per-batch QC — a project can be sewn in batches by different subcons /
+  // in-house sewers, so QC checks each batch. We also surface the sewing
+  // batch-outs (from sorting) for this lead as quick-seed sources.
+  const [qcBatches,setQcBatches]=useState([]);
+  const [sewBatches,setSewBatches]=useState([]);
+  const [batchModal,setBatchModal]=useState(null); // { batch, sourceBatch }
+  const [qcSubcons,setQcSubcons]=useState([]);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('subcons').select('*').order('name'); if(data) setQcSubcons(data); }catch(_){} })(); },[]);
+  async function loadQCBatches(){ const { data }=await sb.from('qc_batches').select('*').eq('qc_report_id',w.id).is('deleted_at',null).order('created_at',{ascending:true}); setQcBatches(data||[]); }
+  useEffect(()=>{ loadQCBatches(); },[w.id]);
+  useEffect(()=>{ (async()=>{ if(!w.lead_id){ setSewBatches([]); return; } const { data }=await sb.from('sorting_batches').select('*').eq('lead_id',w.lead_id).is('deleted_at',null).order('batch_no',{ascending:true}); setSewBatches(data||[]); })(); },[w.lead_id]);
+  async function delQCBatch(b){ if(!confirm('Delete this batch QC entry?')) return; await sb.from('qc_batches').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',b.id); loadQCBatches(); }
+  // sorting batch-outs not yet QC'd (no qc_batch links to them)
+  const qcdSourceIds=new Set(qcBatches.map(b=>b.source_batch_id).filter(Boolean));
+  const pendingSewBatches=sewBatches.filter(sb2=>!qcdSourceIds.has(sb2.id));
   // Only QC staff can be tagged as the QC handler — position of "QC",
   // "Quality Control", or "Quality Control Head".
   const isQCStaff=(e)=>/\bqc\b|quality\s*control/i.test(String(e.position||''));
@@ -7943,9 +8047,44 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           </div>
         </div>
 
+        {/* Per-batch QC — check each sewing batch (subcon / in-house) separately */}
+        {!isSample && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase text-blue-600 font-semibold">🧵 Batch QC · check each sewing batch {qcBatches.length>0 && <span className="text-blue-400">({qcBatches.length})</span>}</div>
+              <button onClick={()=>setBatchModal({ batch:null, sourceBatch:null })} className="text-xs px-2.5 py-1 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700">＋ New batch QC</button>
+            </div>
+            {/* Sewing batch-outs from sorting that haven't been QC'd yet — quick seed */}
+            {pendingSewBatches.length>0 && (
+              <div className="mb-2">
+                <div className="text-[10px] text-slate-400 mb-1">Sewing batches sent out, not yet QC'd — click to check:</div>
+                <div className="flex flex-wrap gap-1">
+                  {pendingSewBatches.map(sb2=>(<button key={sb2.id} onClick={()=>setBatchModal({ batch:null, sourceBatch:sb2 })} className="text-[11px] px-2 py-0.5 rounded-full border border-blue-200 bg-white text-blue-700 hover:bg-blue-100">{sb2.destination_type==='inhouse'?'🏠 In-house':`🧵 ${sb2.subcon_name||'Subcon'}`}{sb2.item_label?` · ${sb2.item_label}`:''} · {batchGarmentTotal(sb2)} pcs</button>))}
+                </div>
+              </div>
+            )}
+            {qcBatches.length===0 ? <div className="text-[11px] text-slate-400">No batch QC yet. If this project was sewn in batches by different subcons / in-house, add a QC entry per batch.</div> : (
+              <div className="space-y-1.5">
+                {qcBatches.map(b=>{ const rej=Number(b.reject_count)||0; return (
+                  <div key={b.id} className="bg-white border rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold">{b.sewer_type==='inhouse'?'🏠 In-house':`🧵 ${b.sewer_name||'Subcon'}`}</span>
+                    {b.item_label && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">{b.item_label}</span>}
+                    <span className="text-slate-500 text-xs">{Number(b.qty_checked)||0} checked · {Number(b.qty_passed)||0} passed{rej?` · ${rej} reject${rej===1?'':'s'}`:''}{(Number(b.minor_repairs)||Number(b.major_repairs))?` · repairs ${Number(b.minor_repairs)||0}m/${Number(b.major_repairs)||0}M`:''}</span>
+                    <div className="flex-1"></div>
+                    <button onClick={()=>setBatchModal({ batch:b, sourceBatch:null })} className="text-xs text-indigo-600 hover:underline">Edit</button>
+                    <button onClick={()=>delQCBatch(b)} className="text-slate-300 hover:text-rose-500 text-sm" title="Delete">✕</button>
+                  </div>
+                ); })}
+                {(()=>{ const tc=qcBatches.reduce((s,b)=>s+(Number(b.qty_checked)||0),0); const tp=qcBatches.reduce((s,b)=>s+(Number(b.qty_passed)||0),0); const tr=qcBatches.reduce((s,b)=>s+(Number(b.reject_count)||0),0); return <div className="text-[11px] text-slate-500 pt-0.5">Batch totals: <span className="font-semibold">{tc}</span> checked · <span className="font-semibold text-emerald-700">{tp}</span> passed · <span className="font-semibold text-rose-600">{tr}</span> rejects</div>; })()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Overall summary — optional single-line sewn-by + repairs (kept for simple jobs) */}
         <div className="grid md:grid-cols-2 gap-3">
           <div className="rounded-lg border p-3 bg-slate-50/60">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by</div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Sewn by <span className="text-slate-300 normal-case">· overall (use Batch QC above for split projects)</span></div>
             <div className="flex gap-2 mb-2">
               <button type="button" onClick={()=>setSewerType('inhouse')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='inhouse'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🏠 In-house</button>
               <button type="button" onClick={()=>setSewerType('subcon')} className={`flex-1 text-xs py-1.5 rounded-lg border font-semibold ${sewerType==='subcon'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>🧵 Subcon</button>
@@ -8023,6 +8162,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save QC report'}</button>
         </div>
       </div>
+      {batchModal && <QCBatchModal batch={batchModal.batch} sourceBatch={batchModal.sourceBatch} qcReport={w} lead={lead} projItems={projItems} subcons={qcSubcons} profile={profile} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadQCBatches(); }} />}
     </Modal>
   );
 }
