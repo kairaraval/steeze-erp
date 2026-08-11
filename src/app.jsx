@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 422 · Purchasing polish: raise a top-up PR for an existing project (project picker + ➕ Add PR); reverse any stock movement; waste% on cut-to-blocks; ⚠ no-techpack badge on PRs; PO expected-arrival ETA (overdue flag) + received-short warning. (Reorder alerts already cover blocks/thread — just set a min-stock value.)";
+const BUILD = "Live build 423 · Production module: moving a job to Embroidery / DTF Printing / Knitting now auto-drops a To-Do card on that department board (idempotent). Dept cards always show the 📋 Techpack button when a lead is linked, plus a 🎨 Graphic / ⚙ Production badge so you can see where each job came from.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -175,6 +175,7 @@ const PRODUCTION_STATUSES = [
   { key:'dtf pressing',          label:'DTF Pressing',          color:'bg-orange-100 text-orange-700' },
   { key:'subli pressing',        label:'Subli Pressing',        color:'bg-orange-100 text-orange-700' },
   { key:'embroidery',            label:'Embroidery',            color:'bg-cyan-100 text-cyan-700' },
+  { key:'knitting',              label:'Knitting',              color:'bg-cyan-100 text-cyan-700' },
   { key:'out to sewing subcon',  label:'Out to Sewing Subcon',  color:'bg-blue-100 text-blue-700' },
   { key:'sewing in-house',       label:'Sewing In-House',       color:'bg-indigo-100 text-indigo-700' },
   { key:'quality check (qc)',    label:'Quality Check (QC)',    color:'bg-teal-100 text-teal-700' },
@@ -3957,7 +3958,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   async function sendToPrinting(j){
     const atts = j.attachments||[];
     if(!confirm(`Send ${j.number||''} to Printing with ${atts.length} attachment${atts.length===1?'':'s'}?`)) return;
-    const row = { number:'PR-P-'+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:atts, status:'to do', due_date:j.due_date||null, notes:j.notes||'' };
+    const row = { number:'PR-P-'+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:atts, status:'to do', due_date:j.due_date||null, notes:j.notes||'', source:'graphic' };
     const { data:inserted, error } = await sb.from('printing_jobs').insert(row).select('id,number').single();
     if(error){ console.error('Send-to-Printing failed:', error); alert('Could not send to Printing.\n\n'+(error.message||error)); return; }
     await reload();
@@ -3968,7 +3969,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   async function sendToDept(j, destTable, destLabel, numberPrefix){
     const atts = j.attachments||[];
     if(!confirm(`Send ${j.number||''} to ${destLabel} with ${atts.length} attachment${atts.length===1?'':'s'}?`)) return;
-    const row = { number: numberPrefix + Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:atts, status:'to do', due_date:j.due_date||null, notes:j.notes||'' };
+    const row = { number: numberPrefix + Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, graphic_type:j.graphic_type||'', attachments:atts, status:'to do', due_date:j.due_date||null, notes:j.notes||'', source:'graphic' };
     const { data:inserted, error } = await sb.from(destTable).insert(row).select('id,number').single();
     if(error){ console.error('Send-to-'+destLabel+' failed:', error); alert(`Could not send to ${destLabel}.\n\n` + (error.message||error)); return; }
     await reload();
@@ -4105,7 +4106,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               {/* Scrollable column body */}
               <div className={`flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] transition ${isDragTarget?'bg-indigo-50/80':'bg-slate-200/60'}`}>
-                {col.map(j=>{ const img=pickCover(j.attachments); const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const hasTp=lead&&lead.techpack;
+                {col.map(j=>{ const img=pickCover(j.attachments); const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null;
                   const isDragging = draggedJobId === j.id;
                   return (
                   <div key={j.id}
@@ -4126,8 +4127,9 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                       <div className="font-semibold text-sm leading-tight">{j.item||'—'}</div>
                       <div className="text-xs text-slate-500 truncate">{j.client_name}</div>
                       <div className="flex items-center gap-1 mt-1 flex-wrap">
+                        <span className={`inline-block text-[8px] uppercase px-1.5 py-0.5 rounded font-bold ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Production':'🎨 Graphic'}</span>
                         {j.graphic_type && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-semibold">{j.graphic_type}</span>}
-                        {hasTp && openTechpack && <button onClick={(e)=>{e.stopPropagation(); openTechpack(lead);}} className="inline-flex items-center gap-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button>}
+                        {lead && openTechpack && <button onClick={(e)=>{e.stopPropagation(); openTechpack(lead);}} className="inline-flex items-center gap-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button>}
                       </div>
                       <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.cls}>{di.label}</span></div>
                       <div className="flex items-center gap-1 mt-2">
@@ -4156,7 +4158,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
           <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Deadline</th><th></th></tr></thead>
           <tbody>{filtered.map(j=>{ const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const meta=metaFrom(statuses,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; return (
             <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
-              <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
+              <td className="px-3 py-2 font-mono text-xs">{j.number}<div className={`inline-block ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Prod':'🎨 Graphic'}</div></td><td className="px-3 py-2">{j.client_name}</td>
               <td className="px-3 py-2 font-medium">{j.item}{j.graphic_type && <span className="ml-1 text-[9px] uppercase px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">{j.graphic_type}</span>}{(j.attachments||[]).length?<span className="text-[10px] text-slate-400"> 📎{j.attachments.length}</span>:''}</td>
               <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
               <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
@@ -4164,7 +4166,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
                 {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType, canSendToPrinting })} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
-                {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+                {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
                 {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} className="text-xs text-purple-700 hover:underline mr-2">🖨 Printing</button>}
                 {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} className="text-xs text-pink-700 hover:underline mr-2">🪡 Embroidery</button>}
                 {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} className="text-xs text-amber-700 hover:underline mr-2">🧶 Knitting</button>}
@@ -6359,6 +6361,12 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   async function move(j,st){
     const {error}=await sb.from('production_jobs').update({ status:st }).eq('id',j.id);
     if(error){ alert(error.message); return; }
+    // Auto-route to the department board when moved to Embroidery / DTF Printing
+    // / Knitting — drops a "To Do" card on that board (idempotent).
+    if(st!==j.status && PROD_DEPT_ROUTES[st]){
+      const made = await maybeAutoCreateDeptJobForProd(profile, { ...j, status:st }, st);
+      if(made){ const lbl = st==='dtf printing'?'Printing (DTF board)':st==='embroidery'?'the Embroidery board':'the Knitting board'; alert(`Added ${j.number||'this job'} to ${lbl} as a "To Do" card.`); }
+    }
     // When a job hits Ready for Delivery, plot it on the Logistics calendar
     // for its due date. Idempotent — won't double-plot if already scheduled.
     if(st === 'ready for delivery' && j.status !== 'ready for delivery'){
@@ -6373,7 +6381,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
     reload();
   }
   async function sendTo(j, table, status, label){ if(!confirm(`Send ${j.number||''} to ${label}?`)) return;
-    const row={ number:(table==='printing_jobs'?'PR-P-':'GD-')+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, attachments:[], status, due_date:j.due_date||null, notes:'' };
+    const row={ number:(table==='printing_jobs'?'PR-P-':'GD-')+Date.now().toString().slice(-5), source_job_id:j.id, lead_id:j.lead_id||null, client_name:j.client_name, item:j.item, items:j.items||[], quantity:j.quantity||0, attachments:[], status, due_date:j.due_date||null, notes:'', source:'production' };
     const {error}=await sb.from(table).insert(row); if(error){ alert(error.message); return; } alert(`Sent to ${label}.`); }
   const tile=(label,value,sub,active2,onClick)=>(
     <button onClick={onClick} className={`text-left rounded-xl border p-4 transition ${active2?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
@@ -22097,6 +22105,35 @@ async function maybeAutoCreateTicketsForLead(profile, lead, prevStage, newStage)
     } catch(e){ console.warn('Ticket auto-create error:', e); }
   }
   return made;
+}
+
+// Auto-route a production job to a department board when its status changes.
+// Moving a production job to Embroidery / DTF Printing / Knitting drops a matching
+// "To Do" card on that department's board, linked back to the production job.
+// Idempotent — keyed on source_job_id so re-entering the status won't duplicate.
+const PROD_DEPT_ROUTES = {
+  'embroidery':   { table:'embroidery_jobs', deptStatus:'to do' },
+  'dtf printing': { table:'printing_jobs',   deptStatus:'for dtf printing' },
+  'knitting':     { table:'knitting_jobs',   deptStatus:'to do' },
+};
+async function maybeAutoCreateDeptJobForProd(profile, job, status){
+  const route = PROD_DEPT_ROUTES[status];
+  if(!route || !job) return null;
+  try {
+    const { data: existing } = await sb.from(route.table).select('id').eq('source_job_id', job.id).is('deleted_at', null).limit(1);
+    if(existing && existing.length>0) return null;
+    const prefix = route.table==='printing_jobs' ? 'PR-P-' : route.table==='embroidery_jobs' ? 'EMB-' : 'KNT-';
+    const { data, error } = await sb.from(route.table).insert({
+      number: prefix + Date.now().toString().slice(-5),
+      source_job_id: job.id, lead_id: job.lead_id || null,
+      client_name: job.client_name || '', item: job.item || '', items: job.items || [],
+      quantity: job.quantity || 0, graphic_type: '', attachments: job.attachments || [],
+      status: route.deptStatus, due_date: job.due_date || null, notes: job.notes || '',
+      source: 'production',
+    }).select('id').single();
+    if(error){ if(String(error.code||'').startsWith('23')) return null; console.warn('Dept auto-create failed:', error.message); return null; }
+    return data;
+  } catch(e){ console.warn('Dept auto-create error:', e); return null; }
 }
 
 // row (or null if skipped / errored).
