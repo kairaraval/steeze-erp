@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 434 · Cleaned up the production QC report — now just project details, the Batch QC section (＋ New batch QC), findings notes, and the replacement request. The old overall handled-by / sewn-by / repairs / issue-type / sizing fields are gone for production (still there for sample QC). Everything per-sewer lives in Batch QC.";
+const BUILD = "Live build 435 · New 📊 Reports tab on Pattern, Cutting, DTF Pressing, Subli Pressing, Quality Control, Printing, Knitting and Embroidery. Filter by This week / month / year / custom range, and group by week / month / day / client — plus per-person (pressing) and per-subcon (QC batches). Shows items, completed, %, output pcs and rejects.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3952,7 +3952,7 @@ function CostingCalculatorView({ profile }){
   );
 }
 
-function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, replacementDept, reload, openActivity, openTechpack, openLead }){
+function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, showReport, replacementDept, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   // Kanban drag-and-drop state for the Board layout — same pattern as the
@@ -4044,12 +4044,14 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
             <button onClick={()=>setMainTab('jobs')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='jobs'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎨 Jobs</button>
             {showResources && <button onClick={()=>setMainTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='resources'?'bg-pink-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📌 Resources</button>}
             {replacementDept && <button onClick={()=>setMainTab('replacements')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold inline-flex items-center gap-1.5 ${mainTab==='replacements'?'bg-rose-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🔁 For Replacement{replCount>0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-bold ${mainTab==='replacements'?'bg-white text-rose-600':'bg-rose-500 text-white'}`}>{replCount}</span>}</button>}
+            {showReport && <button onClick={()=>setMainTab('report')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${mainTab==='report'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📊 Reports</button>}
           </div>
         )}
       </div>
 
       {mainTab==='replacements' && replacementDept && <ForReplacementPanel profile={profile} department={replacementDept} />}
       {mainTab==='resources' && <DesignResourcesBoard profile={profile} />}
+      {mainTab==='report' && <ProgressReport rows={jobs.map(j=>({ date:j.created_at, done:doneStatuses.includes(j.status), item:j.item, client:j.client_name, qty:Number(j.quantity)||0, rejects:0, people:[], subcon:null }))} dims={[]} qtyLabel="pcs" showQty doneLabel="Done" />}
 
       {mainTab==='jobs' && layout==='board' && (
         // Kanban pattern: each column body scrolls independently so the column
@@ -7489,10 +7491,12 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
           <button onClick={()=>setTab('library')} className={`px-3 py-1.5 rounded-md ${tab==='library'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({prodCount})</button>
           <button onClick={()=>setTab('sample')} className={`px-3 py-1.5 rounded-md ${tab==='sample'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sample Patterns ({sampleCount})</button>
           <button onClick={()=>setTab('sizes')} className={`px-3 py-1.5 rounded-md ${tab==='sizes'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Size Charts ({(sizeCharts||[]).length})</button>
+          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
           <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md inline-flex items-center gap-1.5 ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement{replCount>0 && <span className="text-[10px] rounded-full px-1.5 py-0.5 font-bold bg-rose-500 text-white">{replCount}</span>}</button>
         </div>
       </div>
       {tab==='replacements' && <ForReplacementPanel profile={profile} department="Pattern" />}
+      {tab==='reports' && <ProgressReport rows={(patternWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Done" />}
 
       {tab==='worklist' && (
         <div className="space-y-4">
@@ -7602,6 +7606,92 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
 }
 
 /* ─────────── CUTTING DEPARTMENT ─────────── */
+// ─────────── Reusable progress / output report ───────────
+// Feeds off a normalized row set so every department board can drop in a
+// "Reports" tab. Row shape: { date, done, item, client, qty, rejects,
+// people:[names], subcon }. Supports a time-range filter (this week / month /
+// year / custom) and grouping by week / month / day / client / person / subcon.
+function progReportPeriodKey(dateStr, grp){
+  const d=new Date(dateStr); if(isNaN(d)) return '—';
+  if(grp==='day') return d.toISOString().slice(0,10);
+  if(grp==='month') return d.toISOString().slice(0,7);
+  const onejan=new Date(d.getFullYear(),0,1); const wk=Math.ceil((((d-onejan)/86400000)+onejan.getDay()+1)/7);
+  return `${d.getFullYear()}-W${String(wk).padStart(2,'0')}`;
+}
+function progRangeBounds(kind){
+  const now=new Date(); const y=now.getFullYear(), mo=now.getMonth(), da=now.getDate(), dow=now.getDay();
+  const sod=(dt)=>new Date(dt.getFullYear(),dt.getMonth(),dt.getDate());
+  if(kind==='week'){ const monday=sod(new Date(y,mo,da-((dow+6)%7))); const to=new Date(monday); to.setDate(monday.getDate()+7); return [monday,to]; }
+  if(kind==='lastweek'){ const monday=sod(new Date(y,mo,da-((dow+6)%7))); const from=new Date(monday); from.setDate(monday.getDate()-7); return [from,monday]; }
+  if(kind==='month'){ return [new Date(y,mo,1), new Date(y,mo+1,1)]; }
+  if(kind==='lastmonth'){ return [new Date(y,mo-1,1), new Date(y,mo,1)]; }
+  if(kind==='year'){ return [new Date(y,0,1), new Date(y+1,0,1)]; }
+  return null;
+}
+function ProgressReport({ rows, dims=[], qtyLabel='pcs', showQty=false, showRejects=false, doneLabel='Completed' }){
+  const [range,setRange]=useState('month');
+  const [from,setFrom]=useState(''); const [to,setTo]=useState('');
+  const [groupBy,setGroupBy]=useState('week');
+  const list=Array.isArray(rows)?rows:[];
+  // Time filter
+  let lo=null, hi=null;
+  if(range==='custom'){ if(from) lo=new Date(from+'T00:00:00'); if(to){ hi=new Date(to+'T00:00:00'); hi.setDate(hi.getDate()+1); } }
+  else { const b=progRangeBounds(range); if(b){ lo=b[0]; hi=b[1]; } }
+  const inRange=(dateStr)=>{ if(!lo&&!hi) return true; const d=new Date(dateStr); if(isNaN(d)) return false; if(lo&&d<lo) return false; if(hi&&d>=hi) return false; return true; };
+  const filtered=list.filter(r=>inRange(r.date));
+  // KPIs (row-level, no double counting)
+  const totalItems=filtered.length;
+  const doneRows=filtered.filter(r=>r.done);
+  const completed=doneRows.length;
+  const totalQty=doneRows.reduce((s,r)=>s+(Number(r.qty)||0),0);
+  const totalRej=filtered.reduce((s,r)=>s+(Number(r.rejects)||0),0);
+  const pct=totalItems?Math.round(completed/totalItems*100):0;
+  // Grouping
+  const isDim=['client','person','subcon'].includes(groupBy);
+  const groups={};
+  const bump=(key)=>{ const g=groups[key]||(groups[key]={ key, total:0, done:0, qty:0, rej:0 }); return g; };
+  filtered.forEach(r=>{
+    let keys;
+    if(groupBy==='person') keys=(Array.isArray(r.people)&&r.people.length)?r.people:['— Unassigned'];
+    else if(groupBy==='subcon') keys=[r.subcon||'— In-house / n/a'];
+    else if(groupBy==='client') keys=[r.client||'—'];
+    else keys=[progReportPeriodKey(r.date, groupBy)];
+    keys.forEach(k=>{ const g=bump(k); g.total++; if(r.done){ g.done++; g.qty+=Number(r.qty)||0; } g.rej+=Number(r.rejects)||0; });
+  });
+  const groupRows=Object.values(groups).sort((a,b)=> isDim ? (b.done-a.done) : String(b.key).localeCompare(String(a.key)));
+  const rangeBtns=[['month','This month'],['week','This week'],['lastmonth','Last month'],['lastweek','Last week'],['year','This year'],['all','All time'],['custom','Custom']];
+  const groupOpts=[['week','Week'],['month','Month'],['day','Day'],['client','Client'],...(dims.includes('person')?[['person','Person']]:[]),...(dims.includes('subcon')?[['subcon','Subcon']]:[])];
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border rounded-xl p-3 flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase font-semibold text-slate-400">Range</span>
+        <div className="flex flex-wrap rounded-lg border overflow-hidden text-[11px] font-semibold">
+          {rangeBtns.map(([k,l])=><button key={k} onClick={()=>setRange(k)} className={`px-2.5 py-1 ${range===k?'bg-indigo-600 text-white':'bg-white text-slate-600 hover:bg-slate-50'}`}>{l}</button>)}
+        </div>
+        {range==='custom' && <span className="flex items-center gap-1 text-xs"><input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="border rounded px-1.5 py-1 text-xs" /><span className="text-slate-400">→</span><input type="date" value={to} onChange={e=>setTo(e.target.value)} className="border rounded px-1.5 py-1 text-xs" /></span>}
+        <div className="flex-1"></div>
+        <span className="text-[10px] uppercase font-semibold text-slate-400">Group by</span>
+        <select value={groupBy} onChange={e=>setGroupBy(e.target.value)} className="border rounded-lg px-2 py-1 text-xs font-semibold">{groupOpts.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Items</div><div className="text-2xl font-bold">{totalItems}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">{doneLabel}</div><div className="text-2xl font-bold text-emerald-700">{completed}<span className="text-sm text-slate-400 font-medium"> · {pct}%</span></div></div>
+        {showQty && <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">{doneLabel} {qtyLabel}</div><div className="text-2xl font-bold">{totalQty.toLocaleString()}</div></div>}
+        {showRejects && <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Rejects</div><div className="text-2xl font-bold text-rose-600">{totalRej.toLocaleString()}</div></div>}
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-3 py-2 bg-slate-50 text-xs uppercase font-semibold text-slate-500">Breakdown by {groupOpts.find(o=>o[0]===groupBy)?.[1]||groupBy}</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">{groupOpts.find(o=>o[0]===groupBy)?.[1]}</th><th className="text-right px-3 py-2">Items</th><th className="text-right px-3 py-2">{doneLabel}</th>{showQty && <th className="text-right px-3 py-2">{qtyLabel}</th>}{showRejects && <th className="text-right px-3 py-2">Rejects</th>}</tr></thead>
+          <tbody>{groupRows.map(g=>(<tr key={g.key} className="border-t"><td className="px-3 py-2 font-medium">{g.key}</td><td className="px-3 py-2 text-right">{g.total}</td><td className="px-3 py-2 text-right text-emerald-700 font-semibold">{g.done}</td>{showQty && <td className="px-3 py-2 text-right">{g.qty.toLocaleString()}</td>}{showRejects && <td className="px-3 py-2 text-right text-rose-600">{g.rej||0}</td>}</tr>))}{groupRows.length===0 && <tr><td colSpan={2+(showQty?1:0)+(showRejects?1:0)+1} className="text-center text-slate-400 py-8">No data in this range.</td></tr>}</tbody>
+        </table></div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────── QUALITY CONTROL (QC) ───────────
 // Mirrors the Cutting worklist: production jobs AND samples auto-seed a QC row
 // when their status is set to "Quality Check (QC)". QC opens each to log
@@ -7659,6 +7749,16 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const open=dedupe((qcReports||[]).filter(w=>w.status!=='done').slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0))));
   const done=dedupe((qcReports||[]).filter(w=>w.status==='done'));
 
+  // Batch QC across all reports — powers per-subcon reporting.
+  const [qcBatchesAll,setQcBatchesAll]=useState([]);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('qc_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQcBatchesAll(data||[]); }catch(_){ setQcBatchesAll([]); } })(); },[qcReports]);
+  const empNm=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):null; };
+  const batchedReportIds=new Set(qcBatchesAll.map(b=>b.qc_report_id).filter(Boolean));
+  const qcReportRows=[
+    ...qcBatchesAll.map(b=>({ date:b.created_at, done:true, item:b.item, client:b.client_name, qty:Number(b.qty_checked)||0, rejects:Number(b.reject_count)||0, people:(Array.isArray(b.checked_by)?b.checked_by:[]).map(p=>p&&(p.name||p)).filter(Boolean), subcon: b.sewer_type==='subcon'?(b.sewer_name||'Subcon'):'In-house' })),
+    ...(qcReports||[]).filter(w=>w.source_type!=='sample' && !batchedReportIds.has(w.id)).map(w=>({ date:w.done_at||w.updated_at||w.created_at, done:w.status==='done', item:w.item, client:w.client_name, qty:0, rejects:Number(w.reject_count)||0, people:(Array.isArray(w.qc_handlers)?w.qc_handlers:[]).map(empNm).filter(Boolean), subcon: w.sewer_type==='subcon'?(w.sewer_name||'Subcon'):(w.sewer_type==='inhouse'?'In-house':null) })),
+  ];
+
   async function markDone(w){ if(!(Array.isArray(w.qc_handlers)&&w.qc_handlers.length)){ if(!confirm('No QC handler recorded yet. Mark as done anyway?')) return; } const { error }=await sb.from('qc_reports').update({ status:'done', done_at:new Date().toISOString(), done_by:profile.id }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('qc_reports').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
@@ -7702,9 +7802,12 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>To Check ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
           <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📐 Size Charts ({sizers.length})</button>
+          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
         </div>
       </div>
-      {tab==='sizers' ? (
+      {tab==='reports' ? (
+        <ProgressReport rows={qcReportRows} dims={['subcon','person']} qtyLabel="pcs checked" showQty showRejects doneLabel="Checked" />
+      ) : tab==='sizers' ? (
         <div>
           <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -8243,11 +8346,13 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done Cutting ({done.length})</button>
           <button onClick={()=>setTab('patterns')} className={`px-3 py-1.5 rounded-md ${tab==='patterns'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pattern Library ({lib.length})</button>
+          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
           <button onClick={()=>setTab('replacements')} className={`px-3 py-1.5 rounded-md inline-flex items-center gap-1.5 ${tab==='replacements'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔁 For Replacement{replCount>0 && <span className="text-[10px] rounded-full px-1.5 py-0.5 font-bold bg-rose-500 text-white">{replCount}</span>}</button>
         </div>
       </div>
 
       {tab==='replacements' && <ForReplacementPanel profile={profile} department="Cutting" />}
+      {tab==='reports' && <ProgressReport rows={(cuttingWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Cut" />}
 
       {tab==='worklist' && (
         <div className="space-y-4">
@@ -8548,6 +8653,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Worklist ({open.length})</button>
           <button onClick={()=>setTab('done')} className={`px-3 py-1.5 rounded-md ${tab==='done'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>✓ Done ({done.length})</button>
           {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
+          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
         </div>
       </div>
 
@@ -8587,6 +8693,10 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
             </table></div>
           )}
         </div>
+      ) : tab==='reports' ? (
+        <ProgressReport
+          rows={rows.map(x=>({ date:x.done_at||x.start_date||x.created_at, done:x.status==='done', item:x.item||x.title, client:x.client_name, qty:Number(x.qty_done)||0, rejects:Number(x.reject_count)||0, people:(Array.isArray(x.handled_by)?x.handled_by:[]).map(id=>{ const e=(employees||[]).find(y=>y.id===id); return e?fullName(e):null; }).filter(Boolean), subcon:null }))}
+          dims={['person']} qtyLabel="pcs" showQty showRejects doneLabel="Done" />
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">✓ Done — finished (start → finished date/time)</div>
@@ -37048,9 +37158,9 @@ function App(){
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
-        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
-        {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
-        {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sewing' && <SewingBoard profile={profile} profiles={profiles} employees={employees} jobs={sewingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='packing' && <PackingBoard profile={profile} profiles={profiles} employees={employees} jobs={packingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
