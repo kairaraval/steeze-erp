@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 449 · Sales managers/owners now see EVERY sent estimate on their lead — a separate 'View production estimate' button per quote (labelled w/ VAT · no VAT when there are two), each opening that quote. Plus the in-preview VAT/no-VAT switcher. (Multiple estimates per lead added in 448.)";
+const BUILD = "Live build 450 · Estimate quotes are now labelled by their estimate number (not w/VAT · no-VAT — that was just one example reason for two quotes). Managers see a 'View production estimate · EST-…' button per sent quote; the picker and print switcher show the number too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1824,7 +1824,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'} · {peso(total)}{msg?<span className={`ml-2 font-semibold ${/fail/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</span>:''}</div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {estimates.length>1 && <span className="no-print flex items-center gap-1">{estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return <button key={ex.id} onClick={()=>{ loadInto(ex).then(()=>setView('print')); }} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{vatLabel(ex)}</button>; })}</span>}
+            {estimates.length>1 && <span className="no-print flex items-center gap-1">{estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return <button key={ex.id} onClick={()=>{ loadInto(ex).then(()=>setView('print')); }} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{ex.number}</button>; })}</span>}
             {!canEdit && canDecide && isSample && estimate && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('approved')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted — creates the Sample Sales Order">✅ Accept (client approved)</button>}
             {!canEdit && canDecide && isSample && estimate && status!=='rejected' && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('rejected')} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">✕ Decline</button>}
             {!canEdit && status==='approved' && <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 font-semibold">✓ Accepted</span>}
@@ -1931,7 +1931,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
           <div className="flex items-center gap-1.5 flex-wrap border-b pb-2">
             <span className="text-[10px] uppercase text-slate-400 font-semibold mr-1">Quotes:</span>
             {estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return (
-              <button key={ex.id} onClick={()=>loadInto(ex)} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{ex.number} · <span className="font-semibold">{vatLabel(ex)}</span> · {peso(ex.total)}</button>
+              <button key={ex.id} onClick={()=>loadInto(ex)} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}><span className="font-semibold">{ex.number}</span> · {peso(ex.total)}</button>
             ); })}
             {canEdit && <button onClick={()=>loadInto(null)} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`}>＋ New quote</button>}
           </div>
@@ -2713,7 +2713,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`Create / edit the ${label} estimate (Accounting & Admin only)`}>💰 {label} estimate{st?(st==='draft'?' · draft':' ✓'):''}</button>
             ); })}
             {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const list=estsFor(pp).filter(ex=>(ex.status||'draft')!=='draft'); const multi=list.length>1; return list.map(ex=>(
-              <button key={ex.id} onClick={()=>setShowEstimate({ purpose:pp, id:ex.id })} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate{multi?` · ${estVatShort(ex)}`:''}</button>
+              <button key={ex.id} onClick={()=>setShowEstimate({ purpose:pp, id:ex.id })} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate{multi?` · ${ex.number}`:''}</button>
             )); })}
             {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
             {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
