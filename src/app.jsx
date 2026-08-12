@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 453 · Graphic Design board: cards now have a ↺ Request revision button (sales manager/assistant) that sends the linked ticket back to the same assigned artist's Assigned pool and pings them; and the old priority Checklist column is removed (the ticket queue handles prioritisation).";
+const BUILD = "Live build 454 · Moved ↺ Request revision off the Graphic board card face and into the lead view (Open lead) next to Send to Printing — the sales manager/assistant sends it back to the same assigned artist's Assigned pool and pings them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2777,6 +2777,26 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
   const [reading,setReading]=useState(false);
   const deptTable = jobType==='printing' ? 'printing_jobs' : 'graphic_design_jobs';
   const scope = job ? ('dept/'+job.id) : 'dept/new';
+  // Graphic revision — sales manager / assistant sends the project back to the
+  // SAME assigned artist's Assigned pool (keeps the artist) and pings them.
+  const canRevise = jobType==='graphic' && !!job && ['admin','manager','assistant'].includes(profile.role);
+  async function requestRevision(){
+    if(!job) return;
+    const reason=(prompt('Request a revision — note for the artist (optional):','')||'').trim();
+    setBusy(true); setMsg('');
+    try{
+      const { data: tks } = await sb.from('sales_tickets').select('*').eq('board_job_id', job.id).eq('department','graphic').is('deleted_at',null).limit(1);
+      const t=tks&&tks[0];
+      if(t){
+        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: reason?((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason):t.notes, updated_at:new Date().toISOString() }).eq('id', t.id);
+        if(t.assignee_id && t.assignee_id!==profile.id){ try{ await sb.from('notifications').insert({ recipient_id:t.assignee_id, actor_id:profile.id, text:`↺ Revision requested on "${t.title||job.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:t.id, type:'system' }); }catch(_){} }
+      }
+      await sb.from('graphic_design_jobs').update({ status:'to do', cl_done:false }).eq('id', job.id);
+      setBusy(false);
+      setMsg(t ? 'Revision requested — sent back to the assigned artist.' : 'Card moved back to To Do (no linked ticket found).');
+      reload && reload();
+    }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
+  }
 
   async function addPhoto(e){
     const file = e.target.files && e.target.files[0]; if(!file) return;
@@ -2886,6 +2906,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
               await onSendToPrinting({ ...job, attachments: atts, notes: note });
               onClose();
             }} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
+            {canRevise && <button disabled={busy} onClick={requestRevision} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 disabled:opacity-50" title="Send back to the assigned artist for revision">↺ Request revision</button>}
             <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
           </div>
         </div>
@@ -4220,7 +4241,6 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} title="Send to Embroidery" className="text-pink-600 text-xs px-1">🪡</button>}
                         {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} title="Send to Knitting" className="text-amber-600 text-xs px-1">🧶</button>}
                       </div>
-                      {jobType==='graphic' && canRevise && <button onClick={(e)=>{e.stopPropagation(); requestRevision(j);}} className="w-full mt-2 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold" title="Send back to the assigned artist for revision">↺ Request revision</button>}
                       {openLead && (
                         lead
                           ? <button onClick={(e)=>{e.stopPropagation(); openLead({ lead, job:j, jobType, canSendToPrinting });}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
@@ -4250,7 +4270,6 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                 <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
                 {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType, canSendToPrinting })} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
                 {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
-                {jobType==='graphic' && canRevise && <button onClick={()=>requestRevision(j)} className="text-xs text-amber-700 hover:underline mr-2" title="Send back to the assigned artist for revision">↺ Revision</button>}
                 {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} className="text-xs text-purple-700 hover:underline mr-2">🖨 Printing</button>}
                 {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} className="text-xs text-pink-700 hover:underline mr-2">🪡 Embroidery</button>}
                 {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} className="text-xs text-amber-700 hover:underline mr-2">🧶 Knitting</button>}
