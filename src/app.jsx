@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 455 · Graphic artists get pinged for new tickets (both artists, on any new pool ticket) and for newly-assigned tickets: a manager can now 'Assign to…' a specific artist on an open ticket, which drops it in that artist's Assigned pool and notifies them (revision requests already notify the assigned artist).";
+const BUILD = "Live build 456 · Graphic ticket + design-board cards now lead with the LEAD name (same as the sales pipeline), with the design request (e.g. '3d mockup') shown underneath after the lead link. Easier to match a ticket to its project.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4227,7 +4227,8 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                     )}
                     {img ? <button onClick={()=>setDetail(j)} className="block w-full"><AttachmentChip att={img} /></button> : <button onClick={()=>setDetail(j)} className="w-full h-12 bg-slate-50 flex items-center justify-center text-slate-300 text-xl">🖼️</button>}
                     <div className="p-2">
-                      <div className="font-semibold text-sm leading-tight">{j.item||'—'}</div>
+                      <div className="font-semibold text-sm leading-tight">{(jobType==='graphic'&&lead&&lead.title)?lead.title:(j.item||'—')}</div>
+                      {jobType==='graphic'&&lead&&lead.title&&j.item&&j.item!==lead.title && <div className="text-[11px] text-indigo-600 truncate" title="Design request">🎨 {j.item}</div>}
                       <div className="text-xs text-slate-500 truncate">{j.client_name}</div>
                       <div className="flex items-center gap-1 mt-1 flex-wrap">
                         <span className={`inline-block text-[8px] uppercase px-1.5 py-0.5 rounded font-bold ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Production':'🎨 Graphic'}</span>
@@ -4262,7 +4263,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
           <tbody>{filtered.map(j=>{ const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const meta=metaFrom(statuses,j.status); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; return (
             <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
               <td className="px-3 py-2 font-mono text-xs">{j.number}<div className={`inline-block ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Prod':'🎨 Graphic'}</div></td><td className="px-3 py-2">{j.client_name}</td>
-              <td className="px-3 py-2 font-medium">{j.item}{j.graphic_type && <span className="ml-1 text-[9px] uppercase px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">{j.graphic_type}</span>}{(j.attachments||[]).length?<span className="text-[10px] text-slate-400"> 📎{j.attachments.length}</span>:''}</td>
+              <td className="px-3 py-2 font-medium">{(jobType==='graphic'&&lead&&lead.title)?lead.title:j.item}{jobType==='graphic'&&lead&&lead.title&&j.item&&j.item!==lead.title && <span className="ml-1 text-[11px] text-indigo-600 font-normal">· 🎨 {j.item}</span>}{j.graphic_type && <span className="ml-1 text-[9px] uppercase px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">{j.graphic_type}</span>}{(j.attachments||[]).length?<span className="text-[10px] text-slate-400"> 📎{j.attachments.length}</span>:''}</td>
               <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
               <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
               <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
@@ -10846,8 +10847,10 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
           {t.priority!=='normal' && <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${pmeta.color}`}>{pmeta.label}</span>}
           {t.status==='open' && canManage && <span className="ml-auto flex items-center gap-1"><button onClick={()=>setEditTicket(t)} title="Edit" className="text-slate-300 hover:text-slate-600 text-xs">✎</button><button onClick={()=>del(t)} title="Delete" className="text-slate-300 hover:text-rose-500 text-xs">✕</button></span>}
         </div>
-        <div className={`text-sm font-medium ${t.status==='done'?'text-slate-400 line-through':'text-slate-900'}`}>{t.title}</div>
-        {lead && <button onClick={()=>onOpenLead&&onOpenLead(lead)} className="text-xs font-medium text-indigo-600 hover:underline mt-0.5 flex items-center gap-1 text-left truncate max-w-full" title="Open the lead — chat with the requester inside">📁 {lead.title}</button>}
+        {lead
+          ? <button onClick={()=>onOpenLead&&onOpenLead(lead)} className="text-sm font-semibold text-slate-900 hover:text-indigo-700 hover:underline text-left truncate max-w-full block" title="Open the lead — chat with the requester inside">📁 {lead.title}</button>
+          : <div className={`text-sm font-medium ${t.status==='done'?'text-slate-400 line-through':'text-slate-900'}`}>{t.title}</div>}
+        {lead && t.title && t.title!==lead.title && <div className={`text-[12px] mt-0.5 ${t.status==='done'?'text-slate-400 line-through':'text-indigo-700'}`}>🎨 {t.title}</div>}
         <div className="text-xs text-slate-500 mt-0.5">{[clientName(t.client_id), t.due_date?`due ${fmtDate(t.due_date)}`:''].filter(Boolean).join(' · ')||'—'}{overdue && <span className="text-rose-600 font-semibold"> · overdue</span>}</div>
         {req && <div className="text-[11px] text-slate-400 mt-0.5">for {req.name||req.email}</div>}
         {t.notes && <div className="text-[11px] text-slate-500 mt-1 bg-slate-50 rounded px-2 py-1 whitespace-pre-wrap">{t.notes}</div>}
