@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 450 · Estimate quotes are now labelled by their estimate number (not w/VAT · no-VAT — that was just one example reason for two quotes). Managers see a 'View production estimate · EST-…' button per sent quote; the picker and print switcher show the number too.";
+const BUILD = "Live build 451 · ＋ New quote now COPIES the current estimate as-is — every line, VAT checkbox, discount, terms and notes carry over (nothing is reset); you just edit what differs for the second quote. Only the estimate number is new.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1683,6 +1683,17 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     const list = data||[]; setEstimates(list);
     return list;
   }
+  // Start a NEW quote as a COPY of the one currently open — keep every line,
+  // VAT checkbox, discount, terms and notes exactly as-is; only the number is
+  // fresh. The user then edits just what differs between the two quotes.
+  async function newQuote(){
+    setEstimate(null); setStatus('draft');
+    setNumber(await nextEstimateNumber());
+    setLines(lines.map((it,i)=>({ ...it, id:'n'+Date.now()+'_'+i })));
+    setView('edit');
+    setMsg('New quote — copied as-is. Edit only what differs, then Save.');
+    setTimeout(()=>setMsg(''),3500);
+  }
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
     const { data, error } = await sb.from('estimates').select('*').eq('lead_id', lead.id).eq('purpose', purpose).order('created_at',{ ascending:true });
@@ -1933,7 +1944,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             {estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return (
               <button key={ex.id} onClick={()=>loadInto(ex)} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}><span className="font-semibold">{ex.number}</span> · {peso(ex.total)}</button>
             ); })}
-            {canEdit && <button onClick={()=>loadInto(null)} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`}>＋ New quote</button>}
+            {canEdit && <button onClick={newQuote} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`} title="Start a new quote copied from the current one — edit only what differs">＋ New quote (copy)</button>}
           </div>
         )}
 
