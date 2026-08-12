@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 456 · Request revision now works for ANY design-board card: if a card has no linked ticket, it creates one and asks which artist was working on it — dropping it into that artist's Assigned pool (or the Open pool if skipped) so it returns to the ticket board. Cards with a ticket still go back to the same artist's Assigned pool.";
+const BUILD = "Live build 457 · Fix: the graphic artists (Paul Laud, Ron Sagario) are now recognised everywhere (their OS role is 'production'), so Request revision actually asks which artist was working on it, the Assign-to dropdown lists them, and new-ticket notifications reach them. Revision on an unlinked design-board card creates a ticket into the chosen artist's Assigned pool.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -152,6 +152,11 @@ const GRAPHIC_TICKET_STATUS = [
   { key:'in_progress',  label:'In progress',   textColor:'text-blue-700',    pill:'bg-blue-100' },
   { key:'done',         label:'Done',          textColor:'text-emerald-700', pill:'bg-emerald-100' },
 ];
+// The graphic artists. Their OS accounts are role 'production' (they also work the
+// floor), so we identify them by role 'graphic' OR by name. Update this list when
+// the design team changes.
+const GRAPHIC_ARTIST_NAMES = ['Paul Laud','Ron Sagario'];
+function graphicArtists(profiles){ return (profiles||[]).filter(p=> p.role==='graphic' || GRAPHIC_ARTIST_NAMES.includes(p.name)); }
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
 const PAYMENT_OPTS = [
@@ -2796,7 +2801,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
       } else {
         // No linked ticket (card created straight on the board) — create one so
         // it returns to the ticket board. Ask which artist was working on it.
-        const artists=(profiles||[]).filter(p=>p.role==='graphic');
+        const artists=graphicArtists(profiles);
         let artistId=null;
         if(artists.length){
           const pick=prompt('No ticket is linked yet. Who was the artist working on this?\n\n'+artists.map((a,i)=>`${i+1}. ${a.name||a.email}`).join('\n')+'\n\nEnter the number (leave blank = Open pool for anyone to claim):','');
@@ -10554,7 +10559,7 @@ function TicketForm({ profile, profiles, leads, clients, existing, defaultLeadId
           }catch(_){}
           // Notify the graphic artists that a new ticket is in the pool.
           try{
-            const artists=(profiles||[]).filter(p=>p.role==='graphic' && p.id!==profile.id).map(p=>p.id);
+            const artists=graphicArtists(profiles).filter(p=>p.id!==profile.id).map(p=>p.id);
             if(artists.length) await sb.from('notifications').insert(artists.map(id=>({ recipient_id:id, actor_id:profile.id, text:`🎨 New graphic ticket: "${title.trim()}"`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:newT.id, type:'system' })));
           }catch(_){}
         }
@@ -10850,7 +10855,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
   const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
 
-  const artists=(profiles||[]).filter(p=>p.role==='graphic');
+  const artists=graphicArtists(profiles);
   const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='assigned'||t.status==='in_progress')).length;
   const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
   const minActive = artists.length ? Math.min(...artists.map(a=>activeCount(a.id))) : 0;
