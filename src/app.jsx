@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 454 · Moved ↺ Request revision off the Graphic board card face and into the lead view (Open lead) next to Send to Printing — the sales manager/assistant sends it back to the same assigned artist's Assigned pool and pings them.";
+const BUILD = "Live build 455 · Graphic artists get pinged for new tickets (both artists, on any new pool ticket) and for newly-assigned tickets: a manager can now 'Assign to…' a specific artist on an open ticket, which drops it in that artist's Assigned pool and notifies them (revision requests already notify the assigned artist).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10788,6 +10788,14 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   async function moveBoardJob(t, status){ if(!t.board_job_id) return; try{ await sb.from('graphic_design_jobs').update({ status }).eq('id', t.board_job_id); }catch(_){} }
   // Claim: an artist takes a ticket from the open pool into their assigned pool.
   const claim  =(t)=>patch(t,{ status:'assigned', assignee_id:profile.id, claimed_at:new Date().toISOString() });
+  // Assign: a manager hands a ticket to a specific artist's assigned pool and
+  // pings them that they have a new assigned ticket.
+  async function assignTo(t, artistId){
+    if(!artistId) return;
+    await patch(t,{ status:'assigned', assignee_id:artistId, claimed_at:new Date().toISOString() });
+    const a=prof(artistId);
+    await notify(artistId, `🎨 You've been assigned a graphic ticket: "${t.title}"${t.lead_id?` — ${(leadOf(t.lead_id)?.title)||''}`:''}.`, t.id);
+  }
   // Start: the assigned artist begins actively working.
   async function start(t){ await patch(t,{ status:'in_progress' }); await moveBoardJob(t,'to do'); }
   // Release: hand the ticket back to the open pool for anyone to claim.
@@ -10846,6 +10854,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
         <div className="flex items-center gap-2 mt-2">
           {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
           <div className="ml-auto flex items-center gap-1.5">
+            {t.status==='open' && canManage && artists.length>0 && <select defaultValue="" onChange={e=>{ if(e.target.value){ assignTo(t, e.target.value); e.target.value=''; } }} className="text-[11px] border rounded px-1 py-1 bg-white text-slate-600" title="Assign this ticket to an artist"><option value="">Assign to…</option>{artists.map(a=><option key={a.id} value={a.id}>{a.name||a.email}</option>)}</select>}
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
             {t.status==='assigned' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>start(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700">▶ Start</button></>}
             {t.status==='in_progress' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Mark done</button></>}
