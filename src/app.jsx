@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 447 · Replacement Requests: the production supervisor can now ✓ Mark done a routed request manually, and Report to HR is now a per-ticket button on each request (prefills the escalation with that ticket) — plus a General HR report button for ad-hoc escalations.";
+const BUILD = "Live build 448 · A lead can now hold several production estimates — e.g. one WITH VAT and one WITHOUT. Open the estimate, use the Quotes picker to switch between them or ＋ New quote to add another; each gets its own number and prints separately (with a quick VAT/no-VAT switch in the print preview).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1618,6 +1618,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const purposeLabel = purpose==='sample' ? 'Sample' : purpose==='production' ? 'Production' : (purpose||'').charAt(0).toUpperCase()+(purpose||'').slice(1);
   const [loading,setLoading]=useState(true);
   const [estimate,setEstimate]=useState(null);   // existing DB record, if any
+  const [estimates,setEstimates]=useState([]);   // all estimates for this lead+purpose (a lead can hold several, e.g. with-VAT vs no-VAT)
   const [view,setView]=useState(canEdit?'edit':'print'); // view-only users open straight to the PDF
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
@@ -1661,24 +1662,37 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     } catch(_){}
   })(); return ()=>{ alive=false; }; },[]);
 
-  useEffect(()=>{ let alive=true; (async()=>{
-    setLoading(true);
-    const { data, error } = await sb.from('estimates').select('*').eq('lead_id', lead.id).eq('purpose', purpose).order('created_at',{ ascending:false }).limit(1);
-    if(!alive) return;
-    if(error) setMsg('Load failed: '+(error.message||error));
-    const ex = (data && data[0]) || null;
+  // Load an estimate record (or a blank new draft) into the editable fields.
+  async function loadInto(ex){
     if(ex){
       setEstimate(ex); setNumber(ex.number); setStatus(ex.status||'draft');
       setLines((ex.items||[]).map((it,i)=>({ id:'e'+i, itemType:it.itemType||'', description:it.description||it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
       setDiscount(ex.discount?String(ex.discount):''); setDiscountNote(ex.discount_note||''); setVatInclusive(!!ex.vat_inclusive);
       setPaymentTerms(ex.payment_terms||lead.payment_terms||''); setValidUntil(ex.valid_until||''); setNotes(ex.notes||'');
     } else {
+      setEstimate(null); setStatus('draft'); setDiscount(''); setDiscountNote(''); setVatInclusive(false);
+      setPaymentTerms(lead.payment_terms||''); setNotes('');
       setLines(estLinesFromLead(lead));
-      const d=new Date(); d.setDate(d.getDate()+EST_VALIDITY_DAYS); setValidUntil(d.toISOString().slice(0,10)); // valid 7 days from creation
+      const d=new Date(); d.setDate(d.getDate()+EST_VALIDITY_DAYS); setValidUntil(d.toISOString().slice(0,10));
       setNumber(await nextEstimateNumber());
     }
+    setView(canEdit?'edit':'print');
+  }
+  async function refreshList(selectId){
+    const { data } = await sb.from('estimates').select('*').eq('lead_id', lead.id).eq('purpose', purpose).order('created_at',{ ascending:true });
+    const list = data||[]; setEstimates(list);
+    return list;
+  }
+  useEffect(()=>{ let alive=true; (async()=>{
+    setLoading(true);
+    const { data, error } = await sb.from('estimates').select('*').eq('lead_id', lead.id).eq('purpose', purpose).order('created_at',{ ascending:true });
+    if(!alive) return;
+    if(error) setMsg('Load failed: '+(error.message||error));
+    const list = data||[]; setEstimates(list);
+    await loadInto(list.length ? list[list.length-1] : null);
     setLoading(false);
   })(); return ()=>{ alive=false; }; },[lead.id, purpose]);
+  const vatLabel=(ex)=>{ const anyVat = (Array.isArray(ex?.items)?ex.items:[]).some(it=>it.withVat) || ex?.vat_inclusive; return anyVat?'w/ VAT':'no VAT'; };
 
   const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
   // When prices are VAT-inclusive, we neither add nor display the 12% — the
@@ -1726,6 +1740,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
         if(ins.error) throw ins.error; saved=ins.data;
       }
       setEstimate(saved); setStatus(saved.status);
+      try { await refreshList(); } catch(_){}
       // Production estimates never touch a Sales Order (the SO is created at
       // Closed Won). A SAMPLE estimate that's just been Accepted spins up a
       // Sample Sales Order so the sample gets billed/collected like any order.
@@ -1781,7 +1796,11 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     setBusy(false);
     if(error){ setMsg('Delete failed: '+(error.message||error)); return; }
     reload&&reload();
-    onClose();
+    // Reload the remaining estimates for this lead; keep the modal open if any
+    // remain (a lead can hold several quotes), else close.
+    const list = await refreshList();
+    if(list.length){ await loadInto(list[list.length-1]); setMsg('Deleted.'); setTimeout(()=>setMsg(''),2000); }
+    else onClose();
   }
 
   const sm = estStatusMeta(status);
@@ -1804,6 +1823,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'} · {peso(total)}{msg?<span className={`ml-2 font-semibold ${/fail/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</span>:''}</div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {estimates.length>1 && <span className="no-print flex items-center gap-1">{estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return <button key={ex.id} onClick={()=>{ loadInto(ex).then(()=>setView('print')); }} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{vatLabel(ex)}</button>; })}</span>}
             {!canEdit && canDecide && isSample && estimate && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('approved')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted — creates the Sample Sales Order">✅ Accept (client approved)</button>}
             {!canEdit && canDecide && isSample && estimate && status!=='rejected' && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('rejected')} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">✕ Decline</button>}
             {!canEdit && status==='approved' && <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 font-semibold">✓ Accepted</span>}
@@ -1903,6 +1923,18 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
           </div>
           <div className="text-xs text-slate-500">{client?.company||lead.client_name||'—'}</div>
         </div>
+
+        {/* Estimate picker — a lead can hold several quotes (e.g. one with VAT and
+            one without). Switch between them or start a new one. */}
+        {(estimates.length>0 || canEdit) && (
+          <div className="flex items-center gap-1.5 flex-wrap border-b pb-2">
+            <span className="text-[10px] uppercase text-slate-400 font-semibold mr-1">Quotes:</span>
+            {estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return (
+              <button key={ex.id} onClick={()=>loadInto(ex)} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{ex.number} · <span className="font-semibold">{vatLabel(ex)}</span> · {peso(ex.total)}</button>
+            ); })}
+            {canEdit && <button onClick={()=>loadInto(null)} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`}>＋ New quote</button>}
+          </div>
+        )}
 
         <div>
           <div className="flex items-center justify-between mb-1">
