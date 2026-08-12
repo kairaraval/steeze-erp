@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 451 · ＋ New quote now COPIES the current estimate as-is — every line, VAT checkbox, discount, terms and notes carry over (nothing is reset); you just edit what differs for the second quote. Only the estimate number is new.";
+const BUILD = "Live build 452 · Graphic ticket queue reworked: Open pool → Assigned pool (artist claims) → In progress (Start) → Done. New ↺ Request revision button on Done tickets — the sales manager/assistant sends it back to the SAME assigned artist's Assigned pool (keeps the artist) and pings them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -147,10 +147,10 @@ const GRAPHIC_TICKET_TYPES = [
 ];
 function graphicTypeMeta(k){ return GRAPHIC_TICKET_TYPES.find(t=>t.key===k) || GRAPHIC_TICKET_TYPES[GRAPHIC_TICKET_TYPES.length-1]; }
 const GRAPHIC_TICKET_STATUS = [
-  { key:'open',         label:'Open pool',    textColor:'text-slate-600',   pill:'bg-slate-100' },
-  { key:'in_progress',  label:'In progress',  textColor:'text-blue-700',    pill:'bg-blue-100' },
-  { key:'for_approval', label:'For approval', textColor:'text-cyan-700',    pill:'bg-cyan-100' },
-  { key:'done',         label:'Approved',     textColor:'text-emerald-700', pill:'bg-emerald-100' },
+  { key:'open',         label:'Open pool',     textColor:'text-slate-600',   pill:'bg-slate-100' },
+  { key:'assigned',     label:'Assigned pool', textColor:'text-violet-700',  pill:'bg-violet-100' },
+  { key:'in_progress',  label:'In progress',   textColor:'text-blue-700',    pill:'bg-blue-100' },
+  { key:'done',         label:'Done',          textColor:'text-emerald-700', pill:'bg-emerald-100' },
 ];
 const ITEM_CATEGORIES = ['Sublimated', 'Traditional'];
 const LEAD_SOURCES = ['Website','Social Media','Referral','Email Campaign','Paid Advertising','Returning Client','Friend','ECCP','Email','Walk-in','Other'];
@@ -10746,28 +10746,28 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
     if(error){ alert(error.message); return; }
     load();
   }
-  const claim  =(t)=>patch(t,{ status:'in_progress', assignee_id:profile.id, claimed_at:new Date().toISOString() });
-  const release=(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
   // Keep the linked Design-board card in step with the ticket.
   async function moveBoardJob(t, status){ if(!t.board_job_id) return; try{ await sb.from('graphic_design_jobs').update({ status }).eq('id', t.board_job_id); }catch(_){} }
-  async function readyForApproval(t){
-    // Move the ticket into the "For approval" column of the graphic list, move
-    // its To-Do card on the Design board to "For Approval", and notify whoever
-    // raised it. (The sales lead's own stage is left untouched.)
-    await patch(t,{ status:'for_approval' });
+  // Claim: an artist takes a ticket from the open pool into their assigned pool.
+  const claim  =(t)=>patch(t,{ status:'assigned', assignee_id:profile.id, claimed_at:new Date().toISOString() });
+  // Start: the assigned artist begins actively working.
+  async function start(t){ await patch(t,{ status:'in_progress' }); await moveBoardJob(t,'to do'); }
+  // Release: hand the ticket back to the open pool for anyone to claim.
+  const release=(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null });
+  // Done: artist finishes; the requester is notified.
+  async function markDone(t){
+    await patch(t,{ status:'done', done_at:new Date().toISOString() });
     await moveBoardJob(t, 'for approval');
-    await notify(t.created_by || t.requested_by, `🎨 Graphic ticket "${t.title}" is ready for your approval.`, t.id);
+    await notify(t.created_by || t.requested_by, `🎨 Graphic ticket "${t.title}" is marked done — please review.`, t.id);
     reload && reload();
   }
-  async function approve(t){
-    await patch(t,{ status:'done', done_at:new Date().toISOString() });
-    await notify(t.assignee_id, `✅ Your graphic work "${t.title}" was approved.`, t.id);
-  }
-  async function sendBack(t){
-    const reason=(prompt('Send back for revision — add a short note for the artist (optional):','')||'').trim();
-    await patch(t,{ status:'open', notes: reason ? ((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason) : t.notes });
+  // Revision: sales manager / assistant sends the project back to the SAME
+  // artist's assigned pool for rework (keeps the assignee).
+  async function requestRevision(t){
+    const reason=(prompt('Request a revision — add a short note for the artist (optional):','')||'').trim();
+    await patch(t,{ status:'assigned', done_at:null, notes: reason ? ((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason) : t.notes });
     await moveBoardJob(t, 'to do');
-    await notify(t.assignee_id, `↺ Revisions needed on "${t.title}"${reason?': '+reason:''}. Back in the open pool.`, t.id);
+    await notify(t.assignee_id, `↺ Revision requested on "${t.title}"${reason?': '+reason:''}. It's back in your assigned pool.`, t.id);
     reload && reload();
   }
   const reopen =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
@@ -10777,12 +10777,12 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
   const byPrioDue=(a,b)=>{ const pr=prioRank(a)-prioRank(b); if(pr) return pr; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
   const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
+  const assigned = visible.filter(t=>t.status==='assigned').sort(byPrioDue);
   const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
-  const forApproval = visible.filter(t=>t.status==='for_approval').sort(byPrioDue);
   const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
 
   const artists=(profiles||[]).filter(p=>p.role==='graphic');
-  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='in_progress'||t.status==='for_approval')).length;
+  const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && (t.status==='assigned'||t.status==='in_progress')).length;
   const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
   const minActive = artists.length ? Math.min(...artists.map(a=>activeCount(a.id))) : 0;
 
@@ -10809,9 +10809,9 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
           {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
           <div className="ml-auto flex items-center gap-1.5">
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
-            {t.status==='in_progress' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>readyForApproval(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">✓ Ready for approval</button></>}
-            {t.status==='for_approval' && canApprove && <><button onClick={()=>sendBack(t)} className="text-xs px-2 py-1 rounded-lg border text-amber-700 border-amber-300">↺ Send back</button><button onClick={()=>approve(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Approve</button></>}
-            {t.status==='for_approval' && !canApprove && <span className="text-[10px] text-cyan-700 font-semibold">Awaiting approval</span>}
+            {t.status==='assigned' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>start(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700">▶ Start</button></>}
+            {t.status==='in_progress' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Mark done</button></>}
+            {t.status==='done' && canApprove && <button onClick={()=>requestRevision(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700" title="Send back to the assigned artist for revision">↺ Request revision</button>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
           </div>
         </div>
@@ -10838,7 +10838,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
       <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">🎨 Graphic ticket queue</h1>
-          <p className="text-slate-500 text-sm">Shared design task pool — claim the next ticket. Finish it and it goes for the requester's approval.</p>
+          <p className="text-slate-500 text-sm">Open pool → claim into your Assigned pool → Start → Done. Sales can send a Done ticket back to the same artist with ↺ Request revision.</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={load} className="px-3 py-1.5 text-sm rounded-lg border text-slate-600" title="Refresh">↻</button>
@@ -10873,9 +10873,9 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
       {loading ? <div className="text-center text-slate-400 py-12">Loading tickets…</div> : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <Column title="Open pool" icon="📥" list={open} tint="bg-slate-100 text-slate-600" />
+          <Column title="Assigned pool" icon="🙋" list={assigned} tint="bg-violet-100 text-violet-700" />
           <Column title="In progress" icon="▶" list={inprog} tint="bg-blue-100 text-blue-700" />
-          <Column title="For approval" icon="👀" list={forApproval} tint="bg-cyan-100 text-cyan-700" />
-          <Column title="Approved" icon="✓" list={done} tint="bg-emerald-100 text-emerald-700" />
+          <Column title="Done" icon="✓" list={done} tint="bg-emerald-100 text-emerald-700" />
         </div>
       )}
 
