@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 452 · Graphic ticket queue reworked: Open pool → Assigned pool (artist claims) → In progress (Start) → Done. New ↺ Request revision button on Done tickets — the sales manager/assistant sends it back to the SAME assigned artist's Assigned pool (keeps the artist) and pings them.";
+const BUILD = "Live build 453 · Graphic Design board: cards now have a ↺ Request revision button (sales manager/assistant) that sends the linked ticket back to the same assigned artist's Assigned pool and pings them; and the old priority Checklist column is removed (the ticket queue handles prioritisation).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4017,6 +4017,23 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   const canDelete = isAdmin || !isAssistant; // admin + managers
   const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
   async function move(j,st){ const patch={ status:st }; if(jobType==='graphic' && st==='to do') patch.cl_done=false; const {error}=await sb.from(table).update(patch).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
+  // Graphic board: sales manager / assistant can send a card back to the SAME
+  // assigned artist for revision — flips the linked graphic ticket to its
+  // Assigned pool (keeps the artist), moves the card to To Do, and pings them.
+  const canRevise = ['admin','manager','assistant'].includes(profile.role);
+  async function requestRevision(j){
+    const reason=(prompt('Request a revision — note for the artist (optional):','')||'').trim();
+    try {
+      const { data: tks } = await sb.from('sales_tickets').select('*').eq('board_job_id', j.id).eq('department','graphic').is('deleted_at',null).limit(1);
+      const t = tks && tks[0];
+      if(t){
+        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: reason?((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason):t.notes, updated_at:new Date().toISOString() }).eq('id', t.id);
+        if(t.assignee_id && t.assignee_id!==profile.id){ try{ await sb.from('notifications').insert({ recipient_id:t.assignee_id, actor_id:profile.id, text:`↺ Revision requested on "${t.title||j.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:t.id, type:'system' }); }catch(_){} }
+      }
+      await sb.from(table).update({ status:'to do', cl_done:false }).eq('id', j.id);
+      reload();
+    } catch(e){ alert(e.message||String(e)); }
+  }
   async function del(id){ if(!confirm('Send this job to Trash?\n\nIt\'ll be recoverable from Settings → Trash by the admin.')) return; const {error}=await sb.from(table).update({ deleted_at: new Date().toISOString(), deleted_by: profile.id }).eq('id',id); if(error){ alert(error.message); return; } reload(); }
   async function sendToPrinting(j){
     const atts = j.attachments||[];
@@ -4060,7 +4077,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
   // Mirrors the TO-DO column only. An item leaves the checklist when it's moved
   // out of To Do OR ticked off, and re-appears if the job is moved back to To Do.
   // Clicking the title opens the full job card for details.
-  const showChecklist = jobType==='graphic';
+  const showChecklist = false; // retired — the Graphic ticket queue handles prioritisation now
   const checklistJobs = showChecklist
     ? filtered.filter(j=> j.status==='to do' && !j.cl_done)
         .slice().sort((a,b)=> ((a.cl_position??1e9)-(b.cl_position??1e9)) || (new Date(a.created_at||0)-new Date(b.created_at||0)))
@@ -4203,6 +4220,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} title="Send to Embroidery" className="text-pink-600 text-xs px-1">🪡</button>}
                         {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} title="Send to Knitting" className="text-amber-600 text-xs px-1">🧶</button>}
                       </div>
+                      {jobType==='graphic' && canRevise && <button onClick={(e)=>{e.stopPropagation(); requestRevision(j);}} className="w-full mt-2 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold" title="Send back to the assigned artist for revision">↺ Request revision</button>}
                       {openLead && (
                         lead
                           ? <button onClick={(e)=>{e.stopPropagation(); openLead({ lead, job:j, jobType, canSendToPrinting });}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
@@ -4232,6 +4250,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                 <button onClick={()=>setEditing(j)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
                 {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType, canSendToPrinting })} className="text-xs text-indigo-600 hover:underline mr-2">↗ Open lead</button>}
                 {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+                {jobType==='graphic' && canRevise && <button onClick={()=>requestRevision(j)} className="text-xs text-amber-700 hover:underline mr-2" title="Send back to the assigned artist for revision">↺ Revision</button>}
                 {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} className="text-xs text-purple-700 hover:underline mr-2">🖨 Printing</button>}
                 {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} className="text-xs text-pink-700 hover:underline mr-2">🪡 Embroidery</button>}
                 {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} className="text-xs text-amber-700 hover:underline mr-2">🧶 Knitting</button>}
