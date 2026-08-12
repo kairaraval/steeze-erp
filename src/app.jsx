@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 448 · A lead can now hold several production estimates — e.g. one WITH VAT and one WITHOUT. Open the estimate, use the Quotes picker to switch between them or ＋ New quote to add another; each gets its own number and prints separately (with a quick VAT/no-VAT switch in the print preview).";
+const BUILD = "Live build 449 · Sales managers/owners now see EVERY sent estimate on their lead — a separate 'View production estimate' button per quote (labelled w/ VAT · no VAT when there are two), each opening that quote. Plus the in-preview VAT/no-VAT switcher. (Multiple estimates per lead added in 448.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1614,7 +1614,7 @@ function estLinesFromLead(lead){
   }));
 }
 
-function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdit=true, purpose='production' }){
+function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdit=true, purpose='production', initialId=null }){
   const purposeLabel = purpose==='sample' ? 'Sample' : purpose==='production' ? 'Production' : (purpose||'').charAt(0).toUpperCase()+(purpose||'').slice(1);
   const [loading,setLoading]=useState(true);
   const [estimate,setEstimate]=useState(null);   // existing DB record, if any
@@ -1689,7 +1689,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     if(!alive) return;
     if(error) setMsg('Load failed: '+(error.message||error));
     const list = data||[]; setEstimates(list);
-    await loadInto(list.length ? list[list.length-1] : null);
+    const initial = (initialId && list.find(e=>e.id===initialId)) || (list.length ? list[list.length-1] : null);
+    await loadInto(initial);
     setLoading(false);
   })(); return ()=>{ alive=false; }; },[lead.id, purpose]);
   const vatLabel=(ex)=>{ const anyVat = (Array.isArray(ex?.items)?ex.items:[]).some(it=>it.withVat) || ex?.vat_inclusive; return anyVat?'w/ VAT':'no VAT'; };
@@ -2645,6 +2646,8 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   // A lead can carry a Sample estimate and a Production estimate. Look each up.
   const EST_PURPOSES = [['sample','Sample'],['production','Production']];
   const estFor = (pp)=> (estimates||[]).find(e=>e.lead_id===lead.id && (e.purpose||'production')===pp);
+  const estsFor = (pp)=> (estimates||[]).filter(e=>e.lead_id===lead.id && (e.purpose||'production')===pp);
+  const estVatShort = (ex)=>{ const anyVat=(Array.isArray(ex?.items)?ex.items:[]).some(it=>it.withVat)||ex?.vat_inclusive; return anyVat?'w/ VAT':'no VAT'; };
   // Inline notes editor — saves without opening the full Edit lead form
   const [notesDraft,setNotesDraft]=useState(lead.notes||'');
   const [notesBusy,setNotesBusy]=useState(false);
@@ -2709,9 +2712,9 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             {canEstimate && EST_PURPOSES.map(([pp,label])=>{ const ex=estFor(pp); const st=ex?(ex.status||'draft'):null; return (
               <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`Create / edit the ${label} estimate (Accounting & Admin only)`}>💰 {label} estimate{st?(st==='draft'?' · draft':' ✓'):''}</button>
             ); })}
-            {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const ex=estFor(pp); if(!ex || (ex.status||'draft')==='draft') return null; return (
-              <button key={pp} onClick={()=>setShowEstimate(pp)} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate</button>
-            ); })}
+            {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const list=estsFor(pp).filter(ex=>(ex.status||'draft')!=='draft'); const multi=list.length>1; return list.map(ex=>(
+              <button key={ex.id} onClick={()=>setShowEstimate({ purpose:pp, id:ex.id })} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate{multi?` · ${estVatShort(ex)}`:''}</button>
+            )); })}
             {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
             {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
             {canTicket && <button onClick={()=>setShowGraphicTicket(true)} className="py-2 px-3 rounded-lg bg-fuchsia-600 text-white text-sm font-semibold hover:bg-fuchsia-700" title="Raise a design task into the shared Graphic Ticket queue">🎨 Graphic ticket</button>}
@@ -2732,7 +2735,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
           <ThreadBody profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id: lead.id }} scope={'activity/'+lead.id} titleText={lead.title} afterChange={reload} headerless embedded />
         </div>
       </div>
-      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={showEstimate} onClose={()=>setShowEstimate(null)} reload={reload} />}
+      {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={typeof showEstimate==='string'?showEstimate:showEstimate.purpose} initialId={typeof showEstimate==='object'?showEstimate.id:null} onClose={()=>setShowEstimate(null)} reload={reload} />}
       {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
       {showTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} onClose={()=>setShowTicket(false)} onSaved={()=>setShowTicket(false)} />}
       {showGraphicTicket && <TicketForm profile={profile} profiles={profiles} leads={[lead]} clients={clients} defaultLeadId={lead.id} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowGraphicTicket(false)} onSaved={()=>setShowGraphicTicket(false)} />}
