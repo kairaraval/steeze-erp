@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 455 · Graphic artists get pinged for new tickets (both artists, on any new pool ticket) and for newly-assigned tickets: a manager can now 'Assign to…' a specific artist on an open ticket, which drops it in that artist's Assigned pool and notifies them (revision requests already notify the assigned artist).";
+const BUILD = "Live build 456 · Request revision now works for ANY design-board card: if a card has no linked ticket, it creates one and asks which artist was working on it — dropping it into that artist's Assigned pool (or the Open pool if skipped) so it returns to the ticket board. Cards with a ticket still go back to the same artist's Assigned pool.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2780,20 +2780,43 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
   // Graphic revision — sales manager / assistant sends the project back to the
   // SAME assigned artist's Assigned pool (keeps the artist) and pings them.
   const canRevise = jobType==='graphic' && !!job && ['admin','manager','assistant'].includes(profile.role);
+  async function ping(recipientId, text, ticketId){ if(!recipientId||recipientId===profile.id) return; try{ await sb.from('notifications').insert({ recipient_id:recipientId, actor_id:profile.id, text, link_view:'graphic', ref_type:'graphic_ticket', ref_id:ticketId, type:'system' }); }catch(_){} }
   async function requestRevision(){
     if(!job) return;
     const reason=(prompt('Request a revision — note for the artist (optional):','')||'').trim();
     setBusy(true); setMsg('');
     try{
       const { data: tks } = await sb.from('sales_tickets').select('*').eq('board_job_id', job.id).eq('department','graphic').is('deleted_at',null).limit(1);
-      const t=tks&&tks[0];
+      let t=tks&&tks[0];
       if(t){
+        // Existing ticket → back to its assigned artist's pool.
         await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: reason?((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason):t.notes, updated_at:new Date().toISOString() }).eq('id', t.id);
-        if(t.assignee_id && t.assignee_id!==profile.id){ try{ await sb.from('notifications').insert({ recipient_id:t.assignee_id, actor_id:profile.id, text:`↺ Revision requested on "${t.title||job.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:t.id, type:'system' }); }catch(_){} }
+        await ping(t.assignee_id, `↺ Revision requested on "${t.title||job.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, t.id);
+        setMsg('Revision requested — back in the assigned artist\'s pool.');
+      } else {
+        // No linked ticket (card created straight on the board) — create one so
+        // it returns to the ticket board. Ask which artist was working on it.
+        const artists=(profiles||[]).filter(p=>p.role==='graphic');
+        let artistId=null;
+        if(artists.length){
+          const pick=prompt('No ticket is linked yet. Who was the artist working on this?\n\n'+artists.map((a,i)=>`${i+1}. ${a.name||a.email}`).join('\n')+'\n\nEnter the number (leave blank = Open pool for anyone to claim):','');
+          const idx=parseInt(pick,10); if(idx>=1 && idx<=artists.length) artistId=artists[idx-1].id;
+        }
+        const { data:newT, error } = await sb.from('sales_tickets').insert({
+          title: job.item || lead.title || 'Revision', task_type:'revisions', priority:'high',
+          lead_id: job.lead_id||lead.id||null, client_id: lead.client_id||null,
+          requested_by: lead.manager_id || profile.id, department:'graphic',
+          number:'GTK-'+Date.now().toString().slice(-6),
+          status: artistId?'assigned':'open', assignee_id: artistId||null, claimed_at: artistId?new Date().toISOString():null,
+          board_job_id: job.id, notes: reason?('↺ Revision: '+reason):null, created_by: profile.id,
+        }).select().single();
+        if(error) throw error;
+        t=newT;
+        if(artistId){ await ping(artistId, `↺ Revision assigned to you: "${t.title}"${reason?' — '+reason:''}.`, t.id); setMsg('Ticket created in the assigned pool for the chosen artist.'); }
+        else { for(const a of artists){ await ping(a.id, `🎨 Revision back in the pool: "${t.title}"${reason?' — '+reason:''}.`, t.id); } setMsg('Ticket created in the Open pool for the artists to claim.'); }
       }
       await sb.from('graphic_design_jobs').update({ status:'to do', cl_done:false }).eq('id', job.id);
       setBusy(false);
-      setMsg(t ? 'Revision requested — sent back to the assigned artist.' : 'Card moved back to To Do (no linked ticket found).');
       reload && reload();
     }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
   }
