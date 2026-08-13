@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 460 · Added a Done column to the Embroidery board (To Do → For Approval → Approved / Disapproved → Done).";
+const BUILD = "Live build 461 · Added a Done column to the Embroidery and Knitting boards (To Do → For Approval → Approved / Disapproved → Done).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -239,8 +239,9 @@ const KNITTING_STATUSES = [
   { key:'for approval', label:'For Approval', color:'bg-amber-100 text-amber-700' },
   { key:'approved',     label:'Approved',     color:'bg-emerald-100 text-emerald-700' },
   { key:'disapproved',  label:'Disapproved',  color:'bg-rose-100 text-rose-700' },
+  { key:'done',         label:'Done',         color:'bg-emerald-200 text-emerald-800' },
 ];
-const KNITTING_DONE = ['approved','disapproved'];
+const KNITTING_DONE = ['approved','disapproved','done'];
 
 const SEWING_STATUSES = [
   { key:'to do',       label:'To Do',       color:'bg-slate-200 text-slate-700' },
