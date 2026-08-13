@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 457 · Fix: the graphic artists (Paul Laud, Ron Sagario) are now recognised everywhere (their OS role is 'production'), so Request revision actually asks which artist was working on it, the Assign-to dropdown lists them, and new-ticket notifications reach them. Revision on an unlinked design-board card creates a ticket into the chosen artist's Assigned pool.";
+const BUILD = "Live build 458 · Graphic/Printing lead view: a file attached in the team conversation now also lands in the job's left-side Attachments (mirrored to the dept job + shown live), so mockups posted in chat aren't buried in the thread.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -828,7 +828,8 @@ function LoginScreen(){
 }
 
 /* ----------------------- Generic activity thread (leads + dept jobs) ----------------------- */
-function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack, afterChange, onOpenSource, openSourceLabel, embedded, headerless }){
+const DEPT_JOB_TABLE_BY_TYPE = { graphic:'graphic_design_jobs', printing:'printing_jobs', embroidery:'embroidery_jobs', knitting:'knitting_jobs', sampling:'sampling_jobs', production:'production_jobs' };
+function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack, afterChange, onOpenSource, openSourceLabel, embedded, headerless, onAttach }){
   const [rows,setRows]=useState(null); const [text,setText]=useState('');
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
@@ -924,6 +925,20 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
           }
         } catch(mirrorErr){ console.warn('Mirror to lead.attachments failed:', mirrorErr?.message||mirrorErr); }
       }
+      // Mirror onto the DEPT JOB's own attachments (Graphic/Printing/etc.), so a
+      // file posted in the team conversation also shows in the job's Attachments.
+      if(table === 'dept_job_activity' && match?.job_id && pending.length > 0){
+        const jt = DEPT_JOB_TABLE_BY_TYPE[match.job_type] || 'graphic_design_jobs';
+        try {
+          const { data: jobRow } = await sb.from(jt).select('attachments').eq('id', match.job_id).single();
+          const existing = Array.isArray(jobRow?.attachments) ? jobRow.attachments : [];
+          const keyOf = (a) => a?.path || a?.url || (a?.name||'') + (a?.mime||'');
+          const seen = new Set(existing.map(keyOf));
+          const toAdd = pending.filter(a => { const k = keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; });
+          if(toAdd.length){ await sb.from(jt).update({ attachments: [...existing, ...toAdd] }).eq('id', match.job_id); }
+        } catch(mirrorErr){ console.warn('Mirror to dept job attachments failed:', mirrorErr?.message||mirrorErr); }
+      }
+      if(pending.length > 0 && onAttach){ try{ onAttach(pending); }catch(_){} }
       setText(''); setPending([]); await load(); afterChange&&afterChange(); }
     catch(er){ setErr(er.message||String(er)); } finally{ setBusy(false); } }
   // Show who WILL be notified, and warn loudly when an @tag matches nobody —
@@ -2945,7 +2960,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
             <div className="text-[10px] text-slate-400 mt-0.5">Chat with your team — the sales pipeline chat is not shown here.</div>
           </div>
           {job ? (
-            <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: job.id, job_type: jobType }} scope={'dept/'+job.id} titleText={`${job.item||lead.title} · ${job.client_name||client?.company||''}`} afterChange={reload} headerless embedded />
+            <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: job.id, job_type: jobType }} scope={'dept/'+job.id} titleText={`${job.item||lead.title} · ${job.client_name||client?.company||''}`} afterChange={reload} onAttach={(added)=>{ setAtts(prev=>{ const keyOf=(a)=>a?.path||a?.url||(a?.name||'')+(a?.mime||''); const seen=new Set((prev||[]).map(keyOf)); const extra=(added||[]).filter(a=>{ const k=keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; }); return extra.length?[...(prev||[]),...extra]:prev; }); }} headerless embedded />
           ) : (
             <div className="text-xs text-slate-400 italic p-4 border rounded-lg">No team conversation available — this lead isn't linked to a current graphic/printing job.</div>
           )}
