@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 461 · Added a Done column to the Embroidery and Knitting boards (To Do → For Approval → Approved / Disapproved → Done).";
+const BUILD = "Live build 462 · Packing polybags: added Gender and Color / description fields next to Size and Qty (shown on the printable polybag slip).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5929,12 +5929,12 @@ function PolybagSlipModal({ job, only, onClose }){
         <div><span className="text-[10px] uppercase text-slate-400 block">Date of delivery</span>{fmtDateShort(job.delivery_date)}</div>
       </div>
       <table className="w-full text-sm border-t">
-        <thead><tr className="text-[10px] uppercase text-slate-400"><th className="text-left py-1">Size</th><th className="text-right py-1">Qty</th></tr></thead>
+        <thead><tr className="text-[10px] uppercase text-slate-400"><th className="text-left py-1">Gender</th><th className="text-left py-1">Size</th><th className="text-left py-1">Color / description</th><th className="text-right py-1">Qty</th></tr></thead>
         <tbody>
-          {(pb.sizes||[]).filter(s=>s.size||s.qty).map((s,i)=>(<tr key={i} className="border-t"><td className="py-1">{s.size||'—'}</td><td className="py-1 text-right">{s.qty||0}</td></tr>))}
-          {(pb.sizes||[]).length===0 && <tr><td colSpan="2" className="py-2 text-slate-400 text-center text-xs">No size breakdown entered.</td></tr>}
+          {(pb.sizes||[]).filter(s=>s.size||s.qty||s.gender||s.color).map((s,i)=>(<tr key={i} className="border-t"><td className="py-1">{s.gender||'—'}</td><td className="py-1">{s.size||'—'}</td><td className="py-1">{s.color||'—'}</td><td className="py-1 text-right">{s.qty||0}</td></tr>))}
+          {(pb.sizes||[]).length===0 && <tr><td colSpan="4" className="py-2 text-slate-400 text-center text-xs">No size breakdown entered.</td></tr>}
         </tbody>
-        <tfoot><tr className="border-t-2 font-bold"><td className="py-1">Total items inside</td><td className="py-1 text-right">{total}</td></tr></tfoot>
+        <tfoot><tr className="border-t-2 font-bold"><td className="py-1" colSpan="3">Total items inside</td><td className="py-1 text-right">{total}</td></tr></tfoot>
       </table>
       {pb.note && <div className="mt-3 text-xs"><span className="text-[10px] uppercase text-slate-400 block">Contents / notes</span>{pb.note}</div>}
     </div>
@@ -5979,10 +5979,10 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
   function addBag(){ setBags(bs=>[...bs, { id:'pb-'+Date.now().toString().slice(-6), label:'', location:(bs[bs.length-1]?.location||''), sizes:[{size:'',qty:''}], note:'' }]); }
   function removeBag(i){ setBags(bs=>bs.filter((_,x)=>x!==i)); }
   function setBag(i,patch){ setBags(bs=>bs.map((b,x)=>x===i?{...b,...patch}:b)); }
-  function addSize(i){ setBags(bs=>bs.map((b,x)=>x===i?{...b,sizes:[...(b.sizes||[]),{size:'',qty:''}]}:b)); }
+  function addSize(i){ setBags(bs=>bs.map((b,x)=>x===i?{...b,sizes:[...(b.sizes||[]),{gender:'',size:'',color:'',qty:''}]}:b)); }
   function setSize(i,si,patch){ setBags(bs=>bs.map((b,x)=>{ if(x!==i) return b; const sizes=(b.sizes||[]).map((s,y)=>y===si?{...s,...patch}:s); return {...b,sizes}; })); }
   function removeSize(i,si){ setBags(bs=>bs.map((b,x)=>x===i?{...b,sizes:(b.sizes||[]).filter((_,y)=>y!==si)}:b)); }
-  async function save(){ setBusy(true); const clean=bags.map(b=>({ ...b, sizes:(b.sizes||[]).map(s=>({ size:(s.size||'').trim(), qty:Number(s.qty)||0 })).filter(s=>s.size||s.qty) })); const { error }=await sb.from('packing_jobs').update({ polybags:clean, delivery_date:delivery||null }).eq('id',job.id); setBusy(false); if(error){ alert(error.message); return; } reload(); onClose(); }
+  async function save(){ setBusy(true); const clean=bags.map(b=>({ ...b, sizes:(b.sizes||[]).map(s=>({ gender:(s.gender||'').trim(), size:(s.size||'').trim(), color:(s.color||'').trim(), qty:Number(s.qty)||0 })).filter(s=>s.size||s.qty||s.gender||s.color) }));const { error }=await sb.from('packing_jobs').update({ polybags:clean, delivery_date:delivery||null }).eq('id',job.id); setBusy(false); if(error){ alert(error.message); return; } reload(); onClose(); }
   const grandTotal=bags.reduce((s,b)=>s+polybagTotal(b),0);
   const locs=[...new Set(bags.map(b=>(b.location||'').trim()).filter(Boolean))];
   const liveJob={ ...job, polybags:bags, delivery_date:delivery };
@@ -6016,11 +6016,17 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
                 <span className="text-[10px] uppercase font-semibold text-slate-400 shrink-0">🚚 Deliver to</span>
                 <input value={b.location||''} onChange={e=>setBag(i,{location:e.target.value})} placeholder="Delivery location (e.g. DSO Sta. Rosa) — bags are numbered per location" className="input text-xs flex-1" />
               </div>
+              <div className="flex items-center gap-2 mb-2">
+                <input value={b.gender||''} onChange={e=>setBag(i,{gender:e.target.value})} placeholder="Gender (e.g. Male / Female / Unisex)" className="input text-xs w-52" />
+                <input value={b.color||''} onChange={e=>setBag(i,{color:e.target.value})} placeholder="Color / description (e.g. Navy Blue)" className="input text-xs flex-1" />
+              </div>
               <div className="space-y-1">
                 {(b.sizes||[]).map((s,si)=>(
-                  <div key={si} className="flex items-center gap-2">
-                    <input value={s.size} onChange={e=>setSize(i,si,{size:e.target.value})} placeholder="Size (e.g. M)" className="input text-xs w-32" />
-                    <input type="number" min="0" value={s.qty} onChange={e=>setSize(i,si,{qty:e.target.value})} placeholder="Qty" className="input text-xs w-24" />
+                  <div key={si} className="flex items-center gap-2 flex-wrap">
+                    <input value={s.gender||''} onChange={e=>setSize(i,si,{gender:e.target.value})} placeholder="Gender (M/F)" className="input text-xs w-24" />
+                    <input value={s.size} onChange={e=>setSize(i,si,{size:e.target.value})} placeholder="Size (e.g. M)" className="input text-xs w-24" />
+                    <input value={s.color||''} onChange={e=>setSize(i,si,{color:e.target.value})} placeholder="Color / description" className="input text-xs w-40" />
+                    <input type="number" min="0" value={s.qty} onChange={e=>setSize(i,si,{qty:e.target.value})} placeholder="Qty" className="input text-xs w-20" />
                     <button onClick={()=>removeSize(i,si)} className="text-slate-400 hover:text-rose-600 text-xs">remove</button>
                   </div>
                 ))}
