@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 462 · Packing polybags: added Gender and Color / description fields next to Size and Qty (shown on the printable polybag slip).";
+const BUILD = "Live build 463 · Embroidery & Knitting boards: statuses are now To Do → In Progress → Done → Approved Sample / Disapproved Sample.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -226,22 +226,22 @@ const PRINTING_DONE = ['subli done print','dtf done print'];
 // Approved + Disapproved are both terminal so they count as "done" for the
 // "Active vs Delivered" tab toggle in DeptBoard.
 const EMBROIDERY_STATUSES = [
-  { key:'to do',        label:'To Do',        color:'bg-slate-200 text-slate-700' },
-  { key:'for approval', label:'For Approval', color:'bg-amber-100 text-amber-700' },
-  { key:'approved',     label:'Approved',     color:'bg-emerald-100 text-emerald-700' },
-  { key:'disapproved',  label:'Disapproved',  color:'bg-rose-100 text-rose-700' },
-  { key:'done',         label:'Done',         color:'bg-emerald-200 text-emerald-800' },
+  { key:'to do',             label:'To Do',             color:'bg-slate-200 text-slate-700' },
+  { key:'in progress',       label:'In Progress',       color:'bg-amber-100 text-amber-700' },
+  { key:'done',              label:'Done',              color:'bg-sky-100 text-sky-700' },
+  { key:'approved sample',   label:'Approved Sample',   color:'bg-emerald-100 text-emerald-700' },
+  { key:'disapproved sample',label:'Disapproved Sample',color:'bg-rose-100 text-rose-700' },
 ];
-const EMBROIDERY_DONE = ['approved','disapproved','done'];
+const EMBROIDERY_DONE = ['done','approved sample','disapproved sample'];
 
 const KNITTING_STATUSES = [
-  { key:'to do',        label:'To Do',        color:'bg-slate-200 text-slate-700' },
-  { key:'for approval', label:'For Approval', color:'bg-amber-100 text-amber-700' },
-  { key:'approved',     label:'Approved',     color:'bg-emerald-100 text-emerald-700' },
-  { key:'disapproved',  label:'Disapproved',  color:'bg-rose-100 text-rose-700' },
-  { key:'done',         label:'Done',         color:'bg-emerald-200 text-emerald-800' },
+  { key:'to do',             label:'To Do',             color:'bg-slate-200 text-slate-700' },
+  { key:'in progress',       label:'In Progress',       color:'bg-amber-100 text-amber-700' },
+  { key:'done',              label:'Done',              color:'bg-sky-100 text-sky-700' },
+  { key:'approved sample',   label:'Approved Sample',   color:'bg-emerald-100 text-emerald-700' },
+  { key:'disapproved sample',label:'Disapproved Sample',color:'bg-rose-100 text-rose-700' },
 ];
-const KNITTING_DONE = ['approved','disapproved','done'];
+const KNITTING_DONE = ['done','approved sample','disapproved sample'];
 
 const SEWING_STATUSES = [
   { key:'to do',       label:'To Do',       color:'bg-slate-200 text-slate-700' },
@@ -4888,8 +4888,8 @@ function ProductionSupervisorHomeView({ profile, profiles, prodJobs, sampleJobs,
 
   // Boards with the most "in approval" or attention-needed states
   const graphicForApproval = (graphicJobs||[]).filter(j => j.status==='for approval').length;
-  const embForApproval = (embroideryJobs||[]).filter(j => j.status==='for approval').length;
-  const knitForApproval = (knittingJobs||[]).filter(j => j.status==='for approval').length;
+  const embForApproval = (embroideryJobs||[]).filter(j => j.status==='done').length;
+  const knitForApproval = (knittingJobs||[]).filter(j => j.status==='done').length;
   const totalForApproval = graphicForApproval + embForApproval + knitForApproval;
 
   // Top 5 most urgent active production jobs
