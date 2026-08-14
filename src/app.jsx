@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 463 · Embroidery & Knitting boards: statuses are now To Do → In Progress → Done → Approved Sample / Disapproved Sample.";
+const BUILD = "Live build 464 · Replacement requests: added Gender and Size fields to each part line (before Qty); shown on the request cards and in notifications.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8110,21 +8110,21 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
 function ReplacementRequestsSection({ profile, worklistId, process, sourceLabel, leadId, item, clientName, projectQty }){
   const [reqs,setReqs]=useState([]);
   const [showReqForm,setShowReqForm]=useState(false);
-  const emptyReqForm={ department:'', lines:[{ part:'', qty:'' }], reasons:[], reasonOther:'', notes:'' };
+  const emptyReqForm={ department:'', lines:[{ part:'', qty:'', size:'', gender:'' }], reasons:[], reasonOther:'', notes:'' };
   const [rf,setRf]=useState(emptyReqForm);
   function setLine(i,k,v){ setRf(f=>({ ...f, lines:f.lines.map((l,x)=> x===i?{...l,[k]:v}:l) })); }
-  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'' }] })); }
-  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'' }]:f.lines.filter((_,x)=>x!==i) })); }
+  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'', size:'', gender:'' }] })); }
+  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'', size:'', gender:'' }]:f.lines.filter((_,x)=>x!==i) })); }
   function toggleReason(r){ setRf(f=>({ ...f, reasons:f.reasons.includes(r)?f.reasons.filter(x=>x!==r):[...f.reasons,r] })); }
   async function loadReqs(){ if(!worklistId){ setReqs([]); return; } const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',worklistId).order('created_at',{ascending:false}); setReqs(data||[]); }
   useEffect(()=>{ loadReqs(); },[worklistId]);
   async function submitReq(){
     if(!rf.department){ alert('Choose which department this request is for.'); return; }
-    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
+    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty), size:(l.size||'').trim(), gender:(l.gender||'').trim() })).filter(l=>l.part);
     if(!lines.length){ alert('Add at least one part that needs replacing.'); return; }
     const otherChecked = rf.reasons.includes('Others');
     if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
-    const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
+    const partsSummary=lines.map(l=>`${[l.gender,l.size].filter(Boolean).join(' ')}${(l.gender||l.size)?' ':''}${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
     const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
     const { error }=await sb.from('replacement_requests').insert({ process:process||'qc', worklist_id:worklistId, lead_id:leadId||null, item:item||null, client_name:clientName||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, project_qty:projectQty>0?projectQty:null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
@@ -8153,7 +8153,7 @@ function ReplacementRequestsSection({ profile, worklistId, process, sourceLabel,
                 <div className="flex-1"></div>
                 {r.status==='pending' && <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm" title="Cancel request">✕</button>}
               </div>
-              {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+              {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">{(l.gender||l.size)&&<span className="text-[10px] font-semibold text-indigo-600">{[l.gender,l.size].filter(Boolean).join(' ')}</span>}<span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
               {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
               {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
             </div>
@@ -8169,9 +8169,11 @@ function ReplacementRequestsSection({ profile, worklistId, process, sourceLabel,
             <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Parts needed — qty per part *</div>
             <div className="space-y-1.5">
               {rf.lines.map((l,i)=>(
-                <div key={i} className="flex items-center gap-1.5">
-                  <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-20 shrink-0" />
-                  <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1" />
+                <div key={i} className="flex items-center gap-1.5 flex-wrap">
+                  <input value={l.gender||''} onChange={e=>setLine(i,'gender',e.target.value)} placeholder="Gender" className="input w-20 shrink-0" list="steeze-gender-options" />
+                  <input value={l.size||''} onChange={e=>setLine(i,'size',e.target.value)} placeholder="Size" className="input w-20 shrink-0" list="steeze-size-options" />
+                  <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-16 shrink-0" />
+                  <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1 min-w-[140px]" />
                   <button type="button" onClick={()=>rmLine(i)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 w-6" title="Remove line">✕</button>
                 </div>
               ))}
@@ -9045,11 +9047,11 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
   // Replacement / repair requests for this item.
   const [reqs,setReqs]=useState([]);
   const [showReqForm,setShowReqForm]=useState(false);
-  const emptyReqForm={ department:'', lines:[{ part:'', qty:'' }], reasons:[], reasonOther:'', notes:'' };
+  const emptyReqForm={ department:'', lines:[{ part:'', qty:'', size:'', gender:'' }], reasons:[], reasonOther:'', notes:'' };
   const [rf,setRf]=useState(emptyReqForm);
   function setLine(i,k,v){ setRf(f=>({ ...f, lines:f.lines.map((l,x)=> x===i?{...l,[k]:v}:l) })); }
-  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'' }] })); }
-  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'' }]:f.lines.filter((_,x)=>x!==i) })); }
+  function addLine(){ setRf(f=>({ ...f, lines:[...f.lines,{ part:'', qty:'', size:'', gender:'' }] })); }
+  function rmLine(i){ setRf(f=>({ ...f, lines:f.lines.length<=1?[{ part:'', qty:'', size:'', gender:'' }]:f.lines.filter((_,x)=>x!==i) })); }
   function toggleReason(r){ setRf(f=>({ ...f, reasons:f.reasons.includes(r)?f.reasons.filter(x=>x!==r):[...f.reasons,r] })); }
   async function loadReqs(){ const { data }=await sb.from('replacement_requests').select('*').eq('worklist_id',w.id).order('created_at',{ascending:false}); setReqs(data||[]); }
   useEffect(()=>{ loadReqs(); },[w.id]);
@@ -9084,11 +9086,11 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
   const logDays=new Set(logs.map(l=>l.log_date).filter(Boolean)).size;
   async function submitReq(){
     if(!rf.department){ alert('Choose which department this request is for.'); return; }
-    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty) })).filter(l=>l.part);
+    const lines=rf.lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty), size:(l.size||'').trim(), gender:(l.gender||'').trim() })).filter(l=>l.part);
     if(!lines.length){ alert('Add at least one part that needs replacing.'); return; }
     const otherChecked = rf.reasons.includes('Others');
     if(otherChecked && !rf.reasonOther.trim()){ alert('You ticked "Others" — please add the reason.'); return; }
-    const partsSummary=lines.map(l=>`${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
+    const partsSummary=lines.map(l=>`${[l.gender,l.size].filter(Boolean).join(' ')}${(l.gender||l.size)?' ':''}${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
     const totalQty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
     const { error }=await sb.from('replacement_requests').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||w.title||null, client_name:w.client_name||null, department:rf.department, requested_department:rf.department, status:'pending', lines, parts:partsSummary, qty:totalQty||null, project_qty:projQty>0?projQty:null, reasons:rf.reasons.length?rf.reasons:null, reason_other: otherChecked?rf.reasonOther.trim():null, notes:rf.notes.trim()||null, created_by:profile.id });
     if(error){ alert(error.message); return; }
@@ -9260,7 +9262,7 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
                     <div className="flex-1"></div>
                     {r.status==='pending' && <button onClick={()=>delReq(r)} className="text-slate-300 hover:text-rose-500 text-sm" title="Cancel request">✕</button>}
                   </div>
-                  {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+                  {lines && <div className="mt-1 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">{(l.gender||l.size)&&<span className="text-[10px] font-semibold text-indigo-600">{[l.gender,l.size].filter(Boolean).join(' ')}</span>}<span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
                   {reasons.length>0 && <div className="mt-1 flex flex-wrap gap-1">{reasons.map((rn,i)=>(<span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">{rn}</span>))}</div>}
                   {r.notes && <div className="text-[11px] text-slate-400 mt-0.5">— {r.notes}</div>}
                 </div>
@@ -9276,9 +9278,11 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
                 <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Parts needed — qty per part *</div>
                 <div className="space-y-1.5">
                   {rf.lines.map((l,i)=>(
-                    <div key={i} className="flex items-center gap-1.5">
-                      <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-20 shrink-0" />
-                      <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1" />
+                    <div key={i} className="flex items-center gap-1.5 flex-wrap">
+                      <input value={l.gender||''} onChange={e=>setLine(i,'gender',e.target.value)} placeholder="Gender" className="input w-20 shrink-0" list="steeze-gender-options" />
+                      <input value={l.size||''} onChange={e=>setLine(i,'size',e.target.value)} placeholder="Size" className="input w-20 shrink-0" list="steeze-size-options" />
+                      <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-16 shrink-0" />
+                      <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part is needed — e.g. Front panel" className="input flex-1 min-w-[140px]" />
                       <button type="button" onClick={()=>rmLine(i)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 w-6" title="Remove line">✕</button>
                     </div>
                   ))}
@@ -9570,7 +9574,7 @@ function ReplacementCard({ r, children }){
         <div className="flex-1"></div>
         {children}
       </div>
-      {lines && <div className="mt-1.5 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"><span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
+      {lines && <div className="mt-1.5 flex flex-wrap gap-1">{lines.map((l,i)=>(<span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">{(l.gender||l.size)&&<span className="text-[10px] font-semibold text-indigo-600">{[l.gender,l.size].filter(Boolean).join(' ')}</span>}<span className="text-slate-700">{l.part}</span>{l.qty!=null&&<span className="font-semibold text-slate-900">×{l.qty}</span>}</span>))}</div>}
       {!lines && r.parts && <div className="mt-1 text-xs text-slate-600">{r.parts}{r.qty!=null?` · ${r.qty} pcs`:''}</div>}
       {(()=>{ const rq=Number(r.qty)||0; const pq=Number(r.project_qty)||0; if(!rq && !pq) return null; const pct=pq>0?Math.round(rq/pq*100):null; const hot=pct!=null&&pct>10; return (
         <div className="mt-1 text-[11px] flex items-center gap-1.5 flex-wrap">
