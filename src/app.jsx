@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 467 · Sewing board: sewer add/remove moved into the Report (card just shows a count) for a cleaner board view.";
+const BUILD = "Live build 468 · Sewing Report: daily/weekly/monthly filter; finished items, replacements, avg time per item + per project, per-sewer productivity (pcs each sewed + operation) and reject accuracy. Log pcs/operation per sewer in the project Report; replacements can be tagged to a sewer.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5631,12 +5631,14 @@ function toLocalInput(v){ if(!v) return ''; const d=new Date(v); if(isNaN(d)) re
 function sewJobSewers(j){ return (Array.isArray(j.sewers)&&j.sewers.length) ? j.sewers : ((j.sewer_id||j.sewer_name) ? [{ id:j.sewer_id||null, name:j.sewer_name||'—' }] : []); }
 
 function SewingReplacementModal({ job, profile, onClose, onSaved }){
-  const [reason,setReason]=useState(''); const [qty,setQty]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const jobSewersList=sewJobSewers(job);
+  const [reason,setReason]=useState(''); const [qty,setQty]=useState(''); const [sewerId,setSewerId]=useState(jobSewersList[0]?.id||''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function save(){
     if(!reason.trim()){ setMsg('Please state the reason for the replacement.'); return; }
     setBusy(true); setMsg('');
+    const chosen=jobSewersList.find(s=>String(s.id)===String(sewerId));
     const { error } = await sb.from('sewing_replacements').insert({
-      sewing_job_id: job.id, sewer_id: job.sewer_id||null, sewer_name: job.sewer_name||null,
+      sewing_job_id: job.id, sewer_id: chosen?.id||null, sewer_name: chosen?.name||null,
       reason: reason.trim(), qty: Number(qty)||0, created_by: profile?.id||null,
     });
     setBusy(false);
@@ -5646,7 +5648,14 @@ function SewingReplacementModal({ job, profile, onClose, onSaved }){
   return (
     <Modal onClose={onClose} title={`🔁 Replacement request — ${job.number||''}`}>
       <div className="space-y-3 text-sm">
-        <div className="text-xs text-slate-500">{job.client_name} · {job.item}{job.sewer_name?` · Sewer: ${job.sewer_name}`:''}</div>
+        <div className="text-xs text-slate-500">{job.client_name} · {job.item}</div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1">Which sewer's work? <span className="font-normal text-slate-400">(for accuracy tracking — optional)</span></label>
+          <select value={sewerId} onChange={e=>setSewerId(e.target.value)} className="input text-sm w-full">
+            <option value="">— Not specified —</option>
+            {jobSewersList.map(s=><option key={s.id||s.name} value={s.id||''}>{s.name}</option>)}
+          </select>
+        </div>
         <div>
           <label className="block text-xs font-semibold text-slate-500 mb-1">Reason for replacement (e.g. fabric damage)</label>
           <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3} placeholder="Describe the fabric damage or defect needing replacement…" className="input text-sm w-full" />
@@ -5775,9 +5784,10 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
 // replacement requests, and the activity thread (kept from the old lead view).
 function SewingProjectReport({ job, profile, profiles, lead, replacements, sewerOptions, reload, onClose }){
   const [sewers,setSewers]=useState(sewJobSewers(job));
-  async function persistSewers(next){ setSewers(next); const { error }=await sb.from('sewing_jobs').update({ sewers: next, sewer_id: next[0]?.id||null, sewer_name: next.length? next.map(s=>s.name).join(', ') : null }).eq('id', job.id); if(error){ alert(error.message); return; } reload && reload(); }
-  function addSewer(empId){ if(!empId) return; const e=(sewerOptions||[]).find(x=>x.id===empId); if(!e) return; if(sewers.some(s=>s.id===empId)) return; persistSewers([...sewers, { id:empId, name:fullName(e) }]); }
-  function removeSewer(empId){ persistSewers(sewers.filter(s=>s.id!==empId)); }
+  async function saveSewers(next){ const { error }=await sb.from('sewing_jobs').update({ sewers: next, sewer_id: next[0]?.id||null, sewer_name: next.length? next.map(s=>s.name).join(', ') : null }).eq('id', job.id); if(error){ alert(error.message); return; } reload && reload(); }
+  function updateLocal(id,key,val){ setSewers(list=>list.map(s=> (s.id===id||s.name===id)? {...s,[key]:val} : s)); }
+  function addSewer(empId){ if(!empId) return; const e=(sewerOptions||[]).find(x=>x.id===empId); if(!e) return; if(sewers.some(s=>s.id===empId)) return; const next=[...sewers, { id:empId, name:fullName(e), pcs:'', operation:'' }]; setSewers(next); saveSewers(next); }
+  function removeSewer(empId){ const next=sewers.filter(s=>s.id!==empId); setSewers(next); saveSewers(next); }
   const hrs=(job.start_at&&job.end_at)?(new Date(job.end_at)-new Date(job.start_at)):0;
   const di=deadlineInfo(job.due_date, SEWING_DONE.includes(job.status));
   const stMeta=SEWING_STATUSES.find(s=>s.key===job.status);
@@ -5807,10 +5817,18 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
         </div>
         {hrs>0 && <div className="text-sm text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
         <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sewers working on this project ({sewers.length})</div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sewers working on this project ({sewers.length}) <span className="normal-case text-slate-300">· log pcs each did (for shared/operational work)</span></div>
           {sewers.length>0 ? (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {sewers.map(s=>(<span key={s.id||s.name} className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">🧵 {s.name}<button onClick={()=>removeSewer(s.id)} title="Remove" className="no-print text-indigo-400 hover:text-rose-600 font-bold leading-none">×</button></span>))}
+            <div className="space-y-1.5 mb-2">
+              {sewers.map(s=>(
+                <div key={s.id||s.name} className="flex items-center gap-2 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5">
+                  <span className="text-sm font-medium text-indigo-700 flex-1 min-w-[120px]">🧵 {s.name}</span>
+                  <input value={s.operation||''} onChange={e=>updateLocal(s.id||s.name,'operation',e.target.value)} onBlur={()=>saveSewers(sewers)} placeholder="Operation (e.g. collar, whole shirt)" className="no-print text-sm border rounded px-2 py-1 w-52" />
+                  <input type="number" min="0" value={s.pcs||''} onChange={e=>updateLocal(s.id||s.name,'pcs',e.target.value)} onBlur={()=>saveSewers(sewers)} placeholder="pcs" className="no-print text-sm border rounded px-2 py-1 w-20" />
+                  <span className="hidden print:inline text-sm text-slate-600">{s.operation?`${s.operation} · `:''}{s.pcs?`${s.pcs} pcs`:''}</span>
+                  <button onClick={()=>removeSewer(s.id)} title="Remove" className="no-print text-slate-300 hover:text-rose-600 font-bold leading-none px-1">×</button>
+                </div>
+              ))}
             </div>
           ) : <div className="text-sm text-slate-400 mb-2">No sewers assigned yet.</div>}
           <select value="" onChange={e=>{ addSewer(e.target.value); e.target.value=''; }} className="no-print text-sm border rounded-lg px-2 py-1.5 w-full sm:w-72 bg-slate-50">
@@ -5841,65 +5859,97 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
 // Sewing report — finished-project data (sewer, start/end, hours) + a per-sewer
 // rollup (projects done, total pcs, total hours, avg hours, replacements).
 function SewingReport({ jobs, replacements, sewers }){
-  const done=jobs.filter(j=>SEWING_DONE.includes(j.status)).slice().sort((a,b)=>String(b.end_at||'').localeCompare(String(a.end_at||'')));
-  const replByJob={}; replacements.forEach(r=>{ replByJob[r.sewing_job_id]=(replByJob[r.sewing_job_id]||0)+1; });
-  // Per-sewer rollup. A project can have several sewers on a shared timeline, so
-  // each sewer on a job is credited that project's pcs/hours (totals may overlap
-  // when people share a project — the top cards stay project-based, not summed).
+  const [period,setPeriod]=useState('week'); // 'day' | 'week' | 'month' | 'all'
+  // Start of the current day/week(Mon)/month, or null for all-time.
+  const startBound=(()=>{ if(period==='all') return null; const d=new Date(); d.setHours(0,0,0,0); if(period==='day') return d; if(period==='week'){ const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d; } if(period==='month'){ d.setDate(1); return d; } return null; })();
+  const inRange=(ts)=>{ if(!startBound) return true; if(!ts) return false; return new Date(ts)>=startBound; };
+  const periodLabel = period==='day'?'Today':period==='week'?'This week':period==='month'?'This month':'All time';
+
+  // Finished projects whose END falls in the period (that's when the work counts).
+  const done=jobs.filter(j=>SEWING_DONE.includes(j.status) && inRange(j.end_at)).slice().sort((a,b)=>String(b.end_at||'').localeCompare(String(a.end_at||'')));
+  // Replacements raised in the period.
+  const repls=(replacements||[]).filter(r=>inRange(r.created_at));
+  const replByJob={}; repls.forEach(r=>{ replByJob[r.sewing_job_id]=(replByJob[r.sewing_job_id]||0)+1; });
+
+  const jobMs=(j)=>(j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0;
+  const totalDone=done.length;
+  const totalPcs=done.reduce((s,j)=>s+(Number(j.quantity)||0),0);
+  const totalMs=done.reduce((s,j)=>s+jobMs(j),0);
+  const replCount=repls.length;
+  const replPcs=repls.reduce((s,r)=>s+(Number(r.qty)||0),0);
+  const avgPerItemMs = totalPcs>0 ? totalMs/totalPcs : 0;   // avg time per single piece
+  const avgProjectMs = totalDone>0 ? totalMs/totalDone : 0; // avg time per whole project
+
+  // Per-sewer productivity — uses the pcs each sewer logged on a project (real
+  // output on shared/operational work), not the whole project qty split evenly.
+  // Reject accuracy comes from replacements tagged to that sewer.
   const roll={};
-  jobs.forEach(j=>{ const list=sewJobSewers(j); const names=list.length?list.map(s=>s.name):['— Unassigned']; const isDone=SEWING_DONE.includes(j.status); const ms=(j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0; const repl=replByJob[j.id]||0;
-    names.forEach(k=>{ const r=roll[k]||(roll[k]={ name:k, projects:0, done:0, pcs:0, ms:0, repl:0 }); r.projects++; r.repl+=repl; if(isDone){ r.done++; r.pcs+=Number(j.quantity)||0; r.ms+=ms; } }); });
-  const rollRows=Object.values(roll).sort((a,b)=>b.done-a.done);
-  const totalDone=done.length; const totalPcs=done.reduce((s,j)=>s+(Number(j.quantity)||0),0);
-  const totalMs=done.reduce((s,j)=>s+((j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0),0);
+  const getRow=(name)=> roll[name]||(roll[name]={ name, projects:0, pcs:0, ops:new Set(), rejPcs:0, rejCount:0 });
+  done.forEach(j=>{ sewJobSewers(j).forEach(s=>{ const r=getRow(s.name||'—'); r.projects++; r.pcs+=Number(s.pcs)||0; if(s.operation) r.ops.add(s.operation); }); });
+  repls.forEach(rp=>{ if(rp.sewer_name){ const r=getRow(rp.sewer_name); r.rejPcs+=Number(rp.qty)||0; r.rejCount++; } });
+  const rollRows=Object.values(roll).sort((a,b)=>b.pcs-a.pcs);
+  const anyPcsLogged=rollRows.some(r=>r.pcs>0);
+
+  const Btn=({v,label})=>(<button onClick={()=>setPeriod(v)} className={`px-3 py-1.5 text-xs font-semibold ${period===v?'bg-indigo-600 text-white':'bg-white text-slate-600 hover:bg-slate-50'}`}>{label}</button>);
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Projects finished</div><div className="text-2xl font-bold">{totalDone}</div></div>
-        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Pieces sewn</div><div className="text-2xl font-bold">{totalPcs.toLocaleString()}</div></div>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex rounded-lg border overflow-hidden">
+          <Btn v="day" label="Daily" /><Btn v="week" label="Weekly" /><Btn v="month" label="Monthly" /><Btn v="all" label="All time" />
+        </div>
+        <span className="text-xs text-slate-400">{periodLabel} · {totalDone} project{totalDone===1?'':'s'} finished</span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Finished items</div><div className="text-2xl font-bold">{totalPcs.toLocaleString()}</div><div className="text-[10px] text-slate-400">{totalDone} project{totalDone===1?'':'s'}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Replacements</div><div className="text-2xl font-bold text-rose-600">{replCount}</div><div className="text-[10px] text-slate-400">{replPcs.toLocaleString()} pcs</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Avg time / item</div><div className="text-2xl font-bold">{avgPerItemMs?fmtHrs(avgPerItemMs):'—'}</div><div className="text-[10px] text-slate-400">per piece sewn</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Avg time / project</div><div className="text-2xl font-bold">{avgProjectMs?fmtHrs(avgProjectMs):'—'}</div><div className="text-[10px] text-slate-400">start → finish</div></div>
         <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Total sewing hours</div><div className="text-2xl font-bold">{fmtHrs(totalMs)}</div></div>
-        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Replacement requests</div><div className="text-2xl font-bold text-rose-600">{replacements.length}</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Reject rate</div><div className="text-2xl font-bold">{totalPcs>0?`${Math.round(replPcs/totalPcs*100)}%`:'—'}</div><div className="text-[10px] text-slate-400">repl pcs ÷ pcs sewn</div></div>
       </div>
 
       <div className="bg-white border rounded-xl overflow-hidden">
-        <div className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50"><span className="uppercase">Per-sewer summary</span> <span className="normal-case text-[10px] text-slate-400">— when several sewers share one project, each is credited that project's pcs &amp; hours, so rows can overlap</span></div>
+        <div className="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50"><span className="uppercase">Per-sewer productivity</span> <span className="normal-case text-[10px] text-slate-400">— pcs each person actually sewed (logged per project in the Report). {periodLabel}.</span></div>
+        {!anyPcsLogged && <div className="px-3 py-2 text-[11px] text-amber-700 bg-amber-50 border-b border-amber-100">Tip: open a project's 📄 Report and enter the pcs each sewer did to see accurate output here.</div>}
         <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
-            <th className="text-left px-3 py-2">Sewer</th><th className="text-right px-3 py-2">Active</th><th className="text-right px-3 py-2">Finished</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Total hrs</th><th className="text-right px-3 py-2">Avg hrs/project</th><th className="text-right px-3 py-2">Replacements</th>
+            <th className="text-left px-3 py-2">Sewer</th><th className="text-right px-3 py-2">Projects</th><th className="text-right px-3 py-2">Pcs sewn</th><th className="text-right px-3 py-2">Avg pcs/project</th><th className="text-left px-3 py-2">Operations</th><th className="text-right px-3 py-2">Rejects (pcs)</th><th className="text-right px-3 py-2">Reject %</th>
           </tr></thead>
-          <tbody>{rollRows.map(r=>(
+          <tbody>{rollRows.map(r=>{ const rate=r.pcs>0?Math.round(r.rejPcs/r.pcs*100):null; return (
             <tr key={r.name} className="border-t">
               <td className="px-3 py-2 font-medium">{r.name}</td>
-              <td className="px-3 py-2 text-right">{r.projects-r.done}</td>
-              <td className="px-3 py-2 text-right">{r.done}</td>
-              <td className="px-3 py-2 text-right">{r.pcs.toLocaleString()}</td>
-              <td className="px-3 py-2 text-right">{fmtHrs(r.ms)}</td>
-              <td className="px-3 py-2 text-right">{r.done?fmtHrs(r.ms/r.done):'—'}</td>
-              <td className="px-3 py-2 text-right text-rose-600">{r.repl||0}</td>
+              <td className="px-3 py-2 text-right">{r.projects}</td>
+              <td className="px-3 py-2 text-right font-semibold">{r.pcs.toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{r.projects?Math.round(r.pcs/r.projects).toLocaleString():'—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{[...r.ops].join(', ')||'—'}</td>
+              <td className="px-3 py-2 text-right text-rose-600">{r.rejPcs||0}</td>
+              <td className={`px-3 py-2 text-right ${rate!=null&&rate>10?'text-rose-600 font-semibold':'text-slate-600'}`}>{rate!=null?`${rate}%`:'—'}</td>
             </tr>
-          ))}{rollRows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No sewing projects yet.</td></tr>}</tbody>
+          ); })}{rollRows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No finished projects in {periodLabel.toLowerCase()}.</td></tr>}</tbody>
         </table></div>
       </div>
 
       <div className="bg-white border rounded-xl overflow-hidden">
-        <div className="px-3 py-2 text-xs uppercase font-semibold text-slate-500 bg-slate-50">Finished projects</div>
+        <div className="px-3 py-2 text-xs uppercase font-semibold text-slate-500 bg-slate-50">Finished projects · {periodLabel}</div>
         <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
-            <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Sewer</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Start</th><th className="text-left px-3 py-2">End</th><th className="text-right px-3 py-2">Hours</th><th className="text-right px-3 py-2">Repl.</th>
+            <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Sewers (pcs)</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Start</th><th className="text-left px-3 py-2">End</th><th className="text-right px-3 py-2">Hours</th><th className="text-right px-3 py-2">Repl.</th>
           </tr></thead>
-          <tbody>{done.map(j=>{ const hrs=(j.start_at&&j.end_at)?(new Date(j.end_at)-new Date(j.start_at)):0; return (
+          <tbody>{done.map(j=>{ const hrs=jobMs(j); return (
             <tr key={j.id} className="border-t hover:bg-slate-50">
               <td className="px-3 py-2 font-mono text-xs">{j.number}</td>
               <td className="px-3 py-2">{j.client_name}</td>
               <td className="px-3 py-2 font-medium">{j.item}</td>
-              <td className="px-3 py-2">{sewJobSewers(j).map(s=>s.name).join(', ')||'—'}</td>
+              <td className="px-3 py-2 text-xs">{sewJobSewers(j).map(s=>`${s.name}${s.pcs?` (${s.pcs})`:''}`).join(', ')||'—'}</td>
               <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.start_at)}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.end_at)}</td>
               <td className="px-3 py-2 text-right font-semibold">{fmtHrs(hrs)}</td>
               <td className="px-3 py-2 text-right text-rose-600">{replByJob[j.id]||0}</td>
             </tr>
-          ); })}{done.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No finished projects yet. They'll appear here once marked Done.</td></tr>}</tbody>
+          ); })}{done.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No finished projects in {periodLabel.toLowerCase()}.</td></tr>}</tbody>
         </table></div>
       </div>
     </div>
