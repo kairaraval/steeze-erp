@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 466 · Sewing Line Lead can now open the Sewing board (added to their menu + access).";
+const BUILD = "Live build 467 · Sewing board: sewer add/remove moved into the Report (card just shows a count) for a cleaner board view.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5728,24 +5728,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                       {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold" title="Replacement requests">🔁 {repls.length}</span>}
                     </div>
-                    {/* Sewers — a project can be handled by several people. */}
-                    <div className="mt-2">
-                      <label className="block text-[9px] uppercase font-semibold text-slate-400">Sewers {jobSewers(j).length>0 && <span className="text-slate-300">({jobSewers(j).length})</span>}</label>
-                      {jobSewers(j).length>0 && (
-                        <div className="flex flex-wrap gap-1 mb-1">
-                          {jobSewers(j).map(s=>(
-                            <span key={s.id||s.name} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                              {s.name}
-                              <button onClick={()=>removeSewer(j, s.id)} title="Remove" className="text-indigo-400 hover:text-rose-600 font-bold leading-none">×</button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <select value="" onChange={e=>{ addSewer(j, e.target.value); e.target.value=''; }} className="text-[11px] border rounded px-1 py-1 w-full bg-slate-50">
-                        <option value="">＋ Add sewer…</option>
-                        {sewers.filter(e=>!jobSewers(j).some(s=>s.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/sewing head/i.test(e.position||'')?' (Head)':''}</option>)}
-                      </select>
-                    </div>
+                    {jobSewers(j).length>0 && <div className="mt-1.5 text-[10px] text-slate-400">🧵 {jobSewers(j).length} sewer{jobSewers(j).length===1?'':'s'} · manage in Report</div>}
                     {/* Start / Finish + times */}
                     <div className="mt-2 grid grid-cols-2 gap-1">
                       <button onClick={()=>startJob(j)} disabled={!!j.start_at} className="text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 disabled:opacity-40">▶ Start</button>
@@ -5783,15 +5766,18 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
       )}
 
       {replFor && <SewingReplacementModal job={replFor} profile={profile} onClose={()=>setReplFor(null)} onSaved={()=>setBump(b=>b+1)} />}
-      {reportFor && <SewingProjectReport job={reportFor} profile={profile} profiles={profiles} lead={reportFor.lead_id?(leads||[]).find(l=>l.id===reportFor.lead_id):null} replacements={replByJob[reportFor.id]||[]} onClose={()=>setReportFor(null)} />}
+      {reportFor && <SewingProjectReport job={reportFor} profile={profile} profiles={profiles} lead={reportFor.lead_id?(leads||[]).find(l=>l.id===reportFor.lead_id):null} replacements={replByJob[reportFor.id]||[]} sewerOptions={sewers} reload={reload} onClose={()=>setReportFor(null)} />}
     </div>
   );
 }
 
 // Per-project sewing report — deadline, quantity, timing, the sewers on the job,
 // replacement requests, and the activity thread (kept from the old lead view).
-function SewingProjectReport({ job, profile, profiles, lead, replacements, onClose }){
-  const sewers=sewJobSewers(job);
+function SewingProjectReport({ job, profile, profiles, lead, replacements, sewerOptions, reload, onClose }){
+  const [sewers,setSewers]=useState(sewJobSewers(job));
+  async function persistSewers(next){ setSewers(next); const { error }=await sb.from('sewing_jobs').update({ sewers: next, sewer_id: next[0]?.id||null, sewer_name: next.length? next.map(s=>s.name).join(', ') : null }).eq('id', job.id); if(error){ alert(error.message); return; } reload && reload(); }
+  function addSewer(empId){ if(!empId) return; const e=(sewerOptions||[]).find(x=>x.id===empId); if(!e) return; if(sewers.some(s=>s.id===empId)) return; persistSewers([...sewers, { id:empId, name:fullName(e) }]); }
+  function removeSewer(empId){ persistSewers(sewers.filter(s=>s.id!==empId)); }
   const hrs=(job.start_at&&job.end_at)?(new Date(job.end_at)-new Date(job.start_at)):0;
   const di=deadlineInfo(job.due_date, SEWING_DONE.includes(job.status));
   const stMeta=SEWING_STATUSES.find(s=>s.key===job.status);
@@ -5823,10 +5809,14 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, onClo
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sewers working on this project ({sewers.length})</div>
           {sewers.length>0 ? (
-            <div className="flex flex-wrap gap-2">
-              {sewers.map(s=>(<span key={s.id||s.name} className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">🧵 {s.name}</span>))}
+            <div className="flex flex-wrap gap-2 mb-2">
+              {sewers.map(s=>(<span key={s.id||s.name} className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">🧵 {s.name}<button onClick={()=>removeSewer(s.id)} title="Remove" className="no-print text-indigo-400 hover:text-rose-600 font-bold leading-none">×</button></span>))}
             </div>
-          ) : <div className="text-sm text-slate-400">No sewers assigned yet.</div>}
+          ) : <div className="text-sm text-slate-400 mb-2">No sewers assigned yet.</div>}
+          <select value="" onChange={e=>{ addSewer(e.target.value); e.target.value=''; }} className="no-print text-sm border rounded-lg px-2 py-1.5 w-full sm:w-72 bg-slate-50">
+            <option value="">＋ Add sewer…</option>
+            {(sewerOptions||[]).filter(e=>!sewers.some(s=>s.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/sewing head/i.test(e.position||'')?' (Head)':''}</option>)}
+          </select>
         </div>
         {replacements.length>0 && (
           <div>
