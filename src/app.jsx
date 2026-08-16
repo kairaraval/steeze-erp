@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 471 · Production Plan revamped: tick a process checklist to route each project into the right team's To Do; the plan shows live status, pcs & hours (sewn/pressed totals) pulled from every board — no retyping. Manual status + Gantt kept.";
+const BUILD = "Live build 472 · Production Plan: removed the Gantt timeline; added a Sewing Allocation panel showing how many pcs each subcon (and in-house) got from the sorting batch-outs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6774,6 +6774,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [planProcs,setPlanProcs]=useState(()=> Array.isArray(job.plan_processes)?job.plan_processes:[]);
   const [proc,setProc]=useState({});        // process key -> its board row (or undefined)
   const [pressBy,setPressBy]=useState({});  // 'dtf_pressing'|'subli_pressing' -> pcs pressed
+  const [allocBatches,setAllocBatches]=useState([]); // sorting batch-outs (subcon / in-house)
   const [procBusy,setProcBusy]=useState(false);
   async function loadProcesses(){
     const jid=job.id;
@@ -6790,6 +6791,11 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     const pb={};
     if(pressRows.length){ try{ const ids=pressRows.map(r=>r.id); const { data:logs }=await sb.from('process_output_logs').select('worklist_id,qty_done,process').in('worklist_id',ids); (logs||[]).forEach(l=>{ pb[l.process]=(pb[l.process]||0)+(Number(l.qty_done)||0); }); }catch(_){} }
     setPressBy(pb);
+    // Where cut panels were sent for sewing — batch-outs from the sorting boards.
+    const sortRows=prc.filter(r=>r.process==='trad_sorting'||r.process==='subli_sorting');
+    let allocs=[];
+    if(sortRows.length){ try{ const ids=sortRows.map(r=>r.id); const { data:bts }=await sb.from('sorting_batches').select('*').in('worklist_id',ids).is('deleted_at',null); allocs=bts||[]; }catch(_){} }
+    setAllocBatches(allocs);
   }
   useEffect(()=>{ loadProcesses(); },[job.id]);
   function procQty(def,row){
@@ -6985,54 +6991,25 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           );
         })()}
 
-        {/* Forecast Gantt — plot each production status's start/end vs the due date */}
-        <div className="border rounded-lg">
-          <button onClick={()=>setShowGantt(v=>!v)} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50">
-            <span className="text-sm font-semibold">📅 Forecast timeline (Gantt)</span>
-            <span className="text-xs text-slate-500">{daysToDue!=null ? (daysToDue>=0?`${daysToDue} day${daysToDue===1?'':'s'} to due`:`${Math.abs(daysToDue)}d overdue`) : 'no due date'} · {showGantt?'Hide':'Plot stages'}</span>
-          </button>
-          {showGantt && (
-            <div className="p-3 border-t overflow-x-auto">
-              <div className="min-w-[640px]">
-                <div className="flex items-center text-[10px] text-slate-400 mb-1">
-                  <div className="w-44 shrink-0">Status</div>
-                  <div className="w-[17rem] shrink-0">Start · End</div>
-                  <div className="relative flex-1 h-4">
-                    <span className="absolute left-0">{fmtDate(ganttStart)}</span>
-                    <span className="absolute right-0">{fmtDate(ganttEnd)}</span>
-                    {job.due_date && <span className="absolute -top-0.5 text-rose-500 font-semibold" style={{left:clampPct(ganttDays(ganttStart,job.due_date)/ganttTotal*100)+'%'}} title="Due date">▼due</span>}
-                  </div>
-                </div>
-                {PRODUCTION_STATUSES.map(st=>{
-                  const v = schedule[st.key]||{};
-                  const has = v.start && v.end;
-                  const left = has ? clampPct(ganttDays(ganttStart, v.start)/ganttTotal*100) : 0;
-                  const width = has ? Math.max(1.5, (ganttDays(v.start, v.end)+1)/ganttTotal*100) : 0;
-                  const isCurrent = job.status===st.key;
-                  const painting = paint && paint.key===st.key;
-                  return (
-                    <div key={st.key} className={`flex items-center gap-2 py-0.5 rounded ${isCurrent?'bg-amber-50':''} ${painting?'ring-1 ring-indigo-300':''}`}>
-                      <div className="w-40 shrink-0 text-[11px] truncate" title={st.label}>{isCurrent?'▶ ':''}{st.label}</div>
-                      <div className="w-36 shrink-0 flex items-center gap-1 text-[10px]">
-                        {has ? (<>
-                          <span className="text-slate-600 truncate">{fmtDate(v.start)}→{fmtDate(v.end)} · {ganttDays(v.start,v.end)+1}d</span>
-                          <button onClick={()=>{ setPaint(null); saveScheduleRange(st.key,null,null); }} className="text-slate-400 hover:text-rose-600 shrink-0" title="Clear this status">✕</button>
-                        </>) : (
-                          <span className={painting?'text-indigo-600 font-semibold':'text-slate-300'}>{painting?'now click the end →':'tap the bar to plot'}</span>
-                        )}
-                      </div>
-                      <div onClick={e=>paintTrack(st.key,e)} className="relative flex-1 h-6 bg-slate-100 rounded cursor-pointer hover:bg-slate-200/70" title="Click the start day, then click the end day">
-                        {has && <div className={`absolute top-1 h-4 rounded ${ganttBarColor(st.key)} ${painting?'opacity-70':''}`} style={{left:left+'%', width:width+'%'}}></div>}
-                        <div className="absolute top-0 h-full w-px bg-rose-400" style={{left:clampPct(ganttDays(ganttStart,todayISO)/ganttTotal*100)+'%'}} title="Today"></div>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="text-[10px] text-slate-400 mt-2">Red line = today. <b>Click a status bar where it starts, then click where it ends</b> — no typing. Click ✕ to clear a row. Bars show how the plan fits before the due date.</div>
-              </div>
+        {/* Sewing allocation — where cut panels were sent (subcon vs in-house) */}
+        {allocBatches.length>0 && (()=>{
+          const subconTotals={}; let inhouseTotal=0; let subconGrand=0; let returnedCount=0;
+          allocBatches.forEach(b=>{ const g=batchGarmentTotal(b); if(b.destination_type==='subcon'){ const nm=b.subcon_name||'Subcon'; subconTotals[nm]=(subconTotals[nm]||0)+g; subconGrand+=g; } else { inhouseTotal+=g; } if(b.status==='returned') returnedCount++; });
+          return (
+          <div className="border rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div className="text-[10px] uppercase text-slate-400 font-semibold">Sewing allocation · where cut panels were sent from sorting</div>
+              <div className="text-[11px] text-slate-500">{allocBatches.length} batch{allocBatches.length===1?'':'es'}{returnedCount>0?` · ${returnedCount} returned`:''}</div>
             </div>
-          )}
-        </div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(subconTotals).map(([nm,q])=>(<span key={nm} className="text-[11px] px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold">🧵 {nm}: {q.toLocaleString()} pcs</span>))}
+              {inhouseTotal>0 && <span className="text-[11px] px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 font-semibold">🏠 In-house: {inhouseTotal.toLocaleString()} pcs</span>}
+              {Object.keys(subconTotals).length===0 && inhouseTotal===0 && <span className="text-[11px] text-slate-400">Batched out, garment counts not logged yet.</span>}
+            </div>
+            <div className="text-[11px] text-slate-500 mt-2">To subcons: <b>{subconGrand.toLocaleString()}</b>{total?` of ${total.toLocaleString()} target`:''} · In-house: <b>{inhouseTotal.toLocaleString()}</b></div>
+          </div>
+          );
+        })()}
 
       </div>
       {batchEdit && <PlanBatchModal entry={batchEdit.entry} kind={batchEdit.kind} subconName={subconName} onClose={()=>{ setBatchEdit(null); load(); reload&&reload(); }} />}
