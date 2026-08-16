@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 472 · Production Plan: removed the Gantt timeline; added a Sewing Allocation panel showing how many pcs each subcon (and in-house) got from the sorting batch-outs.";
+const BUILD = "Live build 473 · Printing, Embroidery & Knitting cards get a 📋 Log daily output button (date · item · machine · operators · pcs), same as the pressing log.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4167,7 +4167,80 @@ function JobActivityModal({ row, jobType, profile, profiles, onClose }){
   );
 }
 
-function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, showReport, replacementDept, reload, openActivity, openTechpack, openLead }){
+// Machine hints + operator matching for the Printing / Embroidery / Knitting
+// daily output log (same table + look as the pressing log).
+const OUTPUT_MACHINE_HINTS = {
+  printing:   ['DTF Printer 1','DTF Printer 2','Sublimation Printer 1','Sublimation Printer 2'],
+  embroidery: ['Embroidery Machine 1','Embroidery Machine 2','Embroidery Machine 3'],
+  knitting:   ['Knitting Machine 1','Knitting Machine 2'],
+};
+function outputStaffMatch(process, e){
+  const pos=String(e.position||'').toLowerCase(); const dept=String(e.department||'').toLowerCase();
+  if(process==='printing')   return /print/.test(pos)||/print/.test(dept);
+  if(process==='embroidery') return /embro/.test(pos)||/embro/.test(dept);
+  if(process==='knitting')   return /knit/.test(pos)||/knit/.test(dept);
+  return false;
+}
+
+// Daily output log for a dept job (Printing / Embroidery / Knitting) — mirrors
+// the pressing log: date · item · machine · operators · pcs done, tallied per
+// day. Stored in process_output_logs keyed by (worklist_id=jobId, process).
+function DeptDailyLogModal({ job, process, profile, employees, onClose }){
+  const projItems=Array.isArray(job.items)?job.items:[];
+  const projQty=Number(job.quantity)||0;
+  const [logs,setLogs]=useState([]);
+  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'', item_label:'' };
+  const [lf,setLf]=useState(emptyLog);
+  const [busy,setBusy]=useState(false);
+  let staff=(employees||[]).filter(e=> e.is_active!==false && outputStaffMatch(process,e));
+  if(staff.length===0) staff=(employees||[]).filter(e=> e.is_active!==false);
+  staff=staff.slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const wordDone = process==='printing'?'printed':process==='embroidery'?'embroidered':'knitted';
+  async function loadLogs(){ const { data }=await sb.from('process_output_logs').select('*').eq('worklist_id',job.id).eq('process',process).is('deleted_at',null).order('log_date',{ascending:false}).order('created_at',{ascending:false}); setLogs(data||[]); }
+  useEffect(()=>{ loadLogs(); },[job.id]);
+  function addOp(id){ const e=(employees||[]).find(x=>x.id===id); if(!e) return; setLf(f=> f.operators.some(o=>o.id===id)?f:{...f,operators:[...f.operators,{id,name:fullName(e)}]}); }
+  async function saveLog(){ if(!(Number(lf.qty)>0)){ alert('Enter the pcs done today.'); return; } setBusy(true); const { error }=await sb.from('process_output_logs').insert({ process, worklist_id:job.id, lead_id:job.lead_id||null, item:job.item||null, item_label:(lf.item_label||'').trim()||null, client_name:job.client_name||null, log_date:lf.log_date||null, machine:(lf.machine||'').trim()||null, operators:lf.operators, qty_done:Number(lf.qty)||0, notes:(lf.notes||'').trim()||null, created_by:profile.id }); setBusy(false); if(error){ alert(error.message); return; } setLf(emptyLog); loadLogs(); }
+  async function delLog(l){ if(!confirm('Delete this daily log entry?')) return; await sb.from('process_output_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); loadLogs(); }
+  const total=logs.reduce((s,l)=>s+(Number(l.qty_done)||0),0);
+  const days=new Set(logs.map(l=>l.log_date).filter(Boolean)).size;
+  return (
+    <Modal title={`📋 Daily output — ${job.item||job.number||''}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="text-xs text-slate-500">{job.client_name||''}{projQty>0?` · target ${projQty.toLocaleString()} pcs`:''}</div>
+          <div className="text-[11px] text-slate-500">{wordDone.charAt(0).toUpperCase()+wordDone.slice(1)} so far: <span className="font-bold text-slate-700">{total.toLocaleString()}</span>{projQty>0?` / ${projQty.toLocaleString()}`:''}{days>0?` · ${days} day${days===1?'':'s'} · ~${Math.round(total/days).toLocaleString()}/day`:''}</div>
+        </div>
+        <div className="bg-slate-50 border rounded-lg p-2.5 grid md:grid-cols-2 gap-2">
+          <div className="md:col-span-2">
+            <div className="text-[10px] uppercase font-semibold text-slate-400">Item / description <span className="text-slate-300 normal-case">· a project can have several items</span></div>
+            {projItems.length>0 && <div className="flex flex-wrap gap-1 my-1">{projItems.map((it,i)=>{ const lbl=it.itemType||it.description||it.category||'Item'; return <button key={i} type="button" onClick={()=>setLf(f=>({...f,item_label:lbl}))} className={`text-[11px] px-2 py-0.5 rounded-full border ${lf.item_label===lbl?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}>{lbl}{Number(it.quantity)>0?` ×${it.quantity}`:''}</button>; })}</div>}
+            <input value={lf.item_label} onChange={e=>setLf(f=>({...f,item_label:e.target.value}))} placeholder="Which item (optional)" className="input text-sm mt-0.5" />
+          </div>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">Date<input type="date" value={lf.log_date} onChange={e=>setLf(f=>({...f,log_date:e.target.value}))} className="input text-sm mt-0.5" /></label>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">Machine / line<input list={`dept-mach-${process}`} value={lf.machine} onChange={e=>setLf(f=>({...f,machine:e.target.value}))} placeholder="optional" className="input text-sm mt-0.5" /><datalist id={`dept-mach-${process}`}>{(OUTPUT_MACHINE_HINTS[process]||[]).map(m=><option key={m} value={m} />)}</datalist></label>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">Pcs {wordDone} today<input type="number" min="0" value={lf.qty} onChange={e=>setLf(f=>({...f,qty:e.target.value}))} placeholder="0" className="input text-sm mt-0.5" /></label>
+          <div>
+            <div className="text-[10px] uppercase font-semibold text-slate-400">Operator(s)</div>
+            {lf.operators.length>0 && <div className="flex flex-wrap gap-1 my-1">{lf.operators.map(o=>(<span key={o.id} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">{o.name}<button onClick={()=>setLf(f=>({...f,operators:f.operators.filter(x=>x.id!==o.id)}))} className="text-teal-400 hover:text-rose-600 font-bold">×</button></span>))}</div>}
+            <select value="" onChange={e=>{ addOp(e.target.value); e.target.value=''; }} className="input text-sm mt-0.5"><option value="">＋ Add operator…</option>{staff.filter(e=>!lf.operators.some(o=>o.id===e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{/head/i.test(e.position||'')?' (Head)':''}</option>)}</select>
+          </div>
+          <input value={lf.notes} onChange={e=>setLf(f=>({...f,notes:e.target.value}))} placeholder="Notes (optional)" className="input text-sm md:col-span-2" />
+          <div className="md:col-span-2 flex justify-end"><button disabled={busy} onClick={saveLog} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">＋ Log today's output</button></div>
+        </div>
+        {logs.length===0 ? <div className="text-[11px] text-slate-400">No daily output logged yet. Add a row each day with the machine, operators and pcs {wordDone}.</div> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm bg-white rounded-lg overflow-hidden border">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Item</th><th className="text-left px-2 py-1.5">Machine</th><th className="text-left px-2 py-1.5">Operators</th><th className="text-right px-2 py-1.5">Pcs</th><th></th></tr></thead>
+            <tbody>{logs.map(l=>(<tr key={l.id} className="border-t"><td className="px-2 py-1.5 whitespace-nowrap">{fmtDateShort(l.log_date)}</td><td className="px-2 py-1.5 text-xs">{l.item_label||'—'}</td><td className="px-2 py-1.5">{l.machine||'—'}</td><td className="px-2 py-1.5 text-xs">{(Array.isArray(l.operators)?l.operators:[]).map(o=>o.name).join(', ')||'—'}</td><td className="px-2 py-1.5 text-right font-semibold">{(Number(l.qty_done)||0).toLocaleString()}</td><td className="px-2 py-1.5 text-right"><button onClick={()=>delLog(l)} className="text-slate-300 hover:text-rose-500 text-xs">✕</button></td></tr>))}</tbody>
+          </table></div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, showReport, replacementDept, reload, openActivity, openTechpack, openLead }){
+  const [logFor,setLogFor]=useState(null); // dept job whose daily output log is open
+  const canLogOutput=['printing','embroidery','knitting'].includes(jobType);
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   // Kanban drag-and-drop state for the Board layout — same pattern as the
@@ -4388,6 +4461,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} title="Send to Knitting" className="text-amber-600 text-xs px-1">🧶</button>}
                       </div>
                       <StartFinishBar row={j} table={table} reload={reload} />
+                      {canLogOutput && <button onClick={(e)=>{e.stopPropagation(); setLogFor(j);}} className="w-full mt-2 py-1 rounded bg-orange-50 text-orange-700 text-[11px] font-semibold hover:bg-orange-100">📋 Log daily output</button>}
                       {openLead && (
                         lead
                           ? <button onClick={(e)=>{e.stopPropagation(); openLead({ lead, job:j, jobType, canSendToPrinting });}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
@@ -4524,6 +4598,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
           </div>
         </Modal>
       ); })()}
+      {logFor && <DeptDailyLogModal job={logFor} process={jobType} profile={profile} employees={employees} onClose={()=>setLogFor(null)} />}
     </div>
   );
 }
@@ -37843,9 +37918,9 @@ function App(){
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
-        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
-        {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
-        {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
+        {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='sewing' && <SewingBoard profile={profile} profiles={profiles} employees={employees} jobs={sewingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='packing' && <PackingBoard profile={profile} profiles={profiles} employees={employees} jobs={packingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
