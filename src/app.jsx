@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 465 · Sewing board: cards show project deadline + quantity; the Open lead button is now a per-project Report (sewers, timing, replacements, activity box + print).";
+const BUILD = "Live build 466 · Sewing Line Lead can now open the Sewing board (added to their menu + access).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36821,7 +36821,7 @@ function App(){
       // Sewing Line Lead gets view access to Production + Sampling boards
       // (read-only — they don't own status changes, but need to see what's
       // coming down to the floor).
-      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','profile']);
+      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','sewing','profile']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
       // Knit / Embro Team Lead — sees Production + Sampling boards for context,
@@ -37454,7 +37454,7 @@ function App(){
     // coming down to the floor.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
