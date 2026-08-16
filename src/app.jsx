@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 468 · Sewing Report: daily/weekly/monthly filter; finished items, replacements, avg time per item + per project, per-sewer productivity (pcs each sewed + operation) and reject accuracy. Log pcs/operation per sewer in the project Report; replacements can be tagged to a sewer.";
+const BUILD = "Live build 469 · Pattern, Cutting, Trad/Subli Sorting, DTF/Subli Press, QC, Printing, Embroidery, Knitting & Packing cards now show deadline + quantity, have Start/Finish time buttons, and an Activity box (attach files + @-mention teammates).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4067,6 +4067,52 @@ function CostingCalculatorView({ profile }){
   );
 }
 
+// Reusable Start / Finish time stamper for any board card. Writes start_at /
+// end_at (timestamptz) on the given table row and shows the elapsed hours.
+function StartFinishBar({ row, table, reload }){
+  const hrs=(row.start_at&&row.end_at)?(new Date(row.end_at)-new Date(row.start_at)):0;
+  async function stamp(field){ const { error }=await sb.from(table).update({ [field]: new Date().toISOString() }).eq('id',row.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function clr(field){ const { error }=await sb.from(table).update({ [field]: null }).eq('id',row.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  return (
+    <div className="mt-2">
+      <div className="grid grid-cols-2 gap-1">
+        <button onClick={(e)=>{e.stopPropagation(); stamp('start_at');}} disabled={!!row.start_at} className="text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 disabled:opacity-40">▶ Start</button>
+        <button onClick={(e)=>{e.stopPropagation(); stamp('end_at');}} disabled={!!row.end_at} className="text-[11px] py-1 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200 disabled:opacity-40">✓ Finish</button>
+      </div>
+      {(row.start_at||row.end_at) && (
+        <div className="mt-1 text-[10px] text-slate-500 space-y-0.5">
+          {row.start_at && <div className="flex items-center justify-between gap-1">Start: {fmtDT(row.start_at)} <button onClick={(e)=>{e.stopPropagation(); clr('start_at');}} className="text-slate-300 hover:text-rose-500">reset</button></div>}
+          {row.end_at && <div className="flex items-center justify-between gap-1">Finish: {fmtDT(row.end_at)} <button onClick={(e)=>{e.stopPropagation(); clr('end_at');}} className="text-slate-300 hover:text-rose-500">reset</button></div>}
+          {hrs>0 && <div className="text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Reusable activity thread for a board item — attach files + @-mention teammates.
+// Keyed by (job_id, job_type) on the shared dept_job_activity table.
+function JobActivityBox({ row, jobType, profile, profiles }){
+  if(!row||!row.id) return null;
+  return (
+    <div className="border-t pt-3 mt-3">
+      <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Activity — attach files &amp; mention teammates</div>
+      <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: row.id, job_type: jobType }} scope={jobType+'/'+row.id} titleText={`${row.item||row.title||''} · ${row.client_name||''}`} headerless embedded />
+    </div>
+  );
+}
+
+// Standalone modal wrapper for the activity thread — used by boards whose cards
+// don't already open a detail/report modal (Pattern, Cutting, Packing).
+function JobActivityModal({ row, jobType, profile, profiles, onClose }){
+  return (
+    <Modal title={`Activity — ${row.item||row.title||''}`} onClose={onClose} wide>
+      <div className="text-xs text-slate-500 mb-1">{row.client_name||''}</div>
+      <JobActivityBox row={row} jobType={jobType} profile={profile} profiles={profiles} />
+    </Modal>
+  );
+}
+
 function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, showReport, replacementDept, reload, openActivity, openTechpack, openLead }){
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
@@ -4280,13 +4326,14 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
                         {j.graphic_type && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-semibold">{j.graphic_type}</span>}
                         {lead && openTechpack && <button onClick={(e)=>{e.stopPropagation(); openTechpack(lead);}} className="inline-flex items-center gap-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button>}
                       </div>
-                      <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.cls}>{di.label}</span></div>
+                      <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.overdue?'text-rose-600 font-semibold':'text-slate-500'}>{j.due_date?`📅 ${fmtDate(j.due_date)}`:''}{di.label?` · ${di.label}`:''}</span></div>
                       <div className="flex items-center gap-1 mt-2">
                         <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
                         {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} title="Send to Printing" className="text-purple-600 text-xs px-1">🖨</button>}
                         {canSendToPrinting && <button onClick={()=>sendToEmbroidery(j)} title="Send to Embroidery" className="text-pink-600 text-xs px-1">🪡</button>}
                         {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} title="Send to Knitting" className="text-amber-600 text-xs px-1">🧶</button>}
                       </div>
+                      <StartFinishBar row={j} table={table} reload={reload} />
                       {openLead && (
                         lead
                           ? <button onClick={(e)=>{e.stopPropagation(); openLead({ lead, job:j, jobType, canSendToPrinting });}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
@@ -6155,6 +6202,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   const [search,setSearch]=useState('');
   const [replFor,setReplFor]=useState(null);
   const [detailFor,setDetailFor]=useState(null);
+  const [activityFor,setActivityFor]=useState(null);
   const [replacements,setReplacements]=useState([]);
   const [bump,setBump]=useState(0);
   const isAdmin=profile.role==='admin'; const isAssistant=profile.role==='assistant';
@@ -6192,7 +6240,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
-                {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const bags=jobPolybags(j); const bagsTotal=bags.reduce((s,b)=>s+polybagTotal(b),0);
+                {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const bags=jobPolybags(j); const bagsTotal=bags.reduce((s,b)=>s+polybagTotal(b),0); const due=j.due_date||lead?.delivery_date||lead?.expected_close||null; const di=deadlineInfo(due, PACKING_DONE.includes(j.status));
                   return (
                   <div key={j.id} className="bg-white border rounded-lg shadow-sm p-2.5 relative group">
                     {canDelete && <button onClick={()=>del(j.id)} title="Delete" className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-white border text-slate-400 hover:bg-rose-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition">✕</button>}
@@ -6201,6 +6249,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
                     </div>
                     <div className="font-semibold text-sm leading-tight mt-0.5">{j.item||'—'}</div>
                     <div className="text-xs text-slate-500 truncate">{j.client_name}{j.quantity?` · ${j.quantity} pcs`:''}</div>
+                    {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 Deadline: {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
                     <div className="flex flex-wrap items-center gap-1 mt-1">
                       {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold">🔁 {repls.length}</span>}
@@ -6227,7 +6276,8 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
                       <button onClick={()=>setReplFor(j)} title="Request a replacement" className="text-[11px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 font-semibold hover:bg-rose-100">🔁</button>
                     </div>
                     {repls.length>0 && (<div className="mt-1.5 border-t pt-1 space-y-1">{repls.map(r=><div key={r.id} className="text-[10px] text-rose-600"><span className="font-semibold">🔁 {r.qty||0} pc</span> · {r.reason}</div>)}</div>)}
-                    {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType:'packing', canSendToPrinting:false })} className="w-full mt-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium">↗ Open lead</button>}
+                    <StartFinishBar row={j} table="packing_jobs" reload={reload} />
+                    <button onClick={()=>setActivityFor(j)} className="w-full mt-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium">💬 Activity</button>
                   </div>
                 ); })}
                 {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
@@ -6241,6 +6291,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
 
       {replFor && <PackingReplacementModal job={replFor} profile={profile} onClose={()=>setReplFor(null)} onSaved={()=>setBump(b=>b+1)} />}
       {detailFor && <PackingDetailModal job={jobs.find(x=>x.id===detailFor.id)||detailFor} profile={profile} employees={employees} onClose={()=>setDetailFor(null)} reload={reload} />}
+      {activityFor && <JobActivityModal row={activityFor} jobType="packing" profile={profile} profiles={profiles} onClose={()=>setActivityFor(null)} />}
     </div>
   );
 }
@@ -7636,15 +7687,19 @@ async function nextPatternCode(){
 function sizesToText(a){ return Array.isArray(a)? a.join(', ') : (a||''); }
 function textToSizes(t){ return String(t||'').split(',').map(s=>s.trim()).filter(Boolean); }
 
-function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
+function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs, prodJobs, leads, sizeCharts, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Pattern');
   const [search,setSearch]=useState('');
   const [editing,setEditing]=useState(null);   // pattern being edited/created
   const [prefill,setPrefill]=useState(null);    // prefill from a worklist item
   const [newTask,setNewTask]=useState('');
+  const [activityFor,setActivityFor]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   const patternFor=(pid)=> pid?(patterns||[]).find(p=>p.id===pid):null;
+  const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
+  const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
+  const workQty=(w)=>{ const pj=prodById[w.source_job_id]; return pj?.quantity!=null?pj.quantity:null; };
 
   // Auto-seed a worklist row for any job sitting at "For Pattern" (production +
   // sampling) that doesn't have one yet. Rows persist even after the job moves
@@ -7758,14 +7813,17 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
       {tab==='worklist' && (
         <div className="space-y-3">
           <KanbanBoard items={boardItems} onMove={moveStatus}
-            renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (<div>
+            renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
               <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>{p && <span className="text-[9px] text-emerald-700 font-semibold">✓ {p.pattern_code||'logged'}</span>}</div>
               <div className="font-semibold text-sm leading-tight">{w.item||w.title||'—'}</div>
-              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}</div>
+              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+              {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
               <div className="flex flex-wrap items-center gap-1 mt-1">
                 {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                 {!p && <button onClick={()=>logFromWorklist(w)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
+                <button onClick={()=>setActivityFor(w)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200">💬 Activity</button>
               </div>
+              <StartFinishBar row={w} table="pattern_worklist" reload={reload} />
             </div>); }}
             extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
           <div className="bg-white border rounded-xl overflow-hidden max-w-md">
@@ -7802,6 +7860,7 @@ function PatternView({ profile, patterns, patternWorklist, sampleJobs, prodJobs,
       )}
 
       {editing && <PatternFormModal pattern={editing.id?editing:null} prefill={editing.id?null:prefill} profile={profile} sizeCharts={sizeCharts} onClose={()=>{ setEditing(null); setPrefill(null); }} onSaved={()=>{ setEditing(null); setPrefill(null); reload(); }} />}
+      {activityFor && <JobActivityModal row={activityFor} jobType="pattern" profile={profile} profiles={profiles} onClose={()=>setActivityFor(null)} />}
     </div>
   );
 }
@@ -8128,6 +8187,9 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const boardItems=dedupe((qcReports||[]));
   async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
 
+  const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
+  const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
+  const workQty=(w)=>{ const pj=prodById[w.source_job_id]; return pj?.quantity!=null?pj.quantity:null; };
   const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
   const summaryLine=(w)=>{ const bits=[];
     if(w.source_type==='sample'){ if(w.sample_result) bits.push(w.sample_result==='passed'?'✅ Passed':w.sample_result==='failed'?'❌ Failed':w.sample_result); if(w.recommendation) bits.push('Rec: '+w.recommendation); }
@@ -8192,11 +8254,14 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
         boardItems.length===0
           ? <div className="bg-white rounded-xl border px-3 py-10 text-center text-slate-400 text-sm">Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.</div>
           : <KanbanBoard items={boardItems} onMove={moveStatus}
-              renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=typeBadge(w.source_type); const sm=summaryLine(w); return (<div>
+              renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=typeBadge(w.source_type); const sm=summaryLine(w); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
                 <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
                 <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||'—'}</div></button>
-                <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{sm?` · ${sm}`:''}</div>
+                <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+                {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
+                {sm && <div className="text-[11px] text-slate-500 truncate">{sm}</div>}
                 {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+                <StartFinishBar row={w} table="qc_reports" reload={reload} />
               </div>); }}
               extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open QC report">QC ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
       )}
@@ -8621,6 +8686,8 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
 
         <ReplacementRequestsSection profile={profile} worklistId={w.id} process="qc" sourceLabel="QC" leadId={w.lead_id} item={w.item||lead?.title} clientName={w.client_name} projectQty={projQty} />
 
+        <JobActivityBox row={w} jobType="qc" profile={profile} profiles={profiles} />
+
         <div className="flex items-center gap-2 pt-2 border-t">
           {msg && <span className={`text-xs ${msg==='Saved ✓'?'text-emerald-600':'text-rose-600'}`}>{msg}</span>}
           <div className="flex-1"></div>
@@ -8633,7 +8700,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   );
 }
 
-function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, openTechpack, reload }){
+function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, leads, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
@@ -8642,6 +8709,7 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   // Order quantity for a cutting item — from its production job, else the lead's items.
   function qtyForWork(w){ const j=w.source_job_id?(prodJobs||[]).find(x=>x.id===w.source_job_id):null; if(j && Number(j.quantity)>0) return Number(j.quantity); const l=leadFor(w.lead_id); if(l) return (l.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0); return 0; }
+  function workDue(w){ const j=w.source_job_id?(prodJobs||[]).find(x=>x.id===w.source_job_id):null; const l=leadFor(w.lead_id); return j?.due_date||l?.delivery_date||l?.expected_close||null; }
   // The Pattern Library is a live reference — patterns logged by the pattern
   // maker on another device won't be in the parent's cached `patterns` prop
   // until a full reload. Fetch fresh here (on mount + when the tab opens + via
@@ -8730,11 +8798,13 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
       {tab==='worklist' && (
         <div className="space-y-3">
           <KanbanBoard items={boardItems} onMove={moveStatus}
-            renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const qty=qtyForWork(w); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; return (<div>
+            renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const qty=qtyForWork(w); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; const due=workDue(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
               <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
               <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
               <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty.toLocaleString('en-PH')} pcs`:''}{w.pattern_number?` · Pat ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}</div>
+              {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
+              <StartFinishBar row={w} table="cutting_worklist" reload={reload} />
             </div>); }}
             extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open">Open ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
           <div className="bg-white border rounded-xl overflow-hidden max-w-md">
@@ -8774,14 +8844,14 @@ function CuttingView({ profile, patterns, cuttingWorklist, prodJobs, leads, open
         </div>
       )}
 
-      {detail && <CuttingItemModal item={detail} patterns={patSrc} lead={leadFor(detail.lead_id)} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {detail && <CuttingItemModal item={detail} patterns={patSrc} lead={leadFor(detail.lead_id)} profile={profile} profiles={profiles} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
     </div>
   );
 }
 
 // Detail modal for a cutting worklist item — pattern number + per-size consumption + overall.
 const CUT_GENDERS = ['', 'Male', 'Female', 'Unisex', 'Kids'];
-function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved }){
+function CuttingItemModal({ item, patterns, lead, profile, profiles, openTechpack, onClose, onSaved }){
   const w=item;
   const [patternNumber,setPatternNumber]=useState(w.pattern_number||'');
   // Multiple fabric blocks: [{ fabric, rows:[{gender,size,per_pc,qty}] }]
@@ -8913,6 +8983,7 @@ function CuttingItemModal({ item, patterns, lead, openTechpack, onClose, onSaved
 
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>
+        <JobActivityBox row={w} jobType="cutting" profile={profile} profiles={profiles} />
       </div>
     </Modal>
   );
@@ -8929,7 +9000,7 @@ const PROCESS_BOARDS = [
   { key:'dtf-pressing',   process:'dtf_pressing',   title:'DTF Pressing',   icon:'🔥', seedStatus:'dtf pressing',   role:'dtf_pressing_head' },
   { key:'subli-pressing', process:'subli_pressing', title:'Subli Pressing', icon:'🔥', seedStatus:'subli pressing', role:'subli_pressing_head' },
 ];
-function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, openTechpack, process, title, icon, seedStatus }){
+function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, subcons, openTechpack, process, title, icon, seedStatus }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState('worklist');
@@ -8946,6 +9017,9 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
+  const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
+  const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
+  const workQty=(w)=>{ const pj=prodById[w.source_job_id]; return pj?.quantity!=null?pj.quantity:null; };
   const seededRef=useRef(new Set());
   const seedingRef=useRef(false);
 
@@ -9043,11 +9117,12 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
               <div key={key} className="flex-shrink-0 w-72 flex flex-col">
                 <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
                 <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
-                  {col.map(w=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const pressed=pressedByWork[w.id]||0; return (
+                  {col.map(w=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const pressed=pressedByWork[w.id]||0; const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (
                     <div key={w.id} className="bg-white border rounded-lg shadow-sm p-2.5">
                       <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
                       <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
-                      <div className="text-xs text-slate-500 truncate">{w.client_name||''}</div>
+                      <div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+                      {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
                       <div className="flex flex-wrap items-center gap-1 mt-1">
                         {showPress && pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
                         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
@@ -9057,6 +9132,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
                         <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open report">{showPress?'🔥 Log':'Open ▸'}</button>
                         <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
                       </div>
+                      <StartFinishBar row={w} table="process_worklist" reload={load} />
                     </div>
                   ); })}
                   {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
@@ -9107,7 +9183,7 @@ function ProcessWorklistView({ profile, prodJobs, leads, employees, subcons, ope
         </div>
       )}
 
-      {detail && <ProcessReportModal w={detail} profile={profile} employees={employees} leads={leads} subcons={subcons} process={process} title={title} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); load(); loadBatches(); }} />}
+      {detail && <ProcessReportModal w={detail} profile={profile} profiles={profiles} employees={employees} leads={leads} subcons={subcons} process={process} title={title} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); load(); loadBatches(); }} />}
       {batchReceipt && <SortingBatchReceiptModal batch={batchReceipt} subcons={subcons} onClose={()=>setBatchReceipt(null)} />}
     </div>
   );
@@ -9126,7 +9202,7 @@ const REPLACEMENT_STATUS_META={ pending:['Pending approval','bg-amber-100 text-a
 // Reasons for a replacement / repair (tick all that apply; "Others" opens a box).
 const REPLACEMENT_REASONS=['Fabric damage','Print damage','Print error','Machine error','Cold spot'];
 
-function ProcessReportModal({ w, profile, employees, leads, subcons, process, title, openTechpack, onClose, onSaved }){
+function ProcessReportModal({ w, profile, profiles, employees, leads, subcons, process, title, openTechpack, onClose, onSaved }){
   const lead=(leads||[]).find(l=>l.id===w.lead_id)||null;
   const showBatches=isSortingProcess(process);
   const projItems=Array.isArray(lead?.items)?lead.items:[];
@@ -9414,6 +9490,8 @@ function ProcessReportModal({ w, profile, employees, leads, subcons, process, ti
           )}
           {reqs.length===0 && !showReqForm && <div className="text-[11px] text-slate-400">No replacement requests. Raise one to route repairs to a department.</div>}
         </div>
+
+        <JobActivityBox row={w} jobType={process} profile={profile} profiles={profiles} />
 
         <div className="flex items-center gap-2 pt-2 border-t">
           {msg && <span className={`text-xs ${msg==='Saved ✓'?'text-emerald-600':'text-rose-600'}`}>{msg}</span>}
@@ -37702,9 +37780,9 @@ function App(){
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
-        {view==='pattern' && <PatternView profile={profile} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
-        {view==='cutting' && <CuttingView profile={profile} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
-        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
+        {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
+        {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
