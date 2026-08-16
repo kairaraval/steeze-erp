@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 470 · Board timers now have Pause/Resume, only count working hours (Mon–Sat 8am–6pm, auto-stops after hours & Sundays), and cards are sorted earliest-deadline first.";
+const BUILD = "Live build 471 · Production Plan revamped: tick a process checklist to route each project into the right team's To Do; the plan shows live status, pcs & hours (sewn/pressed totals) pulled from every board — no retyping. Manual status + Gantt kept.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6686,6 +6686,45 @@ const PLAN_STAGES = [
 ];
 const planStageMeta = (k) => PLAN_STAGES.find(s=>s.key===k) || PLAN_STAGES[0];
 
+// ── Production process checklist ───────────────────────────────────────────
+// The full set of production processes a project can run through. On the Plan,
+// the supervisor ticks the ones a project needs; ticking drops the item into
+// that board's To Do and the Plan reads live status / pcs / hours back from it.
+const PLAN_PROCESS_DEFS = [
+  { key:'pattern',        label:'Pattern',          icon:'✂',  table:'pattern_worklist',  kind:'worklist' },
+  { key:'cutting',        label:'In-House Cutting', icon:'🔪', table:'cutting_worklist',  kind:'worklist' },
+  { key:'trad_sorting',   label:'Trad Sorting',     icon:'🧺', table:'process_worklist',  kind:'process', process:'trad_sorting' },
+  { key:'subli_sorting',  label:'Subli Sorting',    icon:'🧺', table:'process_worklist',  kind:'process', process:'subli_sorting' },
+  { key:'dtf_pressing',   label:'DTF Pressing',     icon:'🔥', table:'process_worklist',  kind:'process', process:'dtf_pressing' },
+  { key:'subli_pressing', label:'Subli Pressing',   icon:'🔥', table:'process_worklist',  kind:'process', process:'subli_pressing' },
+  { key:'printing',       label:'Printing',         icon:'🖨', table:'printing_jobs',     kind:'deptjob', done:PRINTING_DONE },
+  { key:'embroidery',     label:'Embroidery',       icon:'🪡', table:'embroidery_jobs',   kind:'deptjob', done:EMBROIDERY_DONE },
+  { key:'knitting',       label:'Knitting',         icon:'🧶', table:'knitting_jobs',     kind:'deptjob', done:KNITTING_DONE },
+  { key:'sewing',         label:'Sewing',           icon:'🧵', table:'sewing_jobs',       kind:'sewing',  done:SEWING_DONE },
+  { key:'qc',             label:'Quality Control',  icon:'🔍', table:'qc_reports',        kind:'worklist' },
+  { key:'packing',        label:'Packing',          icon:'📦', table:'packing_jobs',      kind:'packing', done:PACKING_DONE },
+];
+const PLAN_TABLES_WITH_DELETED = new Set(['printing_jobs','embroidery_jobs','knitting_jobs','packing_jobs','sewing_jobs']);
+
+// Idempotent: create the board item for a process if it doesn't exist yet.
+async function createPlanProcessItem(profile, job, def){
+  try{
+    let sel = sb.from(def.table).select('id').eq('source_job_id', job.id);
+    if(def.kind==='process') sel = sel.eq('process', def.process);
+    if(PLAN_TABLES_WITH_DELETED.has(def.table)) sel = sel.is('deleted_at', null);
+    const { data: ex } = await sel.limit(1);
+    if(ex && ex.length) return;
+    if(def.kind==='deptjob'){
+      const prefix = def.table==='printing_jobs'?'PR-P-':def.table==='embroidery_jobs'?'EMB-':'KNT-';
+      await sb.from(def.table).insert({ number:prefix+Date.now().toString().slice(-5), source_job_id:job.id, lead_id:job.lead_id||null, client_name:job.client_name||'', item:job.item||'', items:job.items||[], quantity:job.quantity||0, attachments:job.attachments||[], status:'to do', due_date:job.due_date||null, notes:job.notes||'', source:'production' });
+    } else if(def.kind==='sewing'){ await maybeAutoCreateSewingJob(profile, job); }
+    else if(def.kind==='packing'){ await maybeAutoCreatePackingJob(profile, job); }
+    else { const base={ source_type:'production', source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null }; if(def.kind==='process') base.process=def.process; await sb.from(def.table).insert(base); }
+  }catch(e){ console.warn('plan process create failed', def.key, e?.message||e); }
+}
+function planProcDone(def, row){ if(!row) return false; if(row.end_at) return true; if(def.done) return def.done.includes(row.status); return row.status==='done'; }
+function planProcState(def, row){ if(!row) return 'none'; if(planProcDone(def,row)) return 'done'; if(row.run_since||row.status==='in_progress') return 'in_progress'; return 'todo'; }
+
 // --- Gantt date helpers (operate on 'YYYY-MM-DD' strings; ISO sorts chronologically) ---
 function ganttDays(a,b){ if(!a||!b) return 0; return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
 function ganttAddDays(iso,n){ const d=new Date((iso||new Date().toISOString().slice(0,10))+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
@@ -6730,6 +6769,56 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     setLoading(false);
   }
   useEffect(()=>{ load(); },[job.id]);
+
+  // ── Live process checklist ────────────────────────────────────────────
+  const [planProcs,setPlanProcs]=useState(()=> Array.isArray(job.plan_processes)?job.plan_processes:[]);
+  const [proc,setProc]=useState({});        // process key -> its board row (or undefined)
+  const [pressBy,setPressBy]=useState({});  // 'dtf_pressing'|'subli_pressing' -> pcs pressed
+  const [procBusy,setProcBusy]=useState(false);
+  async function loadProcesses(){
+    const jid=job.id;
+    const one=async(t)=>{ try{ let s=sb.from(t).select('*').eq('source_job_id',jid); if(PLAN_TABLES_WITH_DELETED.has(t)) s=s.is('deleted_at',null); const { data }=await s; return data||[]; }catch(_){ return []; } };
+    const [pat,cut,qc,prt,emb,knt,sew,pak,prc]=await Promise.all([
+      one('pattern_worklist'),one('cutting_worklist'),one('qc_reports'),one('printing_jobs'),
+      one('embroidery_jobs'),one('knitting_jobs'),one('sewing_jobs'),one('packing_jobs'),one('process_worklist'),
+    ]);
+    const map={ pattern:pat[0], cutting:cut[0], qc:qc[0], printing:prt[0], embroidery:emb[0], knitting:knt[0], sewing:sew[0], packing:pak[0] };
+    prc.forEach(r=>{ map[r.process]=r; });
+    setProc(map);
+    // Pressed pcs come from the daily output logs, keyed by the worklist row id.
+    const pressRows=prc.filter(r=>r.process==='dtf_pressing'||r.process==='subli_pressing');
+    const pb={};
+    if(pressRows.length){ try{ const ids=pressRows.map(r=>r.id); const { data:logs }=await sb.from('process_output_logs').select('worklist_id,qty_done,process').in('worklist_id',ids); (logs||[]).forEach(l=>{ pb[l.process]=(pb[l.process]||0)+(Number(l.qty_done)||0); }); }catch(_){} }
+    setPressBy(pb);
+  }
+  useEffect(()=>{ loadProcesses(); },[job.id]);
+  function procQty(def,row){
+    if(!row) return 0;
+    if(def.key==='sewing'){ const pcs=(sewJobSewers(row)||[]).reduce((s,x)=>s+(Number(x.pcs)||0),0); return pcs || (planProcDone(def,row)?(Number(job.quantity)||0):0); }
+    if(def.key==='dtf_pressing'||def.key==='subli_pressing') return pressBy[def.key]||0;
+    if(Number(row.qty_done)>0) return Number(row.qty_done);
+    return planProcDone(def,row)?(Number(job.quantity)||0):0;
+  }
+  async function toggleProcess(def, on){
+    setProcBusy(true);
+    try{
+      if(on){
+        const next=planProcs.includes(def.key)?planProcs:[...planProcs,def.key];
+        setPlanProcs(next);
+        await sb.from('production_jobs').update({ plan_processes: next }).eq('id',job.id);
+        await createPlanProcessItem(profile, job, def);
+      } else {
+        const row=proc[def.key];
+        const started = row && (row.run_since || row.start_at || (Number(row.work_ms)||0)>0 || planProcState(def,row)!=='todo');
+        if(started && !confirm(`${def.label} already has work logged. Remove it from the plan and delete it from the ${def.label} board?`)){ setProcBusy(false); return; }
+        const next=planProcs.filter(k=>k!==def.key);
+        setPlanProcs(next);
+        await sb.from('production_jobs').update({ plan_processes: next }).eq('id',job.id);
+        if(row){ try{ if(PLAN_TABLES_WITH_DELETED.has(def.table)) await sb.from(def.table).update({ deleted_at:new Date().toISOString() }).eq('id',row.id); else await sb.from(def.table).delete().eq('id',row.id); }catch(e){ alert(e?.message||e); } }
+      }
+      await loadProcesses(); reload&&reload();
+    } finally { setProcBusy(false); }
+  }
 
   // A step is "done" once its Done box is ticked (older 'actual' rows were
   // migrated to done=true). Progress = done qty vs the target.
@@ -6859,31 +6948,42 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           </div>
         </div>
 
-        {/* Per-stage progress */}
-        <div className="grid sm:grid-cols-3 gap-3">
-          {PLAN_STAGES.map(st=>{
-            const done=doneStage(st.key); const planned=plannedStage(st.key);
-            const pct=total>0?Math.min(100,Math.round(done/total*100)):0;
-            const behind = entries.some(e=>e.stage===st.key && !isDone(e) && e.deadline && e.deadline<todayISO); // a step's deadline passed, not done
-            const planShort = planned>0 && planned<total;            // plotted plan doesn't cover the target
-            const releasedStage = entries.filter(e=>e.stage===st.key).reduce((s,e)=>s+(Number(e.released_qty)||0),0);
-            const receivedStage = entries.filter(e=>e.stage===st.key).reduce((s,e)=>s+(Number(e.received_qty)||0),0);
-            const activeFilter = stageFilter===st.key;
-            return (
-            <div key={st.key} onClick={()=>{ const next=activeFilter?'':st.key; setStageFilter(next); if(next) setStage(next); }} title="Click to filter the steps below to this stage" className={`border rounded-lg p-3 cursor-pointer transition ${activeFilter?'border-indigo-500 ring-2 ring-indigo-200':behind?'border-rose-300 bg-rose-50/40':'hover:border-indigo-300'}`}>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${st.color}`}>{st.label}</span>
-                <span className="text-xs font-bold">{done.toLocaleString()}/{total.toLocaleString()}</span>
+        {/* Live process checklist — tick what the project needs; it routes to
+            each team's To Do and reports status / pcs / hours back here. */}
+        {(()=>{
+          const checkedDefs=PLAN_PROCESS_DEFS.filter(d=> planProcs.includes(d.key) || proc[d.key]);
+          const doneCount=checkedDefs.filter(d=> planProcState(d, proc[d.key])==='done').length;
+          const sewnTotal=procQty(PLAN_PROCESS_DEFS.find(d=>d.key==='sewing'), proc.sewing);
+          const pressedTotal=(pressBy.dtf_pressing||0)+(pressBy.subli_pressing||0);
+          return (
+          <div className="border rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div className="text-[10px] uppercase text-slate-400 font-semibold">Process checklist · tick what this project needs — it drops into that team's To Do and reports back live</div>
+              <div className="flex flex-wrap gap-2 text-[11px]">
+                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600">✓ {doneCount}/{checkedDefs.length} done</span>
+                <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">🧵 Sewn {sewnTotal.toLocaleString()}{total?`/${total.toLocaleString()}`:''}</span>
+                <span className="px-2 py-0.5 rounded bg-orange-50 text-orange-700 font-semibold">🔥 Pressed {pressedTotal.toLocaleString()}</span>
               </div>
-              <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${st.bar}`} style={{width:pct+'%'}}></div></div>
-              <div className="text-[10px] text-slate-400 mt-1">{pct}% done{total>0?` · ${Math.max(0,total-done).toLocaleString()} to go`:''}{planned>0?` · ${planned.toLocaleString()} planned`:''}</div>
-              {st.key==='sewing' && done>0 && <div className="text-[10px] text-slate-500 mt-0.5">In-house {sewInhouse.toLocaleString()} · Subcon {sewSubcon.toLocaleString()}</div>}
-              {releasedStage>0 && <div className="text-[10px] mt-0.5"><span className="text-cyan-700">🚚 Released {releasedStage.toLocaleString()}</span> · <span className={receivedStage<releasedStage?'text-amber-700':'text-emerald-700'}>📥 Received {receivedStage.toLocaleString()}</span>{releasedStage>receivedStage?<span className="text-slate-400"> · {(releasedStage-receivedStage).toLocaleString()} out</span>:''}</div>}
-              {behind && <div className="text-[10px] text-rose-600 font-semibold mt-1">⚠ A step's deadline passed — still open</div>}
-              {!behind && planShort && <div className="text-[10px] text-amber-600 mt-1">Plan covers {planned.toLocaleString()}/{total.toLocaleString()} — plot {Math.max(0,total-planned).toLocaleString()} more to hit target</div>}
             </div>
-          ); })}
-        </div>
+            <div className="space-y-1">
+              {PLAN_PROCESS_DEFS.map(def=>{ const row=proc[def.key]; const checked=planProcs.includes(def.key)||!!row; const state=planProcState(def,row); const hrs=row?rowWorkedMs(row):0; const qty=procQty(def,row);
+                const badge = state==='done'?['Done','bg-emerald-100 text-emerald-700']:state==='in_progress'?['In Progress','bg-amber-100 text-amber-700']:checked?['To Do','bg-slate-200 text-slate-600']:['not needed','bg-slate-50 text-slate-400'];
+                return (
+                <div key={def.key} className={`flex items-center gap-2 flex-wrap rounded-lg px-2 py-1.5 border ${checked?'bg-white':'bg-slate-50/40 border-dashed'}`}>
+                  <input type="checkbox" checked={checked} disabled={procBusy} onChange={e=>toggleProcess(def, e.target.checked)} className="w-4 h-4 cursor-pointer" />
+                  <span className="text-sm font-medium min-w-[135px]">{def.icon} {def.label}</span>
+                  <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${badge[1]}`}>{badge[0]}</span>
+                  {checked && qty>0 && <span className="text-[11px] text-slate-600">{qty.toLocaleString()} pcs</span>}
+                  {checked && hrs>0 && <span className="text-[11px] text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)}</span>}
+                  <div className="flex-1"></div>
+                  {checked && <span className="text-[10px] text-slate-400">{state==='done'?'✓ complete':state==='in_progress'?'running':'waiting'}</span>}
+                </div>
+              ); })}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-2">Live status, pcs &amp; hours are pulled straight from each team's board — nothing to retype. Unticking a not-yet-started process removes it from that board.</div>
+          </div>
+          );
+        })()}
 
         {/* Forecast Gantt — plot each production status's start/end vs the due date */}
         <div className="border rounded-lg">
@@ -6934,85 +7034,6 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           )}
         </div>
 
-        {/* Log daily output */}
-        {canEdit && (
-          <div className="border rounded-lg p-3 bg-slate-50/60">
-            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Forecast a step — plot the plan (date · stage · qty), then tick it Done below when finished</div>
-            <div className="flex flex-wrap gap-2 items-end">
-              <div><label className="text-[10px] text-slate-500 block">Start date</label><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></div>
-              <div><label className="text-[10px] text-slate-500 block">Deadline</label><input type="date" className="input" value={deadline} onChange={e=>setDeadline(e.target.value)} /></div>
-              <div><label className="text-[10px] text-slate-500 block">Stage</label>
-                <select className="input" value={stage} onChange={e=>setStage(e.target.value)}>{PLAN_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
-              </div>
-              {stage==='sewing' && (
-                <div><label className="text-[10px] text-slate-500 block">Sewing</label>
-                  <select className="input" value={sewingMode} onChange={e=>setSewingMode(e.target.value)}><option value="inhouse">In-house</option><option value="subcon">Subcon</option></select>
-                </div>
-              )}
-              {stage==='sewing' && sewingMode==='subcon' && (
-                <div><label className="text-[10px] text-slate-500 block">Subcon</label>
-                  <select className="input" value={subconId} onChange={e=>setSubconId(e.target.value)}><option value="">— Select —</option>{(subcons||[]).filter(s=>!s.deleted_at).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
-                </div>
-              )}
-              <div><label className="text-[10px] text-slate-500 block">Qty (pcs)</label><input type="number" className="input w-24 text-right" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0" /></div>
-              <div className="flex-1 min-w-[140px]"><label className="text-[10px] text-slate-500 block">Notes</label><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="optional" /></div>
-              <button disabled={busy} onClick={addEntry} className="py-2 px-4 rounded-lg text-white text-sm font-semibold disabled:opacity-50 bg-indigo-600 hover:bg-indigo-700">{busy?'Saving…':'+ Add step'}</button>
-            </div>
-            {msg && <div className={`text-xs mt-1.5 ${/fail|pick|enter/i.test(msg)?'text-rose-600':'text-emerald-600'}`}>{msg}</div>}
-          </div>
-        )}
-
-        {/* Output log */}
-        <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1 flex items-center gap-2">Forecast steps ({entries.filter(e=>isDone(e)).length}/{entries.length} done) — tick each one as it's finished {stageFilter && <button onClick={()=>setStageFilter('')} className="normal-case text-[11px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">Showing {planStageMeta(stageFilter).label} ✕</button>}</div>
-          {loading ? <div className="py-6 text-center text-slate-400 text-sm">Loading…</div> : entries.length===0 ? (
-            <div className="py-6 text-center text-slate-400 text-sm border rounded-lg">No steps yet — forecast a step above, then tick it Done when finished.</div>
-          ) : (
-            <div className="border rounded-lg overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
-                  <th className="text-center px-3 py-2">Done</th>
-                  <th className="text-left px-3 py-2">Start</th>
-                  <th className="text-left px-3 py-2">Deadline</th>
-                  <th className="text-left px-3 py-2">Stage</th>
-                  <th className="text-right px-3 py-2">Qty</th>
-                  <th className="text-left px-3 py-2">Released</th>
-                  <th className="text-left px-3 py-2">Received</th>
-                  <th className="text-left px-3 py-2">Notes</th>
-                  <th className="text-left px-3 py-2">By</th>
-                  <th></th>
-                </tr></thead>
-                <tbody>{[...entries].filter(e=>!stageFilter||e.stage===stageFilter).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))).map(e=>{ const sm=planStageMeta(e.stage); const done=isDone(e); return (
-                  <tr key={e.id} className={`border-t ${done?'bg-emerald-50/50':''}`}>
-                    <td className="px-3 py-2 text-center"><input type="checkbox" checked={done} onChange={()=>toggleDone(e)} title={done?'Done — click to un-mark':'Mark this step done'} className="w-4 h-4 cursor-pointer" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap">{canEdit
-                      ? <input type="date" value={e.date||''} onChange={ev=>setStepStart(e, ev.target.value)} className="text-[11px] px-1.5 py-0.5 rounded border border-slate-300 bg-white" />
-                      : <span className="text-xs">{fmtDate(e.date)}</span>}</td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="date" value={e.deadline||''} onChange={ev=>setStepDeadline(e, ev.target.value)} className={`text-[11px] px-1.5 py-0.5 rounded border bg-white ${(!done && e.deadline && e.deadline<todayISO)?'border-rose-400 text-rose-700 font-semibold':'border-slate-300'}`} /></td>
-                    <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded font-medium ${sm.color}`}>{sm.label}</span>{e.stage==='sewing' && <span className="text-[10px] text-slate-500 ml-1.5">{e.sewing_mode==='subcon'?subconName(e.subcon_id):'In-house'}</span>}</td>
-                    <td className="px-3 py-2 text-right">{canEdit
-                      ? <input type="number" defaultValue={Number(e.quantity)||0} onBlur={ev=>setStepQty(e, ev.target.value)} className={`w-20 text-right text-sm px-1.5 py-0.5 rounded border border-slate-300 bg-white font-semibold ${done?'text-emerald-700':'text-slate-600'}`} />
-                      : <span className={`font-semibold ${done?'text-emerald-700':'text-slate-500'}`}>{(Number(e.quantity)||0).toLocaleString()}</span>}</td>
-                    {/* Released / Received — batch logs (plan vs actual). Click to open. */}
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{(()=>{ const rb=Array.isArray(e.release_batches)?e.release_batches:[]; const rel=Number(e.released_qty)||0;
-                      return rel>0
-                        ? <button onClick={()=>canEdit&&setBatchEdit({entry:e,kind:'release'})} className="text-cyan-700 font-semibold hover:underline">🚚 {rel.toLocaleString()}{rb.length>1?` · ${rb.length} batches`:''}</button>
-                        : (canEdit ? <button onClick={()=>setBatchEdit({entry:e,kind:'release'})} className="text-[11px] px-2 py-0.5 rounded border text-cyan-700 hover:bg-cyan-50">🚚 Release</button> : <span className="text-slate-300">—</span>);
-                    })()}</td>
-                    <td className="px-3 py-2 text-xs whitespace-nowrap">{(()=>{ const cb=Array.isArray(e.receive_batches)?e.receive_batches:[]; const rec=Number(e.received_qty)||0; const planq=Number(e.quantity)||0;
-                      return rec>0
-                        ? <button onClick={()=>canEdit&&setBatchEdit({entry:e,kind:'receive'})} className={`font-semibold hover:underline ${planq>0&&rec<planq?'text-amber-700':'text-emerald-700'}`}>📥 {rec.toLocaleString()}{planq>0?`/${planq.toLocaleString()}`:''}{cb.length>1?` · ${cb.length} batches`:''}</button>
-                        : (canEdit ? <button onClick={()=>setBatchEdit({entry:e,kind:'receive'})} className="text-[11px] px-2 py-0.5 rounded border text-emerald-700 hover:bg-emerald-50">📥 Receive</button> : <span className="text-slate-300">—</span>);
-                    })()}</td>
-                    <td className="px-3 py-2 text-xs text-slate-600">{e.notes||'—'}</td>
-                    <td className="px-3 py-2 text-xs text-slate-400">{who(e.created_by)}</td>
-                    <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>delEntry(e.id)} className="text-slate-400 hover:text-rose-600 text-xs" title="Delete step">✕</button>}</td>
-                  </tr>
-                ); })}</tbody>
-              </table>
-            </div>
-          )}
-        </div>
       </div>
       {batchEdit && <PlanBatchModal entry={batchEdit.entry} kind={batchEdit.kind} subconName={subconName} onClose={()=>{ setBatchEdit(null); load(); reload&&reload(); }} />}
     </Modal>
