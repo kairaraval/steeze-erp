@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 469 · Pattern, Cutting, Trad/Subli Sorting, DTF/Subli Press, QC, Printing, Embroidery, Knitting & Packing cards now show deadline + quantity, have Start/Finish time buttons, and an Activity box (attach files + @-mention teammates).";
+const BUILD = "Live build 470 · Board timers now have Pause/Resume, only count working hours (Mon–Sat 8am–6pm, auto-stops after hours & Sundays), and cards are sorted earliest-deadline first.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4067,23 +4067,77 @@ function CostingCalculatorView({ profile }){
   );
 }
 
-// Reusable Start / Finish time stamper for any board card. Writes start_at /
-// end_at (timestamptz) on the given table row and shows the elapsed hours.
+// Working-hours between two instants: only counts Mon–Sat, 08:00–18:00
+// (Asia/Manila via the device clock, which is PH). Used so tracked time never
+// accrues overnight, after 6pm, or on Sundays — that's the "auto-pause" too.
+const WORK_START_HR=8, WORK_END_HR=18;   // 8am – 6pm
+function workingMsBetween(startISO, endISO){
+  const start=new Date(startISO), end=new Date(endISO);
+  if(!(start<end)) return 0;
+  let total=0; const cur=new Date(start); cur.setHours(0,0,0,0);
+  while(cur<end){
+    if(cur.getDay()!==0){ // 0 = Sunday, skip
+      const ws=new Date(cur); ws.setHours(WORK_START_HR,0,0,0);
+      const we=new Date(cur); we.setHours(WORK_END_HR,0,0,0);
+      const s=Math.max(start.getTime(), ws.getTime());
+      const e=Math.min(end.getTime(), we.getTime());
+      if(e>s) total+=e-s;
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  return total;
+}
+// Total worked (working-hours) ms for a row, including a live running segment.
+function rowWorkedMs(row){
+  const base=Number(row.work_ms)||0;
+  if(row.run_since && !row.end_at) return base+workingMsBetween(row.run_since, new Date().toISOString());
+  if(base>0) return base;
+  if(row.start_at && row.end_at) return workingMsBetween(row.start_at, row.end_at); // legacy rows
+  return base;
+}
+
+// Sort comparator: earliest deadline first, undated items last.
+function byDueAsc(getDue){ return (a,b)=>{ const da=getDue(a), db=getDue(b); const ta=da?new Date(da).getTime():Infinity; const tb=db?new Date(db).getTime():Infinity; return ta-tb; }; }
+
+// Reusable Start / Pause / Resume / Finish time tracker for any board card.
+// Time only accrues during working hours (Mon–Sat 8am–6pm); leaving a card
+// running overnight or on a Sunday adds nothing. Manual Pause stops it early.
 function StartFinishBar({ row, table, reload }){
-  const hrs=(row.start_at&&row.end_at)?(new Date(row.end_at)-new Date(row.start_at)):0;
-  async function stamp(field){ const { error }=await sb.from(table).update({ [field]: new Date().toISOString() }).eq('id',row.id); if(error){ alert(error.message); return; } reload&&reload(); }
-  async function clr(field){ const { error }=await sb.from(table).update({ [field]: null }).eq('id',row.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  const nowISO=()=>new Date().toISOString();
+  const finished=!!row.end_at;
+  const running=!!row.run_since && !finished;
+  const paused=!finished && !running && (!!row.start_at || (Number(row.work_ms)||0)>0);
+  const notStarted=!finished && !running && !paused;
+  const worked=rowWorkedMs(row);
+  async function patch(upd){ const { error }=await sb.from(table).update(upd).eq('id',row.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  const start =(e)=>{ e.stopPropagation(); patch({ start_at: row.start_at||nowISO(), run_since: nowISO(), end_at:null }); };
+  const pause =(e)=>{ e.stopPropagation(); patch({ work_ms:(Number(row.work_ms)||0)+workingMsBetween(row.run_since, nowISO()), run_since:null }); };
+  const resume=(e)=>{ e.stopPropagation(); patch({ run_since: nowISO() }); };
+  const finish=(e)=>{ e.stopPropagation(); const add=row.run_since?workingMsBetween(row.run_since, nowISO()):0; patch({ work_ms:(Number(row.work_ms)||0)+add, run_since:null, end_at: nowISO() }); };
+  const reset =(e)=>{ e.stopPropagation(); patch({ start_at:null, end_at:null, work_ms:0, run_since:null }); };
   return (
     <div className="mt-2">
-      <div className="grid grid-cols-2 gap-1">
-        <button onClick={(e)=>{e.stopPropagation(); stamp('start_at');}} disabled={!!row.start_at} className="text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 disabled:opacity-40">▶ Start</button>
-        <button onClick={(e)=>{e.stopPropagation(); stamp('end_at');}} disabled={!!row.end_at} className="text-[11px] py-1 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200 disabled:opacity-40">✓ Finish</button>
-      </div>
-      {(row.start_at||row.end_at) && (
+      {notStarted && <button onClick={start} className="w-full text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">▶ Start</button>}
+      {running && (
+        <div className="grid grid-cols-2 gap-1">
+          <button onClick={pause} className="text-[11px] py-1 rounded bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">⏸ Pause</button>
+          <button onClick={finish} className="text-[11px] py-1 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200">✓ Finish</button>
+        </div>
+      )}
+      {paused && (
+        <div className="grid grid-cols-2 gap-1">
+          <button onClick={resume} className="text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">▶ Resume</button>
+          <button onClick={finish} className="text-[11px] py-1 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200">✓ Finish</button>
+        </div>
+      )}
+      {(row.start_at||finished||worked>0) && (
         <div className="mt-1 text-[10px] text-slate-500 space-y-0.5">
-          {row.start_at && <div className="flex items-center justify-between gap-1">Start: {fmtDT(row.start_at)} <button onClick={(e)=>{e.stopPropagation(); clr('start_at');}} className="text-slate-300 hover:text-rose-500">reset</button></div>}
-          {row.end_at && <div className="flex items-center justify-between gap-1">Finish: {fmtDT(row.end_at)} <button onClick={(e)=>{e.stopPropagation(); clr('end_at');}} className="text-slate-300 hover:text-rose-500">reset</button></div>}
-          {hrs>0 && <div className="text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
+          {running && <div className="text-amber-700 font-semibold">🟢 Running · counts only 8am–6pm, Mon–Sat</div>}
+          {paused && <div className="text-slate-500 font-semibold">⏸ Paused</div>}
+          {worked>0 && <div className="text-emerald-700 font-semibold">⏱ {fmtHrs(worked)} worked{finished?' to complete':''}</div>}
+          {row.start_at && <div>Started {fmtDT(row.start_at)}</div>}
+          {finished && <div className="flex items-center justify-between gap-1">Finished {fmtDT(row.end_at)} <button onClick={reset} className="text-slate-300 hover:text-rose-500">reset</button></div>}
+          {!finished && <div className="text-right"><button onClick={reset} className="text-slate-300 hover:text-rose-500">reset</button></div>}
         </div>
       )}
     </div>
@@ -4276,7 +4330,7 @@ function DeptBoard({ profile, profiles, title, icon, table, jobType, statuses, d
               </div>
             </div>
           )}
-          {statuses.map(st=>{ const col=filtered.filter(j=>j.status===st.key);
+          {statuses.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort(byDueAsc(j=>j.due_date));
             const isDragTarget = dragOverStatus === st.key;
             const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStatus!==st.key) setDragOverStatus(st.key); };
             const onColumnDragLeave = ()=>{ if(dragOverStatus===st.key) setDragOverStatus(null); };
@@ -6236,7 +6290,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
 
       {tab==='board' && (
         <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {PACKING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key); return (
+          {PACKING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort(byDueAsc(j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; })); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
@@ -7726,7 +7780,7 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
   async function markDone(w){ const { error }=await sb.from('pattern_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('pattern_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('pattern_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-  const boardItems=(patternWorklist||[]).slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
+  const boardItems=(patternWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the worklist?')) return; const { error }=await sb.from('pattern_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   async function delPattern(p){ if(!confirm(`Delete pattern ${p.pattern_code||''}?`)) return; const { error }=await sb.from('patterns').update({ deleted_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload(); }
@@ -8184,12 +8238,12 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   async function markDone(w){ if(!(Array.isArray(w.qc_handlers)&&w.qc_handlers.length)){ if(!confirm('No QC handler recorded yet. Mark as done anyway?')) return; } const { error }=await sb.from('qc_reports').update({ status:'done', done_at:new Date().toISOString(), done_by:profile.id }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('qc_reports').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null, done_by: st==='done'? profile.id : null }; const { error }=await sb.from('qc_reports').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-  const boardItems=dedupe((qcReports||[]));
-  async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-
   const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
   const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
   const workQty=(w)=>{ const pj=prodById[w.source_job_id]; return pj?.quantity!=null?pj.quantity:null; };
+  const boardItems=dedupe((qcReports||[])).slice().sort(byDueAsc(workDue));
+  async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+
   const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
   const summaryLine=(w)=>{ const bits=[];
     if(w.source_type==='sample'){ if(w.sample_result) bits.push(w.sample_result==='passed'?'✅ Passed':w.sample_result==='failed'?'❌ Failed':w.sample_result); if(w.recommendation) bits.push('Rec: '+w.recommendation); }
@@ -8740,7 +8794,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   async function markDone(w){ const { error }=await sb.from('cutting_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('cutting_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-  const boardItems=(cuttingWorklist||[]).slice().sort((a,b)=>((a.position??1e9)-(b.position??1e9))||(new Date(a.created_at||0)-new Date(b.created_at||0)));
+  const boardItems=(cuttingWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
@@ -9059,7 +9113,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   // Pcs pressed per project (from the daily output logs) — for the board cards.
   const pressedByWork={}; (pressLogs||[]).forEach(l=>{ if(l.worklist_id) pressedByWork[l.worklist_id]=(pressedByWork[l.worklist_id]||0)+(Number(l.qty_done)||0); });
   const PRESS_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
-  const pressCol=(key)=> key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done');
+  const pressCol=(key)=> (key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done')).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
