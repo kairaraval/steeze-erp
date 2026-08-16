@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 464 · Replacement requests: added Gender and Size fields to each part line (before Qty); shown on the request cards and in notifications.";
+const BUILD = "Live build 465 · Sewing board: cards show project deadline + quantity; the Open lead button is now a per-project Report (sewers, timing, replacements, activity box + print).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5666,6 +5666,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   const [tab,setTab]=useState('board'); // 'board' | 'report'
   const [search,setSearch]=useState('');
   const [replFor,setReplFor]=useState(null); // job we're logging a replacement for
+  const [reportFor,setReportFor]=useState(null); // job we're viewing the report for
   const [replacements,setReplacements]=useState([]);
   const [bump,setBump]=useState(0);
   const isAdmin=profile.role==='admin'; const isAssistant=profile.role==='assistant';
@@ -5713,7 +5714,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
-                {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const hrs=(j.start_at&&j.end_at)?(new Date(j.end_at)-new Date(j.start_at)):0;
+                {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const hrs=(j.start_at&&j.end_at)?(new Date(j.end_at)-new Date(j.start_at)):0; const di=deadlineInfo(j.due_date, SEWING_DONE.includes(j.status));
                   return (
                   <div key={j.id} className="bg-white border rounded-lg shadow-sm p-2.5 relative group">
                     {canDelete && <button onClick={()=>del(j.id)} title="Delete" className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-white border text-slate-400 hover:bg-rose-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition">✕</button>}
@@ -5722,6 +5723,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                     </div>
                     <div className="font-semibold text-sm leading-tight mt-0.5">{j.item||'—'}</div>
                     <div className="text-xs text-slate-500 truncate">{j.client_name}{j.quantity?` · ${j.quantity} pcs`:''}</div>
+                    {j.due_date && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 Deadline: {fmtDate(j.due_date)}{di.label?` · ${di.label}`:''}</div>}
                     <div className="flex flex-wrap items-center gap-1 mt-1">
                       {lead && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold" title="Replacement requests">🔁 {repls.length}</span>}
@@ -5766,7 +5768,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                         {repls.map(r=><div key={r.id} className="text-[10px] text-rose-600"><span className="font-semibold">🔁 {r.qty||0} pc</span> · {r.reason}</div>)}
                       </div>
                     )}
-                    {lead && openLead && <button onClick={()=>openLead({ lead, job:j, jobType:'sewing', canSendToPrinting:false })} className="w-full mt-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium">↗ Open lead</button>}
+                    <button onClick={()=>setReportFor(j)} className="w-full mt-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium">📄 Report</button>
                   </div>
                 ); })}
                 {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
@@ -5781,7 +5783,68 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
       )}
 
       {replFor && <SewingReplacementModal job={replFor} profile={profile} onClose={()=>setReplFor(null)} onSaved={()=>setBump(b=>b+1)} />}
+      {reportFor && <SewingProjectReport job={reportFor} profile={profile} profiles={profiles} lead={reportFor.lead_id?(leads||[]).find(l=>l.id===reportFor.lead_id):null} replacements={replByJob[reportFor.id]||[]} onClose={()=>setReportFor(null)} />}
     </div>
+  );
+}
+
+// Per-project sewing report — deadline, quantity, timing, the sewers on the job,
+// replacement requests, and the activity thread (kept from the old lead view).
+function SewingProjectReport({ job, profile, profiles, lead, replacements, onClose }){
+  const sewers=sewJobSewers(job);
+  const hrs=(job.start_at&&job.end_at)?(new Date(job.end_at)-new Date(job.start_at)):0;
+  const di=deadlineInfo(job.due_date, SEWING_DONE.includes(job.status));
+  const stMeta=SEWING_STATUSES.find(s=>s.key===job.status);
+  const fmtTs=(t)=> t? new Date(t).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
+  return (
+    <Modal title="Sewing project report" onClose={onClose} wide>
+      <style>{`@media print {
+        body * { visibility:hidden !important; }
+        .sew-rep, .sew-rep * { visibility:visible !important; }
+        .sew-rep { position:absolute; left:0; top:0; width:100%; }
+        .no-print { display:none !important; }
+      }`}</style>
+      <div className="sew-rep space-y-4">
+        <div className="flex items-start justify-between gap-3 border-b pb-3">
+          <div>
+            <div className="font-mono text-[11px] text-slate-400">{job.number}</div>
+            <div className="text-lg font-bold leading-tight">{job.item||'—'}</div>
+            <div className="text-sm text-slate-500">{job.client_name||'—'}</div>
+          </div>
+          {stMeta && <span className={`text-[11px] px-2 py-0.5 rounded font-semibold ${stMeta.color}`}>{stMeta.label}</span>}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <div><div className="text-[10px] uppercase text-slate-400">Deadline</div><div className={di.overdue?'text-rose-600 font-semibold':'font-medium'}>{job.due_date?fmtDate(job.due_date):'—'}{di.label?` · ${di.label}`:''}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Quantity</div><div className="font-medium">{job.quantity?`${job.quantity} pcs`:'—'}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Started</div><div className="font-medium">{fmtTs(job.start_at)}</div></div>
+          <div><div className="text-[10px] uppercase text-slate-400">Finished</div><div className="font-medium">{fmtTs(job.end_at)}</div></div>
+        </div>
+        {hrs>0 && <div className="text-sm text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sewers working on this project ({sewers.length})</div>
+          {sewers.length>0 ? (
+            <div className="flex flex-wrap gap-2">
+              {sewers.map(s=>(<span key={s.id||s.name} className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">🧵 {s.name}</span>))}
+            </div>
+          ) : <div className="text-sm text-slate-400">No sewers assigned yet.</div>}
+        </div>
+        {replacements.length>0 && (
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Replacement requests ({replacements.length})</div>
+            <div className="space-y-1">{replacements.map(r=><div key={r.id} className="text-sm text-rose-600"><span className="font-semibold">🔁 {r.qty||0} pc{(r.qty||0)===1?'':'s'}</span>{r.reason?` · ${r.reason}`:''}</div>)}</div>
+          </div>
+        )}
+        {job.notes && <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes</div><div className="text-sm text-slate-600 whitespace-pre-wrap">{job.notes}</div></div>}
+        <div className="no-print border-t pt-3">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Activity</div>
+          <ThreadBody profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id: job.id, job_type:'sewing' }} scope={'sewing/'+job.id} titleText={`${job.item||''} · ${job.client_name||''}`} headerless embedded />
+        </div>
+        <div className="no-print flex justify-end gap-2 pt-1">
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-sm font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
