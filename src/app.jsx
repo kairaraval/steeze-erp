@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 481 · Evaluations: HR can send an employee's evaluation to their team leader to rate — it lands in the leader's Inbox + a 'My Evaluations to Rate' list; they fill their ratings and submit back to HR to finalize.";
+const BUILD = "Live build 482 · Subcon: full edit history — every send-batch and payroll save now logs who changed the rate/qty/deduction and the before→after, shown in an Edit History panel inside each modal.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35152,6 +35152,39 @@ function canRunSubconPayroll(profile){
 // (e.g. amount withheld for rejects). Never goes below zero.
 function subconNet(p){ return Math.max(0, (Number(p?.total_amount)||0) - (Number(p?.deduction)||0)); }
 
+// ── Subcon edit history (audit trail) ──────────────────────────────────────
+async function logSubconEdit(profile, entityType, entityId, entityNumber, action, changes, note){
+  try{ await sb.from('subcon_edit_log').insert({ entity_type:entityType, entity_id:entityId, entity_number:entityNumber||null, action, changes:changes||[], note:note||null, actor_id:profile?.id||null, actor_name: profile? (profile.name||profile.email||null) : null }); }catch(e){ console.warn('subcon edit log failed', e?.message||e); }
+}
+// Build a [{field,from,to}] diff for the given field list.
+function subconDiff(before, after, fields){ const out=[]; fields.forEach(({key,label})=>{ const a=before?before[key]:undefined; const b=after?after[key]:undefined; const na=(a==null?'':String(a)); const nb=(b==null?'':String(b)); if(na!==nb) out.push({ field: label||key, from: na, to: nb }); }); return out; }
+// Collapsible "who changed what, when" panel for a send batch or payroll.
+function SubconEditHistory({ entityType, entityId }){
+  const [rows,setRows]=useState([]); const [open,setOpen]=useState(false); const [loaded,setLoaded]=useState(false);
+  useEffect(()=>{ let on=true; if(!entityId) return; (async()=>{ const { data }=await sb.from('subcon_edit_log').select('*').eq('entity_type',entityType).eq('entity_id',entityId).order('created_at',{ascending:false}); if(on){ setRows(data||[]); setLoaded(true); } })(); return ()=>{on=false;}; },[entityType,entityId]);
+  if(!entityId) return null;
+  return (
+    <div className="border rounded-lg">
+      <button type="button" onClick={()=>setOpen(o=>!o)} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50">
+        <span className="text-xs font-semibold uppercase text-slate-500">🕘 Edit history{loaded?` (${rows.length})`:''}</span>
+        <span className="text-[11px] text-slate-400">{open?'Hide':'Show'}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 border-t pt-2 space-y-2 max-h-64 overflow-y-auto">
+          {rows.length===0 && <div className="text-[11px] text-slate-400">No changes logged yet.</div>}
+          {rows.map(r=>(
+            <div key={r.id} className="text-[11px] border-b border-slate-100 pb-1.5">
+              <div className="text-slate-600"><span className="font-semibold">{r.actor_name||'—'}</span> · {r.action||'edited'} · {fmtDT(r.created_at)}</div>
+              {Array.isArray(r.changes)&&r.changes.length>0 && <ul className="mt-0.5 ml-3 list-disc text-slate-500">{r.changes.map((c,i)=><li key={i}>{c.field}: <span className="text-rose-600">{c.from||'—'}</span> → <span className="text-emerald-700">{c.to||'—'}</span></li>)}</ul>}
+              {r.note && <div className="text-slate-400 italic">{r.note}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Derive return totals + status for a single send batch.
 function subconSendTotals(send, allReturns){
   const returns = (allReturns||[]).filter(r => r.send_id === send.id);
@@ -35633,8 +35666,16 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
         notes: f.notes || null,
       };
       if(isEdit){
-        const { error } = await sb.from('subcon_sends').update(payload).eq('id', existing.id);
+        const changes = subconDiff(existing, payload, [
+          {key:'rate_per_garment',label:'Rate/garment'},
+          {key:'quantity_sent',label:'Qty sent'},
+          {key:'garment',label:'Garment'},
+          {key:'date_sent',label:'Date sent'},
+          {key:'expected_return_date',label:'Expected return'},
+        ]);
+        const { error } = await sb.from('subcon_sends').update({ ...payload, updated_by: profile.id }).eq('id', existing.id);
         if(error) throw error;
+        if(changes.length) await logSubconEdit(profile, 'send', existing.id, existing.number, 'edited', changes, f.notes||null);
       } else {
         // Allocate SCS-YYYY-MM-NNN. Query the DB (incl. soft-deleted) for the
         // current month and use max+1 to avoid voucher-style collision bugs.
@@ -35648,9 +35689,15 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
         });
         payload.number = `SCS-${monthKey}-${String(max+1).padStart(3,'0')}`;
         payload.prepared_by = profile.id;
+        payload.created_by = profile.id;
         payload.status = 'in_progress';
-        const { error } = await sb.from('subcon_sends').insert(payload);
+        const { data: ins, error } = await sb.from('subcon_sends').insert(payload).select('id').single();
         if(error) throw error;
+        await logSubconEdit(profile, 'send', ins?.id, payload.number, 'created', [
+          {field:'Rate/garment', from:'', to:String(payload.rate_per_garment)},
+          {field:'Qty sent', from:'', to:String(payload.quantity_sent)},
+          {field:'Garment', from:'', to:String(payload.garment)},
+        ], f.notes||null);
       }
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -35719,6 +35766,7 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
             <textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Handling instructions, fabric color, etc." />
           </div>
         </div>
+        {isEdit && <SubconEditHistory entityType="send" entityId={existing.id} />}
         {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{isEdit ? 'Save changes' : 'Log send batch'}</button>
@@ -36051,6 +36099,7 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
             const { error: e2 } = await sb.from('subcon_payroll_items').insert(items);
             if(e2) throw e2;
           }
+          await logSubconEdit(profile, 'payroll', payroll.id, number, 'created', (p.lineItems||[]).map(li=>({ field:`${li.garment||'line'}`, from:'', to:`${Number(li.garments_paid)||0} × ₱${Number(li.rate_per_garment)||0}` })), 'Generated from returns');
           if(p.action === 'supplementary') supplementary++; else created++;
         }
       }
@@ -36178,6 +36227,16 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
     if(deductNum>totalAmount){ setMsg('Deduction cannot be more than the payroll total.'); return; }
     setBusy(true); setMsg('');
     try {
+      // Build a before→after diff for the audit log (rates, qty, deduction, total).
+      const oldByLabel={}; (initialItems||[]).forEach(it=>{ oldByLabel[(it.garment||'').trim().toLowerCase()]=it; });
+      const changes=[];
+      rows.forEach(r=>{ const key=(r.garment||'').trim().toLowerCase(); const o=oldByLabel[key]; const lbl=r.garment||'line';
+        if(o){ if(String(Number(o.rate_per_garment)||0)!==String(Number(r.rate_per_garment)||0)) changes.push({field:`${lbl} — rate`, from:String(Number(o.rate_per_garment)||0), to:String(Number(r.rate_per_garment)||0)});
+                if(String(Number(o.garments_paid)||0)!==String(Number(r.garments_paid)||0)) changes.push({field:`${lbl} — qty`, from:String(Number(o.garments_paid)||0), to:String(Number(r.garments_paid)||0)}); }
+        else changes.push({field:`${lbl} — added`, from:'', to:`${Number(r.garments_paid)||0} × ₱${Number(r.rate_per_garment)||0}`}); });
+      (initialItems||[]).forEach(o=>{ if(!rows.some(r=>(r.garment||'').trim().toLowerCase()===(o.garment||'').trim().toLowerCase())) changes.push({field:`${o.garment||'line'} — removed`, from:`${Number(o.garments_paid)||0} × ₱${Number(o.rate_per_garment)||0}`, to:''}); });
+      if(String(Number(payroll.deduction)||0)!==String(deductNum)) changes.push({field:'Deduction', from:String(Number(payroll.deduction)||0), to:String(deductNum)});
+      if(String(Number(payroll.total_amount)||0)!==String(totalAmount)) changes.push({field:'Total amount', from:String(Number(payroll.total_amount)||0), to:String(totalAmount)});
       // 1) Header update with recomputed totals.
       const { error: e1 } = await sb.from('subcon_payrolls').update({
         week_ending: weekEnding,
@@ -36186,8 +36245,10 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
         total_amount: totalAmount,
         deduction: deductNum,
         deduction_reason: deductionReason.trim()||null,
+        updated_by: profile.id,
       }).eq('id', payroll.id);
       if(e1) throw e1;
+      if(changes.length) await logSubconEdit(profile, 'payroll', payroll.id, payroll.number, 'edited', changes, notes||null);
       // 2) Wipe + reinsert items. Simpler + safer than diffing IDs; small N.
       const { error: e2 } = await sb.from('subcon_payroll_items').delete().eq('payroll_id', payroll.id);
       if(e2) throw e2;
@@ -36277,6 +36338,7 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
           <label className="text-xs font-semibold text-slate-500">Notes</label>
           <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Optional — context for why this payroll was edited" />
         </div>
+        <SubconEditHistory entityType="payroll" entityId={payroll.id} />
         {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">Save changes</button>
