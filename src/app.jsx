@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 478 · Subcon payroll: add a manual deduction + reason (e.g. rejects) — net payable is what gets paid, shown on the list, payout and printable voucher.";
+const BUILD = "Live build 479 · Delivery schedule: pick the contact person from a dropdown of the client's saved contacts (auto-fills name + phone).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21544,6 +21544,11 @@ function DeliveryEditModal({ delivery, date, drivers, clients, onClose, onSaved 
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
   const sortedClients = (clients||[]).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||'')));
+  // Saved contacts for the currently-picked client — a client can have several
+  // contact persons, so we offer them as a dropdown to fill name + phone.
+  const pickedClient = (clients||[]).find(x=>x.id===d.client_id);
+  const clientContacts = (()=>{ const raw=Array.isArray(pickedClient?.contacts)?pickedClient.contacts:[]; const arr=raw.map(c=>({ name:c?.name||c?.contact_name||'', phone:c?.phone||c?.contact_phone||'' })).filter(c=>c.name||c.phone); if(!arr.length && pickedClient && (pickedClient.contact||pickedClient.phone)) return [{ name:pickedClient.contact||'', phone:pickedClient.phone||'' }]; return arr; })();
+  const curContactIdx = clientContacts.findIndex(c=>(c.name||'')===(d.contact||'') && (c.phone||'')===(d.contact_phone||''));
   return (
     <Modal title={isNew?'+ New delivery':'Edit delivery'} onClose={onClose}>
       <div className="space-y-3">
@@ -21566,6 +21571,14 @@ function DeliveryEditModal({ delivery, date, drivers, clients, onClose, onSaved 
           </div>
         </div>
         <TpLbl t="Address"><input className="input" value={d.address} onChange={e=>up('address',e.target.value)} placeholder="e.g. Unit 5, Eastwood City, Quezon City" /></TpLbl>
+        {clientContacts.length>0 && (
+          <TpLbl t={`Contact person (from client) · ${clientContacts.length} saved`}>
+            <select className="input" value={curContactIdx>=0?String(curContactIdx):''} onChange={e=>{ const v=e.target.value; if(v==='') return; const c=clientContacts[Number(v)]; if(c) setD(p=>({...p, contact:c.name||'', contact_phone:c.phone||''})); }}>
+              <option value="">— Choose a saved contact —</option>
+              {clientContacts.map((c,i)=><option key={i} value={i}>{c.name||'(no name)'}{c.phone?` · ${c.phone}`:''}</option>)}
+            </select>
+          </TpLbl>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Contact name"><input className="input" value={d.contact} onChange={e=>up('contact',e.target.value)} placeholder="e.g. Drew Siapco" /></TpLbl>
           <TpLbl t="Contact phone"><input className="input" value={d.contact_phone} onChange={e=>up('contact_phone',e.target.value)} placeholder="e.g. +63 917 …" /></TpLbl>
