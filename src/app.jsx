@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 482 · Subcon: full edit history — every send-batch and payroll save now logs who changed the rate/qty/deduction and the before→after, shown in an Edit History panel inside each modal.";
+const BUILD = "Live build 483 · Replacement Requests: production supervisor can raise a new request and route it straight to any department (＋ New request).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9963,6 +9963,7 @@ function ReplacementQueueView({ profile, profiles, employees }){
   const [tab,setTab]=useState('pending');
   const [routeDept,setRouteDept]=useState({});   // id -> chosen department
   const [hrFor,setHrFor]=useState(null);          // request being escalated (or {} for blank)
+  const [newReq,setNewReq]=useState(false);       // supervisor-raised new request
   async function load(){ setLoading(true); const { data }=await sb.from('replacement_requests').select('*').order('created_at',{ascending:false}); setRows(data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
   const pending=rows.filter(r=>r.status==='pending');
@@ -9983,7 +9984,10 @@ function ReplacementQueueView({ profile, profiles, employees }){
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">🔁 Replacement Requests</h1><p className="text-slate-500 text-sm">Repair / replacement requests from the production floor. {canApprove?'Approve & route each to the department that will fix it.':'View-only.'}</p></div>
-          {canApprove && <button onClick={()=>setHrFor({})} className="px-3 py-2 rounded-lg bg-white border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50" title="File a general HR report not tied to a specific ticket">⚠ General HR report</button>}
+          <div className="flex items-center gap-2">
+            {canApprove && <button onClick={()=>setNewReq(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a replacement request and route it to any department">＋ New request</button>}
+            {canApprove && <button onClick={()=>setHrFor({})} className="px-3 py-2 rounded-lg bg-white border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50" title="File a general HR report not tied to a specific ticket">⚠ General HR report</button>}
+          </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('pending')} className={`px-3 py-1.5 rounded-md ${tab==='pending'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Pending ({pending.length})</button>
@@ -10015,7 +10019,81 @@ function ReplacementQueueView({ profile, profiles, employees }){
         </div>
       )}
       {hrFor && <HrEscalationModal init={hrFor} profile={profile} profiles={profiles} employees={employees} onClose={()=>setHrFor(null)} onSaved={()=>setHrFor(null)} />}
+      {newReq && <ReplacementNewModal profile={profile} onClose={()=>setNewReq(false)} onSaved={()=>{ setNewReq(false); load(); }} />}
     </div>
+  );
+}
+
+// Supervisor-raised replacement request — routes straight to any department.
+function ReplacementNewModal({ profile, onClose, onSaved }){
+  const [department,setDepartment]=useState('');
+  const [item,setItem]=useState(''); const [clientName,setClientName]=useState('');
+  const [lines,setLines]=useState([{ part:'', qty:'', size:'', gender:'' }]);
+  const [reasons,setReasons]=useState([]); const [reasonOther,setReasonOther]=useState(''); const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function setLine(i,k,v){ setLines(ls=>ls.map((l,x)=>x===i?{...l,[k]:v}:l)); }
+  function addLine(){ setLines(ls=>[...ls,{ part:'', qty:'', size:'', gender:'' }]); }
+  function rmLine(i){ setLines(ls=>ls.length<=1?[{ part:'', qty:'', size:'', gender:'' }]:ls.filter((_,x)=>x!==i)); }
+  function toggleReason(r){ setReasons(rs=>rs.includes(r)?rs.filter(x=>x!==r):[...rs,r]); }
+  async function save(){
+    if(!department){ setMsg('Choose a department to route this to.'); return; }
+    const cl=lines.map(l=>({ part:(l.part||'').trim(), qty:l.qty===''?null:Number(l.qty), size:(l.size||'').trim(), gender:(l.gender||'').trim() })).filter(l=>l.part);
+    if(!cl.length){ setMsg('Add at least one part / item needed.'); return; }
+    if(!reasons.length && !reasonOther.trim()){ setMsg('Pick or type a reason.'); return; }
+    setBusy(true); setMsg('');
+    const totalQty=cl.reduce((s,l)=>s+(Number(l.qty)||0),0);
+    const partsSummary=cl.map(l=>`${[l.gender,l.size].filter(Boolean).join(' ')}${(l.gender||l.size)?' ':''}${l.part}${l.qty!=null?` (${l.qty})`:''}`).join(', ');
+    const { error }=await sb.from('replacement_requests').insert({
+      process:'manual', department, requested_department:department,
+      item: item.trim()||null, client_name: clientName.trim()||null,
+      lines: cl, parts: partsSummary, qty: totalQty||null,
+      reasons: reasons.length?reasons:null, reason_other: reasonOther.trim()||null, notes: notes.trim()||null,
+      status:'approved', created_by: profile.id, routed_by: profile.id, routed_at: new Date().toISOString(),
+    });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved && onSaved();
+  }
+  return (
+    <Modal title="🔁 New replacement request" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-800">Raise a replacement/repair and route it straight to a department — it lands on their board as an approved request.</div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Route to department *</div>
+          <select value={department} onChange={e=>setDepartment(e.target.value)} className="input"><option value="">— Select —</option>{REPLACEMENT_DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}</select>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Item / project <span className="text-slate-300 normal-case">· optional</span></div><input value={item} onChange={e=>setItem(e.target.value)} placeholder="e.g. JARC Polo" className="input" /></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Client <span className="text-slate-300 normal-case">· optional</span></div><input value={clientName} onChange={e=>setClientName(e.target.value)} placeholder="e.g. JARC Group" className="input" /></div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Parts / items needed — qty per part *</div>
+          <div className="space-y-1.5">
+            {lines.map((l,i)=>(
+              <div key={i} className="flex items-center gap-1.5 flex-wrap">
+                <input value={l.gender||''} onChange={e=>setLine(i,'gender',e.target.value)} placeholder="Gender" className="input w-20 shrink-0" />
+                <input value={l.size||''} onChange={e=>setLine(i,'size',e.target.value)} placeholder="Size" className="input w-20 shrink-0" />
+                <input type="number" min="0" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" className="input w-16 shrink-0" />
+                <input value={l.part} onChange={e=>setLine(i,'part',e.target.value)} placeholder="What part / item is needed — e.g. Front panel" className="input flex-1 min-w-[140px]" />
+                <button type="button" onClick={()=>rmLine(i)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0 w-6" title="Remove line">✕</button>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={addLine} className="mt-1.5 text-xs text-indigo-600 font-semibold hover:underline">+ Add part line</button>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Reason for replacement <span className="text-slate-300 normal-case">· tick all that apply</span></div>
+          <div className="flex flex-wrap gap-1.5">
+            {[...REPLACEMENT_REASONS,'Others'].map(rn=>{ const on=reasons.includes(rn); return (
+              <button key={rn} type="button" onClick={()=>toggleReason(rn)} className={`text-xs rounded-full px-2.5 py-1 border ${on?'bg-rose-500 text-white border-rose-500':'bg-white text-slate-600 border-slate-200 hover:border-rose-300'}`}>{rn}</button>
+            ); })}
+          </div>
+          {reasons.includes('Others') && <input value={reasonOther} onChange={e=>setReasonOther(e.target.value)} placeholder="Describe the other reason…" className="input text-sm mt-1.5" />}
+        </div>
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes <span className="text-slate-300 normal-case">· optional</span></div><textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="input" placeholder="Any details for the department…" /></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1 border-t"><button onClick={onClose} className="px-3 py-2 rounded-lg border text-sm font-semibold">Cancel</button><button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'🔁 Create & route'}</button></div>
+      </div>
+    </Modal>
   );
 }
 
