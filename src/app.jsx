@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 475 · Performance Evaluations: the 1–5 rating scale (with each number's meaning) now shows at the top of the fill-in form and on the printed evaluation.";
+const BUILD = "Live build 476 · Purchasing: attach photos/PDFs to a PO; Accounting can view the PO items + attachments on the RFP (to match the quotation); each RFP now lists all payment entries with the running total paid.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -659,6 +659,30 @@ async function resolveAttUrl(att){
   const key = storageKeyFromUrl(att.url);
   if(key){ try { return await signedUrl(key); } catch(_){} }
   return att.url || null;
+}
+// Glyph for an attachment based on its type/name.
+function attGlyph(a){ const t=((a&&a.type)||'')+' '+((a&&a.name)||''); if(/image|png|jpe?g|gif|webp/i.test(t)) return '🖼'; if(/pdf/i.test(t)) return '📄'; if(/word|docx?/i.test(t)) return '📝'; if(/sheet|xlsx?|csv/i.test(t)) return '📊'; return '📎'; }
+// Reusable upload+remove field. value is an array of {type,name,path,mime}.
+function AttachmentsEditor({ value, onChange, scope='misc', label }){
+  const [uploading,setUploading]=useState(false); const [err,setErr]=useState('');
+  const list=Array.isArray(value)?value:[];
+  async function pick(fileList){ const files=Array.from(fileList||[]).filter(Boolean); if(!files.length) return; setUploading(true); setErr('');
+    try{ const added=[]; for(const file of files){ added.push(await uploadFile(scope,file)); } onChange([...list, ...added]); }
+    catch(e){ setErr('Upload failed: '+(e.message||String(e))); } setUploading(false); }
+  return (
+    <div>
+      {label && <label className="text-xs font-semibold text-slate-500">{label}</label>}
+      <label className="mt-1 flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:border-slate-400 cursor-pointer w-max">📎 {uploading?'Uploading…':'Attach photo / PDF / file'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx" className="hidden" disabled={uploading} onChange={e=>{ pick(e.target.files); e.target.value=''; }} /></label>
+      {err && <div className="text-[11px] text-rose-600 mt-1">{err}</div>}
+      {list.length>0 && <div className="mt-2 space-y-1">{list.map((a,i)=>(<div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5"><span>{attGlyph(a)}</span><button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name||'file'}</button><button type="button" onClick={()=>onChange(list.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-500">✕</button></div>))}</div>}
+    </div>
+  );
+}
+// Read-only openable list of attachments.
+function AttachmentList({ attachments, empty }){
+  const list=Array.isArray(attachments)?attachments:[];
+  if(!list.length) return empty?<div className="text-[11px] text-slate-400">{empty}</div>:null;
+  return (<div className="space-y-1">{list.map((a,i)=>(<div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5"><span>{attGlyph(a)}</span><button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name||'file'}</button></div>))}</div>);
 }
 function AttachmentChip({ att, small, gallery }){
   const [url,setUrl]=useState(att.url||null);
@@ -25570,7 +25594,11 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     transfer_bank_name:         isEdit?(existing.transfer_bank_name||''):'',
     transfer_bank_account_name: isEdit?(existing.transfer_bank_account_name||''):'',
     transfer_bank_account_number: isEdit?(existing.transfer_bank_account_number||''):'',
+    attachments: isEdit?(Array.isArray(existing.attachments)?existing.attachments:[]):[],
   });
+  // Attachments (quotation, supplier invoice, photos). Editable even after the PO
+  // is locked; for a saved PO we persist immediately so Accounting sees them.
+  async function setAttachments(next){ setF(p=>({...p,attachments:next})); if(isEdit){ try{ await sb.from('purchase_orders').update({ attachments:next }).eq('id',existing.id); }catch(e){ setMsg('Could not save attachment: '+(e.message||e)); } } }
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Locally-added suppliers (just-created via quick-add) so the PO supplier
   // dropdown picks them up immediately, before the page-level loadAll reloads.
@@ -25633,7 +25661,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
-      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0 };
+      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0, attachments:f.attachments||[] };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
     const { data, error } = isEdit ? await sb.from('purchase_orders').update(payload).eq('id',existing.id).select().single() : await sb.from('purchase_orders').insert(payload).select().single();
     if(error){ setBusy(false); setMsg(error.message); return; }
@@ -25651,6 +25679,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
       vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
+      attachments:f.attachments||[],
       payment_status: existing?.payment_status || 'unpaid' };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
     const { data, error } = isEdit ? await sb.from('purchase_orders').update(payload).eq('id',existing.id).select().single() : await sb.from('purchase_orders').insert(payload).select().single();
@@ -25905,6 +25934,9 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
         )}
 
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} disabled={locked} /></TpLbl>
+        <div>
+          <AttachmentsEditor value={f.attachments} onChange={setAttachments} scope={'po/'+(existing?.id||'new')} label="Attachments · quotation, supplier invoice, photos (Accounting can view these on the RFP)" />
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
 
         {/* Two-button footer: Save Draft (keeps editable) + Finalize (locks).
@@ -28399,7 +28431,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <button disabled={!sameSupplier} onClick={()=>setBatchPaying(selectedRfps)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">💰 Pay together as one check</button>
         </div>
       )}
-      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
+      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
       {viewingAp && <APVoucherModal ap={viewingAp} profiles={profiles} onClose={()=>setViewingAp(null)} />}
@@ -28407,12 +28439,19 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   );
 }
 
-function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved, onPay }){
+function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose, onSaved, onPay }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
+  const [showPO,setShowPO]=useState(false);
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const po = orders.find(o=>o.id===rfp.po_id);
+  const poAtts = po && Array.isArray(po.attachments) ? po.attachments : [];
+  const poLines = po && Array.isArray(po.lines) ? po.lines : [];
+  // Every payment voucher recorded against this RFP (partial payments create
+  // several) — so accounting can see all the entries they've made.
+  const rfpVouchers = (vouchers||[]).filter(v=>v.rfp_id===rfp.id && !v.deleted_at).slice().sort((a,b)=>String(a.date||a.created_at||'').localeCompare(String(b.date||b.created_at||'')));
+  const paidTotal = rfpVouchers.reduce((s,v)=>s+(Number(v.amount)||0),0);
   const supplier = suppliers.find(s=>s.id===rfp.supplier_id);
   const requestedBy = profiles.find(p=>p.id===rfp.requested_by);
   const financeBy = profiles.find(p=>p.id===rfp.finance_approved_by);
@@ -28481,6 +28520,46 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, onClose, onSaved,
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
         </div>
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
+
+        {/* Linked PO — items + attachments, so Accounting can match the quotation
+            / estimate against the PO before paying. */}
+        {po && (
+          <div className="border rounded-lg">
+            <button onClick={()=>setShowPO(v=>!v)} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50">
+              <span className="text-xs font-semibold uppercase text-slate-600">📄 Purchase Order {po.number||''} · {peso(po.total)}{poAtts.length?` · 📎 ${poAtts.length}`:''}</span>
+              <span className="text-[11px] text-slate-400">{showPO?'Hide':'View PO & attachments'}</span>
+            </button>
+            {showPO && (
+              <div className="px-3 pb-3 border-t pt-2 space-y-2">
+                {poLines.length>0 ? (
+                  <div className="overflow-x-auto"><table className="w-full text-xs">
+                    <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Item / description</th><th className="text-right py-1">Qty</th><th className="text-right py-1">Unit cost</th><th className="text-right py-1">Amount</th></tr></thead>
+                    <tbody>{poLines.map((l,i)=>(<tr key={i} className="border-t"><td className="py-1">{l.description||'—'}</td><td className="py-1 text-right">{Number(l.qty)||0}</td><td className="py-1 text-right">{peso(Number(l.unit_cost)||0)}</td><td className="py-1 text-right font-semibold">{peso((Number(l.qty)||0)*(Number(l.unit_cost)||0))}</td></tr>))}</tbody>
+                  </table></div>
+                ) : <div className="text-[11px] text-slate-400">No line items on the PO.</div>}
+                <div>
+                  <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">PO attachments · quotation / invoice / photos</div>
+                  <AttachmentList attachments={poAtts} empty="No attachments on this PO." />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Payments recorded against this RFP — multiple entries for partial /
+            multi-payment suppliers. */}
+        {rfpVouchers.length>0 && (
+          <div className="border rounded-lg p-3 bg-emerald-50/40 border-emerald-100">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase text-emerald-700 font-semibold">💸 Payment entries ({rfpVouchers.length})</div>
+              <div className="text-[11px] text-slate-600">Total paid: <span className="font-bold">{peso(paidTotal)}</span> of {peso(rfp.amount)}</div>
+            </div>
+            <div className="overflow-x-auto"><table className="w-full text-xs bg-white rounded-lg overflow-hidden border">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Voucher #</th><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Type</th><th className="text-left px-2 py-1.5">Ref / Check #</th><th className="text-right px-2 py-1.5">Amount</th></tr></thead>
+              <tbody>{rfpVouchers.map(v=>(<tr key={v.id} className="border-t"><td className="px-2 py-1.5 font-mono">{v.number||'—'}</td><td className="px-2 py-1.5">{v.date?fmtDate(v.date):'—'}</td><td className="px-2 py-1.5 uppercase">{v.type||'—'}</td><td className="px-2 py-1.5">{v.check_number||'—'}</td><td className="px-2 py-1.5 text-right font-semibold">{peso(v.amount)}</td></tr>))}</tbody>
+            </table></div>
+          </div>
+        )}
 
         {/* Supplier bank details — snapshot on the RFP, falling back to the
             supplier record so Finance always knows where to send the transfer. */}
