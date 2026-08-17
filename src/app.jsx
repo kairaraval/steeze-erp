@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 474 · Trip Tickets: the driver's scheduled stops now show even before the ticket is started (was hidden until Start).";
+const BUILD = "Live build 475 · Performance Evaluations: the 1–5 rating scale (with each number's meaning) now shows at the top of the fill-in form and on the printed evaluation.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13371,6 +13371,7 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
   const comp=computeEval(tpl, answers, two);
   const band=evalBandOf(tpl, comp.grand);
   const cats=(tpl?.structure?.categories)||[];
+  const scale=(tpl?.structure?.scale&&tpl.structure.scale.length)?tpl.structure.scale:DEFAULT_EVAL_SCALE;
 
   async function save(markComplete){
     setBusy(true); setMsg('');
@@ -13414,6 +13415,19 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
           {band && <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${evalBandColor(band.level)}`}>{band.level}</span>}
           <span className="text-xs text-slate-500">{comp.rated}/{comp.total} rated{two?' · A & B averaged':''}</span>
           {band && <span className="text-xs text-slate-600 truncate">→ {band.result}</span>}
+        </div>
+
+        {/* Rating scale legend — so evaluators see what each number means */}
+        <div className="border border-slate-200 rounded-lg bg-slate-50 px-3 py-2">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">Rating scale · 1 (lowest) → 5 (highest)</div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
+            {scale.map(s=>(
+              <div key={s.v} className="text-[11px] leading-snug">
+                <div className="flex items-center gap-1.5 mb-0.5"><span className="inline-flex items-center justify-center w-5 h-5 rounded bg-indigo-600 text-white font-bold text-[11px]">{s.v}</span><span className="font-semibold text-slate-700">{s.label}</span></div>
+                <div className="text-slate-500">{s.desc}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {cats.map((cat,ci)=>(
@@ -13576,6 +13590,7 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
   const band=evalBandOf(tpl, review.grand_score!=null?Number(review.grand_score):comp.grand);
   const grand = review.grand_score!=null?Number(review.grand_score):comp.grand;
   const reviewer=(profiles||[]).find(p=>p.id===review.reviewer_id);
+  const scale=(tpl?.structure?.scale&&tpl.structure.scale.length)?tpl.structure.scale:DEFAULT_EVAL_SCALE;
   const LBL='text-[9px] uppercase font-bold text-slate-500 tracking-wider';
   return ReactDOM.createPortal(
     <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
@@ -13598,6 +13613,13 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
             <div><span className={LBL}>Evaluation date:</span> <span className="font-medium">{review.evaluation_date?fmtDate(review.evaluation_date):'—'}</span></div>
             <div><span className={LBL}>Employment status:</span> <span className="font-medium">{review.employment_status||'—'}</span></div>
             <div><span className={LBL}>Immediate supervisor:</span> <span className="font-medium">{review.immediate_supervisor||'—'}</span></div>
+          </div>
+          {/* Performance rating scale — what each number means */}
+          <div className="border border-slate-400 rounded mb-3 text-[9px]" style={{ breakInside:'avoid' }}>
+            <div className="bg-slate-200 font-bold px-1.5 py-1 text-center">PERFORMANCE RATING SCALE — 1 (lowest) to 5 (highest)</div>
+            <table className="w-full border-collapse">
+              <tbody>{scale.map(s=>(<tr key={s.v} className="border-t border-slate-200"><td className="px-1.5 py-1 font-bold whitespace-nowrap align-top" style={{width:'1.6in'}}>( {s.v} ) {(s.label||'').toUpperCase()}</td><td className="px-1.5 py-1 align-top">{s.desc}</td></tr>))}</tbody>
+            </table>
           </div>
           <table className="w-full text-[10px] border-collapse mb-3">
             <thead><tr className="bg-slate-800 text-white"><th className="text-left px-1.5 py-1">Standard</th><th className="px-1 py-1 w-10">WT</th><th className="px-1 py-1 w-8">A</th>{two&&<th className="px-1 py-1 w-8">B</th>}<th className="px-1 py-1 w-10">Avg</th><th className="px-1 py-1 w-12">Wt score</th></tr></thead>
