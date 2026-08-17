@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 484 · New Pricing cheat sheet (Sales → 💰 Pricing): base garment prices by fabric + qty tier, add-ons, and a quick quote calculator. Seeded from past estimates; admin edits, sales view.";
+const BUILD = "Live build 485 · Pricing calculator: split the garment picker into two dropdowns — Garment, then Type / fabric — so it's simpler for sales.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3355,7 +3355,7 @@ function pricingTierKey(qty){ const q=Number(qty)||0; return q<50?'p1':q<100?'p2
 function PricingView({ profile }){
   const canEdit = profile.role==='admin';
   const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
-  const [baseId,setBaseId]=useState(''); const [qty,setQty]=useState(100); const [addQty,setAddQty]=useState({});
+  const [calcItem,setCalcItem]=useState(''); const [calcVariant,setCalcVariant]=useState(''); const [qty,setQty]=useState(100); const [addQty,setAddQty]=useState({});
   async function load(){ setLoading(true); const { data }=await sb.from('pricing_items').select('*').eq('active',true).order('kind',{ascending:true}).order('position',{ascending:true}); setRows(data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
   const base=rows.filter(r=>r.kind==='base'); const addons=rows.filter(r=>r.kind==='addon');
@@ -3368,8 +3368,11 @@ function PricingView({ profile }){
   const txtCell=(r,key,ph)=> canEdit
     ? <input defaultValue={r[key]||''} placeholder={ph} onBlur={e=>{ if(e.target.value!==(r[key]||'')) upd(r.id,{[key]:e.target.value||null}); }} className="w-full text-sm px-1.5 py-0.5 rounded border border-slate-200" />
     : <span>{r[key]||''}</span>;
-  // Calculator
-  const cbase=base.find(b=>b.id===baseId); const tk=pricingTierKey(qty); const basePrice=cbase?(Number(cbase[tk])||0):0;
+  // Calculator — garment first, then its type/fabric.
+  const garmentNames=[...new Set(base.map(b=>b.item).filter(Boolean))];
+  const variantsFor=base.filter(b=>b.item===calcItem);
+  const cbase = calcItem ? (variantsFor.length===1 ? variantsFor[0] : variantsFor.find(b=>(b.variant||'')===(calcVariant||''))) : null;
+  const tk=pricingTierKey(qty); const basePrice=cbase?(Number(cbase[tk])||0):0;
   let addPerPc=0, oneTime=0, pct=0;
   addons.forEach(a=>{ const c=Number(addQty[a.id]||0); if(!c) return; const price=Number(a.p1)||0; const u=(a.unit||'').toLowerCase();
     if(u.includes('%')) pct+=price; else if(u.includes('one-time')||u.includes('project')) oneTime+=price*c; else addPerPc+=price*c; });
@@ -3385,9 +3388,11 @@ function PricingView({ profile }){
         {/* Calculator */}
         <div className="bg-white border rounded-xl p-4">
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Quick quote calculator</div>
-          <div className="grid sm:grid-cols-3 gap-3 mb-3">
+          <div className="grid sm:grid-cols-4 gap-3 mb-3">
             <div><div className="text-[10px] uppercase text-slate-400 mb-1">Garment</div>
-              <select value={baseId} onChange={e=>setBaseId(e.target.value)} className="input text-sm"><option value="">— pick —</option>{base.map(b=><option key={b.id} value={b.id}>{b.item}{b.variant?` · ${b.variant}`:''}</option>)}</select></div>
+              <select value={calcItem} onChange={e=>{ setCalcItem(e.target.value); const vs=base.filter(b=>b.item===e.target.value); setCalcVariant(vs.length===1?(vs[0].variant||''):''); }} className="input text-sm"><option value="">— pick —</option>{garmentNames.map(g=><option key={g} value={g}>{g}</option>)}</select></div>
+            <div><div className="text-[10px] uppercase text-slate-400 mb-1">Type / fabric</div>
+              <select value={calcVariant} onChange={e=>setCalcVariant(e.target.value)} disabled={!calcItem} className="input text-sm disabled:bg-slate-50 disabled:text-slate-400"><option value="">{calcItem?'— pick —':'pick garment first'}</option>{variantsFor.map(b=><option key={b.id} value={b.variant||''}>{b.variant||'Standard'}</option>)}</select></div>
             <div><div className="text-[10px] uppercase text-slate-400 mb-1">Quantity</div><input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} className="input text-sm" /></div>
             <div><div className="text-[10px] uppercase text-slate-400 mb-1">Base @ {PRICING_TIERS.find(t=>t[0]===tk)[1]} tier</div><div className="text-lg font-bold">{peso(basePrice)}<span className="text-xs text-slate-400">/pc</span></div></div>
           </div>
