@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 473 · Printing, Embroidery & Knitting cards get a 📋 Log daily output button (date · item · machine · operators · pcs), same as the pressing log.";
+const BUILD = "Live build 474 · Trip Tickets: the driver's scheduled stops now show even before the ticket is started (was hidden until Start).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20802,10 +20802,26 @@ function TripTicketsView({ profile }){
           ) : loading ? (
             <div className="bg-white border rounded-xl px-4 py-8 text-center text-slate-400 text-sm">Loading…</div>
           ) : !ticket ? (
-            <div className="bg-white border rounded-xl p-5 text-center">
-              <div className="text-sm text-slate-600 mb-3">No ticket yet for {driverFor(driverId)?.name} on this day.</div>
-              {vehicleId && vehicleFor(vehicleId)?.odometer!=null && <div className="text-xs text-slate-500 mb-3">Start odometer will pre-fill from <b>{vehicleFor(vehicleId)?.name}</b>: <b>{Number(vehicleFor(vehicleId)?.odometer).toLocaleString()} km</b> (you can adjust).</div>}
-              <button onClick={startTicket} className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-700">▶ Start today’s ticket</button>
+            <div className="bg-white border rounded-xl p-5">
+              {deliveries.length>0 && (
+                <div className="mb-4">
+                  <div className="text-[11px] uppercase text-slate-400 font-semibold mb-2">📋 Today’s schedule · {deliveries.length} stop{deliveries.length===1?'':'s'}</div>
+                  <div className="space-y-1">
+                    {deliveries.map((d,i)=>(
+                      <div key={d.id} className="flex items-center gap-2 text-sm border rounded-lg px-2.5 py-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 w-5 text-center shrink-0">{i+1}</span>
+                        <div className="min-w-0 flex-1"><div className="font-medium truncate">{d.client_name||d.item||'Stop'}</div>{d.item && d.client_name && <div className="text-[11px] text-slate-500 truncate">{d.item}</div>}</div>
+                        {d.status && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 shrink-0">{d.status}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="text-center">
+                <div className="text-sm text-slate-600 mb-3">{deliveries.length>0 ? 'Start your ticket to begin timing each stop, log breaks, mileage & gas.' : `No ticket yet for ${driverFor(driverId)?.name} on this day.`}</div>
+                {vehicleId && vehicleFor(vehicleId)?.odometer!=null && <div className="text-xs text-slate-500 mb-3">Start odometer will pre-fill from <b>{vehicleFor(vehicleId)?.name}</b>: <b>{Number(vehicleFor(vehicleId)?.odometer).toLocaleString()} km</b> (you can adjust).</div>}
+                <button onClick={startTicket} className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-700">▶ Start today’s ticket</button>
+              </div>
             </div>
           ) : (
             <>
