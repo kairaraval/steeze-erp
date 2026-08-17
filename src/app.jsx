@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 483 · Replacement Requests: production supervisor can raise a new request and route it straight to any department (＋ New request).";
+const BUILD = "Live build 484 · New Pricing cheat sheet (Sales → 💰 Pricing): base garment prices by fabric + qty tier, add-ons, and a quick quote calculator. Seeded from past estimates; admin edits, sales view.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3345,6 +3345,90 @@ function SalesResourceForm({ profile, category, existing, defaultFolder, onClose
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Pricing cheat sheet — base garment prices (by fabric + qty tier) + add-ons,
+// plus a quick quote calculator. Admin edits; everyone in sales reads.
+const PRICING_TIERS=[['p1','<50'],['p2','50–99'],['p3','100–199'],['p4','200+']];
+function pricingTierKey(qty){ const q=Number(qty)||0; return q<50?'p1':q<100?'p2':q<200?'p3':'p4'; }
+function PricingView({ profile }){
+  const canEdit = profile.role==='admin';
+  const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
+  const [baseId,setBaseId]=useState(''); const [qty,setQty]=useState(100); const [addQty,setAddQty]=useState({});
+  async function load(){ setLoading(true); const { data }=await sb.from('pricing_items').select('*').eq('active',true).order('kind',{ascending:true}).order('position',{ascending:true}); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  const base=rows.filter(r=>r.kind==='base'); const addons=rows.filter(r=>r.kind==='addon');
+  async function upd(id,patch){ if(!canEdit) return; setRows(rs=>rs.map(r=>r.id===id?{...r,...patch}:r)); try{ await sb.from('pricing_items').update({ ...patch, updated_by:profile.id, updated_at:new Date().toISOString() }).eq('id',id); }catch(e){ alert(e.message||e); } }
+  async function addRow(kind){ if(!canEdit) return; const pos=(rows.filter(r=>r.kind===kind).reduce((m,r)=>Math.max(m,Number(r.position)||0),0))+10; const { data,error }=await sb.from('pricing_items').insert({ kind, item: kind==='base'?'New garment':'New add-on', variant: kind==='base'?'':null, unit: kind==='addon'?'per pc':null, p1:0, position:pos, updated_by:profile.id }).select('*').single(); if(error){ alert(error.message); return; } if(data) setRows(rs=>[...rs,data]); }
+  async function delRow(id){ if(!canEdit) return; if(!confirm('Remove this pricing row?')) return; await sb.from('pricing_items').update({ active:false }).eq('id',id); setRows(rs=>rs.filter(r=>r.id!==id)); }
+  const numCell=(r,key)=> canEdit
+    ? <input type="number" defaultValue={r[key]!=null?r[key]:''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(String(v)!==String(r[key])) upd(r.id,{[key]:v}); }} className="w-20 text-right text-sm px-1.5 py-0.5 rounded border border-slate-300 bg-yellow-50" />
+    : <span className="font-semibold">{r[key]!=null?peso(r[key]):'—'}</span>;
+  const txtCell=(r,key,ph)=> canEdit
+    ? <input defaultValue={r[key]||''} placeholder={ph} onBlur={e=>{ if(e.target.value!==(r[key]||'')) upd(r.id,{[key]:e.target.value||null}); }} className="w-full text-sm px-1.5 py-0.5 rounded border border-slate-200" />
+    : <span>{r[key]||''}</span>;
+  // Calculator
+  const cbase=base.find(b=>b.id===baseId); const tk=pricingTierKey(qty); const basePrice=cbase?(Number(cbase[tk])||0):0;
+  let addPerPc=0, oneTime=0, pct=0;
+  addons.forEach(a=>{ const c=Number(addQty[a.id]||0); if(!c) return; const price=Number(a.p1)||0; const u=(a.unit||'').toLowerCase();
+    if(u.includes('%')) pct+=price; else if(u.includes('one-time')||u.includes('project')) oneTime+=price*c; else addPerPc+=price*c; });
+  const perPc=basePrice+addPerPc; const subtotal=perPc*(Number(qty)||0)+oneTime; const total=subtotal*(1+pct/100);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <h1 className="text-2xl font-bold">💰 Pricing Cheat Sheet</h1>
+        <p className="text-slate-500 text-sm">Base garment price by fabric + quantity tier, then stack add-ons. {canEdit?'You can edit any yellow price.':'Read-only — ask admin to change prices.'}</p>
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : (
+      <div className="space-y-5 max-w-5xl">
+        {/* Calculator */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Quick quote calculator</div>
+          <div className="grid sm:grid-cols-3 gap-3 mb-3">
+            <div><div className="text-[10px] uppercase text-slate-400 mb-1">Garment</div>
+              <select value={baseId} onChange={e=>setBaseId(e.target.value)} className="input text-sm"><option value="">— pick —</option>{base.map(b=><option key={b.id} value={b.id}>{b.item}{b.variant?` · ${b.variant}`:''}</option>)}</select></div>
+            <div><div className="text-[10px] uppercase text-slate-400 mb-1">Quantity</div><input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} className="input text-sm" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 mb-1">Base @ {PRICING_TIERS.find(t=>t[0]===tk)[1]} tier</div><div className="text-lg font-bold">{peso(basePrice)}<span className="text-xs text-slate-400">/pc</span></div></div>
+          </div>
+          {base.length>0 && (
+            <div className="mb-3">
+              <div className="text-[10px] uppercase text-slate-400 mb-1">Add-ons (enter how many per piece / how many times)</div>
+              <div className="grid sm:grid-cols-2 gap-1.5">
+                {addons.map(a=>(<label key={a.id} className="flex items-center gap-2 text-xs bg-slate-50 border rounded px-2 py-1"><input type="number" min="0" value={addQty[a.id]||''} onChange={e=>setAddQty(q=>({...q,[a.id]:e.target.value}))} className="w-14 text-right px-1 py-0.5 rounded border" placeholder="0" /><span className="flex-1">{a.item} <span className="text-slate-400">· {peso(a.p1)} {a.unit}</span></span></label>))}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-end gap-4 border-t pt-2 text-sm">
+            <span className="text-slate-500">Add-ons/pc <b>{peso(addPerPc)}</b></span>
+            <span className="text-slate-500">Price/pc <b>{peso(perPc)}</b></span>
+            {oneTime>0 && <span className="text-slate-500">One-time <b>{peso(oneTime)}</b></span>}
+            {pct>0 && <span className="text-slate-500">Rush <b>+{pct}%</b></span>}
+            <span className="text-lg font-bold text-emerald-700">Order total {peso(total)}</span>
+          </div>
+        </div>
+
+        {/* Base prices */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>Base garment prices (₱ / pc)</span>{canEdit && <button onClick={()=>addRow('base')} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">+ Add garment</button>}</div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Fabric / Type</th>{PRICING_TIERS.map(t=><th key={t[0]} className="text-right px-3 py-2">{t[1]}</th>)}<th className="text-left px-3 py-2">Notes</th>{canEdit&&<th></th>}</tr></thead>
+            <tbody>{base.map(r=>(<tr key={r.id} className="border-t"><td className="px-3 py-1.5">{txtCell(r,'item')}</td><td className="px-3 py-1.5">{txtCell(r,'variant')}</td>{PRICING_TIERS.map(t=><td key={t[0]} className="px-3 py-1.5 text-right">{numCell(r,t[0])}</td>)}<td className="px-3 py-1.5 text-xs text-slate-500 min-w-[180px]">{txtCell(r,'notes')}</td>{canEdit&&<td className="px-2"><button onClick={()=>delRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}</tr>))}</tbody>
+          </table></div>
+        </div>
+
+        {/* Add-ons */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>Add-ons &amp; one-time fees</span>{canEdit && <button onClick={()=>addRow('addon')} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">+ Add add-on</button>}</div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Add-on / Service</th><th className="text-left px-3 py-2">Unit</th><th className="text-right px-3 py-2">Price</th><th className="text-left px-3 py-2">Notes</th>{canEdit&&<th></th>}</tr></thead>
+            <tbody>{addons.map(r=>(<tr key={r.id} className="border-t"><td className="px-3 py-1.5">{txtCell(r,'item')}</td><td className="px-3 py-1.5 w-40">{txtCell(r,'unit','per pc')}</td><td className="px-3 py-1.5 text-right">{numCell(r,'p1')}</td><td className="px-3 py-1.5 text-xs text-slate-500 min-w-[180px]">{txtCell(r,'notes')}</td>{canEdit&&<td className="px-2"><button onClick={()=>delRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}</tr>))}</tbody>
+          </table></div>
+        </div>
+        <div className="text-[11px] text-slate-400">Seeded from your past estimates (medians). Rows noted “CONFIRM” were bundled into old prices — verify. Base prices assume standard construction incl. 1 logo unless the fabric note says otherwise.</div>
+      </div>
+      )}
+    </div>
   );
 }
 
@@ -37382,10 +37466,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -38110,7 +38194,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -38120,7 +38204,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -38134,7 +38218,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -38314,6 +38398,7 @@ function App(){
         {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>openLeadFromDept({ lead:l, job:(graphicJobs||[]).find(j=>j.lead_id===l.id && !j.deleted_at), jobType:'graphic', canSendToPrinting:true })} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
+        {view==='pricing' && <PricingView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
