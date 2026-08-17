@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 479 · Delivery schedule: pick the contact person from a dropdown of the client's saved contacts (auto-fills name + phone).";
+const BUILD = "Live build 480 · Delivery schedule: a newly-typed contact is saved back to the client's contact list for next time.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21539,6 +21539,21 @@ function DeliveryEditModal({ delivery, date, drivers, clients, onClose, onSaved 
       } else {
         const { error } = await sb.from('logistics_deliveries').update(payload).eq('id', delivery.id);
         if(error) throw error;
+      }
+      // If a brand-new contact was typed for a saved client, add them to that
+      // client's contact list so it's there next time.
+      if(d.client_id && (d.contact.trim() || d.contact_phone.trim())){
+        const c=(clients||[]).find(x=>x.id===d.client_id);
+        if(c){
+          const norm=(s)=>String(s||'').trim().toLowerCase();
+          const existing=Array.isArray(c.contacts)?c.contacts:[];
+          const already=existing.some(x=> norm(x.name||x.contact_name)===norm(d.contact) && norm(x.phone||x.contact_phone)===norm(d.contact_phone))
+            || (norm(c.contact)===norm(d.contact) && norm(c.phone)===norm(d.contact_phone));
+          if(!already){
+            const next=[...existing, { name:d.contact.trim(), phone:d.contact_phone.trim() }];
+            try{ await sb.from('clients').update({ contacts: next }).eq('id', c.id); }catch(_){}
+          }
+        }
       }
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
