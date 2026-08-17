@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 477 · RFP: Accounting can now open the actual printable PO preview (🖨 Print preview) straight from the RFP.";
+const BUILD = "Live build 478 · Subcon payroll: add a manual deduction + reason (e.g. rejects) — net payable is what gets paid, shown on the list, payout and printable voucher.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35048,6 +35048,9 @@ function canRunSubconPayroll(profile){
   const r = profile?.role;
   return r==='admin' || r==='accounting' || r==='accounting_officer' || r==='purchasing_admin';
 }
+// Net payable for a subcon payroll = garment total minus any manual deduction
+// (e.g. amount withheld for rejects). Never goes below zero.
+function subconNet(p){ return Math.max(0, (Number(p?.total_amount)||0) - (Number(p?.deduction)||0)); }
 
 // Derive return totals + status for a single send batch.
 function subconSendTotals(send, allReturns){
@@ -36054,6 +36057,8 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
   const initialItems = (payrollItems||[]).filter(it => it.payroll_id === payroll.id).sort((a,b)=>(a.position||0)-(b.position||0));
   const [weekEnding,setWeekEnding]=useState(payroll.week_ending||'');
   const [notes,setNotes]=useState(payroll.notes||'');
+  const [deduction,setDeduction]=useState(payroll.deduction!=null?String(payroll.deduction):'');
+  const [deductionReason,setDeductionReason]=useState(payroll.deduction_reason||'');
   const [rows,setRows]=useState(initialItems.map(it => ({
     id: it.id, send_id: it.send_id||null,
     garment: it.garment||'',
@@ -36066,8 +36071,11 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
   function removeRow(i){ setRows(p => p.filter((_,idx) => idx!==i)); }
   const totalGarments = rows.reduce((s,r) => s + (Number(r.garments_paid)||0), 0);
   const totalAmount   = rows.reduce((s,r) => s + (Number(r.garments_paid)||0) * (Number(r.rate_per_garment)||0), 0);
+  const deductNum = Math.max(0, Number(deduction)||0);
+  const netPay = Math.max(0, totalAmount - deductNum);
   async function save(){
     if(!weekEnding){ setMsg('Week ending date is required.'); return; }
+    if(deductNum>totalAmount){ setMsg('Deduction cannot be more than the payroll total.'); return; }
     setBusy(true); setMsg('');
     try {
       // 1) Header update with recomputed totals.
@@ -36076,6 +36084,8 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
         notes: notes||null,
         total_garments: totalGarments,
         total_amount: totalAmount,
+        deduction: deductNum,
+        deduction_reason: deductionReason.trim()||null,
       }).eq('id', payroll.id);
       if(e1) throw e1;
       // 2) Wipe + reinsert items. Simpler + safer than diffing IDs; small N.
@@ -36150,6 +36160,19 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
           </table>
         </div>
         <button onClick={addRow} className="text-xs px-3 py-1.5 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200">+ Add line item</button>
+        {/* Manual deduction — e.g. amount withheld for rejects */}
+        <div className="border border-rose-100 bg-rose-50/40 rounded-lg p-3">
+          <div className="text-[10px] uppercase text-rose-600 font-semibold mb-2">Manual deduction · e.g. rejects / defects withheld from this payout</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <div><label className="text-xs font-semibold text-slate-500">Deduction (₱)</label><input type="number" min="0" step="0.01" value={deduction} onChange={e=>setDeduction(e.target.value)} placeholder="0.00" className="w-full border rounded px-2 py-1.5 text-right font-mono" /></div>
+            <div className="sm:col-span-2"><label className="text-xs font-semibold text-slate-500">Reason</label><input value={deductionReason} onChange={e=>setDeductionReason(e.target.value)} placeholder="e.g. 12 pcs rejects — stitching defect" className="w-full border rounded px-2 py-1.5" /></div>
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-4 text-sm">
+            <span className="text-slate-500">Gross {peso(totalAmount)}</span>
+            {deductNum>0 && <span className="text-rose-600">− {peso(deductNum)}</span>}
+            <span className="font-bold text-emerald-700">Net payable {peso(netPay)}</span>
+          </div>
+        </div>
         <div>
           <label className="text-xs font-semibold text-slate-500">Notes</label>
           <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" placeholder="Optional — context for why this payroll was edited" />
@@ -36170,7 +36193,7 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
   const items = (payrollItems||[]).filter(it => it.payroll_id === payroll.id).sort((a,b)=>(a.position||0)-(b.position||0));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Admin + Production Supervisor may edit / reopen / void payroll logs.
-  const canEditPayroll = profile.role==='admin' || profile.role==='production_supervisor';
+  const canEditPayroll = profile.role==='admin' || profile.role==='production_supervisor' || canRunSubconPayroll(profile);
   async function finalize(){
     if(!confirm('Finalize this payroll? Once finalized, it locks the line items and is ready for payment.')) return;
     setBusy(true);
@@ -36258,10 +36281,14 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
             </tr>
           ))}
             <tr className="bg-slate-50 font-bold">
-              <td colSpan="2" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total garments / Amount</td>
+              <td colSpan="2" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total garments / {Number(payroll.deduction)>0?'Gross':'Amount'}</td>
               <td className="px-2 py-2 text-right border-r border-slate-800">{payroll.total_garments}</td>
               <td className="px-2 py-2 text-right text-base">{peso(payroll.total_amount)}</td>
             </tr>
+            {Number(payroll.deduction)>0 && (<>
+              <tr className="border-b border-slate-400"><td colSpan="3" className="px-2 py-1.5 text-right border-r border-slate-800 text-rose-700">Less: deduction{payroll.deduction_reason?` — ${payroll.deduction_reason}`:''}</td><td className="px-2 py-1.5 text-right text-rose-700 font-semibold">− {peso(payroll.deduction)}</td></tr>
+              <tr className="bg-slate-100 font-bold"><td colSpan="3" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Net payable</td><td className="px-2 py-2 text-right text-base text-emerald-700">{peso(subconNet(payroll))}</td></tr>
+            </>)}
           </tbody>
         </table>
         <div className="grid grid-cols-2 gap-6 mt-8 text-xs">
@@ -36310,7 +36337,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   const [summaryWeek,setSummaryWeek]=useState('');
   const [payrollWeek,setPayrollWeek]=useState('');       // '' = all weeks
   const [payrollStatus,setPayrollStatus]=useState('');   // '' | 'for_payment' | 'paid'
-  const canEditPayrollRow = profile.role==='admin' || profile.role==='production_supervisor';
+  const canEditPayrollRow = profile.role==='admin' || profile.role==='production_supervisor' || canRunSubconPayroll(profile);
 
   const sendRows = (subconSends||[])
     .filter(s => !search || (`${s.number} ${s.garment} ${s.client_name||''} ${(subcons||[]).find(x=>x.id===s.subcon_id)?.name||''}`).toLowerCase().includes(search.toLowerCase()))
@@ -36601,14 +36628,15 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
           .map(p=>({ p, subcon:(subcons||[]).find(x=>x.id===p.subcon_id) }))
           .sort((a,b)=>String(a.subcon?.name||'').localeCompare(String(b.subcon?.name||'')));
         const totGarments = rows.reduce((s,r)=>s+Number(r.p.total_garments||0),0);
-        const totAmount = rows.reduce((s,r)=>s+Number(r.p.total_amount||0),0);
-        const paidAmt = rows.filter(r=>r.p.status==='paid').reduce((s,r)=>s+Number(r.p.total_amount||0),0);
+        const totAmount = rows.reduce((s,r)=>s+subconNet(r.p),0);
+        const paidAmt = rows.filter(r=>r.p.status==='paid').reduce((s,r)=>s+subconNet(r.p),0);
         const unpaid = rows.filter(r=>r.p.status!=='paid' && r.p.status!=='cancelled');
         async function markPaid(p){ if(!confirm(`Mark ${p.number} as PAID?`)) return; const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload && reload(); }
         // Batch payout: pay every unpaid subcon for the week (draft or finalized)
         // as one expense + one bank deduction. Recording the payout marks them paid.
+        // Amounts are NET of any manual deduction (e.g. rejects withheld).
         const payoutRows = unpaid;
-        const payoutLines = payoutRows.map(r=>({ name:r.subcon?.name||'Subcon', amount:Number(r.p.total_amount||0) }));
+        const payoutLines = payoutRows.map(r=>({ name:r.subcon?.name||'Subcon', amount:subconNet(r.p) }));
         const periodStart = activeWeek ? (()=>{ const d=new Date(activeWeek+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })() : activeWeek;
         async function markPayoutPaid(payoutId){ const ids=payoutRows.map(r=>r.p.id); if(ids.length){ const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString(), payout_id:payoutId }).in('id', ids); if(error) throw error; } }
         return (
@@ -36640,7 +36668,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                     <td className="px-3 py-2 font-semibold">{subcon?.name||'—'}</td>
                     <td className="px-3 py-2 font-mono text-xs">{p.number}</td>
                     <td className="px-3 py-2 text-right">{p.total_garments}</td>
-                    <td className="px-3 py-2 text-right font-bold">{peso(p.total_amount)}</td>
+                    <td className="px-3 py-2 text-right font-bold">{peso(subconNet(p))}{Number(p.deduction)>0 && <div className="text-[10px] font-normal text-rose-600" title={p.deduction_reason||'Deduction'}>gross {peso(p.total_amount)} · −{peso(p.deduction)}{p.deduction_reason?` (${p.deduction_reason})`:''}</div>}</td>
                     <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View</button>
@@ -36673,7 +36701,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       {singleSubconPayout && <PayoutModal kind="subcon"
         periodStart={(()=>{ const d=new Date(String(singleSubconPayout.p.week_ending)+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })()}
         periodEnd={singleSubconPayout.p.week_ending}
-        lines={[{ name: singleSubconPayout.subcon?.name||'Subcon', amount:Number(singleSubconPayout.p.total_amount||0) }]}
+        lines={[{ name: singleSubconPayout.subcon?.name||'Subcon', amount:subconNet(singleSubconPayout.p) }]}
         bankAccounts={bankAccounts} profile={profile}
         onMarkPaid={async(payoutId)=>{ const { error }=await sb.from('subcon_payrolls').update({ status:'paid', paid_at:new Date().toISOString(), payout_id:payoutId }).eq('id', singleSubconPayout.p.id); if(error) throw error; }}
         onClose={()=>setSingleSubconPayout(null)}
