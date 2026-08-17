@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 485 · Pricing calculator: split the garment picker into two dropdowns — Garment, then Type / fabric — so it's simpler for sales.";
+const BUILD = "Live build 486 · Pricing: each garment row has a + fabric button to quickly add another fabric/type under the same garment.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3360,7 +3360,7 @@ function PricingView({ profile }){
   useEffect(()=>{ load(); },[]);
   const base=rows.filter(r=>r.kind==='base'); const addons=rows.filter(r=>r.kind==='addon');
   async function upd(id,patch){ if(!canEdit) return; setRows(rs=>rs.map(r=>r.id===id?{...r,...patch}:r)); try{ await sb.from('pricing_items').update({ ...patch, updated_by:profile.id, updated_at:new Date().toISOString() }).eq('id',id); }catch(e){ alert(e.message||e); } }
-  async function addRow(kind){ if(!canEdit) return; const pos=(rows.filter(r=>r.kind===kind).reduce((m,r)=>Math.max(m,Number(r.position)||0),0))+10; const { data,error }=await sb.from('pricing_items').insert({ kind, item: kind==='base'?'New garment':'New add-on', variant: kind==='base'?'':null, unit: kind==='addon'?'per pc':null, p1:0, position:pos, updated_by:profile.id }).select('*').single(); if(error){ alert(error.message); return; } if(data) setRows(rs=>[...rs,data]); }
+  async function addRow(kind, prefillItem, afterPos){ if(!canEdit) return; const pos = afterPos!=null ? (Number(afterPos)||0)+1 : (rows.filter(r=>r.kind===kind).reduce((m,r)=>Math.max(m,Number(r.position)||0),0))+10; const { data,error }=await sb.from('pricing_items').insert({ kind, item: prefillItem||(kind==='base'?'New garment':'New add-on'), variant: kind==='base'?'':null, unit: kind==='addon'?'per pc':null, p1:0, position:pos, updated_by:profile.id }).select('*').single(); if(error){ alert(error.message); return; } if(data) setRows(rs=>[...rs,data].sort((a,b)=> a.kind===b.kind ? ((Number(a.position)||0)-(Number(b.position)||0)) : (a.kind<b.kind?-1:1))); }
   async function delRow(id){ if(!canEdit) return; if(!confirm('Remove this pricing row?')) return; await sb.from('pricing_items').update({ active:false }).eq('id',id); setRows(rs=>rs.filter(r=>r.id!==id)); }
   const numCell=(r,key)=> canEdit
     ? <input type="number" defaultValue={r[key]!=null?r[key]:''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(String(v)!==String(r[key])) upd(r.id,{[key]:v}); }} className="w-20 text-right text-sm px-1.5 py-0.5 rounded border border-slate-300 bg-yellow-50" />
@@ -3418,7 +3418,7 @@ function PricingView({ profile }){
           <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>Base garment prices (₱ / pc)</span>{canEdit && <button onClick={()=>addRow('base')} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">+ Add garment</button>}</div>
           <div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-[11px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Fabric / Type</th>{PRICING_TIERS.map(t=><th key={t[0]} className="text-right px-3 py-2">{t[1]}</th>)}<th className="text-left px-3 py-2">Notes</th>{canEdit&&<th></th>}</tr></thead>
-            <tbody>{base.map(r=>(<tr key={r.id} className="border-t"><td className="px-3 py-1.5">{txtCell(r,'item')}</td><td className="px-3 py-1.5">{txtCell(r,'variant')}</td>{PRICING_TIERS.map(t=><td key={t[0]} className="px-3 py-1.5 text-right">{numCell(r,t[0])}</td>)}<td className="px-3 py-1.5 text-xs text-slate-500 min-w-[180px]">{txtCell(r,'notes')}</td>{canEdit&&<td className="px-2"><button onClick={()=>delRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}</tr>))}</tbody>
+            <tbody>{base.map(r=>(<tr key={r.id} className="border-t"><td className="px-3 py-1.5">{txtCell(r,'item')}</td><td className="px-3 py-1.5">{txtCell(r,'variant')}</td>{PRICING_TIERS.map(t=><td key={t[0]} className="px-3 py-1.5 text-right">{numCell(r,t[0])}</td>)}<td className="px-3 py-1.5 text-xs text-slate-500 min-w-[180px]">{txtCell(r,'notes')}</td>{canEdit&&<td className="px-2 whitespace-nowrap"><button onClick={()=>addRow('base', r.item, r.position)} title={`Add another fabric/type for ${r.item}`} className="text-[11px] text-indigo-600 hover:underline mr-2">+ fabric</button><button onClick={()=>delRow(r.id)} className="text-slate-300 hover:text-rose-500">✕</button></td>}</tr>))}</tbody>
           </table></div>
         </div>
 
