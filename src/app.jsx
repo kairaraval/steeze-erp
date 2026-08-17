@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 480 · Delivery schedule: a newly-typed contact is saved back to the client's contact list for next time.";
+const BUILD = "Live build 481 · Evaluations: HR can send an employee's evaluation to their team leader to rate — it lands in the leader's Inbox + a 'My Evaluations to Rate' list; they fill their ratings and submit back to HR to finalize.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13328,7 +13328,7 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
                   <td className="px-3 py-2 text-xs text-slate-500">{r.review_period||(r.evaluation_date?fmtDate(r.evaluation_date):'—')}</td>
                   <td className="px-3 py-2 text-center">{r.grand_score!=null?<span className="text-xs font-bold px-2 py-1 rounded bg-indigo-100 text-indigo-700">{Number(r.grand_score).toFixed(2)}/5</span>:<span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-2">{r.band_level?<span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${evalBandColor(r.band_level)}`}>{r.band_level}</span>:'—'}</td>
-                  <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${r.status==='completed'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{r.status||'draft'}</span></td>
+                  <td className="px-3 py-2">{(()=>{ const sc=r.status==='completed'?'bg-emerald-100 text-emerald-700':r.status==='submitted'?'bg-blue-100 text-blue-700':r.status==='assigned'?'bg-indigo-100 text-indigo-700':'bg-amber-100 text-amber-700'; const lbl=r.status==='submitted'?'submitted':r.status==='assigned'?'with leader':(r.status||'draft'); const who=r.assigned_to?((profiles||[]).find(p=>p.id===r.assigned_to)):null; return (<><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sc}`}>{lbl}</span>{who && (r.status==='assigned'||r.status==='submitted') && <div className="text-[10px] text-slate-400 mt-0.5">{who.name||who.email}</div>}</>); })()}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrintRev(r);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print / PDF">🖨</button>{canManage && <button onClick={(e)=>{e.stopPropagation(); delRev(r);}} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
                 </tr>
               ))}</tbody>
@@ -13382,6 +13382,41 @@ function EvalStartModal({ employees, templates, onClose, onStart }){
   );
 }
 
+// Team-leader / supervisor view of evaluations HR sent them to rate.
+function MyEvaluationsView({ profile, profiles, employees, evalTemplates, evalReviews, reload }){
+  const [fillRev,setFillRev]=useState(null);
+  const [printRev,setPrintRev]=useState(null);
+  const mine=(evalReviews||[]).filter(r=>r.assigned_to===profile.id).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const toRate=mine.filter(r=>r.status==='assigned');
+  const done=mine.filter(r=>r.status!=='assigned');
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const tplName=(id)=>(evalTemplates||[]).find(t=>t.id===id)?.name||'—';
+  const card=(r)=>(
+    <div key={r.id} className="bg-white border rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">{empName(r.employee_id)} <span className="text-xs text-slate-400">· {r.position||tplName(r.template_id)}</span></div>
+        <div className="text-xs text-slate-500">{tplName(r.template_id)}{r.review_period?` · ${r.review_period}`:''}</div>
+      </div>
+      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${r.status==='assigned'?'bg-amber-100 text-amber-700':r.status==='submitted'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>{r.status==='assigned'?'To rate':r.status==='submitted'?'Submitted':r.status}</span>
+      <button onClick={()=>setFillRev(r)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">{r.status==='assigned'?'✍ Rate':'Open'}</button>
+    </div>
+  );
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <h1 className="text-2xl font-bold">📋 My Evaluations to Rate</h1>
+        <p className="text-slate-500 text-sm">Evaluations HR sent you. Fill in your ratings + comments, then Submit to HR.</p>
+      </div>
+      <div className="space-y-4">
+        <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Waiting on you ({toRate.length})</div><div className="space-y-2">{toRate.length?toRate.map(card):<div className="text-sm text-slate-400 bg-white border rounded-xl p-6 text-center">Nothing waiting on you right now.</div>}</div></div>
+        {done.length>0 && <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Submitted / done ({done.length})</div><div className="space-y-2">{done.map(card)}</div></div>}
+      </div>
+      {fillRev && <EvalFillModal review={fillRev} template={(evalTemplates||[]).find(t=>t.id===fillRev.template_id)} profile={profile} profiles={profiles} employees={employees} onClose={()=>setFillRev(null)} onSaved={()=>{ setFillRev(null); reload&&reload(); }} onPrint={(r)=>{ setFillRev(null); setPrintRev(r); }} />}
+      {printRev && <EvalPrintView review={printRev} template={(evalTemplates||[]).find(t=>t.id===printRev.template_id)} employees={employees} profiles={profiles} onClose={()=>setPrintRev(null)} />}
+    </div>
+  );
+}
+
 function EvalFillModal({ review, template, profile, profiles, employees, onClose, onSaved, onPrint }){
   const emp=(employees||[]).find(e=>e.id===review.employee_id);
   const tpl = template || { name:review.template_name, structure:{ scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:[] } };
@@ -13397,20 +13432,34 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
   const cats=(tpl?.structure?.categories)||[];
   const scale=(tpl?.structure?.scale&&tpl.structure.scale.length)?tpl.structure.scale:DEFAULT_EVAL_SCALE;
 
-  async function save(markComplete){
+  async function save(markComplete, over){
     setBusy(true); setMsg('');
     const payload={ ...review, template_id:review.template_id||template?.id||null, template_name:tpl.name||review.template_name||null, position: emp?.position||review.position||null,
       two_raters:two, answers, reviewer_id:f.reviewer_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
       grand_score:Number(comp.grand.toFixed(3)), kpi_score: comp.catTotals['kpi']!=null?Number(comp.catTotals['kpi'].toFixed(3)):null, competency_score: comp.catTotals['competency']!=null?Number(comp.catTotals['competency'].toFixed(3)):null,
       band_level:band?.level||null, band_result:band?.result||null,
       areas_improvement:f.areas_improvement||null, strong_points:f.strong_points||null, employee_review:f.employee_review||null, outcome,
-      status: markComplete?'completed':(f.status||'draft'), updated_at:new Date().toISOString() };
+      status: (over&&over.status) || (markComplete?'completed':(f.status||'draft')), updated_at:new Date().toISOString(), ...((over&&over.fields)||{}) };
     delete payload.id;
-    let error;
+    let error, savedId=review.id;
     if(review.id){ ({ error }=await sb.from('eval_reviews').update(payload).eq('id',review.id)); }
-    else { ({ error }=await sb.from('eval_reviews').insert({ ...payload, created_by:profile.id })); }
+    else { const res=await sb.from('eval_reviews').insert({ ...payload, created_by:profile.id }).select('id').single(); error=res.error; savedId=res.data?.id; }
     setBusy(false); if(error){ setMsg(error.message); return; }
+    if(over && over.notify){ try{ await over.notify(savedId); }catch(_){} }
     onSaved();
+  }
+  const canAssign = ['admin','hr','manager'].includes(profile.role);
+  const isLeaderView = !!review.assigned_to && review.assigned_to===profile.id;
+  const assignedName = review.assigned_to ? (()=>{ const p=(profiles||[]).find(x=>x.id===review.assigned_to); return p?(p.name||p.email):'a team leader'; })() : '';
+  const [assignTo,setAssignTo]=useState(review.assigned_to||'');
+  async function sendToLeader(){
+    if(!assignTo){ setMsg('Pick the team leader to send this to.'); return; }
+    const now=new Date().toISOString();
+    await save(false, { status:'assigned', fields:{ assigned_to:assignTo, assigned_at:now, assigned_by:profile.id }, notify: async(id)=>{ if(assignTo && assignTo!==profile.id) await sb.from('notifications').insert({ recipient_id:assignTo, actor_id:profile.id, text:`📋 Please rate the evaluation of ${emp?fullName(emp):'an employee'}${f.review_period?` (${f.review_period})`:''}.`, link_view:'my-evals', ref_type:'eval_review', ref_id:id, type:'system' }); } });
+  }
+  async function submitToHR(){
+    const now=new Date().toISOString();
+    await save(false, { status:'submitted', fields:{ submitted_at:now, submitted_by:profile.id }, notify: async(id)=>{ const hrIds=(profiles||[]).filter(p=>['hr','admin'].includes(p.role)).map(p=>p.id); const targets=[...new Set([...(review.created_by?[review.created_by]:[]), ...hrIds])].filter(x=>x&&x!==profile.id); if(targets.length) await sb.from('notifications').insert(targets.map(t=>({ recipient_id:t, actor_id:profile.id, text:`✅ ${(profile.name||profile.email||'A team leader')} submitted the evaluation of ${emp?fullName(emp):'an employee'} — ready for your review.`, link_view:'hr-reviews', ref_type:'eval_review', ref_id:id, type:'system' }))); } });
   }
 
   const RateCell=({cid,k})=> (
@@ -13502,13 +13551,36 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
             <textarea value={outcome.hr_notes||''} onChange={e=>setOutcome(o=>({...o, hr_notes:e.target.value}))} rows={3} placeholder="HR's recommendation, remarks, or follow-up notes for this evaluation…" className="input min-h-[64px]" /></div>
         </div>
 
+        {/* Assignment status + send-to-team-leader (HR routes it out for rating) */}
+        {(review.assigned_to || canAssign) && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+            {review.assigned_to && (
+              <div className="text-xs mb-2">
+                {review.status==='submitted'
+                  ? <span className="text-emerald-700 font-semibold">✅ Rated & submitted by {assignedName}{review.submitted_at?` · ${fmtDate(String(review.submitted_at).slice(0,10))}`:''} — review and finalize below.</span>
+                  : <span className="text-indigo-700 font-semibold">📋 Assigned to {assignedName} to rate{review.assigned_at?` · sent ${fmtDate(String(review.assigned_at).slice(0,10))}`:''}.</span>}
+              </div>
+            )}
+            {canAssign && (
+              <div className="flex items-end gap-2 flex-wrap">
+                <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Send to team leader / supervisor to rate</div>
+                  <select value={assignTo} onChange={e=>setAssignTo(e.target.value)} className="input text-sm"><option value="">— pick a team leader —</option>{(profiles||[]).slice().sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||''))).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select>
+                </div>
+                <button disabled={busy||!assignTo} onClick={sendToLeader} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">📤 {review.assigned_to?'Re-send':'Send to team leader'}</button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-2 pt-2 border-t flex-wrap">
           {msg && <span className="text-xs text-rose-600">{msg}</span>}
           {review.id && <button onClick={()=>onPrint&&onPrint(review)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">🖨 Print / PDF</button>}
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
           <button disabled={busy} onClick={()=>save(false)} className="px-4 py-2 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy?'Saving…':'Save draft'}</button>
-          <button disabled={busy} onClick={()=>save(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">Save &amp; complete</button>
+          {isLeaderView && !canAssign
+            ? <button disabled={busy} onClick={submitToHR} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">✅ Submit to HR</button>
+            : <button disabled={busy} onClick={()=>save(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">Save &amp; complete</button>}
         </div>
       </div>
     </Modal>
@@ -37266,6 +37338,8 @@ function App(){
     // Trip Tickets ride alongside the Daily Schedule — anyone who can see the
     // Logistics module can open them (drivers log, HR/finance review).
     if(allowed.has('logistics')) allowed.add('trip-tickets');
+    // Anyone can open the evaluations HR assigned to them to rate.
+    allowed.add('my-evals');
     // Manual Purchase Request intake lives in the Sales module — only sales
     // managers + sales assistants (and admin, who is unrestricted) may open it.
     if(profile.role==='manager' || profile.role==='assistant') allowed.add('pr-request');
@@ -37952,6 +38026,12 @@ function App(){
       return g;
     });
   }
+  // Show a "My Evaluations" entry for anyone HR has assigned an evaluation to
+  // rate (kept out of the way for everyone else).
+  if(Array.isArray(NAV) && NAV.length && (evalReviews||[]).some(r=>r.assigned_to===profile.id)){
+    const already = NAV.some(g=>Array.isArray(g.items)&&g.items.some(it=>it[0]==='my-evals'));
+    if(!already) NAV = [ NAV[0], { items:[['my-evals','My Evaluations','📋']] }, ...NAV.slice(1) ];
+  }
   function NavBtn([k,lbl,icon], keyPrefix){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
     // not error) so it stands out from inbox @mentions (which are rose).
@@ -38064,6 +38144,7 @@ function App(){
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
+        {view==='my-evals' && <MyEvaluationsView profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
