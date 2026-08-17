@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 476 · Purchasing: attach photos/PDFs to a PO; Accounting can view the PO items + attachments on the RFP (to match the quotation); each RFP now lists all payment entries with the running total paid.";
+const BUILD = "Live build 477 · RFP: Accounting can now open the actual printable PO preview (🖨 Print preview) straight from the RFP.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28443,6 +28443,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const [showPO,setShowPO]=useState(false);
+  const [poPrint,setPoPrint]=useState(false);
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const po = orders.find(o=>o.id===rfp.po_id);
@@ -28525,10 +28526,13 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose
             / estimate against the PO before paying. */}
         {po && (
           <div className="border rounded-lg">
-            <button onClick={()=>setShowPO(v=>!v)} className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50">
-              <span className="text-xs font-semibold uppercase text-slate-600">📄 Purchase Order {po.number||''} · {peso(po.total)}{poAtts.length?` · 📎 ${poAtts.length}`:''}</span>
-              <span className="text-[11px] text-slate-400">{showPO?'Hide':'View PO & attachments'}</span>
-            </button>
+            <div className="w-full flex items-center justify-between px-3 py-2 gap-2">
+              <button onClick={()=>setShowPO(v=>!v)} className="flex-1 flex items-center justify-between hover:opacity-80 text-left">
+                <span className="text-xs font-semibold uppercase text-slate-600">📄 Purchase Order {po.number||''} · {peso(po.total)}{poAtts.length?` · 📎 ${poAtts.length}`:''}</span>
+                <span className="text-[11px] text-slate-400 mr-2">{showPO?'Hide':'View items & attachments'}</span>
+              </button>
+              <button onClick={()=>setPoPrint(true)} className="text-[11px] px-2 py-1 rounded bg-slate-800 text-white font-semibold hover:bg-slate-900 shrink-0" title="Open the printable PO">🖨 Print preview</button>
+            </div>
             {showPO && (
               <div className="px-3 pb-3 border-t pt-2 space-y-2">
                 {poLines.length>0 ? (
@@ -28614,6 +28618,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose
           )}
         </div>
       </div>
+      {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
     </Modal>
   );
 }
