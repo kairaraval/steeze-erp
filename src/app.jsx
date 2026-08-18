@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 486 · Pricing: each garment row has a + fabric button to quickly add another fabric/type under the same garment.";
+const BUILD = "Live build 487 · Sewing board: Start/Pause/Finish timer (working hours only); cards sorted by earliest deadline; per-item sewing — pick which item is being sewn and set the in-house pcs to sew (rest may go to subcon).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5987,6 +5987,10 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   async function finishJob(j){ if(!j.start_at){ if(!confirm('This project has no start time. Mark it done anyway?')) return; } await patch(j,{ end_at: new Date().toISOString(), status:'done' }); }
   async function setTime(j, field, localVal){ await patch(j,{ [field]: localVal? new Date(localVal).toISOString() : null }); }
   async function del(id){ if(!confirm('Send this sewing job to Trash?')) return; await sb.from('sewing_jobs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',id); reload(); }
+  // Per-item sewing — a lead can pick which item(s) they're sewing (one project
+  // can have e.g. a polo + a jacket). In-house to-sew qty is editable in Report.
+  const canSew = profile.role==='admin' || profile.role==='production_supervisor' || profile.role==='sewing_lead';
+  async function toggleSewItem(j, idx){ const items=(Array.isArray(j.sew_items)?j.sew_items:[]).map((it,i)=> i===idx? {...it, active:!it.active} : it); await patch(j,{ sew_items: items }); }
 
   const doneJobs=jobs.filter(j=>SEWING_DONE.includes(j.status));
 
@@ -6008,7 +6012,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
 
       {tab==='board' && (
         <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {SEWING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key); return (
+          {SEWING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort(byDueAsc(j=>j.due_date)); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
@@ -6027,18 +6031,19 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold" title="Replacement requests">🔁 {repls.length}</span>}
                     </div>
                     {jobSewers(j).length>0 && <div className="mt-1.5 text-[10px] text-slate-400">🧵 {jobSewers(j).length} sewer{jobSewers(j).length===1?'':'s'} · manage in Report</div>}
-                    {/* Start / Finish + times */}
-                    <div className="mt-2 grid grid-cols-2 gap-1">
-                      <button onClick={()=>startJob(j)} disabled={!!j.start_at} className="text-[11px] py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200 disabled:opacity-40">▶ Start</button>
-                      <button onClick={()=>finishJob(j)} disabled={!!j.end_at} className="text-[11px] py-1 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200 disabled:opacity-40">✓ Finish</button>
-                    </div>
-                    {(j.start_at||j.end_at) && (
-                      <div className="mt-1.5 space-y-1 text-[10px] text-slate-500">
-                        <label className="flex items-center gap-1">Start<input type="datetime-local" value={toLocalInput(j.start_at)} onChange={e=>setTime(j,'start_at',e.target.value)} className="flex-1 border rounded px-1 py-0.5 text-[10px]" /></label>
-                        <label className="flex items-center gap-1">End&nbsp;<input type="datetime-local" value={toLocalInput(j.end_at)} onChange={e=>setTime(j,'end_at',e.target.value)} className="flex-1 border rounded px-1 py-0.5 text-[10px]" /></label>
-                        {hrs>0 && <div className="text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
+                    {/* Items to sew — tap to mark which item(s) are being sewn in-house */}
+                    {Array.isArray(j.sew_items) && j.sew_items.length>0 && (
+                      <div className="mt-1.5">
+                        <div className="text-[9px] uppercase font-semibold text-slate-400 mb-0.5">Items to sew · tap to select</div>
+                        <div className="flex flex-wrap gap-1">
+                          {j.sew_items.map((it,ix)=>(
+                            <button key={ix} onClick={()=>canSew && toggleSewItem(j,ix)} disabled={!canSew} title={canSew?'Toggle — currently sewing this item':''} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${it.active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200'} ${canSew?'hover:border-indigo-400':''}`}>{it.active?'🧵 ':''}{it.name||'Item'}{(it.sew_qty!=null&&it.sew_qty!=='')?` · ${it.sew_qty}`:(it.qty?` · ${it.qty}`:'')}</button>
+                          ))}
+                        </div>
                       </div>
                     )}
+                    {/* Start / Pause / Finish — counts working hours only */}
+                    <StartFinishBar row={j} table="sewing_jobs" reload={reload} />
                     {/* Actions */}
                     <div className="mt-2 flex items-center gap-1">
                       <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{SEWING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
@@ -6077,7 +6082,15 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
   function updateLocal(id,key,val){ setSewers(list=>list.map(s=> (s.id===id||s.name===id)? {...s,[key]:val} : s)); }
   function addSewer(empId){ if(!empId) return; const e=(sewerOptions||[]).find(x=>x.id===empId); if(!e) return; if(sewers.some(s=>s.id===empId)) return; const next=[...sewers, { id:empId, name:fullName(e), pcs:'', operation:'' }]; setSewers(next); saveSewers(next); }
   function removeSewer(empId){ const next=sewers.filter(s=>s.id!==empId); setSewers(next); saveSewers(next); }
-  const hrs=(job.start_at&&job.end_at)?(new Date(job.end_at)-new Date(job.start_at)):0;
+  // Per-item "to sew" (in-house pcs) + which item is being sewn.
+  const canSew = profile.role==='admin' || profile.role==='production_supervisor' || profile.role==='sewing_lead';
+  const [items,setItems]=useState(Array.isArray(job.sew_items)?job.sew_items:[]);
+  function setItemLocal(i,key,val){ setItems(list=>list.map((it,x)=>x===i?{...it,[key]:val}:it)); }
+  async function saveItems(next){ const arr=next||items; const { error }=await sb.from('sewing_jobs').update({ sew_items: arr }).eq('id', job.id); if(error){ alert(error.message); return; } reload && reload(); }
+  function addItem(){ const next=[...items,{ name:'', qty:0, sew_qty:'', active:false }]; setItems(next); }
+  function removeItem(i){ const next=items.filter((_,x)=>x!==i); setItems(next); saveItems(next); }
+  const totalToSew=items.reduce((s,it)=>s+(Number(it.sew_qty)||0),0);
+  const hrs=rowWorkedMs(job);
   const di=deadlineInfo(job.due_date, SEWING_DONE.includes(job.status));
   const stMeta=SEWING_STATUSES.find(s=>s.key===job.status);
   const fmtTs=(t)=> t? new Date(t).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
@@ -6104,7 +6117,25 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
           <div><div className="text-[10px] uppercase text-slate-400">Started</div><div className="font-medium">{fmtTs(job.start_at)}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Finished</div><div className="font-medium">{fmtTs(job.end_at)}</div></div>
         </div>
-        {hrs>0 && <div className="text-sm text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} to complete</div>}
+        {hrs>0 && <div className="text-sm text-emerald-700 font-semibold">⏱ {fmtHrs(hrs)} worked (working hours only)</div>}
+        {/* Items to sew — set the in-house pcs per item (some may go to subcon)
+            and mark which item(s) are being sewn. */}
+        <div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Items to sew · set the in-house pcs (leave lower than order qty if some go to subcon) <span className="normal-case text-slate-300">· total to sew {totalToSew.toLocaleString()}</span></div>
+          {items.length>0 ? (
+            <div className="space-y-1.5 mb-2">
+              {items.map((it,i)=>(
+                <div key={i} className="flex items-center gap-2 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5">
+                  <label className="flex items-center gap-1.5 flex-1 min-w-[140px] text-sm"><input type="checkbox" checked={!!it.active} disabled={!canSew} onChange={e=>{ const next=items.map((x,y)=>y===i?{...x,active:e.target.checked}:x); setItems(next); saveItems(next); }} /> <input value={it.name||''} onChange={e=>setItemLocal(i,'name',e.target.value)} onBlur={()=>saveItems()} disabled={!canSew} placeholder="Item name" className="flex-1 min-w-[100px] text-sm border rounded px-2 py-1 bg-white disabled:bg-transparent disabled:border-0" /></label>
+                  <span className="text-[11px] text-slate-400">order {Number(it.qty)||0}</span>
+                  <label className="text-[11px] text-slate-500 flex items-center gap-1">To sew <input type="number" min="0" value={it.sew_qty??''} onChange={e=>setItemLocal(i,'sew_qty',e.target.value)} onBlur={()=>saveItems()} disabled={!canSew} placeholder="pcs" className="text-sm border rounded px-2 py-1 w-20 bg-white" /></label>
+                  {canSew && <button onClick={()=>removeItem(i)} title="Remove" className="no-print text-slate-300 hover:text-rose-600 font-bold leading-none px-1">×</button>}
+                </div>
+              ))}
+            </div>
+          ) : <div className="text-sm text-slate-400 mb-2">No item breakdown — the whole project qty is sewn in-house.</div>}
+          {canSew && <button onClick={addItem} className="no-print text-xs text-indigo-600 font-semibold hover:underline">＋ Add item</button>}
+        </div>
         <div>
           <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sewers working on this project ({sewers.length}) <span className="normal-case text-slate-300">· log pcs each did (for shared/operational work)</span></div>
           {sewers.length>0 ? (
@@ -6160,7 +6191,7 @@ function SewingReport({ jobs, replacements, sewers }){
   const repls=(replacements||[]).filter(r=>inRange(r.created_at));
   const replByJob={}; repls.forEach(r=>{ replByJob[r.sewing_job_id]=(replByJob[r.sewing_job_id]||0)+1; });
 
-  const jobMs=(j)=>(j.start_at&&j.end_at)?Math.max(0,new Date(j.end_at)-new Date(j.start_at)):0;
+  const jobMs=(j)=>rowWorkedMs(j);
   const totalDone=done.length;
   const totalPcs=done.reduce((s,j)=>s+(Number(j.quantity)||0),0);
   const totalMs=done.reduce((s,j)=>s+jobMs(j),0);
@@ -24305,11 +24336,17 @@ async function maybeAutoCreateSewingJob(profile, job){
   try {
     const { data: existing } = await sb.from('sewing_jobs').select('id').eq('source_job_id', job.id).is('deleted_at', null).limit(1);
     if(existing && existing.length>0) return null;
+    // Seed the per-item sewing list from the production job's items so the
+    // sewing lead can pick which item they're sewing + set the in-house qty.
+    const srcItems = Array.isArray(job.items) ? job.items : [];
+    const sewItems = srcItems.length
+      ? srcItems.map(it=>({ name: it.itemType||it.description||it.name||'Item', qty: Number(it.quantity)||0, sew_qty: Number(it.quantity)||0, active:false }))
+      : (job.item ? [{ name: job.item, qty: Number(job.quantity)||0, sew_qty: Number(job.quantity)||0, active:false }] : []);
     const { data, error } = await sb.from('sewing_jobs').insert({
       number: 'SEW-' + Date.now().toString().slice(-5),
       source_job_id: job.id, lead_id: job.lead_id || null,
       client_name: job.client_name || '', item: job.item || '', items: job.items || [],
-      quantity: job.quantity || 0, attachments: job.attachments || [],
+      quantity: job.quantity || 0, attachments: job.attachments || [], sew_items: sewItems,
       status: 'to do', due_date: job.due_date || null, notes: job.notes || '',
       source: 'production', created_by: profile?.id || null,
     }).select('id').single();
