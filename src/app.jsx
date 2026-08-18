@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 500 · Voided or trashed vouchers (e.g. a reversed Solomon payment) no longer appear in the Expense Log or its category totals.";
+const BUILD = "Live build 501 · Sales tickets that have been Done for 3+ days now auto-archive off the board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11191,9 +11191,23 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   async function load(){
     setLoading(true);
     const { data, error } = await sb.from('sales_tickets').select('*').is('deleted_at',null).order('created_at',{ascending:false});
+    let rows = data||[];
+    if(!error){
+      // Auto-archive: any sales ticket that's been sitting in Done for 3+ full
+      // days gets archived so the board stays tidy. Uses done_at as the clock;
+      // manual archive/reopen still work. Runs whenever the board loads.
+      const cutoff = Date.now() - 3*24*60*60*1000;
+      const stale = rows.filter(t => (t.department||'sales')==='sales' && t.status==='done' && !t.archived_at && t.done_at && new Date(t.done_at).getTime() < cutoff);
+      if(stale.length){
+        const nowIso = new Date().toISOString();
+        const ids = stale.map(t=>t.id);
+        await sb.from('sales_tickets').update({ archived_at: nowIso }).in('id', ids);
+        rows = rows.map(t => ids.includes(t.id) ? { ...t, archived_at: nowIso } : t);
+      }
+    }
     // Only sales-department tickets belong on this board (graphic tickets have
     // their own queue). Legacy rows have no department → treat as sales.
-    if(!error) setTickets((data||[]).filter(t=> (t.department||'sales')==='sales'));
+    if(!error) setTickets(rows.filter(t=> (t.department||'sales')==='sales'));
     setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
