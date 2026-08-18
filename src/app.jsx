@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 499 · Petty cash is now per-batch: each replenishment release closes the current batch and opens a new dated batch that carries the unspent balance forward — so outstanding no longer stacks across cycles.";
+const BUILD = "Live build 500 · Voided or trashed vouchers (e.g. a reversed Solomon payment) no longer appear in the Expense Log or its category totals.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33189,7 +33189,7 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
   //   • vouchers tied to a PO or RFP (their cost is already in COGS via the
   //     PO total, so double-counting would inflate cost)
   const inPeriodVouchers = (vouchers||[]).filter(v =>
-    inRange(v.date) && !v.deleted_at && !v.document_only && !v.rfp_id && !v.po_id && isApprovedFin(v)
+    inRange(v.date) && !v.deleted_at && !v.void_at && !v.document_only && !v.rfp_id && !v.po_id && isApprovedFin(v)
   );
   function categoryBucket(cat){
     const c = String(cat||'');
@@ -33349,6 +33349,9 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     // voucher). Approved / pending / rejected BRs stay out — they're
     // commitments, not movements.
     (vouchers||[]).forEach(v=>{
+      // Voided or trashed vouchers no longer moved money (their bank txn was
+      // reversed/removed), so they must not appear as a money-out event.
+      if(v.void_at || v.deleted_at) return;
       // Document-only vouchers (e.g. subcon payroll vouchers) don't move money —
       // the payout already logged the expense + bank deduction. Skip them.
       if(v.document_only) return;
