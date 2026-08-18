@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 487 · Sewing board: Start/Pause/Finish timer (working hours only); cards sorted by earliest deadline; per-item sewing — pick which item is being sewn and set the in-house pcs to sew (rest may go to subcon).";
+const BUILD = "Live build 488 · Evaluations: name both evaluators (A & B) and give each their own Areas for Improvement + Strong Points boxes; both show on the printed form with separate signature lines.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13620,7 +13620,7 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
   const tpl = template || { name:review.template_name, structure:{ scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:[] } };
   const two = review.two_raters!==false;
   const [answers,setAnswers]=useState(review.answers||{});
-  const [f,setF]=useState({ review_period:review.review_period||'', evaluation_date:review.evaluation_date||new Date().toISOString().slice(0,10), immediate_supervisor:review.immediate_supervisor||'', employment_status:review.employment_status||'', reviewer_id:review.reviewer_id||profile.id, areas_improvement:review.areas_improvement||'', strong_points:review.strong_points||'', employee_review:review.employee_review||'', status:review.status||'draft' });
+  const [f,setF]=useState({ review_period:review.review_period||'', evaluation_date:review.evaluation_date||new Date().toISOString().slice(0,10), immediate_supervisor:review.immediate_supervisor||'', employment_status:review.employment_status||'', reviewer_id:review.reviewer_id||profile.id, reviewer_b_id:review.reviewer_b_id||review.assigned_to||'', areas_improvement:review.areas_improvement||'', strong_points:review.strong_points||'', areas_improvement_b:review.areas_improvement_b||'', strong_points_b:review.strong_points_b||'', employee_review:review.employee_review||'', status:review.status||'draft' });
   const [outcome,setOutcome]=useState(review.outcome||{});
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
@@ -13633,10 +13633,10 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
   async function save(markComplete, over){
     setBusy(true); setMsg('');
     const payload={ ...review, template_id:review.template_id||template?.id||null, template_name:tpl.name||review.template_name||null, position: emp?.position||review.position||null,
-      two_raters:two, answers, reviewer_id:f.reviewer_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
+      two_raters:two, answers, reviewer_id:f.reviewer_id||null, reviewer_b_id:f.reviewer_b_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
       grand_score:Number(comp.grand.toFixed(3)), kpi_score: comp.catTotals['kpi']!=null?Number(comp.catTotals['kpi'].toFixed(3)):null, competency_score: comp.catTotals['competency']!=null?Number(comp.catTotals['competency'].toFixed(3)):null,
       band_level:band?.level||null, band_result:band?.result||null,
-      areas_improvement:f.areas_improvement||null, strong_points:f.strong_points||null, employee_review:f.employee_review||null, outcome,
+      areas_improvement:f.areas_improvement||null, strong_points:f.strong_points||null, areas_improvement_b:f.areas_improvement_b||null, strong_points_b:f.strong_points_b||null, employee_review:f.employee_review||null, outcome,
       status: (over&&over.status) || (markComplete?'completed':(f.status||'draft')), updated_at:new Date().toISOString(), ...((over&&over.fields)||{}) };
     delete payload.id;
     let error, savedId=review.id;
@@ -13677,7 +13677,8 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Review period</div><input value={f.review_period} onChange={e=>up('review_period',e.target.value)} placeholder="May to June 2026" className="input text-sm" /></div>
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluation date</div><input type="date" value={f.evaluation_date} onChange={e=>up('evaluation_date',e.target.value)} className="input text-sm" /></div>
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Immediate supervisor</div><input value={f.immediate_supervisor} onChange={e=>up('immediate_supervisor',e.target.value)} placeholder="Name" className="input text-sm" /></div>
-          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluator</div><select value={f.reviewer_id||''} onChange={e=>up('reviewer_id',e.target.value)} className="input text-sm"><option value="">—</option>{(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></div>
+          <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluator A (rater A)</div><select value={f.reviewer_id||''} onChange={e=>up('reviewer_id',e.target.value)} className="input text-sm"><option value="">—</option>{(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></div>
+          {two && <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Evaluator B (rater B)</div><select value={f.reviewer_b_id||''} onChange={e=>up('reviewer_b_id',e.target.value)} className="input text-sm"><option value="">—</option>{(profiles||[]).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></div>}
         </div>
 
         {/* Live score summary */}
@@ -13728,10 +13729,22 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
         ))}
         {cats.length===0 && <div className="text-center text-slate-400 text-sm py-6 border rounded-lg">This template has no criteria yet. Edit the template to add them.</div>}
 
-        <div className="grid md:grid-cols-2 gap-3">
-          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement} onChange={e=>up('areas_improvement',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
-          <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points} onChange={e=>up('strong_points',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+        <div className="border rounded-lg p-3">
+          <div className="text-[10px] uppercase text-indigo-600 font-semibold mb-1.5">Evaluator A{f.reviewer_id?` · ${(profiles||[]).find(p=>p.id===f.reviewer_id)?.name||''}`:''} — comments</div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement} onChange={e=>up('areas_improvement',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points} onChange={e=>up('strong_points',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+          </div>
         </div>
+        {two && (
+          <div className="border rounded-lg p-3">
+            <div className="text-[10px] uppercase text-teal-600 font-semibold mb-1.5">Evaluator B{f.reviewer_b_id?` · ${(profiles||[]).find(p=>p.id===f.reviewer_b_id)?.name||''}`:''} — comments</div>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement_b} onChange={e=>up('areas_improvement_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points_b} onChange={e=>up('strong_points_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+            </div>
+          </div>
+        )}
         <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Employee review / acknowledgment note</div><textarea value={f.employee_review} onChange={e=>up('employee_review',e.target.value)} placeholder="Employee's comments after the evaluation was discussed" className="input min-h-[50px] whitespace-pre-line" /></div>
 
         {/* Managerial outcome */}
@@ -13884,6 +13897,8 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
   const band=evalBandOf(tpl, review.grand_score!=null?Number(review.grand_score):comp.grand);
   const grand = review.grand_score!=null?Number(review.grand_score):comp.grand;
   const reviewer=(profiles||[]).find(p=>p.id===review.reviewer_id);
+  const reviewerB=(profiles||[]).find(p=>p.id===review.reviewer_b_id);
+  const hasB = two && (reviewerB || review.areas_improvement_b || review.strong_points_b);
   const scale=(tpl?.structure?.scale&&tpl.structure.scale.length)?tpl.structure.scale:DEFAULT_EVAL_SCALE;
   const LBL='text-[9px] uppercase font-bold text-slate-500 tracking-wider';
   return ReactDOM.createPortal(
@@ -13935,16 +13950,25 @@ function EvalPrintView({ review, template, employees, profiles, onClose }){
             <div><span className={LBL}>Final appraisal:</span> <span className="font-bold">{band?.level||'—'}</span></div>
             <div className="text-right font-medium">{band?.result||''}</div>
           </div>
+          <div className="text-[10px] mb-1"><span className={LBL}>Evaluator A{reviewer?` · ${reviewer.name||reviewer.email}`:''} — comments</span></div>
           <div className="grid grid-cols-2 gap-3 text-[10px] mb-3">
             <div><div className={LBL}>Areas for improvement</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.areas_improvement||'—'}</div></div>
             <div><div className={LBL}>Strong points to maintain</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.strong_points||'—'}</div></div>
           </div>
+          {hasB && (<>
+            <div className="text-[10px] mb-1"><span className={LBL}>Evaluator B{reviewerB?` · ${reviewerB.name||reviewerB.email}`:''} — comments</span></div>
+            <div className="grid grid-cols-2 gap-3 text-[10px] mb-3">
+              <div><div className={LBL}>Areas for improvement</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.areas_improvement_b||'—'}</div></div>
+              <div><div className={LBL}>Strong points to maintain</div><div className="whitespace-pre-wrap border rounded p-1.5 min-h-[40px]">{review.strong_points_b||'—'}</div></div>
+            </div>
+          </>)}
           {(review.outcome?.action) && <div className="text-[10px] mb-3"><span className={LBL}>Recommended action:</span> <span className="font-semibold">{review.outcome.action}{review.outcome.details?` · ${review.outcome.details}`:''}</span></div>}
           {review.outcome?.hr_notes && <div className="text-[10px] whitespace-pre-wrap mb-3"><div className={LBL}>HR recommendation / notes</div><div className="border rounded p-1.5 min-h-[36px]">{review.outcome.hr_notes}</div></div>}
           <div className="text-[10px] whitespace-pre-wrap mb-4"><div className={LBL}>Employee review / acknowledgment</div><div className="border rounded p-1.5 min-h-[36px]">{review.employee_review||''}</div></div>
-          <div className="grid grid-cols-3 gap-6 mt-8" style={{ breakInside:'avoid' }}>
+          <div className={`grid ${hasB?'grid-cols-4':'grid-cols-3'} gap-6 mt-8`} style={{ breakInside:'avoid' }}>
             <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Employee · Signature &amp; Date</div></div>
-            <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Evaluated by{review.outcome?.evaluated_by?` · ${review.outcome.evaluated_by}`:(reviewer?` · ${reviewer.name||reviewer.email}`:'')}</div></div>
+            <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Evaluated by{hasB?' (A)':''}{review.outcome?.evaluated_by?` · ${review.outcome.evaluated_by}`:(reviewer?` · ${reviewer.name||reviewer.email}`:'')}</div></div>
+            {hasB && <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Evaluated by (B){reviewerB?` · ${reviewerB.name||reviewerB.email}`:''}</div></div>}
             <div className="text-center"><div className="h-10 border-b border-slate-400"></div><div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">Reviewed by — HR{review.outcome?.hr_name?` · ${review.outcome.hr_name}`:''}</div></div>
           </div>
         </div>
