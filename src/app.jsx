@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 490 · Daily Delivery Schedule: red count badge on the Activity button when a delivery has activity. (Also relaxed the activity job_type constraint so posting works.)";
+const BUILD = "Live build 491 · Graphic revision: a new revision note replaces the previous one (no more stacked ↺ Revision lines) — keeps the brief + only the latest revision note.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2836,7 +2836,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
       let t=tks&&tks[0];
       if(t){
         // Existing ticket → back to its assigned artist's pool.
-        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: reason?((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason):t.notes, updated_at:new Date().toISOString() }).eq('id', t.id);
+        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: (()=>{ const base=(t.notes||'').split('\n').filter(l=>!l.trim().startsWith('↺ Revision:')).join('\n').trim(); return reason?((base?base+'\n':'')+'↺ Revision: '+reason):base; })(), updated_at:new Date().toISOString() }).eq('id', t.id);
         await ping(t.assignee_id, `↺ Revision requested on "${t.title||job.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, t.id);
         setMsg('Revision requested — back in the assigned artist\'s pool.');
       } else {
@@ -4379,7 +4379,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
       const { data: tks } = await sb.from('sales_tickets').select('*').eq('board_job_id', j.id).eq('department','graphic').is('deleted_at',null).limit(1);
       const t = tks && tks[0];
       if(t){
-        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: reason?((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason):t.notes, updated_at:new Date().toISOString() }).eq('id', t.id);
+        await sb.from('sales_tickets').update({ status:'assigned', done_at:null, notes: (()=>{ const base=(t.notes||'').split('\n').filter(l=>!l.trim().startsWith('↺ Revision:')).join('\n').trim(); return reason?((base?base+'\n':'')+'↺ Revision: '+reason):base; })(), updated_at:new Date().toISOString() }).eq('id', t.id);
         if(t.assignee_id && t.assignee_id!==profile.id){ try{ await sb.from('notifications').insert({ recipient_id:t.assignee_id, actor_id:profile.id, text:`↺ Revision requested on "${t.title||j.item||''}"${reason?': '+reason:''}. It's back in your assigned pool.`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:t.id, type:'system' }); }catch(_){} }
       }
       await sb.from(table).update({ status:'to do', cl_done:false }).eq('id', j.id);
@@ -11397,7 +11397,8 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   // artist's assigned pool for rework (keeps the assignee).
   async function requestRevision(t){
     const reason=(prompt('Request a revision — add a short note for the artist (optional):','')||'').trim();
-    await patch(t,{ status:'assigned', done_at:null, notes: reason ? ((t.notes?t.notes+'\n':'')+'↺ Revision: '+reason) : t.notes });
+    const revBase=(t.notes||'').split('\n').filter(l=>!l.trim().startsWith('↺ Revision:')).join('\n').trim();
+    await patch(t,{ status:'assigned', done_at:null, notes: reason ? ((revBase?revBase+'\n':'')+'↺ Revision: '+reason) : revBase });
     await moveBoardJob(t, 'to do');
     await notify(t.assignee_id, `↺ Revision requested on "${t.title}"${reason?': '+reason:''}. It's back in your assigned pool.`, t.id);
     reload && reload();
