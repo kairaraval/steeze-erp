@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 489 · Daily Delivery Schedule: each delivery has a 💬 Activity box — see the item's activity, attach photos/files, and chat/@-mention.";
+const BUILD = "Live build 490 · Daily Delivery Schedule: red count badge on the Activity button when a delivery has activity. (Also relaxed the activity job_type constraint so posting works.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21479,7 +21479,12 @@ function DailyLogistics({ profile, profiles, clients }){
   const [loadErr,setLoadErr]=useState('');
   const [editing,setEditing]=useState(null); // delivery being edited; null=closed, 'new'=create form
   const [showDrivers,setShowDrivers]=useState(false);
+  const [actCounts,setActCounts]=useState({}); // delivery id -> # of activity posts
 
+  async function loadActCounts(ids){
+    if(!ids||!ids.length){ setActCounts({}); return; }
+    try{ const { data }=await sb.from('dept_job_activity').select('job_id').eq('job_type','delivery').in('job_id',ids); const m={}; (data||[]).forEach(r=>{ m[r.job_id]=(m[r.job_id]||0)+1; }); setActCounts(m); }catch(_){ setActCounts({}); }
+  }
   async function loadAll(){
     setLoading(true); setLoadErr('');
     try{
@@ -21494,6 +21499,7 @@ function DailyLogistics({ profile, profiles, clients }){
       setDrivers(dRes.data||[]);
       setDeliveries(eRes.data||[]);
       setDayAssign(aRes.data||[]);
+      loadActCounts((eRes.data||[]).map(d=>d.id));
     }catch(e){
       console.error('Logistics load failed:', e);
       setLoadErr(e.message||String(e));
@@ -21684,7 +21690,7 @@ function DailyLogistics({ profile, profiles, clients }){
                       onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                       onDropRow={()=>{ reorderTo(dragId, d.id, dr.id); setDragId(null); setDragOverId(null); }}
                       onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)}
+                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0}
                     />
                   ))}
                 </div>
@@ -21712,7 +21718,7 @@ function DailyLogistics({ profile, profiles, clients }){
                   onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                   onDropRow={()=>{ reorderTo(dragId, d.id, null); setDragId(null); setDragOverId(null); }}
                   onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)}
+                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0}
                 />
               ))}
             </div>
@@ -21721,13 +21727,13 @@ function DailyLogistics({ profile, profiles, clients }){
       </div>
 
       {editing && <DeliveryEditModal delivery={editing==='new'?{ date }:editing} date={date} drivers={drivers} clients={clients||[]} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); loadAll(); }} />}
-      {activityFor && <JobActivityModal row={activityFor} jobType="delivery" profile={profile} profiles={profiles} onClose={()=>setActivityFor(null)} />}
+      {activityFor && <JobActivityModal row={activityFor} jobType="delivery" profile={profile} profiles={profiles} onClose={()=>{ setActivityFor(null); loadActCounts(deliveries.map(d=>d.id)); }} />}
       {showDrivers && <DriversManageModal drivers={drivers} onClose={()=>setShowDrivers(false)} onChanged={loadAll} />}
     </div>
   );
 }
 
-function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete, onActivity }){
+function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete, onActivity, activityCount }){
   const isDone = d.status==='delivered';
   const isTransit = d.status==='in_transit';
   const isFail = d.status==='failed';
@@ -21776,7 +21782,7 @@ function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, on
             <option value="delivered">Delivered</option>
             <option value="failed">Failed</option>
           </select>
-          {onActivity && <button onClick={onActivity} className="text-[11px] text-indigo-600 hover:underline">💬 Activity</button>}
+          {onActivity && <button onClick={onActivity} className="text-[11px] text-indigo-600 hover:underline inline-flex items-center gap-1">💬 Activity{activityCount>0 && <span className="text-[10px] bg-rose-500 text-white rounded-full px-1.5 py-0.5 font-bold leading-none">{activityCount}</span>}</button>}
           <button onClick={onEdit} className="text-[11px] text-slate-500 hover:underline">Edit</button>
           <button onClick={onDelete} className="text-[11px] text-rose-500 hover:underline">Delete</button>
         </div>
