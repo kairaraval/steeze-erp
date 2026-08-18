@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 491 · Graphic revision: a new revision note replaces the previous one (no more stacked ↺ Revision lines) — keeps the brief + only the latest revision note.";
+const BUILD = "Live build 492 · Purchase Requests: activity/communication box so Sales & Purchasing can chat, attach files, and @-mention — on both the sales 'Request from Purchasing' list and the purchasing PR form.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4276,6 +4276,26 @@ function JobActivityModal({ row, jobType, profile, profiles, onClose }){
     <Modal title={`Activity — ${row.item||row.title||''}`} onClose={onClose} wide>
       <div className="text-xs text-slate-500 mb-1">{row.client_name||''}</div>
       <JobActivityBox row={row} jobType={jobType} profile={profile} profiles={profiles} />
+    </Modal>
+  );
+}
+
+// Conversation thread between Sales & Purchasing on a purchase request.
+function PRActivityBox({ pr, profile, profiles }){
+  const line=(pr.lines||[])[0]||{};
+  return (
+    <div className="border-t pt-3 mt-3">
+      <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Sales ⇄ Purchasing — attach files &amp; mention teammates</div>
+      <ThreadBody profile={profile} profiles={profiles} table="pr_activity" match={{ pr_id: pr.id }} scope={'pr/'+pr.id} titleText={line.description||pr.number||'Request'} headerless embedded />
+    </div>
+  );
+}
+function PRActivityModal({ pr, profile, profiles, onClose }){
+  const line=(pr.lines||[])[0]||{};
+  return (
+    <Modal title={`Activity — ${line.description||pr.number||'Request'}`} onClose={onClose} wide>
+      <div className="text-xs text-slate-500 mb-1">{pr.number||''}{pr.client_name?` · ${pr.client_name}`:''}</div>
+      <PRActivityBox pr={pr} profile={profile} profiles={profiles} />
     </Modal>
   );
 }
@@ -25104,7 +25124,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
         })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
       </table></div></div>
       )}
-      {(creating||editing) && <PurchaseRequestForm profile={profile} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
+      {(creating||editing) && <PurchaseRequestForm profile={profile} profiles={profiles} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
   );
@@ -25205,10 +25225,11 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
   );
 }
 
-function PurchaseIntakeView({ profile }){
+function PurchaseIntakeView({ profile, profiles }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [creating,setCreating]=useState(false);
+  const [activityFor,setActivityFor]=useState(null);
   async function load(){
     setLoading(true);
     const { data }=await sb.from('purchase_requests').select('*')
@@ -25233,6 +25254,7 @@ function PurchaseIntakeView({ profile }){
           <th className="text-left px-3 py-2">Urgency</th>
           <th className="text-left px-3 py-2">Files</th>
           <th className="text-left px-3 py-2">Status</th>
+          <th></th>
         </tr></thead>
         <tbody>{loading ? <tr><td colSpan="6" className="text-center text-slate-400 py-8">Loading…</td></tr> : rows.map(r=>{
           const meta=prMeta(r.status); const line=(r.lines||[])[0]||{}; const atts=Array.isArray(r.attachments)?r.attachments:[];
@@ -25244,16 +25266,18 @@ function PurchaseIntakeView({ profile }){
               <td className="px-3 py-2 text-xs">{r.urgency||'normal'}</td>
               <td className="px-3 py-2 text-xs">{atts.length?atts.map((a,i)=><a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="mr-1 hover:text-indigo-600">📎</a>):<span className="text-slate-300">—</span>}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2 text-right"><button onClick={()=>setActivityFor(r)} className="text-[11px] text-indigo-600 hover:underline">💬 Activity</button></td>
             </tr>
           );
-        })}{!loading && rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No requests yet. Click “+ New request” to ask Purchasing for something.</td></tr>}</tbody>
+        })}{!loading && rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No requests yet. Click “+ New request” to ask Purchasing for something.</td></tr>}</tbody>
       </table></div></div>
       {creating && <PurchaseIntakeForm profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); load(); }} />}
+      {activityFor && <PRActivityModal pr={activityFor} profile={profile} profiles={profiles} onClose={()=>setActivityFor(null)} />}
     </div>
   );
 }
 
-function PurchaseRequestForm({ profile, existing, prefillLeadId, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
+function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
   // When the user picks "+ Add new inventory item" on a line, this stores the
   // line index so we can auto-select the new item on that line after save.
   const [addingItemForLine, setAddingItemForLine] = useState(null);
@@ -25544,6 +25568,7 @@ function PurchaseRequestForm({ profile, existing, prefillLeadId, items, supplier
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)} disabled={!canApprove}>{PR_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
           <TpLbl t="Approver note"><input className="input" value={f.approver_note} onChange={e=>up('approver_note',e.target.value)} disabled={!canApprove} /></TpLbl>
         </div>
+        {isEdit && <PRActivityBox pr={existing} profile={profile} profiles={profiles} />}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
 
         <div className="flex gap-2 pt-2 border-t flex-wrap">
@@ -38489,7 +38514,7 @@ function App(){
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
-        {view==='pr-request' && <PurchaseIntakeView profile={profile} />}
+        {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
