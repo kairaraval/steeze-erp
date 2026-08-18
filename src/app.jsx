@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 492 · Purchase Requests: activity/communication box so Sales & Purchasing can chat, attach files, and @-mention — on both the sales 'Request from Purchasing' list and the purchasing PR form.";
+const BUILD = "Live build 493 · Inbox: @mentions from a delivery's activity now open — clicking jumps to the Daily Schedule (right date) and opens that delivery's activity thread.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21483,8 +21483,14 @@ function VehicleManager({ vehicles, onChanged }){
 /* ============================================================================
    LOGISTICS — Daily delivery scheduling (simple, two drivers)
    ============================================================================ */
-function DailyLogistics({ profile, profiles, clients }){
+function DailyLogistics({ profile, profiles, clients, openDeliveryId, onConsumedDelivery }){
   const [activityFor,setActivityFor]=useState(null);
+  // Deep-link from an Inbox @mention on a delivery's activity thread.
+  useEffect(()=>{ let on=true; if(!openDeliveryId) return; (async()=>{
+    try{ const { data }=await sb.from('logistics_deliveries').select('*').eq('id',openDeliveryId).maybeSingle();
+      if(on && data){ if(data.date) setDate(data.date); setActivityFor(data); } }catch(_){}
+    onConsumedDelivery && onConsumedDelivery();
+  })(); return ()=>{on=false;}; },[openDeliveryId]);
   // Build a YYYY-MM-DD string from the LOCAL date parts of a Date object.
   // Using toISOString().slice(0,10) was producing wrong values in Asia/Manila
   // (UTC+8) — at local midnight the UTC date is still the previous calendar
@@ -37243,6 +37249,7 @@ function App(){
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
   const [inboxOpenSO,setInboxOpenSO]=useState(null);
+  const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
   const [jumpToPayments,setJumpToPayments]=useState(false);
@@ -38013,6 +38020,7 @@ function App(){
   function openInboxTask(m){
     if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
     if(m.source==='pr'){ setView('requests'); return; }
+    if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
       if(l) setDetailLead(l);
@@ -38522,7 +38530,7 @@ function App(){
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
-        {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} />}
+        {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
