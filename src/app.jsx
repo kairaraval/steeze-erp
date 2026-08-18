@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 495 · Inbox: delivery-activity mentions now labeled 🚚 Daily Delivery Schedule (was a generic 'a job').";
+const BUILD = "Live build 496 · Edit lead modal is now wider, and the line-item Item + Category fields are widened so names show in full.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1305,7 +1305,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
       onSaved();
     } catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
-    <Modal title={isEdit?'Edit lead':'New lead'} onClose={onClose}>
+    <Modal title={isEdit?'Edit lead':'New lead'} onClose={onClose} wide>
       <div className="space-y-3" onPaste={onPasteLead}>
         {!isEdit && (<div className="flex gap-2 text-xs"><button onClick={()=>setClientMode('existing')} disabled={!clients.length} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='existing'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'} disabled:opacity-40`}>Existing client</button><button onClick={()=>setClientMode('new')} className={`flex-1 py-2 rounded-lg border font-medium ${clientMode==='new'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>+ New client</button></div>)}
         {clientMode==='existing' ? (<SearchSelect value={clientId} onChange={setClientId} options={(clients||[]).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(c=>({value:c.id,label:c.company}))} placeholder="Search client…" />) : (<input className="input" placeholder="Company" value={newCompany} onChange={e=>setNewCompany(e.target.value)} />)}
@@ -1343,10 +1343,10 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
           <div className="space-y-2">{items.map((it,idx)=>(
             <div key={it.id} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
-              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Category</label><select className="input mt-0.5" value={it.category} onChange={e=>setItem(idx,'category',e.target.value)}><option value="">—</option>{ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
-              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
-              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
+              <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
+              <div className="col-span-3"><label className="text-[10px] text-slate-500 uppercase">Category</label><select className="input mt-0.5" value={it.category} onChange={e=>setItem(idx,'category',e.target.value)}><option value="">—</option>{ITEM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Qty</label><input type="number" className="input mt-0.5" value={it.quantity} onChange={e=>setItem(idx,'quantity',e.target.value)} /></div>
+              <div className="col-span-2"><label className="text-[10px] text-slate-500 uppercase">Price ₱</label><input type="number" className="input mt-0.5" value={it.pricePerItem} onChange={e=>setItem(idx,'pricePerItem',e.target.value)} /></div>
               <div className="col-span-1 text-right"><button onClick={()=>removeItem(idx)} className="text-rose-400 text-sm">✕</button></div>
               <div className="col-span-12"><label className="text-[10px] text-slate-500 uppercase">Description</label><textarea className="input mt-0.5 min-h-[52px] whitespace-pre-line" value={it.description||''} onChange={e=>setItem(idx,'description',e.target.value)} placeholder="Carries to the estimate — e.g. full sublimation, dri-fit, sizes S–XL. Press Enter for a new line." /></div>
               <div className="col-span-12 flex flex-wrap items-center gap-x-4 gap-y-1">
