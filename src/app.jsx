@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 493 · Inbox: @mentions from a delivery's activity now open — clicking jumps to the Daily Schedule (right date) and opens that delivery's activity thread.";
+const BUILD = "Live build 494 · Inbox delivery mention: also scrolls to and highlights the exact delivery card on the schedule (amber ring), so you see which card the mention belongs to.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21485,12 +21485,15 @@ function VehicleManager({ vehicles, onChanged }){
    ============================================================================ */
 function DailyLogistics({ profile, profiles, clients, openDeliveryId, onConsumedDelivery }){
   const [activityFor,setActivityFor]=useState(null);
+  const [highlightId,setHighlightId]=useState(null); // deep-linked delivery to spotlight
   // Deep-link from an Inbox @mention on a delivery's activity thread.
   useEffect(()=>{ let on=true; if(!openDeliveryId) return; (async()=>{
     try{ const { data }=await sb.from('logistics_deliveries').select('*').eq('id',openDeliveryId).maybeSingle();
-      if(on && data){ if(data.date) setDate(data.date); setActivityFor(data); } }catch(_){}
+      if(on && data){ if(data.date) setDate(data.date); setHighlightId(data.id); setActivityFor(data); } }catch(_){}
     onConsumedDelivery && onConsumedDelivery();
   })(); return ()=>{on=false;}; },[openDeliveryId]);
+  // Clear the spotlight after a few seconds.
+  useEffect(()=>{ if(!highlightId) return; const t=setTimeout(()=>setHighlightId(null),8000); return ()=>clearTimeout(t); },[highlightId]);
   // Build a YYYY-MM-DD string from the LOCAL date parts of a Date object.
   // Using toISOString().slice(0,10) was producing wrong values in Asia/Manila
   // (UTC+8) — at local midnight the UTC date is still the previous calendar
@@ -21717,7 +21720,7 @@ function DailyLogistics({ profile, profiles, clients, openDeliveryId, onConsumed
                       onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                       onDropRow={()=>{ reorderTo(dragId, d.id, dr.id); setDragId(null); setDragOverId(null); }}
                       onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0}
+                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0} highlighted={highlightId===d.id}
                     />
                   ))}
                 </div>
@@ -21745,7 +21748,7 @@ function DailyLogistics({ profile, profiles, clients, openDeliveryId, onConsumed
                   onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                   onDropRow={()=>{ reorderTo(dragId, d.id, null); setDragId(null); setDragOverId(null); }}
                   onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0}
+                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)} activityCount={actCounts[d.id]||0} highlighted={highlightId===d.id}
                 />
               ))}
             </div>
@@ -21760,12 +21763,14 @@ function DailyLogistics({ profile, profiles, clients, openDeliveryId, onConsumed
   );
 }
 
-function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete, onActivity, activityCount }){
+function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete, onActivity, activityCount, highlighted }){
   const isDone = d.status==='delivered';
   const isTransit = d.status==='in_transit';
   const isFail = d.status==='failed';
+  const rowRef = useRef(null);
+  useEffect(()=>{ if(highlighted && rowRef.current){ try{ rowRef.current.scrollIntoView({ behavior:'smooth', block:'center' }); }catch(_){} } },[highlighted]);
   return (
-    <div
+    <div ref={rowRef}
       // Whole row is draggable, but grabbing the ≡ handle on the left feels
       // more obvious. Native HTML5 drag: setData carries the row id; drop
       // target's onDrop reads it and reorders.
@@ -21775,7 +21780,7 @@ function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, on
       onDragLeave={()=>onDragLeaveRow&&onDragLeaveRow()}
       onDrop={(e)=>{ e.preventDefault(); onDropRow&&onDropRow(); }}
       onDragEnd={()=>onDragEndRow&&onDragEndRow()}
-      className={`flex items-start gap-3 px-4 py-3 transition ${isDone?'bg-emerald-50/40':(isFail?'bg-rose-50/40':(isTransit?'bg-blue-50/40':''))} ${isDragging?'opacity-40':''} ${isDropTarget?'ring-2 ring-orange-300 ring-inset bg-orange-50/40':''}`}
+      className={`flex items-start gap-3 px-4 py-3 transition ${isDone?'bg-emerald-50/40':(isFail?'bg-rose-50/40':(isTransit?'bg-blue-50/40':''))} ${isDragging?'opacity-40':''} ${isDropTarget?'ring-2 ring-orange-300 ring-inset bg-orange-50/40':''} ${highlighted?'ring-2 ring-amber-400 ring-inset bg-amber-50/70':''}`}
     >
       {/* Drag handle — visual affordance that this row is reorderable. */}
       <span className="shrink-0 mt-1 select-none text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing text-base" title="Drag to reorder">≡</span>
