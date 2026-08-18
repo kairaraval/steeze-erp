@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 498 · Opening a Purchase Request mention from your inbox now opens that exact PR, not just the Purchase Requests board.";
+const BUILD = "Live build 499 · Petty cash is now per-batch: each replenishment release closes the current batch and opens a new dated batch that carries the unspent balance forward — so outstanding no longer stacks across cycles.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31559,21 +31559,46 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
     const { error }=await sb.from('petty_cash_replenishments').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id', r.id);
     if(error){ alert(error.message); return; } reload && reload();
   }
-  // Accounting releases the approved replenishment — withdraws from the bank and
-  // tops the float back up (Dr Cash on Hand / Cr Cash in Bank).
+  // Accounting releases the approved replenishment — withdraws from the bank
+  // (Dr Cash on Hand / Cr Cash in Bank), then CLOSES the current batch and opens
+  // a NEW dated batch that carries the old batch's remaining cash forward. Each
+  // replenishment cycle therefore becomes its own dated row in the list.
   async function releaseReplenishment(r, bankId){
     if(!bankId){ alert('Pick the bank to withdraw the replenishment from.'); return; }
     try {
       // Atomic guard: only the FIRST click flips approved → released and returns
       // a row. Repeat clicks match no row (status already 'released') and skip
-      // the bank withdrawal — this prevents the duplicate/triple GL posting.
+      // everything below — this prevents duplicate GL postings AND duplicate
+      // batch rows.
       const { data:upd, error:uErr }=await sb.from('petty_cash_replenishments')
         .update({ status:'released', released_by:profile.id, released_at:new Date().toISOString(), bank_id:bankId })
         .eq('id', r.id).eq('status','approved').select('id');
       if(uErr) throw uErr;
       if(!upd || upd.length===0){ reload && reload(); return; } // already released elsewhere
-      const float=(cashAdvances||[]).find(c=>c.id===r.petty_cash_id);
-      await sb.from('bank_transactions').insert({ bank_id:bankId, date:new Date().toISOString().slice(0,10), direction:'out', amount:Number(r.amount||0), description:`Petty cash replenishment · ${float?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
+      const old=(cashAdvances||[]).find(c=>c.id===r.petty_cash_id);
+      const released=Number(r.amount||0);
+      // The bank withdrawal (this is the only GL-driving cash movement).
+      await sb.from('bank_transactions').insert({ bank_id:bankId, date:new Date().toISOString().slice(0,10), direction:'out', amount:released, description:`Petty cash replenishment · ${old?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
+      // Close the batch being replenished and open its successor.
+      if(old){
+        const carry=onHandOf(old);                       // unspent cash carried forward
+        const opening=carry+released;                    // new batch's starting balance
+        const today=new Date().toISOString().slice(0,10);
+        const monthKey=today.slice(0,7);
+        const { data: monthRows } = await sb.from('cash_advances').select('id').like('number', `PC-${monthKey}-%`);
+        const seq=String((monthRows?.length||0)+1).padStart(3,'0');
+        await sb.from('cash_advances').update({ status:'closed' }).eq('id', old.id);
+        // The new batch is funded internally (carried cash + the replenishment
+        // that already has its own bank txn), so it does NOT get its own bank
+        // withdrawal — that would double-count the cash in the GL.
+        await sb.from('cash_advances').insert({
+          number:`PC-${monthKey}-${seq}`, date:today, kind:'petty_cash', status:'open',
+          custodian_id:old.custodian_id||null, custodian_name:old.custodian_name||null,
+          amount:opening, carry_in:carry, replenished_in:released, carried_from:old.id,
+          bank_id:null, purpose:`Petty cash batch — ${peso(carry)} carried from ${old.number||''} + ${peso(released)} replenished`,
+          created_by:profile.id,
+        });
+      }
       reload && reload();
     } catch(e){ alert(e.message||String(e)); }
   }
@@ -31665,7 +31690,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
               <td className="px-3 py-2 font-mono text-xs">{c.number||c.id.slice(0,6)}</td>
               <td className="px-3 py-2">{custodian?(custodian.name||custodian.email):c.custodian_name||'—'}</td>
               <td className="px-3 py-2 max-w-xs truncate">{c.purpose||'—'}</td>
-              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}{isPetty && c.carried_from && <div className="text-[10px] font-normal text-slate-400 whitespace-nowrap">{peso(c.carry_in)} carried + {peso(c.replenished_in)} new</div>}</td>
               <td className="px-3 py-2 text-right text-emerald-700">{peso(linkedSpent)}</td>
               <td className="px-3 py-2 text-right text-blue-700">{peso(c.amount_returned)}</td>
               <td className={`px-3 py-2 text-right font-bold ${outstanding>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(outstanding)}</td>
