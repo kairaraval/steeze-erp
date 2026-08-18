@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 496 · Edit lead modal is now wider, and the line-item Item + Category fields are widened so names show in full.";
+const BUILD = "Live build 497 · Liquidated petty cash now shows in the Expense Log, and the replenishment release is guarded so it can no longer double/triple-post to the General Ledger.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31532,8 +31532,12 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
     if(!confirm(`Liquidate ${c.number||'petty cash'}?\n\n• Spent (receipts to recognise): ${peso(spent)}\n\nThis posts the spend to the Expense Log and raises a ${peso(spent)} replenishment request to Admin to bring the float back to ${peso(c.amount)}. No cash is returned to the bank.`)) return;
     try {
       const now=new Date().toISOString();
-      await Promise.all(cycleExp.map(e=> sb.from('expenses').update({ pc_liquidated_at: now }).eq('id', e.id)));
-      await sb.from('petty_cash_replenishments').insert({ petty_cash_id:c.id, amount:spent, status:'pending_admin', requested_by:profile.id, note:`Replenish ${c.number||'petty cash'} to ${peso(c.amount)}` });
+      // Atomic: stamp only receipts still unliquidated. If a rapid second click
+      // stamps nothing, skip creating a duplicate replenishment request.
+      const { data:stamped }=await sb.from('expenses').update({ pc_liquidated_at: now }).in('id', cycleExp.map(e=>e.id)).is('pc_liquidated_at', null).select('id,amount');
+      if(!stamped || stamped.length===0){ reload && reload(); return; }
+      const realSpent = stamped.reduce((s,e)=>s+Number(e.amount||0),0);
+      await sb.from('petty_cash_replenishments').insert({ petty_cash_id:c.id, amount:realSpent, status:'pending_admin', requested_by:profile.id, note:`Replenish ${c.number||'petty cash'} to ${peso(c.amount)}` });
       await sb.from('cash_advances').update({ liquidated_at:now.slice(0,10) }).eq('id', c.id);
       // Notify admins that a replenishment needs approval.
       try {
@@ -31554,10 +31558,17 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   async function releaseReplenishment(r, bankId){
     if(!bankId){ alert('Pick the bank to withdraw the replenishment from.'); return; }
     try {
+      // Atomic guard: only the FIRST click flips approved → released and returns
+      // a row. Repeat clicks match no row (status already 'released') and skip
+      // the bank withdrawal — this prevents the duplicate/triple GL posting.
+      const { data:upd, error:uErr }=await sb.from('petty_cash_replenishments')
+        .update({ status:'released', released_by:profile.id, released_at:new Date().toISOString(), bank_id:bankId })
+        .eq('id', r.id).eq('status','approved').select('id');
+      if(uErr) throw uErr;
+      if(!upd || upd.length===0){ reload && reload(); return; } // already released elsewhere
       const float=(cashAdvances||[]).find(c=>c.id===r.petty_cash_id);
       await sb.from('bank_transactions').insert({ bank_id:bankId, date:new Date().toISOString().slice(0,10), direction:'out', amount:Number(r.amount||0), description:`Petty cash replenishment · ${float?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
-      const { error }=await sb.from('petty_cash_replenishments').update({ status:'released', released_by:profile.id, released_at:new Date().toISOString(), bank_id:bankId }).eq('id', r.id);
-      if(error) throw error; reload && reload();
+      reload && reload();
     } catch(e){ alert(e.message||String(e)); }
   }
 
@@ -33320,11 +33331,20 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
       });
     });
     (expenses||[]).forEach(e=>{
-      // Skip ONLY expenses that are linked to a specific petty cash float —
-      // their cash movement is already counted in that float's issuance row.
-      if(e.petty_cash_id) return;
       // Skip pending Officer drafts (not yet approved / no money out).
       if(!isApprovedFin(e)) return;
+      // Petty-cash spend: it's a real expense, but only recognised once the
+      // float has been LIQUIDATED (pc_liquidated_at stamped). Show each
+      // liquidated receipt individually; unliquidated receipts stay out.
+      if(e.petty_cash_id){
+        if(!e.pc_liquidated_at) return;
+        out.push({
+          date: e.date, source:'petty_cash', amount: Number(e.amount||0),
+          label: e.description || e.vendor || '(petty cash)',
+          category: e.category || 'Petty Cash', ref: e.id?.slice(0,6) || '', raw:e,
+        });
+        return;
+      }
       out.push({
         date: e.date, source:'expense', amount: Number(e.amount||0),
         label: e.description || e.vendor || '(expense)',
@@ -33348,17 +33368,18 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     // is LIQUIDATED, and only for the amount actually SPENT (not the cash that
     // was returned). Before liquidation, nothing is logged here.
     (cashAdvances||[]).forEach(c=>{
+      // Petty-cash floats are logged per-liquidated-receipt above (imprest
+      // floats stay "open" across cycles, so we never wait for a float status).
+      if((c.kind||'cash_advance')==='petty_cash') return;
       if(c.status !== 'liquidated') return;
-      const spent = c.kind==='petty_cash'
-        ? (expenses||[]).filter(e=>e.petty_cash_id===c.id).reduce((s,e)=>s+Number(e.amount||0),0)
-        : Number(c.amount_liquidated||0);
+      const spent = Number(c.amount_liquidated||0);
       if(spent <= 0) return;
       out.push({
         date: c.liquidated_at || c.date,
-        source: c.kind==='petty_cash' ? 'petty_cash' : 'cash_advance',
+        source: 'cash_advance',
         amount: spent,
         label: c.purpose || c.custodian_name || '(CA)',
-        category: c.kind==='petty_cash' ? 'Petty Cash' : 'Cash Advance',
+        category: 'Cash Advance',
         ref: c.number, raw:c,
       });
     });
