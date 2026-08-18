@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 494 · Inbox delivery mention: also scrolls to and highlights the exact delivery card on the schedule (amber ring), so you see which card the mention belongs to.";
+const BUILD = "Live build 495 · Inbox: delivery-activity mentions now labeled 🚚 Daily Delivery Schedule (was a generic 'a job').";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10767,6 +10767,9 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     if(m.source==='notification'){
       const title = m.ref_type==='loan' ? 'Employee Loan' : 'Notification';
       return { company:'', title, label:m.text||'Notification', tag:'Alert', icon:'🔔', color:'text-amber-600' };
+    }
+    if(m.source==='delivery'){
+      return { company:'', title:'Daily Delivery Schedule', label:'Daily Delivery Schedule', tag:'Logistics', icon:'🚚', color:'text-orange-600' };
     }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
