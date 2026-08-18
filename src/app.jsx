@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 497 · Liquidated petty cash now shows in the Expense Log, and the replenishment release is guarded so it can no longer double/triple-post to the General Ledger.";
+const BUILD = "Live build 498 · Opening a Purchase Request mention from your inbox now opens that exact PR, not just the Purchase Requests board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24984,8 +24984,14 @@ const PR_AWAITING = ['submitted','manual_request'];
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 const PR_URGENCIES=['normal','high','urgent'];
 
-function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack }){
+function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, openPRId, onConsumedPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [createLeadId,setCreateLeadId]=useState(''); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
+  // From the Inbox: a Purchase Request mention opens the exact PR here.
+  React.useEffect(()=>{
+    if(!openPRId) return;
+    const target=(requests||[]).find(r=>r.id===openPRId);
+    if(target){ setEditing(target); onConsumedPR && onConsumedPR(); }
+  }, [openPRId, requests]);
   const [layout,setLayout]=useState('board');       // 'board' | 'list'
   const [sourceFilter,setSourceFilter]=useState(''); // '' | production | sampling | manual
   const counts=PR_STATUSES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>r.status===s.key).length; return a; },{});
@@ -37279,6 +37285,7 @@ function App(){
   // (with its built-in Activity tab) above the current view.
   const [inboxOpenSO,setInboxOpenSO]=useState(null);
   const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
+  const [inboxPRId,setInboxPRId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
   const [jumpToPayments,setJumpToPayments]=useState(false);
@@ -38026,7 +38033,7 @@ function App(){
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
   function openInboxItem(m){
     if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
-    if(m.source==='pr'){ setView('requests'); return; }
+    if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
       // Open the SO directly — the Edit modal has the Activity tab built in.
@@ -38048,7 +38055,7 @@ function App(){
   //     LeadInfoModal exists for those yet — they go to the board).
   function openInboxTask(m){
     if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
-    if(m.source==='pr'){ setView('requests'); return; }
+    if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
@@ -38550,7 +38557,7 @@ function App(){
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
-        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} />}
+        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
