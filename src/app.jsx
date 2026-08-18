@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 488 · Evaluations: name both evaluators (A & B) and give each their own Areas for Improvement + Strong Points boxes; both show on the printed form with separate signature lines.";
+const BUILD = "Live build 489 · Daily Delivery Schedule: each delivery has a 💬 Activity box — see the item's activity, attach photos/files, and chat/@-mention.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21462,7 +21462,8 @@ function VehicleManager({ vehicles, onChanged }){
 /* ============================================================================
    LOGISTICS — Daily delivery scheduling (simple, two drivers)
    ============================================================================ */
-function DailyLogistics({ profile, clients }){
+function DailyLogistics({ profile, profiles, clients }){
+  const [activityFor,setActivityFor]=useState(null);
   // Build a YYYY-MM-DD string from the LOCAL date parts of a Date object.
   // Using toISOString().slice(0,10) was producing wrong values in Asia/Manila
   // (UTC+8) — at local midnight the UTC date is still the previous calendar
@@ -21683,7 +21684,7 @@ function DailyLogistics({ profile, clients }){
                       onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                       onDropRow={()=>{ reorderTo(dragId, d.id, dr.id); setDragId(null); setDragOverId(null); }}
                       onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)}
+                      onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)}
                     />
                   ))}
                 </div>
@@ -21711,7 +21712,7 @@ function DailyLogistics({ profile, clients }){
                   onDragLeaveRow={()=>setDragOverId(prev=>prev===d.id?null:prev)}
                   onDropRow={()=>{ reorderTo(dragId, d.id, null); setDragId(null); setDragOverId(null); }}
                   onDragEndRow={()=>{ setDragId(null); setDragOverId(null); setDragOverDriverId(null); }}
-                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)}
+                  onToggle={()=>toggleDelivered(d)} onSetStatus={(s)=>setStatusOf(d,s)} onEdit={()=>setEditing(d)} onDelete={()=>deleteDelivery(d)} onActivity={()=>setActivityFor(d)}
                 />
               ))}
             </div>
@@ -21720,12 +21721,13 @@ function DailyLogistics({ profile, clients }){
       </div>
 
       {editing && <DeliveryEditModal delivery={editing==='new'?{ date }:editing} date={date} drivers={drivers} clients={clients||[]} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); loadAll(); }} />}
+      {activityFor && <JobActivityModal row={activityFor} jobType="delivery" profile={profile} profiles={profiles} onClose={()=>setActivityFor(null)} />}
       {showDrivers && <DriversManageModal drivers={drivers} onClose={()=>setShowDrivers(false)} onChanged={loadAll} />}
     </div>
   );
 }
 
-function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete }){
+function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, onDragOverRow, onDragLeaveRow, onDropRow, onDragEndRow, onToggle, onSetStatus, onEdit, onDelete, onActivity }){
   const isDone = d.status==='delivered';
   const isTransit = d.status==='in_transit';
   const isFail = d.status==='failed';
@@ -21774,6 +21776,7 @@ function DeliveryRow({ d, driverId, isDragging, isDropTarget, onDragStartRow, on
             <option value="delivered">Delivered</option>
             <option value="failed">Failed</option>
           </select>
+          {onActivity && <button onClick={onActivity} className="text-[11px] text-indigo-600 hover:underline">💬 Activity</button>}
           <button onClick={onEdit} className="text-[11px] text-slate-500 hover:underline">Edit</button>
           <button onClick={onDelete} className="text-[11px] text-rose-500 hover:underline">Delete</button>
         </div>
@@ -38487,7 +38490,7 @@ function App(){
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
-        {view==='logistics' && <DailyLogistics profile={profile} clients={clients} />}
+        {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
