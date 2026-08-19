@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 509 · A lead / SO with more than one invoice now shows a View button for EACH invoice (sales managers can open both), not just the first.";
+const BUILD = "Live build 510 · Sourcing: write answers next to each checklist question, a new Other tab for anything beyond fabric/trims/machines, and an Itinerary tab for the trip schedule.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31218,8 +31218,35 @@ const SOURCING_TYPES = {
       ['q_certification','＋ Demo / certification (CE) available?'],
     ],
   },
+  other: {
+    label:'Other', icon:'📦', prefix:'O',
+    fields:[
+      { k:'item', l:'Material / item', ph:'Packaging · hangtags · dye…', full:true },
+      { k:'material', l:'Type / spec', ph:'Kraft paper · 300gsm' },
+      { k:'size', l:'Size / dimension', ph:'—' },
+      { k:'finish', l:'Variant / finish', ph:'—' },
+      { k:'price', l:'Price', ph:'$0.10/pc' },
+      { k:'lead_time', l:'Lead time', ph:'20 days' },
+      { k:'moq', l:'MOQ', ph:'1000 pcs' },
+      { k:'mcq', l:'MCQ', ph:'500 pcs' },
+    ],
+    flags:[
+      { k:'stock_available', l:'Stock available' },
+      { k:'custom_option', l:'Customizable' },
+      { k:'sample_requested', l:'Sample requested' },
+    ],
+    questions:[
+      ['q_spec','① What exactly is it / spec?'],
+      ['q_size','② Size / dimensions?'],
+      ['q_moq','③ MOQ?'],
+      ['q_price','④ Price at MOQ?'],
+      ['q_stock_custom','⑤ Stock or made-to-order?'],
+      ['q_lead_time','⑥ Lead time?'],
+      ['q_samples','＋ Samples / test reports available?'],
+    ],
+  },
 };
-const SOURCING_TYPE_KEYS = ['fabric','trims','machine'];
+const SOURCING_TYPE_KEYS = ['fabric','trims','machine','other'];
 function StarRating({ value, onChange, readOnly, size='text-lg' }){
   return (
     <div className="flex items-center gap-0.5">
@@ -31250,7 +31277,8 @@ function SourcingView({ profile, profiles }){
   useEffect(()=>{ load(); },[]);
   const sv=(r,k)=> (r && r.specs && r.specs[k]) || '';
   const typeOf=(r)=> r.type || 'fabric';
-  const cfg = SOURCING_TYPES[tab];
+  const isItin = tab==='itinerary';
+  const cfg = SOURCING_TYPES[tab] || SOURCING_TYPES.fabric;
   function nextCode(type){
     const pfx = SOURCING_TYPES[type].prefix;
     const re = new RegExp(`IT26-${pfx}-(\\d+)`,'i');
@@ -31283,20 +31311,25 @@ function SourcingView({ profile, profiles }){
             <h1 className="text-xl sm:text-2xl font-bold">🧳 STEEZE — Intertextile 2026</h1>
             <p className="text-slate-500 text-xs sm:text-sm">{rows.length} supplier{rows.length===1?'':'s'} logged · fabrics / trims / machines</p>
           </div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {cfg.label.replace(/s$/,'').toLowerCase()} supplier</button>
+          {!isItin && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {cfg.label.replace(/s$/,'').toLowerCase()} supplier</button>}
         </div>
-        <div className="flex items-center gap-1 mt-3">
+        <div className="flex items-center gap-1 mt-3 flex-wrap">
           {SOURCING_TYPE_KEYS.map(k=>{ const c=SOURCING_TYPES[k]; return (
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab===k?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>{c.icon} {c.label} <span className={`ml-1 text-[11px] ${tab===k?'text-indigo-100':'text-slate-400'}`}>{counts[k]||0}</span></button>
           ); })}
+          <button onClick={()=>setTab('itinerary')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${isItin?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>📅 Itinerary</button>
         </div>
-        <div className="flex items-center gap-2 mt-3 flex-wrap">
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, spec…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
-          <select value={minRating} onChange={e=>setMinRating(Number(e.target.value))} className="input !py-1.5 text-sm w-auto"><option value={0}>Any rating</option><option value={5}>★★★★★</option><option value={4}>★★★★+</option><option value={3}>★★★+</option></select>
-          <select value={sort} onChange={e=>setSort(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="recent">Newest</option><option value="rating">Top rated</option><option value="code">By ID</option></select>
-        </div>
+        {!isItin && (
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, spec…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
+            <select value={minRating} onChange={e=>setMinRating(Number(e.target.value))} className="input !py-1.5 text-sm w-auto"><option value={0}>Any rating</option><option value={5}>★★★★★</option><option value={4}>★★★★+</option><option value={3}>★★★+</option></select>
+            <select value={sort} onChange={e=>setSort(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="recent">Newest</option><option value="rating">Top rated</option><option value="code">By ID</option></select>
+          </div>
+        )}
       </div>
-      {loading ? <div className="text-center text-slate-400 py-12 text-sm">Loading…</div> : visible.length===0 ? (
+      {isItin && <SourcingItinerary profile={profile} profiles={profiles} />}
+      {!isItin && (
+        loading ? <div className="text-center text-slate-400 py-12 text-sm">Loading…</div> : visible.length===0 ? (
         <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">{(counts[tab]||0)===0?`No ${cfg.label.toLowerCase()} suppliers yet. Tap "+ New" at the first booth.`:'No suppliers match your filters.'}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -31345,7 +31378,7 @@ function SourcingView({ profile, profiles }){
             );
           })}
         </div>
-      )}
+      ))}
       {(creating||editing) && <SourcingFormModal existing={editing} type={editing?(editing.type||'fabric'):tab} suggestedCode={editing?null:nextCode(tab)} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); load(); }} />}
     </div>
   );
@@ -31367,18 +31400,21 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
   // All type-specific field + flag values live in `specs`.
   const [specs,setSpecs]=useState(()=> (existing?.specs && typeof existing.specs==='object') ? {...existing.specs} : {});
   const [questions,setQuestions]=useState(()=> (existing?.questions && typeof existing.questions==='object') ? existing.questions : {});
+  const [answers,setAnswers]=useState(()=> (existing?.answers && typeof existing.answers==='object') ? {...existing.answers} : {});
   const [attachments,setAttachments]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   function sp(k,v){ setSpecs(p=>({...p,[k]:v})); }
   function toggleQ(k){ setQuestions(q=>({...q,[k]:!q[k]})); }
+  // Typing an answer auto-confirms the question was asked.
+  function setAns(k,v){ setAnswers(a=>({...a,[k]:v})); if(v && !questions[k]) setQuestions(q=>({...q,[k]:true})); }
   async function save(){
     if(!f.company.trim()){ setMsg('Company name is required.'); return; }
     setBusy(true); setMsg('');
     const payload={
       code:f.code||null, event:SOURCING_EVENT, type, company:f.company.trim(), hall_booth:f.hall_booth||null,
       contact:f.contact||null, category:f.category||null, rating:Number(f.rating)||null,
-      wechat_added:f.wechat_added, notes:f.notes||null, specs, questions, attachments,
+      wechat_added:f.wechat_added, notes:f.notes||null, specs, questions, answers, attachments,
       updated_at:new Date().toISOString(),
     };
     let error;
@@ -31426,10 +31462,14 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
           </div>
         </div>
         <div className="border-t pt-3">
-          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Did we ask everything? (tick as you confirm)</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Did we ask everything? — tick + jot the answer</div>
+          <div className="space-y-2">
             {cfg.questions.map(([k,label])=>(
-              <label key={k} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={!!questions[k]} onChange={()=>toggleQ(k)} /> {label}</label>
+              <div key={k} className="flex items-center gap-2">
+                <input type="checkbox" checked={!!questions[k]} onChange={()=>toggleQ(k)} className="shrink-0" title="Mark asked" />
+                <span className="text-sm text-slate-700 w-44 sm:w-56 shrink-0">{label}</span>
+                <input className="input !py-1 text-sm flex-1" value={answers[k]||''} onChange={e=>setAns(k,e.target.value)} placeholder="answer…" />
+              </div>
             ))}
           </div>
         </div>
@@ -31440,6 +31480,91 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save supplier':'Add supplier'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function SourcingItinerary({ profile, profiles }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [editing,setEditing]=useState(null); // row | 'new'
+  async function load(){
+    setLoading(true);
+    const { data } = await sb.from('sourcing_itinerary').select('*').is('deleted_at',null).order('date',{ascending:true}).order('start_time',{ascending:true});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  async function del(r){
+    if(!confirm('Delete this schedule item?')) return;
+    await sb.from('sourcing_itinerary').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', r.id);
+    load();
+  }
+  const byDate={}; rows.forEach(r=>{ const d=r.date||'zzz'; (byDate[d]=byDate[d]||[]).push(r); });
+  const dates=Object.keys(byDate).sort();
+  return (
+    <div>
+      <div className="flex justify-end mb-3"><button onClick={()=>setEditing('new')} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Schedule item</button></div>
+      {loading ? <div className="text-center text-slate-400 py-12 text-sm">Loading…</div> : dates.length===0 ? (
+        <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">No schedule yet. Add your flights, hotel, hall visits and meetings.</div>
+      ) : (
+        <div className="space-y-4">
+          {dates.map(d=>(
+            <div key={d}>
+              <div className="text-xs font-bold uppercase text-slate-500 mb-2">{d==='zzz'?'Unscheduled':fmtDate(d)}</div>
+              <div className="space-y-2">
+                {byDate[d].map(r=>(
+                  <div key={r.id} className="bg-white border rounded-xl p-3 flex items-start gap-3">
+                    <div className="text-xs font-mono text-indigo-600 w-24 shrink-0">{[r.start_time, r.end_time].filter(Boolean).join(' – ')||'—'}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-sm text-slate-900">{r.title||'(untitled)'}</div>
+                      {r.location && <div className="text-[11px] text-slate-500">📍 {r.location}</div>}
+                      {r.notes && <div className="text-[11px] text-slate-500 mt-0.5 whitespace-pre-line">{r.notes}</div>}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs shrink-0">
+                      <button onClick={()=>setEditing(r)} className="text-indigo-600 hover:underline">Edit</button>
+                      <button onClick={()=>del(r)} className="text-slate-300 hover:text-rose-500">✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {editing && <SourcingItineraryModal existing={editing==='new'?null:editing} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
+    </div>
+  );
+}
+
+function SourcingItineraryModal({ existing, profile, onClose, onSaved }){
+  const [f,setF]=useState({ date:existing?.date||'', start_time:existing?.start_time||'', end_time:existing?.end_time||'', title:existing?.title||'', location:existing?.location||'', notes:existing?.notes||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.title.trim()){ setMsg('Give it a title.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ event:SOURCING_EVENT, date:f.date||null, start_time:f.start_time||null, end_time:f.end_time||null, title:f.title.trim(), location:f.location||null, notes:f.notes||null, updated_at:new Date().toISOString() };
+    let error;
+    if(existing){ ({ error }=await sb.from('sourcing_itinerary').update(payload).eq('id', existing.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('sourcing_itinerary').insert(payload)); }
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title={existing?'Edit schedule item':'New schedule item'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Start"><input type="time" className="input" value={f.start_time} onChange={e=>up('start_time',e.target.value)} /></TpLbl>
+          <TpLbl t="End"><input type="time" className="input" value={f.end_time} onChange={e=>up('end_time',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="What / title *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} placeholder="Intertextile Hall 5.1 · meet Linda" /></TpLbl>
+        <TpLbl t="Location"><input className="input" value={f.location} onChange={e=>up('location',e.target.value)} placeholder="NECC · Hall 5.1" /></TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Flight #, hotel, who we're meeting…" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':existing?'Save':'Add to itinerary'}</button>
       </div>
     </Modal>
   );
