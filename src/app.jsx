@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 513 · Notifications (reactions, ticket pings, approvals) now arrive live with a chime + toast instead of only on refresh — the notifications table is now realtime-subscribed.";
+const BUILD = "Live build 514 · Sewing board now seeds the full order item breakdown (like the QC report) so the line lead just picks the item(s) they're sewing and sets the pcs — no manual typing.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6074,6 +6074,14 @@ function SewingReplacementModal({ job, profile, onClose, onSaved }){
   );
 }
 
+// The item breakdown a sewing lead picks from. Once they've saved choices we use
+// those; until then we seed the list from the order's items (lead → job) so the
+// board shows the full order (like the QC report does) with zero manual typing.
+function deriveSewItems(job, lead){
+  if(Array.isArray(job.sew_items) && job.sew_items.length) return job.sew_items;
+  const src = (Array.isArray(lead?.items)&&lead.items.length) ? lead.items : (Array.isArray(job.items)?job.items:[]);
+  return src.map(it=>({ name: it.itemType||it.description||it.category||it.name||'Item', qty: Number(it.quantity ?? it.qty)||0, sew_qty:'', active:false }));
+}
 function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTechpack, openLead }){
   const [tab,setTab]=useState('board'); // 'board' | 'report'
   const [search,setSearch]=useState('');
@@ -6104,7 +6112,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   // Per-item sewing — a lead can pick which item(s) they're sewing (one project
   // can have e.g. a polo + a jacket). In-house to-sew qty is editable in Report.
   const canSew = profile.role==='admin' || profile.role==='production_supervisor' || profile.role==='sewing_lead';
-  async function toggleSewItem(j, idx){ const items=(Array.isArray(j.sew_items)?j.sew_items:[]).map((it,i)=> i===idx? {...it, active:!it.active} : it); await patch(j,{ sew_items: items }); }
+  async function toggleSewItem(j, lead, idx){ const items=deriveSewItems(j, lead).map((it,i)=> i===idx? {...it, active:!it.active} : it); await patch(j,{ sew_items: items }); }
 
   const doneJobs=jobs.filter(j=>SEWING_DONE.includes(j.status));
 
@@ -6145,17 +6153,19 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
                       {repls.length>0 && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold" title="Replacement requests">🔁 {repls.length}</span>}
                     </div>
                     {jobSewers(j).length>0 && <div className="mt-1.5 text-[10px] text-slate-400">🧵 {jobSewers(j).length} sewer{jobSewers(j).length===1?'':'s'} · manage in Report</div>}
-                    {/* Items to sew — tap to mark which item(s) are being sewn in-house */}
-                    {Array.isArray(j.sew_items) && j.sew_items.length>0 && (
+                    {/* Items on the order — tap to mark which item(s) are being sewn
+                        in-house. Seeded from the order so the full breakdown shows. */}
+                    {(()=>{ const sewItems=deriveSewItems(j, lead); return sewItems.length>0 && (
                       <div className="mt-1.5">
-                        <div className="text-[9px] uppercase font-semibold text-slate-400 mb-0.5">Items to sew · tap to select</div>
+                        <div className="text-[9px] uppercase font-semibold text-slate-400 mb-0.5">Items on order · tap to pick what you're sewing</div>
                         <div className="flex flex-wrap gap-1">
-                          {j.sew_items.map((it,ix)=>(
-                            <button key={ix} onClick={()=>canSew && toggleSewItem(j,ix)} disabled={!canSew} title={canSew?'Toggle — currently sewing this item':''} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${it.active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200'} ${canSew?'hover:border-indigo-400':''}`}>{it.active?'🧵 ':''}{it.name||'Item'}{(it.sew_qty!=null&&it.sew_qty!=='')?` · ${it.sew_qty}`:(it.qty?` · ${it.qty}`:'')}</button>
+                          {sewItems.map((it,ix)=>(
+                            <button key={ix} onClick={()=>canSew && toggleSewItem(j,lead,ix)} disabled={!canSew} title={canSew?'Toggle — currently sewing this item':''} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${it.active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200'} ${canSew?'hover:border-indigo-400':''}`}>{it.active?'🧵 ':''}{it.name||'Item'}{(it.sew_qty!=null&&it.sew_qty!=='')?` · ${it.sew_qty}`:(it.qty?` · ×${it.qty}`:'')}</button>
                           ))}
                         </div>
+                        <div className="text-[9px] text-slate-400 mt-0.5">Set the pcs you're sewing in 📄 Report</div>
                       </div>
-                    )}
+                    ); })()}
                     {/* Start / Pause / Finish — counts working hours only */}
                     <StartFinishBar row={j} table="sewing_jobs" reload={reload} />
                     {/* Actions */}
@@ -6198,7 +6208,7 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
   function removeSewer(empId){ const next=sewers.filter(s=>s.id!==empId); setSewers(next); saveSewers(next); }
   // Per-item "to sew" (in-house pcs) + which item is being sewn.
   const canSew = profile.role==='admin' || profile.role==='production_supervisor' || profile.role==='sewing_lead';
-  const [items,setItems]=useState(Array.isArray(job.sew_items)?job.sew_items:[]);
+  const [items,setItems]=useState(deriveSewItems(job, lead));
   function setItemLocal(i,key,val){ setItems(list=>list.map((it,x)=>x===i?{...it,[key]:val}:it)); }
   async function saveItems(next){ const arr=next||items; const { error }=await sb.from('sewing_jobs').update({ sew_items: arr }).eq('id', job.id); if(error){ alert(error.message); return; } reload && reload(); }
   function addItem(){ const next=[...items,{ name:'', qty:0, sew_qty:'', active:false }]; setItems(next); }
@@ -6235,7 +6245,7 @@ function SewingProjectReport({ job, profile, profiles, lead, replacements, sewer
         {/* Items to sew — set the in-house pcs per item (some may go to subcon)
             and mark which item(s) are being sewn. */}
         <div>
-          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Items to sew · set the in-house pcs (leave lower than order qty if some go to subcon) <span className="normal-case text-slate-300">· total to sew {totalToSew.toLocaleString()}</span></div>
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Items on the order · tick what you're sewing + set the in-house pcs (leave lower than order qty if some go to subcon) <span className="normal-case text-slate-300">· total to sew {totalToSew.toLocaleString()}</span></div>
           {items.length>0 ? (
             <div className="space-y-1.5 mb-2">
               {items.map((it,i)=>(
