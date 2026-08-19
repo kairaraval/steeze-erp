@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 503 · Budget-request receipts now open via a signed URL (fixes the 'Bucket not found' error); old receipts open correctly too.";
+const BUILD = "Live build 504 · Budget-request receipts now open inline in a viewer (image or PDF) instead of a new browser tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31047,6 +31047,14 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState('');
+  const [receiptView,setReceiptView]=useState(null); // in-page attachment viewer
+  async function openReceipt(rawKey){
+    const kind = /\.pdf(\?|$)/i.test(String(rawKey||'')) ? 'pdf' : 'image';
+    const key = storageKeyFromUrl(rawKey) || rawKey;
+    let signed = rawKey;
+    try { signed = await signedUrl(key); } catch(_){}
+    setReceiptView({ url:signed, path:key, kind });
+  }
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canApprove = isAdmin || isAccounting;
@@ -31171,13 +31179,14 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
             <td className="px-3 py-2 text-xs">{b.date_needed?fmtDate(b.date_needed):'—'}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
-              {b.attachment_url && <button onClick={e=>{e.stopPropagation(); openSignedAttachment(b.attachment_url);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View receipt / attachment">📎</button>}
+              {b.attachment_url && <button onClick={e=>{e.stopPropagation(); openReceipt(b.attachment_url);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View receipt / attachment">📎</button>}
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteBR(b);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No budget requests yet. Click "+ New request" to submit one.</td></tr>}</tbody>
       </table></div></div>
       {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Attachment" onClose={()=>setReceiptView(null)} />}
     </div>
   );
 }
@@ -31196,6 +31205,16 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
   const [uploading,setUploading]=useState(false);
   const status = existing?.status || 'pending';
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // In-page attachment viewer (no new tab). Resolve a signed URL + bare storage
+  // key so both new keys and legacy public URLs render inline.
+  const [receiptView,setReceiptView]=useState(null); // { url, path, kind }
+  async function openReceipt(rawKey){
+    const kind = /\.pdf(\?|$)/i.test(String(rawKey||'')) ? 'pdf' : 'image';
+    const key = storageKeyFromUrl(rawKey) || rawKey;
+    let signed = rawKey;
+    try { signed = await signedUrl(key); } catch(_){}
+    setReceiptView({ url:signed, path:key, kind });
+  }
   async function handleAttachment(file){
     if(!file) return;
     setUploading(true);
@@ -31274,7 +31293,7 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
           <div className="flex items-center gap-2">
             <input type="file" onChange={e=>handleAttachment(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.attachment_url && <button type="button" onClick={()=>openSignedAttachment(f.attachment_url)} className="text-xs text-indigo-600 hover:underline">View →</button>}
+            {f.attachment_url && <button type="button" onClick={()=>openReceipt(f.attachment_url)} className="text-xs text-indigo-600 hover:underline">View</button>}
           </div>
         </TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -31289,6 +31308,7 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
           <button onClick={markSpent} disabled={busy} className="w-full py-2 rounded-lg bg-slate-600 text-white font-semibold disabled:opacity-50">Mark as spent</button>
         )}
       </div>
+      {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Attachment" onClose={()=>setReceiptView(null)} />}
     </Modal>
   );
 }
