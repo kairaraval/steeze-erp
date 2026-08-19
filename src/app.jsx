@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 507 · Batch QC now lets the QC lead pick the QC personnel who checked each batch; they show on the batch row and in the QC report.";
+const BUILD = "Live build 508 · Invoices: tag a payment (e.g. the 50% DP) to ONE invoice so its 'payments received' reflects only that invoice, not the whole SO. Untagged payments still count at the SO level.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2167,6 +2167,10 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const [birRef,setBirRef]=useState(existing?.bir_reference||'');
   const [birDate,setBirDate]=useState(existing?.bir_date||'');
   const [fileForBir,setFileForBir]=useState(!!existing?.file_for_bir);
+  // Payments on this SO — used to attribute (tag) a payment to ONE invoice so
+  // each invoice's "received" reflects only its own share, not the whole SO.
+  const [soPays,setSoPays]=useState([]);
+  async function loadSoPays(){ if(!so?.id){ setSoPays([]); return; } try{ const { data }=await sb.from('sales_order_payments').select('*').eq('sales_order_id', so.id); setSoPays(data||[]); }catch(_){ setSoPays([]); } }
   // Due date = delivery (or expected delivery / issue) + payment terms.
   function dueFromTerms(){
     const base = so?.delivered_at || so?.expected_delivery || issueDate || new Date().toISOString().slice(0,10);
@@ -2177,6 +2181,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
 
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
+    loadSoPays();
     if(existing){
       setLines((existing.items||[]).map((it,i)=>({ id:'v'+i, itemType:it.itemType||it.name||'', description:it.description||it.category||'', quantity:String(it.quantity||''), pricePerItem:String(it.pricePerItem||''), withVat:!!it.withVat })));
     } else {
@@ -2190,7 +2195,33 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const subtotal = lines.reduce((s,it)=>s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0),0);
   const vat = vatInclusive ? 0 : lines.reduce((s,it)=>{ const l=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?l*INV_VAT_RATE:0); },0);
   const total = subtotal + vat;
-  const paymentsReceived = Number(so?.amount_paid ?? existing?.payments_received ?? 0)||0;
+  // Per-invoice payment attribution. Once ANY verified payment on this SO is
+  // tagged to an invoice, every invoice shows only what's tagged to it (so a DP
+  // reflects on one invoice, not all). Until then, fall back to the SO's total
+  // paid so single-invoice orders behave exactly as before.
+  const invId = invoice?.id || existing?.id || null;
+  const verifiedPays = (soPays||[]).filter(p=> (p.status==='verified' || p.verified_at) && !p.voided_at);
+  const allocationInUse = verifiedPays.some(p=> p.invoice_id);
+  const allocatedToThis = verifiedPays.filter(p=> invId && p.invoice_id===invId).reduce((s,p)=>s+Number(p.amount||0),0);
+  const unallocatedTotal = verifiedPays.filter(p=> !p.invoice_id).reduce((s,p)=>s+Number(p.amount||0),0);
+  const paymentsReceived = allocationInUse ? allocatedToThis : (Number(so?.amount_paid ?? existing?.payments_received ?? 0)||0);
+  async function toggleAlloc(p){
+    if(!invId) return;
+    const to = p.invoice_id===invId ? null : invId;
+    const { error }=await sb.from('sales_order_payments').update({ invoice_id: to }).eq('id', p.id);
+    if(error){ setMsg(error.message); return; }
+    const { data:fresh }=await sb.from('sales_order_payments').select('*').eq('sales_order_id', so.id);
+    setSoPays(fresh||[]);
+    // Persist this invoice's recomputed received/balance so the list + PDF match
+    // without needing a separate Save.
+    if(invoice?.id){
+      const vp=(fresh||[]).filter(x=>(x.status==='verified'||x.verified_at)&&!x.voided_at);
+      const rec=vp.filter(x=>x.invoice_id===invoice.id).reduce((s,x)=>s+Number(x.amount||0),0);
+      const bal=Math.max(0, total-rec);
+      const due = invoiceType==='downpayment' ? Math.max(0, Math.round(total*(Number(dpPercent)||0)/100*100)/100 - rec) : bal;
+      try{ await sb.from('invoices').update({ payments_received:rec, balance_due:bal, amount_due:due }).eq('id', invoice.id); reload && reload(); }catch(_){}
+    }
+  }
   const orderBalance = Math.max(0, total - paymentsReceived);
   const dp = Number(dpPercent)||0;
   const amountDue = invoiceType==='downpayment'
@@ -2471,6 +2502,26 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
                 <input className="input" value={qbUrl} onChange={e=>setQbUrl(e.target.value)} placeholder="https://qbo.intuit.com/…" />
               </div> : <div className="text-sm">{qbNum||'—'} {qbUrl && <a href={qbUrl} target="_blank" className="text-indigo-600 underline">open</a>}</div>}
             </div>
+            {canEdit && so?.id && verifiedPays.length>0 && (
+              <div className="border rounded-lg p-2.5 bg-slate-50">
+                <label className="text-[10px] uppercase text-slate-400 font-semibold">Payments on this order — tag which apply to THIS invoice</label>
+                {!invId ? (
+                  <div className="text-[11px] text-slate-500 mt-1">Save this invoice first, then tick the payment(s) that belong to it.</div>
+                ) : (
+                  <div className="space-y-1 mt-1.5">
+                    {verifiedPays.map(p=>{ const onThis=p.invoice_id===invId; const elsewhere=p.invoice_id && !onThis; return (
+                      <label key={p.id} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border cursor-pointer ${onThis?'bg-emerald-50 border-emerald-200':'bg-white'}`}>
+                        <input type="checkbox" checked={onThis} onChange={()=>toggleAlloc(p)} />
+                        <span className="font-semibold">{peso(p.amount)}</span>
+                        <span className="text-slate-500">{fmtDate(p.date)} · {payMethodLabel(p.method)}{p.reference?` · ${p.reference}`:''}</span>
+                        {elsewhere && <span className="ml-auto text-[10px] text-amber-600">tagged to another invoice — tick to move here</span>}
+                      </label>
+                    ); })}
+                    {allocationInUse && unallocatedTotal>0 && <div className="text-[11px] text-amber-600 mt-1">⚠ {peso(unallocatedTotal)} of verified payments isn't tagged to any invoice yet, so it won't show as received on any of them.</div>}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="border rounded-lg p-2.5 bg-amber-50/50 border-amber-200">
               <label className="flex items-center gap-2 text-sm font-semibold text-slate-800"><input type="checkbox" checked={birBilling} disabled={!canEdit} onChange={e=>setBirBilling(e.target.checked)} /> Issue a BIR Billing Invoice</label>
               {birBilling && <div className="grid grid-cols-2 gap-2 mt-2">
