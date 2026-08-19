@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 502 · Consolidated (multiple-PO) voucher payments now support the same Itemize / split (debit–credit) breakdown to segregate EWT / VAT.";
+const BUILD = "Live build 503 · Budget-request receipts now open via a signed URL (fixes the 'Bucket not found' error); old receipts open correctly too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31171,7 +31171,7 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
             <td className="px-3 py-2 text-xs">{b.date_needed?fmtDate(b.date_needed):'—'}</td>
             <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
-              {b.attachment_url && <a href={b.attachment_url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-xs text-indigo-600 hover:underline mr-2">📎</a>}
+              {b.attachment_url && <button onClick={e=>{e.stopPropagation(); openSignedAttachment(b.attachment_url);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View receipt / attachment">📎</button>}
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteBR(b);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
           </tr>
@@ -31204,8 +31204,9 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
       const key = `budget-requests/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
       const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
       if(upErr) throw upErr;
-      const { data: pu } = await sb.storage.from(BUCKET).getPublicUrl(key);
-      setF(p=>({...p, attachment_url: pu.publicUrl}));
+      // The Attachments bucket is PRIVATE — store the storage KEY (not a public
+      // URL, which 404s). Views mint a signed URL via openSignedAttachment.
+      setF(p=>({...p, attachment_url: key}));
     } catch(e){ alert('Upload failed: '+e.message); }
     setUploading(false);
   }
@@ -31273,7 +31274,7 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
           <div className="flex items-center gap-2">
             <input type="file" onChange={e=>handleAttachment(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.attachment_url && <a href={f.attachment_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">View →</a>}
+            {f.attachment_url && <button type="button" onClick={()=>openSignedAttachment(f.attachment_url)} className="text-xs text-indigo-600 hover:underline">View →</button>}
           </div>
         </TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
