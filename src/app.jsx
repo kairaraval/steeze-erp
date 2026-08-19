@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 510 · Sourcing: write answers next to each checklist question, a new Other tab for anything beyond fabric/trims/machines, and an Itinerary tab for the trip schedule.";
+const BUILD = "Live build 511 · Activity boxes now have emoji reactions — thumbs-up (or ❤️ ✅ 🎉 👀 🙏) any comment to acknowledge it; counts show who reacted.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -899,6 +899,19 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   // You can only edit/delete your OWN comments — nobody (not even admin) can
   // edit or delete someone else's. Also enforced in the DB (RLS + trigger).
   function canModify(row){ return row.actor_id === profile.id; }
+  // Emoji reactions — stored per comment as { "👍":[userId,…], … }. Anyone can
+  // react to any comment (e.g. a thumbs-up to acknowledge).
+  const [reactOpenId,setReactOpenId]=useState(null);
+  async function toggleReaction(row, emoji){
+    const reactions = (row.reactions && typeof row.reactions==='object') ? {...row.reactions} : {};
+    const arr = Array.isArray(reactions[emoji]) ? [...reactions[emoji]] : [];
+    const i = arr.indexOf(profile.id);
+    if(i>=0) arr.splice(i,1); else arr.push(profile.id);
+    if(arr.length) reactions[emoji]=arr; else delete reactions[emoji];
+    setRows(rs=> rs ? rs.map(r=> r.id===row.id ? {...r, reactions} : r) : rs); // optimistic
+    const { error } = await sb.from(table).update({ reactions }).eq('id', row.id);
+    if(error){ alert('Reaction failed: '+(error.message||error)); load(); }
+  }
   async function load(){
     let q = sb.from(table).select('*'); Object.entries(match).forEach(([k,v])=>{ q=q.eq(k,v); });
     const { data, error } = await q.order('created_at',{ ascending:true });
@@ -1041,6 +1054,19 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
                   <>
                     <div className="mt-1 text-sm whitespace-pre-wrap">{renderCommentText(a.text, profiles)}</div>
                     {atts.length>0 && <div className="mt-2 flex flex-col gap-2 items-start">{atts.map((att,i)=><InlineAttachment key={i} att={att} />)}</div>}
+                    <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+                      {Object.entries(a.reactions||{}).filter(([,ids])=>Array.isArray(ids)&&ids.length).map(([em,ids])=>{ const mineR=ids.includes(profile.id); return (
+                        <button key={em} onClick={()=>toggleReaction(a,em)} title={ids.map(id=>profiles.find(p=>p.id===id)?.name||'?').join(', ')} className={`text-[11px] px-1.5 py-0.5 rounded-full border ${mineR?'bg-indigo-50 border-indigo-300 text-indigo-700':'bg-white border-slate-200 text-slate-600'} hover:border-indigo-300`}>{em} {ids.length}</button>
+                      ); })}
+                      <div className="relative">
+                        <button onClick={()=>setReactOpenId(reactOpenId===a.id?null:a.id)} className="text-[11px] px-1.5 py-0.5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-300" title="Add reaction">☺+</button>
+                        {reactOpenId===a.id && (
+                          <div className="absolute z-30 bottom-full mb-1 left-0 bg-white border rounded-full shadow-lg px-2 py-1 flex items-center gap-1.5">
+                            {['👍','❤️','✅','🎉','👀','🙏'].map(em=><button key={em} onClick={()=>{ toggleReaction(a,em); setReactOpenId(null); }} className="text-base leading-none hover:scale-125 transition">{em}</button>)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </>
                 )}
               </div>
