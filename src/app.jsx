@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 511 · Activity boxes now have emoji reactions — thumbs-up (or ❤️ ✅ 🎉 👀 🙏) any comment to acknowledge it; counts show who reacted.";
+const BUILD = "Live build 512 · Reacting to a comment now notifies its author (on add only, never for your own comment); the notification opens the lead / SO / PR it came from.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -906,11 +906,23 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
     const reactions = (row.reactions && typeof row.reactions==='object') ? {...row.reactions} : {};
     const arr = Array.isArray(reactions[emoji]) ? [...reactions[emoji]] : [];
     const i = arr.indexOf(profile.id);
+    const adding = i<0;
     if(i>=0) arr.splice(i,1); else arr.push(profile.id);
     if(arr.length) reactions[emoji]=arr; else delete reactions[emoji];
     setRows(rs=> rs ? rs.map(r=> r.id===row.id ? {...r, reactions} : r) : rs); // optimistic
     const { error } = await sb.from(table).update({ reactions }).eq('id', row.id);
-    if(error){ alert('Reaction failed: '+(error.message||error)); load(); }
+    if(error){ alert('Reaction failed: '+(error.message||error)); load(); return; }
+    // Notify the comment's author ONLY when a reaction is added (not removed),
+    // and never for reacting to your own comment. Routes to the right item.
+    if(adding && row.actor_id && row.actor_id!==profile.id){
+      const DEPT_VIEW = { production:'prod', graphic:'graphic', printing:'printing', embroidery:'embroidery', knitting:'knitting', sampling:'sampling', pattern:'pattern', cutting:'cutting', qc:'qc', sewing:'sewing', packing:'packing', delivery:'logistics' };
+      let ref_type=null, ref_id=null, link_view=null;
+      if(table==='lead_activity'){ ref_type='react_lead'; ref_id=match.lead_id; link_view='pipeline'; }
+      else if(table==='sales_order_activity'){ ref_type='react_so'; ref_id=match.sales_order_id; link_view='sales-orders'; }
+      else if(table==='pr_activity'){ ref_type='react_pr'; ref_id=match.pr_id; link_view='requests'; }
+      else if(table==='dept_job_activity'){ ref_type='react_dept'; ref_id=match.job_id; link_view=DEPT_VIEW[match.job_type]||'prod'; }
+      try{ await sb.from('notifications').insert({ recipient_id:row.actor_id, actor_id:profile.id, text:`${firstName(profile)} reacted ${emoji} to your comment`, type:'system', ref_type, ref_id, link_view }); }catch(_){}
+    }
   }
   async function load(){
     let q = sb.from(table).select('*'); Object.entries(match).forEach(([k,v])=>{ q=q.eq(k,v); });
@@ -38685,7 +38697,12 @@ function App(){
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
   function openInboxItem(m){
-    if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
+    if(m.source==='notification'){
+      if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setActivityLead(l); return; } }
+      if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
+      if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.link_view) setView(m.link_view); return;
+    }
     if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
@@ -38707,7 +38724,12 @@ function App(){
   //   • Sampling / Production mention → board view + dept-job activity (no
   //     LeadInfoModal exists for those yet — they go to the board).
   function openInboxTask(m){
-    if(m.source==='notification'){ if(m.link_view) setView(m.link_view); return; }
+    if(m.source==='notification'){
+      if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setDetailLead(l); return; } }
+      if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
+      if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.link_view) setView(m.link_view); return;
+    }
     if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
