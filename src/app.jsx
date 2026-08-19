@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 505 · New Executive → Sourcing Trips: a mobile-friendly STEEZE — Intertextile 2026 supplier logbook (all spec fields, 1–5 star rating, 7-question checklist, photo/file attachments per supplier).";
+const BUILD = "Live build 506 · Sourcing Trips now has Fabrics / Trims / Machines tabs — each with its own fields, its own 7-question checklist, and its own ID prefix (IT26-F / IT26-T / IT26-M).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31050,16 +31050,97 @@ function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, chartA
    Executive-only (admin nav). Currently scoped to INTERTEXTILE 2026.
 */
 const SOURCING_EVENT = 'INTERTEXTILE 2026';
-const SOURCING_QUESTIONS = [
-  ['composition','① Composition?'],
-  ['gsm','② GSM?'],
-  ['width','③ Width?'],
-  ['moq','④ MOQ per color?'],
-  ['price','⑤ Price at MOQ?'],
-  ['stock_mto','⑥ Stock fabric or made-to-order?'],
-  ['lead_time','⑦ Production lead time?'],
-  ['test_reports','＋ Can you provide test reports?'],
-];
+// Each sourcing type (fabric / trims / machine) has its own ID prefix, spec
+// fields, yes/no flags, and "did we ask everything" checklist. All type-specific
+// field + flag values live in the record's `specs` jsonb, keyed by field key,
+// so the three types share one table cleanly.
+const SOURCING_TYPES = {
+  fabric: {
+    label:'Fabrics', icon:'🧵', prefix:'F',
+    fields:[
+      { k:'main_fabric', l:'Main fabric', ph:'Nylon Spandex', full:true },
+      { k:'composition', l:'Composition', ph:'75% N / 25% Spx' },
+      { k:'gsm', l:'GSM', ph:'220' },
+      { k:'width', l:'Width', ph:'60\"' },
+      { k:'price', l:'Price', ph:'$3.20/yd' },
+      { k:'lead_time', l:'Lead time', ph:'20 days' },
+      { k:'moq', l:'MOQ / color', ph:'500 yd' },
+      { k:'mcq', l:'MCQ / color', ph:'300 yd' },
+    ],
+    flags:[
+      { k:'stock_available', l:'Stock available' },
+      { k:'custom_dye', l:'Custom dye' },
+      { k:'sample_requested', l:'Sample requested' },
+    ],
+    questions:[
+      ['q_composition','① Composition?'],
+      ['q_gsm','② GSM?'],
+      ['q_width','③ Width?'],
+      ['q_moq','④ MOQ per color?'],
+      ['q_price','⑤ Price at MOQ?'],
+      ['q_stock_mto','⑥ Stock fabric or made-to-order?'],
+      ['q_lead_time','⑦ Production lead time?'],
+      ['q_test_reports','＋ Can you provide test reports?'],
+    ],
+  },
+  trims: {
+    label:'Trims', icon:'🧷', prefix:'T',
+    fields:[
+      { k:'item', l:'Trim / item', ph:'YKK #5 zipper', full:true },
+      { k:'material', l:'Material', ph:'Metal / nylon' },
+      { k:'size', l:'Size / dimension', ph:'#5 · 18mm · 20cm' },
+      { k:'finish', l:'Color / finish', ph:'Antique brass' },
+      { k:'price', l:'Price', ph:'$0.15/pc' },
+      { k:'lead_time', l:'Lead time', ph:'15 days' },
+      { k:'moq', l:'MOQ / color-size', ph:'1000 pcs' },
+      { k:'mcq', l:'MCQ', ph:'500 pcs' },
+    ],
+    flags:[
+      { k:'stock_available', l:'Stock available' },
+      { k:'custom_logo', l:'Custom logo / mold' },
+      { k:'sample_requested', l:'Sample requested' },
+    ],
+    questions:[
+      ['q_material','① Material / composition?'],
+      ['q_size','② Size / dimensions (ligne, mm, length)?'],
+      ['q_finish','③ Color / finish options?'],
+      ['q_moq','④ MOQ per color / size?'],
+      ['q_price','⑤ Price at MOQ?'],
+      ['q_stock_custom','⑥ Stock or custom (logo / mold)?'],
+      ['q_lead_time','⑦ Production lead time?'],
+      ['q_compliance','＋ Compliance / test reports (nickel-free, REACH)?'],
+    ],
+  },
+  machine: {
+    label:'Machines', icon:'⚙️', prefix:'M',
+    fields:[
+      { k:'model', l:'Machine / model', ph:'Juki DDL-9000C', full:true },
+      { k:'brand', l:'Brand', ph:'Juki' },
+      { k:'machine_specs', l:'Key specs', ph:'Single needle · 5000 spm' },
+      { k:'power', l:'Power (V / phase)', ph:'220V single phase' },
+      { k:'price', l:'Unit price', ph:'$1,200 / unit' },
+      { k:'lead_time', l:'Delivery lead', ph:'30 days' },
+      { k:'warranty', l:'Warranty', ph:'1 year' },
+      { k:'aftersales', l:'After-sales / parts', ph:'PH agent · parts in stock' },
+    ],
+    flags:[
+      { k:'stock_available', l:'In stock / ready' },
+      { k:'demo_seen', l:'Demo seen' },
+      { k:'sample_requested', l:'Quote requested' },
+    ],
+    questions:[
+      ['q_brand_model','① Brand / model?'],
+      ['q_specs','② Key specs (speed, function, power)?'],
+      ['q_price','③ Unit price?'],
+      ['q_warranty','④ Warranty period?'],
+      ['q_lead_time','⑤ Delivery lead time?'],
+      ['q_aftersales','⑥ After-sales support / spare parts?'],
+      ['q_power','⑦ Power compatibility (PH 220V)?'],
+      ['q_certification','＋ Demo / certification (CE) available?'],
+    ],
+  },
+};
+const SOURCING_TYPE_KEYS = ['fabric','trims','machine'];
 function StarRating({ value, onChange, readOnly, size='text-lg' }){
   return (
     <div className="flex items-center gap-0.5">
@@ -31077,8 +31158,8 @@ function SourcingView({ profile, profiles }){
   const [loading,setLoading]=useState(true);
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
+  const [tab,setTab]=useState('fabric'); // fabric | trims | machine
   const [search,setSearch]=useState('');
-  const [cat,setCat]=useState('');
   const [minRating,setMinRating]=useState(0);
   const [sort,setSort]=useState('recent'); // 'recent' | 'rating' | 'code'
   async function load(){
@@ -31088,29 +31169,32 @@ function SourcingView({ profile, profiles }){
     setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
-  const prof=(id)=>(profiles||[]).find(p=>p.id===id);
-  const cats = Array.from(new Set(rows.map(r=>r.category).filter(Boolean))).sort();
-  function nextCode(){
-    const nums = rows.map(r=>{ const m=String(r.code||'').match(/IT26-(\d+)/i); return m?parseInt(m[1],10):0; });
+  const sv=(r,k)=> (r && r.specs && r.specs[k]) || '';
+  const typeOf=(r)=> r.type || 'fabric';
+  const cfg = SOURCING_TYPES[tab];
+  function nextCode(type){
+    const pfx = SOURCING_TYPES[type].prefix;
+    const re = new RegExp(`IT26-${pfx}-(\\d+)`,'i');
+    const nums = rows.filter(r=>typeOf(r)===type).map(r=>{ const m=String(r.code||'').match(re); return m?parseInt(m[1],10):0; });
     const n = (nums.length?Math.max(...nums):0)+1;
-    return `IT26-${String(n).padStart(3,'0')}`;
+    return `IT26-${pfx}-${String(n).padStart(3,'0')}`;
   }
   async function del(r){
     if(!confirm(`Delete ${r.code||r.company||'this supplier'} from the sourcing list?`)) return;
     await sb.from('sourcing_leads').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', r.id);
     load();
   }
-  let visible = rows.filter(r=>
-    (!cat || r.category===cat) &&
+  const counts = SOURCING_TYPE_KEYS.reduce((a,k)=>{ a[k]=rows.filter(r=>typeOf(r)===k).length; return a; },{});
+  let visible = rows.filter(r=> typeOf(r)===tab).filter(r=>
     (!minRating || Number(r.rating||0)>=minRating) &&
-    (!search || `${r.code||''} ${r.company||''} ${r.main_fabric||''} ${r.contact||''} ${r.hall_booth||''} ${r.category||''} ${r.composition||''} ${r.notes||''}`.toLowerCase().includes(search.toLowerCase()))
+    (!search || `${r.code||''} ${r.company||''} ${r.contact||''} ${r.hall_booth||''} ${r.category||''} ${Object.values(r.specs||{}).join(' ')} ${r.notes||''}`.toLowerCase().includes(search.toLowerCase()))
   );
   visible = visible.slice().sort((a,b)=>{
     if(sort==='rating') return Number(b.rating||0)-Number(a.rating||0) || String(a.code||'').localeCompare(String(b.code||''));
     if(sort==='code')   return String(a.code||'').localeCompare(String(b.code||''));
     return String(b.created_at||'').localeCompare(String(a.created_at||''));
   });
-  const askedCount=(r)=> SOURCING_QUESTIONS.filter(([k])=> r.questions && r.questions[k]).length;
+  const askedCount=(r)=>{ const c=SOURCING_TYPES[typeOf(r)]; return c.questions.filter(([k])=> r.questions && r.questions[k]).length; };
   const Flag=({on,children})=> <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${on?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-400'}`}>{on?'✓':'✕'} {children}</span>;
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
@@ -31118,23 +31202,29 @@ function SourcingView({ profile, profiles }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold">🧳 STEEZE — Intertextile 2026</h1>
-            <p className="text-slate-500 text-xs sm:text-sm">{rows.length} supplier{rows.length===1?'':'s'} logged · fabric / trim / machine sourcing</p>
+            <p className="text-slate-500 text-xs sm:text-sm">{rows.length} supplier{rows.length===1?'':'s'} logged · fabrics / trims / machines</p>
           </div>
-          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New supplier</button>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {cfg.label.replace(/s$/,'').toLowerCase()} supplier</button>
+        </div>
+        <div className="flex items-center gap-1 mt-3">
+          {SOURCING_TYPE_KEYS.map(k=>{ const c=SOURCING_TYPES[k]; return (
+            <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab===k?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>{c.icon} {c.label} <span className={`ml-1 text-[11px] ${tab===k?'text-indigo-100':'text-slate-400'}`}>{counts[k]||0}</span></button>
+          ); })}
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, fabric…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
-          <select value={cat} onChange={e=>setCat(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="">All categories</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, spec…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
           <select value={minRating} onChange={e=>setMinRating(Number(e.target.value))} className="input !py-1.5 text-sm w-auto"><option value={0}>Any rating</option><option value={5}>★★★★★</option><option value={4}>★★★★+</option><option value={3}>★★★+</option></select>
           <select value={sort} onChange={e=>setSort(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="recent">Newest</option><option value="rating">Top rated</option><option value="code">By ID</option></select>
         </div>
       </div>
       {loading ? <div className="text-center text-slate-400 py-12 text-sm">Loading…</div> : visible.length===0 ? (
-        <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">{rows.length===0?'No suppliers logged yet. Tap "+ New supplier" at the first booth.':'No suppliers match your filters.'}</div>
+        <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">{(counts[tab]||0)===0?`No ${cfg.label.toLowerCase()} suppliers yet. Tap "+ New" at the first booth.`:'No suppliers match your filters.'}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {visible.map(r=>{
-            const cr=prof(r.created_by); const nAtt=(Array.isArray(r.attachments)?r.attachments:[]).length; const asked=askedCount(r);
+            const c=SOURCING_TYPES[typeOf(r)];
+            const nAtt=(Array.isArray(r.attachments)?r.attachments:[]).length; const asked=askedCount(r);
+            const mainF=c.fields[0]; const specFields=c.fields.filter(x=>!['price','lead_time','moq','mcq','warranty','aftersales'].includes(x.k) && x.k!==mainF.k);
             return (
               <div key={r.id} className="bg-white rounded-xl border p-3 flex flex-col gap-2">
                 <div className="flex items-start justify-between gap-2">
@@ -31145,28 +31235,27 @@ function SourcingView({ profile, profiles }){
                   </div>
                   <StarRating value={r.rating} readOnly size="text-sm" />
                 </div>
-                {(r.main_fabric||r.composition||r.gsm||r.width) && (
+                {(sv(r,mainF.k) || specFields.some(x=>sv(r,x.k))) && (
                   <div className="text-xs text-slate-700 bg-slate-50 rounded px-2 py-1.5 leading-relaxed">
-                    {r.main_fabric && <div className="font-medium">{r.main_fabric}</div>}
-                    <div className="text-slate-500">{[r.composition, r.gsm&&`${r.gsm} GSM`, r.width&&`${r.width} wide`].filter(Boolean).join(' · ')}</div>
+                    {sv(r,mainF.k) && <div className="font-medium">{sv(r,mainF.k)}</div>}
+                    <div className="text-slate-500">{specFields.map(x=>sv(r,x.k)).filter(Boolean).join(' · ')}</div>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
-                  {r.price && <div><span className="text-slate-400">Price</span> <strong>{r.price}</strong></div>}
-                  {r.lead_time && <div><span className="text-slate-400">Lead</span> <strong>{r.lead_time}</strong></div>}
-                  {r.moq && <div><span className="text-slate-400">MOQ</span> <strong>{r.moq}</strong></div>}
-                  {r.mcq && <div><span className="text-slate-400">MCQ</span> <strong>{r.mcq}</strong></div>}
+                  {sv(r,'price') && <div><span className="text-slate-400">Price</span> <strong>{sv(r,'price')}</strong></div>}
+                  {sv(r,'lead_time') && <div><span className="text-slate-400">Lead</span> <strong>{sv(r,'lead_time')}</strong></div>}
+                  {sv(r,'moq') && <div><span className="text-slate-400">MOQ</span> <strong>{sv(r,'moq')}</strong></div>}
+                  {sv(r,'mcq') && <div><span className="text-slate-400">MCQ</span> <strong>{sv(r,'mcq')}</strong></div>}
+                  {sv(r,'warranty') && <div><span className="text-slate-400">Warranty</span> <strong>{sv(r,'warranty')}</strong></div>}
                   {r.contact && <div className="col-span-2"><span className="text-slate-400">Contact</span> <strong>{r.contact}</strong></div>}
                 </div>
                 <div className="flex flex-wrap gap-1">
                   <Flag on={r.wechat_added}>WeChat</Flag>
-                  <Flag on={r.stock_available}>Stock</Flag>
-                  <Flag on={r.custom_dye}>Custom dye</Flag>
-                  <Flag on={r.sample_requested}>Sample</Flag>
+                  {c.flags.map(fl=> <Flag key={fl.k} on={!!sv(r,fl.k)}>{fl.l}</Flag>)}
                 </div>
                 {r.notes && <div className="text-[11px] text-slate-500 italic line-clamp-2">{r.notes}</div>}
                 <div className="flex items-center justify-between mt-auto pt-2 border-t text-[11px]">
-                  <span className={`font-semibold ${asked===SOURCING_QUESTIONS.length?'text-emerald-600':'text-amber-600'}`}>{asked}/{SOURCING_QUESTIONS.length} asked</span>
+                  <span className={`font-semibold ${asked===c.questions.length?'text-emerald-600':'text-amber-600'}`}>{asked}/{c.questions.length} asked</span>
                   {nAtt>0 && <span className="text-slate-400">📎 {nAtt}</span>}
                   <span className="flex items-center gap-2">
                     <button onClick={()=>setEditing(r)} className="text-indigo-600 hover:underline font-medium">Open</button>
@@ -31178,50 +31267,39 @@ function SourcingView({ profile, profiles }){
           })}
         </div>
       )}
-      {(creating||editing) && <SourcingFormModal existing={editing} suggestedCode={nextCode()} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); load(); }} />}
+      {(creating||editing) && <SourcingFormModal existing={editing} type={editing?(editing.type||'fabric'):tab} suggestedCode={editing?null:nextCode(tab)} profile={profile} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); load(); }} />}
     </div>
   );
 }
 
-function SourcingFormModal({ existing, suggestedCode, profile, onClose, onSaved }){
+function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, onSaved }){
   const isEdit=!!existing;
+  const cfg = SOURCING_TYPES[type] || SOURCING_TYPES.fabric;
   const [f,setF]=useState(()=>({
     code: existing?.code || suggestedCode || '',
     company: existing?.company || '',
     hall_booth: existing?.hall_booth || '',
     contact: existing?.contact || '',
     category: existing?.category || '',
-    main_fabric: existing?.main_fabric || '',
-    composition: existing?.composition || '',
-    gsm: existing?.gsm || '',
-    width: existing?.width || '',
-    price: existing?.price || '',
-    moq: existing?.moq || '',
-    mcq: existing?.mcq || '',
-    lead_time: existing?.lead_time || '',
     rating: existing?.rating || 0,
     wechat_added: !!existing?.wechat_added,
-    stock_available: !!existing?.stock_available,
-    custom_dye: !!existing?.custom_dye,
-    sample_requested: !!existing?.sample_requested,
     notes: existing?.notes || '',
   }));
+  // All type-specific field + flag values live in `specs`.
+  const [specs,setSpecs]=useState(()=> (existing?.specs && typeof existing.specs==='object') ? {...existing.specs} : {});
   const [questions,setQuestions]=useState(()=> (existing?.questions && typeof existing.questions==='object') ? existing.questions : {});
   const [attachments,setAttachments]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function sp(k,v){ setSpecs(p=>({...p,[k]:v})); }
   function toggleQ(k){ setQuestions(q=>({...q,[k]:!q[k]})); }
-  const Chk=({k,label})=> <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={!!f[k]} onChange={e=>up(k,e.target.checked)} /> {label}</label>;
   async function save(){
     if(!f.company.trim()){ setMsg('Company name is required.'); return; }
     setBusy(true); setMsg('');
     const payload={
-      code:f.code||null, event:SOURCING_EVENT, company:f.company.trim(), hall_booth:f.hall_booth||null,
-      contact:f.contact||null, category:f.category||null, main_fabric:f.main_fabric||null,
-      composition:f.composition||null, gsm:f.gsm||null, width:f.width||null, price:f.price||null,
-      moq:f.moq||null, mcq:f.mcq||null, lead_time:f.lead_time||null, rating:Number(f.rating)||null,
-      wechat_added:f.wechat_added, stock_available:f.stock_available, custom_dye:f.custom_dye,
-      sample_requested:f.sample_requested, notes:f.notes||null, questions, attachments,
+      code:f.code||null, event:SOURCING_EVENT, type, company:f.company.trim(), hall_booth:f.hall_booth||null,
+      contact:f.contact||null, category:f.category||null, rating:Number(f.rating)||null,
+      wechat_added:f.wechat_added, notes:f.notes||null, specs, questions, attachments,
       updated_at:new Date().toISOString(),
     };
     let error;
@@ -31231,51 +31309,54 @@ function SourcingFormModal({ existing, suggestedCode, profile, onClose, onSaved 
     if(error){ setMsg(error.message); return; }
     onSaved();
   }
+  const priceFields = cfg.fields.filter(x=>['price','lead_time','moq','mcq','warranty','aftersales'].includes(x.k));
+  const specOnly = cfg.fields.filter(x=> x.k!==cfg.fields[0].k && !priceFields.includes(x));
+  const mainF = cfg.fields[0];
   return (
-    <Modal title={isEdit?`Supplier · ${f.code||''}`:'New supplier'} onClose={onClose} wide>
+    <Modal title={isEdit?`${cfg.label.replace(/s$/,'')} · ${f.code||''}`:`New ${cfg.label.replace(/s$/,'').toLowerCase()} supplier`} onClose={onClose} wide>
       <div className="space-y-3">
+        <div className="text-[11px] font-semibold px-2 py-1 rounded bg-indigo-50 text-indigo-700 w-max">{cfg.icon} {cfg.label}</div>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Supplier ID"><input className="input" value={f.code} onChange={e=>up('code',e.target.value)} placeholder="IT26-001" /></TpLbl>
+          <TpLbl t="Supplier ID"><input className="input" value={f.code} onChange={e=>up('code',e.target.value)} placeholder={`IT26-${cfg.prefix}-001`} /></TpLbl>
           <TpLbl t="Rating"><div className="pt-1"><StarRating value={f.rating} onChange={v=>up('rating',v)} /></div></TpLbl>
         </div>
         <TpLbl t="Company *"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} placeholder="Suzhou ABC Textile" /></TpLbl>
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Hall / Booth"><input className="input" value={f.hall_booth} onChange={e=>up('hall_booth',e.target.value)} placeholder="5.1 C38" /></TpLbl>
-          <TpLbl t="Category"><input className="input" value={f.category} onChange={e=>up('category',e.target.value)} placeholder="Activewear" /></TpLbl>
+          <TpLbl t="Category"><input className="input" value={f.category} onChange={e=>up('category',e.target.value)} placeholder={type==='machine'?'Sewing / cutting':type==='trims'?'Zippers / buttons':'Activewear'} /></TpLbl>
         </div>
         <TpLbl t="Contact"><input className="input" value={f.contact} onChange={e=>up('contact',e.target.value)} placeholder="Linda · +86 …" /></TpLbl>
         <div className="border-t pt-3">
-          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Fabric / product</div>
-          <TpLbl t="Main fabric"><input className="input" value={f.main_fabric} onChange={e=>up('main_fabric',e.target.value)} placeholder="Nylon Spandex" /></TpLbl>
+          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">{cfg.label} detail</div>
+          <TpLbl t={mainF.l}><input className="input" value={specs[mainF.k]||''} onChange={e=>sp(mainF.k,e.target.value)} placeholder={mainF.ph} /></TpLbl>
           <div className="grid grid-cols-3 gap-2 mt-2">
-            <TpLbl t="Composition"><input className="input" value={f.composition} onChange={e=>up('composition',e.target.value)} placeholder="75% N / 25% Spx" /></TpLbl>
-            <TpLbl t="GSM"><input className="input" value={f.gsm} onChange={e=>up('gsm',e.target.value)} placeholder="220" /></TpLbl>
-            <TpLbl t="Width"><input className="input" value={f.width} onChange={e=>up('width',e.target.value)} placeholder='60"' /></TpLbl>
+            {specOnly.map(x=>(
+              <TpLbl key={x.k} t={x.l}><input className="input" value={specs[x.k]||''} onChange={e=>sp(x.k,e.target.value)} placeholder={x.ph} /></TpLbl>
+            ))}
           </div>
           <div className="grid grid-cols-2 gap-2 mt-2">
-            <TpLbl t="Price"><input className="input" value={f.price} onChange={e=>up('price',e.target.value)} placeholder="$3.20/yd" /></TpLbl>
-            <TpLbl t="Lead time"><input className="input" value={f.lead_time} onChange={e=>up('lead_time',e.target.value)} placeholder="20 days" /></TpLbl>
-            <TpLbl t="MOQ / color"><input className="input" value={f.moq} onChange={e=>up('moq',e.target.value)} placeholder="500 yd" /></TpLbl>
-            <TpLbl t="MCQ / color"><input className="input" value={f.mcq} onChange={e=>up('mcq',e.target.value)} placeholder="300 yd" /></TpLbl>
+            {priceFields.map(x=>(
+              <TpLbl key={x.k} t={x.l}><input className="input" value={specs[x.k]||''} onChange={e=>sp(x.k,e.target.value)} placeholder={x.ph} /></TpLbl>
+            ))}
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-3">
-            <Chk k="wechat_added" label="WeChat added" />
-            <Chk k="stock_available" label="Stock available" />
-            <Chk k="custom_dye" label="Custom dye" />
-            <Chk k="sample_requested" label="Sample requested" />
+            <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={!!f.wechat_added} onChange={e=>up('wechat_added',e.target.checked)} /> WeChat added</label>
+            {cfg.flags.map(fl=>(
+              <label key={fl.k} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={!!specs[fl.k]} onChange={e=>sp(fl.k,e.target.checked)} /> {fl.l}</label>
+            ))}
           </div>
         </div>
         <div className="border-t pt-3">
           <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Did we ask everything? (tick as you confirm)</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
-            {SOURCING_QUESTIONS.map(([k,label])=>(
+            {cfg.questions.map(([k,label])=>(
               <label key={k} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={!!questions[k]} onChange={()=>toggleQ(k)} /> {label}</label>
             ))}
           </div>
         </div>
         <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Very soft, Lululemon feel…" /></TpLbl>
         <div className="border-t pt-3">
-          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Photos / files (fabric, business card, WeChat QR, test reports)</div>
+          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Photos / files (product, business card, WeChat QR, test reports)</div>
           <AttachmentsEditor value={attachments} onChange={setAttachments} scope={`sourcing/${existing?.id||'new'}`} />
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
