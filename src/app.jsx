@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 506 · Sourcing Trips now has Fabrics / Trims / Machines tabs — each with its own fields, its own 7-question checklist, and its own ID prefix (IT26-F / IT26-T / IT26-M).";
+const BUILD = "Live build 507 · Batch QC now lets the QC lead pick the QC personnel who checked each batch; they show on the batch row and in the QC report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8468,7 +8468,7 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const empNm=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):null; };
   const batchedReportIds=new Set(qcBatchesAll.map(b=>b.qc_report_id).filter(Boolean));
   const qcReportRows=[
-    ...qcBatchesAll.map(b=>({ date:b.created_at, done:true, item:b.item, client:b.client_name, qty:Number(b.qty_checked)||0, rejects:Number(b.reject_count)||0, people:(Array.isArray(b.checked_by)?b.checked_by:[]).map(p=>p&&(p.name||p)).filter(Boolean), subcon: b.sewer_type==='subcon'?(b.sewer_name||'Subcon'):'In-house' })),
+    ...qcBatchesAll.map(b=>({ date:b.created_at, done:true, item:b.item, client:b.client_name, qty:Number(b.qty_checked)||0, rejects:Number(b.reject_count)||0, people:(Array.isArray(b.qc_handlers)?b.qc_handlers:(Array.isArray(b.checked_by)?b.checked_by:[])).map(p=>empNm(p)||(p&&(p.name||p))).filter(Boolean), subcon: b.sewer_type==='subcon'?(b.sewer_name||'Subcon'):'In-house' })),
     ...(qcReports||[]).filter(w=>w.source_type!=='sample' && !batchedReportIds.has(w.id)).map(w=>({ date:w.done_at||w.updated_at||w.created_at, done:w.status==='done', item:w.item, client:w.client_name, qty:0, rejects:Number(w.reject_count)||0, people:(Array.isArray(w.qc_handlers)?w.qc_handlers:[]).map(empNm).filter(Boolean), subcon: w.sewer_type==='subcon'?(w.sewer_name||'Subcon'):(w.sewer_type==='inhouse'?'In-house':null) })),
   ];
 
@@ -8669,9 +8669,17 @@ const QC_REJECT_TYPES=['Fabric damage','Wrong size','Wrong logo','Reject on prin
 
 // Add / edit a single batch QC entry. A project can be sewn in batches by
 // different subcons / in-house sewers, so QC checks each batch separately.
-function QCBatchModal({ batch, qcReport, lead, projItems, subcons, sourceBatch, profile, onClose, onSaved }){
+function QCBatchModal({ batch, qcReport, lead, projItems, subcons, sourceBatch, employees, profile, onClose, onSaved }){
   const seed=batch||{};
   const src=sourceBatch||null;
+  const [qcHandlers,setQcHandlers]=useState(Array.isArray(seed.qc_handlers)?seed.qc_handlers:[]);
+  const [empSearch,setEmpSearch]=useState('');
+  // Only QC staff can be tagged as the QC personnel who checked this batch.
+  const isQCStaff=(e)=>/\bqc\b|quality\s*control/i.test(String(e.position||''));
+  const activeQC=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated'&&isQCStaff(e));
+  const qcName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const filteredQC=activeQC.filter(e=> !empSearch || fullName(e).toLowerCase().includes(empSearch.toLowerCase())).slice(0,60);
+  function toggleHandler(id){ setQcHandlers(h=> h.includes(id)?h.filter(x=>x!==id):[...h,id]); }
   const [sewerType,setSewerType]=useState(seed.sewer_type || src?.destination_type || '');
   const [subconId,setSubconId]=useState(seed.subcon_id || (src?.destination_type==='subcon'?src?.subcon_id:'') || '');
   const [sewerName,setSewerName]=useState(seed.sewer_name || (src && src.destination_type!=='subcon'?'':'') || '');
@@ -8699,7 +8707,7 @@ function QCBatchModal({ batch, qcReport, lead, projItems, subcons, sourceBatch, 
       sewer_name: sewerType==='subcon'?(sc?.name||null):(sewerName.trim()||null),
       qty_checked:Number(qtyChecked)||0, qty_passed:Number(qtyPassed)||0, reject_count:Number(rejectCount)||0,
       minor_repairs:Number(minor)||0, major_repairs:Number(major)||0, human_error_count:Number(humanErr)||0,
-      reject_types:rejectTypes, findings:findings.trim()||null };
+      reject_types:rejectTypes, qc_handlers:qcHandlers, findings:findings.trim()||null };
     let error;
     if(batch?.id){ ({ error }=await sb.from('qc_batches').update(payload).eq('id',batch.id)); }
     else { payload.created_by=profile.id; ({ error }=await sb.from('qc_batches').insert(payload)); }
@@ -8723,6 +8731,20 @@ function QCBatchModal({ batch, qcReport, lead, projItems, subcons, sourceBatch, 
           </div>
           {sewerType==='subcon' && <select value={subconId} onChange={e=>setSubconId(e.target.value)} className="input text-sm"><option value="">— Choose subcon —</option>{subconList.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
           {sewerType==='inhouse' && <input value={sewerName} onChange={e=>setSewerName(e.target.value)} placeholder="Sewer name (optional)" className="input text-sm" />}
+        </div>
+        <div className="rounded-lg border p-3 bg-slate-50/60">
+          <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1.5">QC personnel — who checked this batch</div>
+          {qcHandlers.length>0 && <div className="flex flex-wrap gap-1 mb-1.5">{qcHandlers.map(id=>(<span key={id} className="inline-flex items-center gap-1 text-[11px] bg-teal-50 text-teal-700 border border-teal-200 rounded px-1.5 py-0.5">{qcName(id)}<button type="button" onClick={()=>toggleHandler(id)} className="text-teal-400 hover:text-rose-500">✕</button></span>))}</div>}
+          <input value={empSearch} onChange={e=>setEmpSearch(e.target.value)} placeholder="Search QC staff to add…" className="input text-sm" />
+          <div className="mt-1 max-h-32 overflow-y-auto border rounded-lg divide-y bg-white">
+            {filteredQC.map(e=>(
+              <label key={e.id} className="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={qcHandlers.includes(e.id)} onChange={()=>toggleHandler(e.id)} />
+                <span>{fullName(e)}</span>
+              </label>
+            ))}
+            {filteredQC.length===0 && <div className="px-2 py-2 text-xs text-slate-400">{empSearch?'No QC staff match.':'No QC staff found — only employees with a QC / Quality Control position can be tagged here.'}</div>}
+          </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-0.5">Qty checked</div><input type="number" min="0" value={qtyChecked} onChange={e=>setQtyChecked(e.target.value)} placeholder="0" className="input text-sm" /></div>
@@ -8903,6 +8925,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
                     <span className="font-semibold">{b.sewer_type==='inhouse'?'🏠 In-house':`🧵 ${b.sewer_name||'Subcon'}`}</span>
                     {b.item_label && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">{b.item_label}</span>}
                     <span className="text-slate-500 text-xs">{Number(b.qty_checked)||0} checked · {Number(b.qty_passed)||0} passed{rej?` · ${rej} reject${rej===1?'':'s'}`:''}{(Number(b.minor_repairs)||Number(b.major_repairs))?` · repairs ${Number(b.minor_repairs)||0}m/${Number(b.major_repairs)||0}M`:''}</span>
+                    {Array.isArray(b.qc_handlers)&&b.qc_handlers.length>0 && <span className="text-[10px] text-teal-700 bg-teal-50 border border-teal-100 rounded px-1.5 py-0.5">🔍 {b.qc_handlers.map(id=>empName(id)).filter(Boolean).join(', ')}</span>}
                     <div className="flex-1"></div>
                     <button onClick={()=>setBatchModal({ batch:b, sourceBatch:null })} className="text-xs text-indigo-600 hover:underline">Edit</button>
                     <button onClick={()=>delQCBatch(b)} className="text-slate-300 hover:text-rose-500 text-sm" title="Delete">✕</button>
@@ -8986,7 +9009,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
           <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save QC report'}</button>
         </div>
       </div>
-      {batchModal && <QCBatchModal batch={batchModal.batch} sourceBatch={batchModal.sourceBatch} qcReport={w} lead={lead} projItems={projItems} subcons={qcSubcons} profile={profile} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadQCBatches(); }} />}
+      {batchModal && <QCBatchModal batch={batchModal.batch} sourceBatch={batchModal.sourceBatch} qcReport={w} lead={lead} projItems={projItems} subcons={qcSubcons} employees={employees} profile={profile} onClose={()=>setBatchModal(null)} onSaved={()=>{ setBatchModal(null); loadQCBatches(); }} />}
     </Modal>
   );
 }
