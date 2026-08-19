@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 508 · Invoices: tag a payment (e.g. the 50% DP) to ONE invoice so its 'payments received' reflects only that invoice, not the whole SO. Untagged payments still count at the SO level.";
+const BUILD = "Live build 509 · A lead / SO with more than one invoice now shows a View button for EACH invoice (sales managers can open both), not just the first.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2747,8 +2747,11 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   const canEstimate = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   // Invoice(s) generated for this lead (via the lead directly or its Sales Order).
   const leadSO = (salesOrders||[]).find(s=>s.lead_id===lead.id && s.kind==='production' && !s.deleted_at);
-  const leadInvoice = (invoices||[]).find(iv=> iv.lead_id===lead.id || (leadSO && iv.sales_order_id===leadSO.id));
-  const [showInvoice,setShowInvoice]=useState(false);
+  // ALL invoices tied to this lead (directly or via its Sales Order) — an SO can
+  // carry more than one invoice, and sales managers should see every one.
+  const leadInvoices = (invoices||[]).filter(iv=> iv.lead_id===lead.id || (leadSO && iv.sales_order_id===leadSO.id))
+    .slice().sort((a,b)=> String(a.number||'').localeCompare(String(b.number||'')));
+  const [showInvoice,setShowInvoice]=useState(null); // the invoice object to open, or null
   // Holds which estimate purpose is open ('sample' | 'production'), or null.
   const [showEstimate,setShowEstimate]=useState(null);
   // A lead can carry a Sample estimate and a Production estimate. Look each up.
@@ -2823,7 +2826,9 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             {!canEstimate && EST_PURPOSES.map(([pp,label])=>{ const list=estsFor(pp).filter(ex=>(ex.status||'draft')!=='draft'); const multi=list.length>1; return list.map(ex=>(
               <button key={ex.id} onClick={()=>setShowEstimate({ purpose:pp, id:ex.id })} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title={`View the ${label} estimate PDF`}>📄 View {label} estimate{multi?` · ${ex.number}`:''}</button>
             )); })}
-            {leadInvoice && <button onClick={()=>setShowInvoice(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${leadInvoice.number||''}`}>🧾 View invoice{leadInvoice.number?` · ${leadInvoice.number}`:''}</button>}
+            {leadInvoices.map(iv=>(
+              <button key={iv.id} onClick={()=>setShowInvoice(iv)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title={`View / print invoice ${iv.number||''}`}>🧾 {leadInvoices.length>1?(iv.number||'Invoice'):`View invoice${iv.number?` · ${iv.number}`:''}`}</button>
+            ))}
             {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
             {canTicket && <button onClick={()=>setShowGraphicTicket(true)} className="py-2 px-3 rounded-lg bg-fuchsia-600 text-white text-sm font-semibold hover:bg-fuchsia-700" title="Raise a design task into the shared Graphic Ticket queue">🎨 Graphic ticket</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
@@ -2844,7 +2849,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
         </div>
       </div>
       {showEstimate && <EstimateModal profile={profile} lead={lead} client={client} clients={clients} canEdit={canEstimate} purpose={typeof showEstimate==='string'?showEstimate:showEstimate.purpose} initialId={typeof showEstimate==='object'?showEstimate.id:null} onClose={()=>setShowEstimate(null)} reload={reload} />}
-      {showInvoice && leadInvoice && <InvoiceModal profile={profile} so={leadSO || { id:leadInvoice.sales_order_id, number:leadInvoice.number, total:leadInvoice.total, client_name:leadInvoice.client_name }} lead={lead} client={client} existing={leadInvoice} onClose={()=>setShowInvoice(false)} reload={reload} />}
+      {showInvoice && <InvoiceModal profile={profile} so={leadSO || { id:showInvoice.sales_order_id, number:showInvoice.number, total:showInvoice.total, client_name:showInvoice.client_name }} lead={lead} client={client} existing={showInvoice} onClose={()=>setShowInvoice(null)} reload={reload} />}
       {showTicket && <TicketForm profile={profile} leads={[lead]} clients={clients} defaultLeadId={lead.id} onClose={()=>setShowTicket(false)} onSaved={()=>setShowTicket(false)} />}
       {showGraphicTicket && <TicketForm profile={profile} profiles={profiles} leads={[lead]} clients={clients} defaultLeadId={lead.id} department="graphic" taskTypes={GRAPHIC_TICKET_TYPES} onClose={()=>setShowGraphicTicket(false)} onSaved={()=>setShowGraphicTicket(false)} />}
     </Modal>
