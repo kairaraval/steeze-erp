@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 501 · Sales tickets that have been Done for 3+ days now auto-archive off the board.";
+const BUILD = "Live build 502 · Consolidated (multiple-PO) voucher payments now support the same Itemize / split (debit–credit) breakdown to segregate EWT / VAT.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29282,9 +29282,28 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // Optional compound (debit/credit) breakdown — segregate EWT / Input VAT across
+  // the consolidated payment, exactly like the single-RFP voucher.
+  const [splitOn,setSplitOn]=useState(false);
+  const [splits,setSplits]=useState([{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' },{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]);
+  const splitAcct=(code)=> (chartAccounts||[]).find(a=>a.code===code);
+  const splitT = { debit: splits.reduce((s,l)=>s+(Number(l.debit)||0),0), credit: splits.reduce((s,l)=>s+(Number(l.credit)||0),0) };
+  const splitBalanced = Math.abs(splitT.debit - splitT.credit) < 0.01 && splitT.debit>0;
+  function setSplit(i,k,val){ setSplits(ls=>ls.map((l,j)=>j===i?{...l,[k]:val}:l)); }
+  function addSplit(){ setSplits(ls=>[...ls,{ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' }]); }
+  function removeSplit(i){ setSplits(ls=>ls.filter((_,j)=>j!==i)); }
   async function save(){
     if((f.type==='check'||f.type==='bank_transfer') && !f.bank_id){ setMsg('Pick the bank this draws from.'); return; }
     if(f.type==='cash' && !f.received_by){ setMsg('Who is receiving the cash?'); return; }
+    let splitLines=null;
+    if(splitOn){
+      const cs=splits.filter(l=>l.account_code && ((Number(l.debit)||0)>0 || (Number(l.credit)||0)>0))
+        .map(l=>({ account_code:l.account_code, account_name:splitAcct(l.account_code)?.name||'', cost_center_id:l.cost_center_id||null, description:l.description||'', debit:Number(l.debit)||0, credit:Number(l.credit)||0 }));
+      if(cs.length<2){ setMsg('A split entry needs at least two lines.'); return; }
+      const st={ debit:cs.reduce((s,l)=>s+l.debit,0), credit:cs.reduce((s,l)=>s+l.credit,0) };
+      if(Math.abs(st.debit-st.credit)>=0.01){ setMsg(`Split is out of balance by ${peso(Math.abs(st.debit-st.credit))}.`); return; }
+      splitLines=cs;
+    }
     setBusy(true); setMsg('');
     try {
       const prefix = f.type==='check' ? 'CV' : (f.type==='bank_transfer' ? 'BT' : 'CASH');
@@ -29309,7 +29328,7 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
           number, type:f.type, date:f.date,
           rfp_id: first.id, po_id: first.po_id||null, rfp_ids: ids, supplier_id: first.supplier_id,
           payee:f.payee, amount:Number(total), particulars:f.particulars||null, expense_category:f.expense_category||null,
-          gl_account_code:f.gl_account_code||null, cost_center_id:f.cost_center_id||null,
+          gl_account_code:f.gl_account_code||null, cost_center_id:f.cost_center_id||null, split_lines:splitLines,
           check_number: (f.type==='check' || f.type==='bank_transfer') ? (f.check_number||null) : null,
           check_date: f.type==='check' ? (f.check_date||null) : null,
           bank_id: f.bank_id||null,
@@ -29383,6 +29402,24 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
             </select>
           </TpLbl>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer"><input type="checkbox" checked={splitOn} onChange={e=>setSplitOn(e.target.checked)} /> Itemize / split (debit–credit) — segregate EWT / VAT</label>
+        {splitOn && (
+          <div className="border border-indigo-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5 w-48">Account</th><th className="text-left px-2 py-1.5 w-32">Cost center</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5 w-24">Debit</th><th className="text-right px-2 py-1.5 w-24">Credit</th><th className="w-8"></th></tr></thead>
+              <tbody>{splits.map((l,i)=>(
+                <tr key={i} className="border-t">
+                  <td className="px-2 py-1"><select className="input !py-1" value={l.account_code} onChange={e=>setSplit(i,'account_code',e.target.value)}><option value="">— account —</option>{(chartAccounts||[]).filter(a=>a.active!==false).map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>)}</select></td><td className="px-2 py-1"><select className="input !py-1" value={l.cost_center_id||''} onChange={e=>setSplit(i,'cost_center_id',e.target.value)}><option value="">— cc —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code||c.name}</option>)}</select></td>
+                  <td className="px-2 py-1"><input className="input !py-1" value={l.description} onChange={e=>setSplit(i,'description',e.target.value)} placeholder="line memo" /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.debit} onChange={e=>setSplit(i,'debit',e.target.value)} onFocus={()=>{ if(Number(l.credit)) setSplit(i,'credit',''); }} /></td>
+                  <td className="px-2 py-1"><input type="number" className="input !py-1 text-right" value={l.credit} onChange={e=>setSplit(i,'credit',e.target.value)} onFocus={()=>{ if(Number(l.debit)) setSplit(i,'debit',''); }} /></td>
+                  <td className="px-2 py-1 text-center"><button type="button" onClick={()=>removeSplit(i)} className="text-slate-400 hover:text-rose-600">✕</button></td>
+                </tr>
+              ))}</tbody>
+              <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-2 py-1.5" colSpan="3"><button type="button" onClick={addSplit} className="text-xs text-indigo-600 hover:underline">+ Add line</button></td><td className="px-2 py-1.5 text-right">{peso(splitT.debit)}</td><td className="px-2 py-1.5 text-right">{peso(splitT.credit)}</td><td></td></tr></tfoot>
+            </table>
+            <div className={`text-xs text-center py-1 ${splitBalanced?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{splitBalanced?'✓ Balanced':`Out of balance by ${peso(Math.abs(splitT.debit-splitT.credit))}`}</div>
+          </div>
+        )}
         <TpLbl t="Particulars (auto-lists each PO — edit if needed)"><textarea className="input min-h-[90px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} /></TpLbl>
         {f.type==='check' && (
           <div className="grid grid-cols-3 gap-2 bg-blue-50 border border-blue-200 rounded p-2">
