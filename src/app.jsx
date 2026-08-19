@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 512 · Reacting to a comment now notifies its author (on add only, never for your own comment); the notification opens the lead / SO / PR it came from.";
+const BUILD = "Live build 513 · Notifications (reactions, ticket pings, approvals) now arrive live with a chime + toast instead of only on refresh — the notifications table is now realtime-subscribed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38469,10 +38469,22 @@ function App(){
       if(!mutedRef.current) showSystemMention('Steeze OS — New @mention', snippet || 'You were tagged in a comment.', ()=>setView('inbox'));
       scheduleReload();
     }
+    // System notifications (reactions, ticket pings, approvals routed via the
+    // notifications table, etc.) — fire the moment a row lands for me.
+    function maybeNotifyNotification(row){
+      if(!row || row.recipient_id !== me) return;
+      if(row.actor_id === me) return;             // don't ping yourself
+      if(!mutedRef.current) playPing();
+      const body = (row.text||'You have a new notification.').slice(0,140);
+      setToast({ title:'🔔 Notification', body });
+      if(!mutedRef.current) showSystemMention('Steeze OS — Notification', body, ()=>setView('inbox'));
+      scheduleReload();
+    }
     const ch = sb.channel('mentions-'+me)
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'lead_activity' },         (p)=>maybeNotify(p.new))
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'dept_job_activity' },     (p)=>maybeNotify(p.new))
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'sales_order_activity' },  (p)=>maybeNotify(p.new))
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'notifications', filter:`recipient_id=eq.${me}` }, (p)=>maybeNotifyNotification(p.new))
       .subscribe();
     return ()=>{ try{ sb.removeChannel(ch); }catch(_){} };
   },[profile && profile.id]);
