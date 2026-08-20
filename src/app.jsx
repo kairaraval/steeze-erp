@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 518 · Reverted subcon payroll generation back to per-week returns (only that week's returns are rolled up), per request.";
+const BUILD = "Live build 519 · Adjusting a deadline on the Production board now cascades to every department board (graphic, printing, embroidery, knitting, sampling, sewing, packing) and moves the delivery-schedule date to match.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7595,6 +7595,20 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
     const due = newDate || null;
     const { error } = await sb.from('production_jobs').update({ due_date: due }).eq('id', j.id);
     if(error){ alert(error.message); return; }
+    // Cascade the new deadline to every downstream department board + the
+    // delivery schedule so they never drift. The process boards (pattern /
+    // cutting / QC / sorting / pressing) read the production due live, so they
+    // update on their own; only the boards that store their OWN due_date and the
+    // logistics delivery need writing.
+    try {
+      const L = j.lead_id || null;
+      if(L){
+        const deptTables = ['graphic_design_jobs','printing_jobs','embroidery_jobs','knitting_jobs','sampling_jobs','sewing_jobs','packing_jobs'];
+        await Promise.all(deptTables.map(t => sb.from(t).update({ due_date: due }).eq('lead_id', L)));
+        await sb.from('logistics_deliveries').update({ date: due }).eq('lead_id', L).neq('status','delivered');
+      }
+      await sb.from('logistics_deliveries').update({ date: due }).eq('source_type','production_job').eq('source_id', j.id).neq('status','delivered');
+    } catch(e){ console.warn('Deadline cascade failed:', e?.message||e); }
     reload();
   }
   // Derive the sales owner: prefer the job's own sales_owner_id, fall back to
