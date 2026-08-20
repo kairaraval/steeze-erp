@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 520 · The Sample Sales Order now reflects EVERY accepted sample estimate on a lead (a 2nd accepted sample now shows for payment), rebuilt from the full accepted set.";
+const BUILD = "Live build 521 · Opening a mention in the inbox now marks it read immediately (including reaction/system notifications) so the row shows as opened and the inbox badge count drops.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10944,6 +10944,23 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     setBusyIds(p=>{ const n=new Set(p); n.delete(m.id); return n; });
     reload && reload();
   }
+  // Mark every underlying row in this thread read (WITHOUT archiving) — called
+  // when the user opens a mention. Works for all sources, including system
+  // notifications (reactions, alerts) that have no activity thread of their own,
+  // so the inbox badge always drops the moment you open something.
+  async function markGroupRead(m){
+    const all = groupedAll[dedupKey(m)] || [m];
+    const toMark = all.filter(r=>!(r.read_by||[]).includes(profile.id));
+    if(!toMark.length) return;
+    try {
+      await Promise.all(toMark.map(row=>{
+        const table = inboxTableFor(row.source);
+        const nextRead = Array.from(new Set([...(row.read_by||[]), profile.id]));
+        return sb.from(table).update({ read_by: nextRead }).eq('id', row.id);
+      }));
+      reload && reload();
+    } catch(e){ console.warn('Mark-read on open failed:', e?.message||e); }
+  }
   async function clearAll(){
     // Archive every underlying mention (not just the deduped visible rows) so
     // older mentions don't reappear after dismiss. We operate on rawVisible
@@ -11060,7 +11077,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                     </div>
                     {/* Company + task title — company is shown as a distinct
                         chip so it's never lost in the truncation. */}
-                    <button onClick={()=>onGoToTask(m)} className="shrink-0 w-64 text-left hover:underline" title={c.label}>
+                    <button onClick={()=>{ markGroupRead(m); onGoToTask(m); }} className="shrink-0 w-64 text-left hover:underline" title={c.label}>
                       {c.company && (
                         <div className={`text-[10px] uppercase font-bold tracking-wide truncate ${c.color}`}>{c.company}</div>
                       )}
@@ -11071,7 +11088,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                       {sender ? <Avatar profile={sender} size="sm" /> : <div className="w-7 h-7 rounded-full bg-slate-200" />}
                     </div>
                     {/* Message preview */}
-                    <button onClick={()=>onOpen(m)} className="flex-1 min-w-0 text-left text-sm text-slate-600 truncate hover:underline">
+                    <button onClick={()=>{ markGroupRead(m); onOpen(m); }} className="flex-1 min-w-0 text-left text-sm text-slate-600 truncate hover:underline">
                       {renderCommentText(m.text, profiles)}
                     </button>
                     {/* Thread-count badge — appears when this row represents
