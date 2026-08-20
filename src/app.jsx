@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 517 · Subcon payroll now pays on each batch's cumulative unpaid balance (total returned − total paid), so returns logged in a later week than an earlier payment are no longer missed.";
+const BUILD = "Live build 518 · Reverted subcon payroll generation back to per-week returns (only that week's returns are rolled up), per request.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36995,12 +36995,8 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
     let totalAmount = 0;
     const lineItems = [];
     sendsForSubcon.forEach(send => {
-      // Pay on the CUMULATIVE unpaid balance per send: total good returned so
-      // far minus everything already paid for it. (Comparing only this week's
-      // returns against all-time paid under-counted any returns that came in a
-      // later week than an earlier payment.)
-      const goodTotal = (subconReturns||[])
-        .filter(r => r.send_id === send.id)
+      const goodInWeek = (subconReturns||[])
+        .filter(r => r.send_id === send.id && r.date_returned >= weekStart && r.date_returned <= weekEnding)
         .reduce((s,r) => s + Number(r.quantity_returned||0), 0);
       // Already paid for this send in FINALIZED or PAID payrolls (any week).
       // Drafts don't count — they get refreshed in place if present.
@@ -37011,7 +37007,7 @@ function SubconPayrollGenerateModal({ profile, subcons, subconSends, subconRetur
         if(pr.status !== 'finalized' && pr.status !== 'paid') return sum;
         return sum + Number(pi.garments_paid||0);
       }, 0);
-      const net = Math.max(0, goodTotal - alreadyPaid);
+      const net = Math.max(0, goodInWeek - alreadyPaid);
       if(net > 0){
         const rate = Number(send.rate_per_garment||0);
         const lineTotal = net * rate;
