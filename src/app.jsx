@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 515 · Subcon payroll now needs Production Supervisor approval before payment: accounting submits → she reviews/approves (or sends back) from an approval list → accounting pays.";
+const BUILD = "Live build 516 · Subcon payroll adjustment can now DEDUCT (rejects) or ADD (bonus / prior balance) — one signed field with a Deduct/Add toggle; the payslip shows Less/Add accordingly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -37185,7 +37185,12 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
   const initialItems = (payrollItems||[]).filter(it => it.payroll_id === payroll.id).sort((a,b)=>(a.position||0)-(b.position||0));
   const [weekEnding,setWeekEnding]=useState(payroll.week_ending||'');
   const [notes,setNotes]=useState(payroll.notes||'');
-  const [deduction,setDeduction]=useState(payroll.deduction!=null?String(payroll.deduction):'');
+  // Manual adjustment: a single signed amount that can DEDUCT (rejects) or ADD
+  // (bonus / prior balance). Stored in `deduction` as a value SUBTRACTED from
+  // gross — positive = deduct, negative = add.
+  const initAdj = Number(payroll.deduction)||0;
+  const [adjMode,setAdjMode]=useState(initAdj<0?'add':'deduct');
+  const [adjAmount,setAdjAmount]=useState(initAdj!==0?String(Math.abs(initAdj)):'');
   const [deductionReason,setDeductionReason]=useState(payroll.deduction_reason||'');
   const [rows,setRows]=useState(initialItems.map(it => ({
     id: it.id, send_id: it.send_id||null,
@@ -37199,11 +37204,12 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
   function removeRow(i){ setRows(p => p.filter((_,idx) => idx!==i)); }
   const totalGarments = rows.reduce((s,r) => s + (Number(r.garments_paid)||0), 0);
   const totalAmount   = rows.reduce((s,r) => s + (Number(r.garments_paid)||0) * (Number(r.rate_per_garment)||0), 0);
-  const deductNum = Math.max(0, Number(deduction)||0);
-  const netPay = Math.max(0, totalAmount - deductNum);
+  const adjAmt = Math.max(0, Number(adjAmount)||0);
+  const storedDeduction = adjMode==='add' ? -adjAmt : adjAmt;   // subtracted from gross
+  const netPay = Math.max(0, totalAmount - storedDeduction);
   async function save(){
     if(!weekEnding){ setMsg('Week ending date is required.'); return; }
-    if(deductNum>totalAmount){ setMsg('Deduction cannot be more than the payroll total.'); return; }
+    if(adjMode==='deduct' && adjAmt>totalAmount){ setMsg('Deduction cannot be more than the payroll total.'); return; }
     setBusy(true); setMsg('');
     try {
       // Build a before→after diff for the audit log (rates, qty, deduction, total).
@@ -37214,7 +37220,7 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
                 if(String(Number(o.garments_paid)||0)!==String(Number(r.garments_paid)||0)) changes.push({field:`${lbl} — qty`, from:String(Number(o.garments_paid)||0), to:String(Number(r.garments_paid)||0)}); }
         else changes.push({field:`${lbl} — added`, from:'', to:`${Number(r.garments_paid)||0} × ₱${Number(r.rate_per_garment)||0}`}); });
       (initialItems||[]).forEach(o=>{ if(!rows.some(r=>(r.garment||'').trim().toLowerCase()===(o.garment||'').trim().toLowerCase())) changes.push({field:`${o.garment||'line'} — removed`, from:`${Number(o.garments_paid)||0} × ₱${Number(o.rate_per_garment)||0}`, to:''}); });
-      if(String(Number(payroll.deduction)||0)!==String(deductNum)) changes.push({field:'Deduction', from:String(Number(payroll.deduction)||0), to:String(deductNum)});
+      if(String(Number(payroll.deduction)||0)!==String(storedDeduction)) changes.push({field:'Adjustment', from:String(Number(payroll.deduction)||0), to:String(storedDeduction)});
       if(String(Number(payroll.total_amount)||0)!==String(totalAmount)) changes.push({field:'Total amount', from:String(Number(payroll.total_amount)||0), to:String(totalAmount)});
       // 1) Header update with recomputed totals.
       const { error: e1 } = await sb.from('subcon_payrolls').update({
@@ -37222,7 +37228,7 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
         notes: notes||null,
         total_garments: totalGarments,
         total_amount: totalAmount,
-        deduction: deductNum,
+        deduction: storedDeduction,
         deduction_reason: deductionReason.trim()||null,
         updated_by: profile.id,
       }).eq('id', payroll.id);
@@ -37300,16 +37306,25 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
           </table>
         </div>
         <button onClick={addRow} className="text-xs px-3 py-1.5 rounded bg-emerald-100 text-emerald-700 font-semibold hover:bg-emerald-200">+ Add line item</button>
-        {/* Manual deduction — e.g. amount withheld for rejects */}
-        <div className="border border-rose-100 bg-rose-50/40 rounded-lg p-3">
-          <div className="text-[10px] uppercase text-rose-600 font-semibold mb-2">Manual deduction · e.g. rejects / defects withheld from this payout</div>
+        {/* Manual adjustment — deduct (rejects) or add (bonus / prior balance) */}
+        <div className="border border-slate-200 bg-slate-50/60 rounded-lg p-3">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Manual adjustment · deduct (rejects / defects) or add (bonus / prior balance)</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-            <div><label className="text-xs font-semibold text-slate-500">Deduction (₱)</label><input type="number" min="0" step="0.01" value={deduction} onChange={e=>setDeduction(e.target.value)} placeholder="0.00" className="w-full border rounded px-2 py-1.5 text-right font-mono" /></div>
-            <div className="sm:col-span-2"><label className="text-xs font-semibold text-slate-500">Reason</label><input value={deductionReason} onChange={e=>setDeductionReason(e.target.value)} placeholder="e.g. 12 pcs rejects — stitching defect" className="w-full border rounded px-2 py-1.5" /></div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500">Adjustment (₱)</label>
+              <div className="flex items-stretch gap-1 mt-0.5">
+                <div className="inline-flex rounded-lg border bg-white overflow-hidden text-xs font-semibold">
+                  <button type="button" onClick={()=>setAdjMode('deduct')} className={`px-2 ${adjMode==='deduct'?'bg-rose-500 text-white':'text-slate-500'}`}>− Deduct</button>
+                  <button type="button" onClick={()=>setAdjMode('add')} className={`px-2 ${adjMode==='add'?'bg-emerald-600 text-white':'text-slate-500'}`}>+ Add</button>
+                </div>
+                <input type="number" min="0" step="0.01" value={adjAmount} onChange={e=>setAdjAmount(e.target.value)} placeholder="0.00" className="flex-1 min-w-0 border rounded px-2 py-1.5 text-right font-mono" />
+              </div>
+            </div>
+            <div className="sm:col-span-2"><label className="text-xs font-semibold text-slate-500">Reason</label><input value={deductionReason} onChange={e=>setDeductionReason(e.target.value)} placeholder={adjMode==='add'?'e.g. carried-over balance / rush bonus':'e.g. 12 pcs rejects — stitching defect'} className="w-full border rounded px-2 py-1.5" /></div>
           </div>
           <div className="mt-2 flex items-center justify-end gap-4 text-sm">
             <span className="text-slate-500">Gross {peso(totalAmount)}</span>
-            {deductNum>0 && <span className="text-rose-600">− {peso(deductNum)}</span>}
+            {adjAmt>0 && (adjMode==='add' ? <span className="text-emerald-700">+ {peso(adjAmt)}</span> : <span className="text-rose-600">− {peso(adjAmt)}</span>)}
             <span className="font-bold text-emerald-700">Net payable {peso(netPay)}</span>
           </div>
         </div>
@@ -37457,12 +37472,14 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, profi
             </tr>
           ))}
             <tr className="bg-slate-50 font-bold">
-              <td colSpan="2" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total garments / {Number(payroll.deduction)>0?'Gross':'Amount'}</td>
+              <td colSpan="2" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Total garments / {Number(payroll.deduction)!==0?'Gross':'Amount'}</td>
               <td className="px-2 py-2 text-right border-r border-slate-800">{payroll.total_garments}</td>
               <td className="px-2 py-2 text-right text-base">{peso(payroll.total_amount)}</td>
             </tr>
-            {Number(payroll.deduction)>0 && (<>
-              <tr className="border-b border-slate-400"><td colSpan="3" className="px-2 py-1.5 text-right border-r border-slate-800 text-rose-700">Less: deduction{payroll.deduction_reason?` — ${payroll.deduction_reason}`:''}</td><td className="px-2 py-1.5 text-right text-rose-700 font-semibold">− {peso(payroll.deduction)}</td></tr>
+            {Number(payroll.deduction)!==0 && (<>
+              {Number(payroll.deduction)>0
+                ? <tr className="border-b border-slate-400"><td colSpan="3" className="px-2 py-1.5 text-right border-r border-slate-800 text-rose-700">Less: deduction{payroll.deduction_reason?` — ${payroll.deduction_reason}`:''}</td><td className="px-2 py-1.5 text-right text-rose-700 font-semibold">− {peso(payroll.deduction)}</td></tr>
+                : <tr className="border-b border-slate-400"><td colSpan="3" className="px-2 py-1.5 text-right border-r border-slate-800 text-emerald-700">Add: adjustment{payroll.deduction_reason?` — ${payroll.deduction_reason}`:''}</td><td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">+ {peso(-payroll.deduction)}</td></tr>}
               <tr className="bg-slate-100 font-bold"><td colSpan="3" className="px-2 py-2 text-right border-r border-slate-800 uppercase text-[10px] tracking-wider">Net payable</td><td className="px-2 py-2 text-right text-base text-emerald-700">{peso(subconNet(payroll))}</td></tr>
             </>)}
           </tbody>
@@ -37870,7 +37887,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                     <td className="px-3 py-2 font-semibold">{subcon?.name||'—'}</td>
                     <td className="px-3 py-2 font-mono text-xs">{p.number}</td>
                     <td className="px-3 py-2 text-right">{p.total_garments}</td>
-                    <td className="px-3 py-2 text-right font-bold">{peso(subconNet(p))}{Number(p.deduction)>0 && <div className="text-[10px] font-normal text-rose-600" title={p.deduction_reason||'Deduction'}>gross {peso(p.total_amount)} · −{peso(p.deduction)}{p.deduction_reason?` (${p.deduction_reason})`:''}</div>}</td>
+                    <td className="px-3 py-2 text-right font-bold">{peso(subconNet(p))}{Number(p.deduction)!==0 && <div className={`text-[10px] font-normal ${Number(p.deduction)>0?'text-rose-600':'text-emerald-600'}`} title={p.deduction_reason||'Adjustment'}>gross {peso(p.total_amount)} · {Number(p.deduction)>0?`−${peso(p.deduction)}`:`+${peso(-p.deduction)}`}{p.deduction_reason?` (${p.deduction_reason})`:''}</div>}</td>
                     <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View</button>
