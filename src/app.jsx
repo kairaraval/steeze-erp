@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 514 · Sewing board now seeds the full order item breakdown (like the QC report) so the line lead just picks the item(s) they're sewing and sets the pcs — no manual typing.";
+const BUILD = "Live build 515 · Subcon payroll now needs Production Supervisor approval before payment: accounting submits → she reviews/approves (or sends back) from an approval list → accounting pays.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -37329,18 +37329,53 @@ function SubconPayrollEditModal({ payroll, subcons, payrollItems, profile, onClo
   );
 }
 
-function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClose, onSaved, onEdit }){
+function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, profiles, onClose, onSaved, onEdit }){
   const subcon = (subcons||[]).find(s => s.id === payroll.subcon_id);
   const items = (payrollItems||[]).filter(it => it.payroll_id === payroll.id).sort((a,b)=>(a.position||0)-(b.position||0));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Admin + Production Supervisor may edit / reopen / void payroll logs.
   const canEditPayroll = profile.role==='admin' || profile.role==='production_supervisor' || canRunSubconPayroll(profile);
-  async function finalize(){
-    if(!confirm('Finalize this payroll? Once finalized, it locks the line items and is ready for payment.')) return;
+  // Only the Production Supervisor (or Admin) approves a submitted payroll.
+  const canApprovePayroll = profile.role==='production_supervisor' || profile.role==='admin';
+  const net = subconNet(payroll);
+  // Accounting submits a draft payroll to the Production Supervisor for approval.
+  async function submitForApproval(){
+    if(!confirm('Send this payroll to the Production Supervisor for approval? Payment is blocked until she approves.')) return;
     setBusy(true);
-    const { error } = await sb.from('subcon_payrolls').update({ status:'finalized' }).eq('id', payroll.id);
+    const { error } = await sb.from('subcon_payrolls').update({ status:'pending_approval', submitted_by:profile.id, submitted_at:new Date().toISOString() }).eq('id', payroll.id);
     setBusy(false);
     if(error){ setMsg(error.message); return; }
+    try {
+      const supers=(profiles||[]).filter(p=>p.role==='production_supervisor').map(p=>p.id);
+      if(supers.length) await sb.from('notifications').insert(supers.map(id=>({ recipient_id:id, actor_id:profile.id, text:`🧵 Subcon payroll ${payroll.number} (${subcon?.name||''}) — ${peso(net)} needs your approval before payment.`, link_view:'subcon', ref_type:'subcon_payroll', ref_id:payroll.id, type:'system' })));
+    } catch(_){}
+    onSaved && onSaved();
+  }
+  // Production Supervisor approves → ready for accounting to pay.
+  async function approve(){
+    if(!confirm(`Approve subcon payroll ${payroll.number} for ${peso(net)}? Accounting can pay it after this.`)) return;
+    setBusy(true);
+    const { error } = await sb.from('subcon_payrolls').update({ status:'finalized', approved_by:profile.id, approved_at:new Date().toISOString(), approval_note:null }).eq('id', payroll.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    try {
+      const recips=[...new Set([payroll.submitted_by, ...(profiles||[]).filter(p=>p.role==='accounting'||p.role==='accounting_officer').map(p=>p.id)])].filter(id=>id&&id!==profile.id);
+      if(recips.length) await sb.from('notifications').insert(recips.map(id=>({ recipient_id:id, actor_id:profile.id, text:`✅ Subcon payroll ${payroll.number} approved. Ready for payment (${peso(net)}).`, link_view:'subcon', ref_type:'subcon_payroll', ref_id:payroll.id, type:'system' })));
+    } catch(_){}
+    onSaved && onSaved();
+  }
+  // Production Supervisor sends it back to accounting with a reason.
+  async function sendBack(){
+    const reason=(prompt('Reason for sending this payroll back to accounting?')||'').trim();
+    if(reason===null) return;
+    setBusy(true);
+    const { error } = await sb.from('subcon_payrolls').update({ status:'draft', approval_note:reason||null }).eq('id', payroll.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    try {
+      const recips=[...new Set([payroll.submitted_by, ...(profiles||[]).filter(p=>p.role==='accounting'||p.role==='accounting_officer').map(p=>p.id)])].filter(id=>id&&id!==profile.id);
+      if(recips.length) await sb.from('notifications').insert(recips.map(id=>({ recipient_id:id, actor_id:profile.id, text:`↩ Subcon payroll ${payroll.number} sent back${reason?`: ${reason}`:''}. Please revise.`, link_view:'subcon', ref_type:'subcon_payroll', ref_id:payroll.id, type:'system' })));
+    } catch(_){}
     onSaved && onSaved();
   }
   async function markPaid(){
@@ -37389,7 +37424,7 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
         <div className="grid grid-cols-3 gap-3 mb-3 text-xs">
           <div><div className="font-semibold uppercase text-slate-500">Payroll No.</div><div className="font-mono text-base font-bold">{payroll.number}</div></div>
           <div><div className="font-semibold uppercase text-slate-500">Week ending</div><div className="font-medium">{fmtDate(payroll.week_ending)}</div></div>
-          <div><div className="font-semibold uppercase text-slate-500">Status</div><div className="font-medium capitalize">{payroll.status}</div></div>
+          <div><div className="font-semibold uppercase text-slate-500">Status</div><div className="font-medium capitalize">{payroll.status==='pending_approval'?'Pending approval':payroll.status==='finalized'?'Approved · ready to pay':payroll.status}</div>{payroll.approved_by && (payroll.status==='finalized'||payroll.status==='paid') && <div className="text-[10px] text-emerald-700 normal-case">✓ Approved by {(profiles||[]).find(p=>p.id===payroll.approved_by)?.name||'—'}</div>}{payroll.status==='draft' && payroll.approval_note && <div className="text-[10px] text-rose-600 normal-case">↩ Sent back: {payroll.approval_note}</div>}</div>
         </div>
         <div className="border-2 border-slate-800 p-3 mb-3">
           <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-500">PAY TO</div>
@@ -37440,7 +37475,12 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, onClo
       </div>
       {msg && <div className="no-print text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2 mt-3">{msg}</div>}
       <div className="no-print flex gap-2 mt-3 flex-wrap">
-        {payroll.status==='draft' && canRunSubconPayroll(profile) && <button disabled={busy} onClick={finalize} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">✓ Finalize</button>}
+        {payroll.status==='draft' && canRunSubconPayroll(profile) && <button disabled={busy} onClick={submitForApproval} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📤 Submit for approval</button>}
+        {payroll.status==='pending_approval' && canApprovePayroll && <>
+          <button disabled={busy} onClick={approve} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Approve</button>
+          <button disabled={busy} onClick={sendBack} className="px-3 py-2 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">↩ Send back</button>
+        </>}
+        {payroll.status==='pending_approval' && !canApprovePayroll && <span className="px-3 py-2 rounded-lg bg-amber-50 text-amber-700 font-semibold text-xs self-center">⏳ Awaiting Production Supervisor approval</span>}
         {payroll.status==='finalized' && canRunSubconPayroll(profile) && <button disabled={busy} onClick={markPaid} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💰 Mark paid</button>}
         {/* Admin escape hatches — Edit (any status), Reopen (finalized/paid → draft),
             Void (soft delete, recoverable), Delete (hard delete, permanent). */}
@@ -37698,8 +37738,27 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
             : payrollStatus==='paid' ? p.status==='paid'
             : /* for_payment */ (p.status!=='paid' && p.status!=='cancelled'));
         const fTotal = filtered.reduce((s,p)=>s+Number(p.total_amount||0),0);
+        const pendingApproval = (subconPayrolls||[]).filter(p=>p.status==='pending_approval');
+        const canApprove = profile.role==='production_supervisor' || profile.role==='admin';
         return (
         <div className="space-y-3">
+          {canApprove && pendingApproval.length>0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-3">
+              <div className="text-xs font-bold uppercase tracking-wider text-amber-800 mb-2">🔔 Awaiting your approval ({pendingApproval.length})</div>
+              <div className="space-y-1.5">
+                {pendingApproval.map(p=>{ const sc=(subcons||[]).find(x=>x.id===p.subcon_id); return (
+                  <div key={p.id} className="flex items-center gap-2 flex-wrap bg-white border border-amber-200 rounded-lg px-3 py-2">
+                    <span className="font-mono text-xs font-bold">{p.number}</span>
+                    <span className="text-sm font-semibold">{sc?.name||'—'}</span>
+                    <span className="text-xs text-slate-500">wk {fmtDate(p.week_ending)} · {p.total_garments} pcs</span>
+                    <span className="text-sm font-bold text-emerald-700">{peso(subconNet(p))}</span>
+                    <div className="flex-1"></div>
+                    <button onClick={()=>setViewingPayroll(p)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Review &amp; approve →</button>
+                  </div>
+                ); })}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl px-3 py-2">
             <label className="text-xs font-semibold text-slate-500">Week ending</label>
             <select value={payrollWeek} onChange={e=>setPayrollWeek(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
@@ -37733,8 +37792,10 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
               const subcon = (subcons||[]).find(x => x.id === p.subcon_id);
               const statusCls = p.status==='paid' ? 'bg-emerald-100 text-emerald-700'
                 : p.status==='finalized' ? 'bg-indigo-100 text-indigo-700'
+                : p.status==='pending_approval' ? 'bg-amber-100 text-amber-800'
                 : p.status==='cancelled' ? 'bg-rose-100 text-rose-700'
                 : 'bg-slate-100 text-slate-600';
+              const statusLabel = p.status==='pending_approval' ? 'pending approval' : p.status==='finalized' ? 'approved' : p.status;
               return (
                 <tr key={p.id} className="border-t hover:bg-slate-50">
                   <td className="px-3 py-2 font-mono text-xs font-bold">{p.number}</td>
@@ -37742,7 +37803,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
                   <td className="px-3 py-2 font-semibold">{subcon?.name||'—'}</td>
                   <td className="px-3 py-2 text-right">{p.total_garments}</td>
                   <td className="px-3 py-2 text-right font-bold">{peso(p.total_amount)}</td>
-                  <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{p.status}</span></td>
+                  <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusCls}`}>{statusLabel}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button onClick={()=>setViewingPayroll(p)} className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 mr-1">View / Print</button>
                     {canEditPayrollRow && <button onClick={()=>setEditingPayroll(p)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 mr-1">Edit</button>}
@@ -37837,7 +37898,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload && reload(); }} />}
       {editingReturn && <SubconReturnModal profile={profile} send={(subconSends||[]).find(s=>s.id===editingReturn.send_id)} subcons={subcons} allReturns={subconReturns} existing={editingReturn} onClose={()=>setEditingReturn(null)} onSaved={()=>{ setEditingReturn(null); reload && reload(); }} />}
       {generatingPayroll && <SubconPayrollGenerateModal profile={profile} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} onClose={()=>setGeneratingPayroll(false)} onSaved={(summary)=>{ setGeneratingPayroll(false); reload && reload(); alert(summary); }} />}
-      {viewingPayroll && <SubconPayrollViewModal payroll={viewingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setViewingPayroll(null)} onSaved={()=>{ setViewingPayroll(null); reload && reload(); }} onEdit={()=>{ setEditingPayroll(viewingPayroll); setViewingPayroll(null); }} />}
+      {viewingPayroll && <SubconPayrollViewModal payroll={viewingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} profiles={profiles} onClose={()=>setViewingPayroll(null)} onSaved={()=>{ setViewingPayroll(null); reload && reload(); }} onEdit={()=>{ setEditingPayroll(viewingPayroll); setViewingPayroll(null); }} />}
       {editingPayroll && <SubconPayrollEditModal payroll={editingPayroll} subcons={subcons} payrollItems={subconPayrollItems} profile={profile} onClose={()=>setEditingPayroll(null)} onSaved={()=>{ setEditingPayroll(null); reload && reload(); }} />}
       {singleSubconPayout && <PayoutModal kind="subcon"
         periodStart={(()=>{ const d=new Date(String(singleSubconPayout.p.week_ending)+'T00:00:00'); d.setDate(d.getDate()-6); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; })()}
