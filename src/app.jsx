@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 519 · Adjusting a deadline on the Production board now cascades to every department board (graphic, printing, embroidery, knitting, sampling, sewing, packing) and moves the delivery-schedule date to match.";
+const BUILD = "Live build 520 · The Sample Sales Order now reflects EVERY accepted sample estimate on a lead (a 2nd accepted sample now shows for payment), rebuilt from the full accepted set.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24767,30 +24767,48 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
 // lead.sales_order_id (that stays the production SO). Commission accrues via the
 // normal SO triggers on subtotal (ex-VAT base).
 async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
-  if(!lead || !profile || !estimate) return null;
+  if(!lead || !profile) return null;
   try {
+    // The Sample Sales Order reflects EVERY accepted sample estimate on this
+    // lead — some clients accept two. So (re)build it from the full set of
+    // accepted sample estimates each time one is accepted. Idempotent: running
+    // again just recomputes the same totals, so nothing double-counts.
+    const { data: accepted } = await sb.from('estimates')
+      .select('id, items, total, subtotal, number, client_name, payment_terms')
+      .eq('lead_id', lead.id).eq('purpose','sample').eq('status','approved');
+    const accs = accepted || [];
+    if(accs.length===0) return null;
+    const items = accs.flatMap(e => Array.isArray(e.items) ? e.items : []);
+    const total = accs.reduce((s,e)=> s + (Number(e.total)||0), 0);
+    const subtotal = accs.reduce((s,e)=> s + (Number(e.subtotal ?? e.total)||0), 0);
+    const linkAll = async (soId)=>{ try { await sb.from('estimates').update({ sales_order_id: soId }).eq('lead_id', lead.id).eq('purpose','sample').eq('status','approved'); } catch(_){} };
+    // Existing sample SO for this lead → rebuild it from the full accepted set.
     const { data: existing } = await sb.from('sales_orders')
-      .select('id').eq('lead_id', lead.id).eq('kind','sample').is('deleted_at', null).limit(1);
-    if(existing && existing.length>0) return existing[0];
+      .select('id, number, amount_paid').eq('lead_id', lead.id).eq('kind','sample').is('deleted_at', null).limit(1);
+    if(existing && existing.length>0){
+      const so = existing[0];
+      const balance = Math.max(0, total - (Number(so.amount_paid)||0));
+      await sb.from('sales_orders').update({ items, subtotal, total, balance_due: balance }).eq('id', so.id);
+      await linkAll(so.id);
+      return so;
+    }
     const today = new Date().toISOString().slice(0,10);
     const monthKey = today.slice(0,7);
     const { data: monthRows } = await sb.from('sales_orders').select('number').like('number', `SO-${monthKey}-%`);
     let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
     const number = `SO-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
-    const total = Number(estimate.total)||0;
-    const subtotal = Number(estimate.subtotal ?? total)||0; // ex-VAT base drives commission
     const payload = {
       number, kind:'sample', date: today,
       lead_id: lead.id, manager_id: lead.manager_id||null, client_id: lead.client_id||null,
-      client_name: client?.company || estimate.client_name || lead.client_name || '',
-      items: estimate.items || [],
-      subtotal, total, amount_paid: 0, balance_due: total, status: 'open',
+      client_name: client?.company || estimate?.client_name || lead.client_name || '',
+      items, subtotal, total, amount_paid: 0, balance_due: total, status: 'open',
       expected_delivery: lead.delivery_date || lead.expected_close || null,
-      payment_terms: estimate.payment_terms || lead.payment_terms || null,
+      payment_terms: estimate?.payment_terms || lead.payment_terms || null,
       created_by: profile.id,
     };
     const { data, error } = await sb.from('sales_orders').insert(payload).select().single();
     if(error){ if(String(error.code||'').startsWith('23')) return null; console.warn('Sample SO create failed:', error.message); return null; }
+    await linkAll(data.id);
     try { await sb.from('lead_activity').insert({ lead_id: lead.id, actor_id: profile.id, type:'system', text:`Sample estimate accepted → Sample Sales Order ${number} created for collection` }); } catch(_){}
     return data;
   } catch(e){ console.warn('Sample SO unexpected error:', e); return null; }
