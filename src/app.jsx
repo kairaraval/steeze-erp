@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 521 · Opening a mention in the inbox now marks it read immediately (including reaction/system notifications) so the row shows as opened and the inbox badge count drops.";
+const BUILD = "Live build 522 · Sourcing Trips has a new leftmost 🛒 Buy list tab — a tickable checklist of the items you actually want to buy on the trip.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31375,6 +31375,8 @@ function SourcingView({ profile, profiles }){
   const sv=(r,k)=> (r && r.specs && r.specs[k]) || '';
   const typeOf=(r)=> r.type || 'fabric';
   const isItin = tab==='itinerary';
+  const isChecklist = tab==='checklist';
+  const isPanel = isItin || isChecklist;   // non-supplier tabs (own layout)
   const cfg = SOURCING_TYPES[tab] || SOURCING_TYPES.fabric;
   function nextCode(type){
     const pfx = SOURCING_TYPES[type].prefix;
@@ -31408,15 +31410,16 @@ function SourcingView({ profile, profiles }){
             <h1 className="text-xl sm:text-2xl font-bold">🧳 STEEZE — Intertextile 2026</h1>
             <p className="text-slate-500 text-xs sm:text-sm">{rows.length} supplier{rows.length===1?'':'s'} logged · fabrics / trims / machines</p>
           </div>
-          {!isItin && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {cfg.label.replace(/s$/,'').toLowerCase()} supplier</button>}
+          {!isPanel && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New {cfg.label.replace(/s$/,'').toLowerCase()} supplier</button>}
         </div>
         <div className="flex items-center gap-1 mt-3 flex-wrap">
+          <button onClick={()=>setTab('checklist')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${isChecklist?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>🛒 Buy list</button>
           {SOURCING_TYPE_KEYS.map(k=>{ const c=SOURCING_TYPES[k]; return (
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab===k?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>{c.icon} {c.label} <span className={`ml-1 text-[11px] ${tab===k?'text-indigo-100':'text-slate-400'}`}>{counts[k]||0}</span></button>
           ); })}
           <button onClick={()=>setTab('itinerary')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${isItin?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>📅 Itinerary</button>
         </div>
-        {!isItin && (
+        {!isPanel && (
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, spec…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
             <select value={minRating} onChange={e=>setMinRating(Number(e.target.value))} className="input !py-1.5 text-sm w-auto"><option value={0}>Any rating</option><option value={5}>★★★★★</option><option value={4}>★★★★+</option><option value={3}>★★★+</option></select>
@@ -31424,8 +31427,9 @@ function SourcingView({ profile, profiles }){
           </div>
         )}
       </div>
+      {isChecklist && <SourcingChecklist profile={profile} />}
       {isItin && <SourcingItinerary profile={profile} profiles={profiles} />}
-      {!isItin && (
+      {!isPanel && (
         loading ? <div className="text-center text-slate-400 py-12 text-sm">Loading…</div> : visible.length===0 ? (
         <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">{(counts[tab]||0)===0?`No ${cfg.label.toLowerCase()} suppliers yet. Tap "+ New" at the first booth.`:'No suppliers match your filters.'}</div>
       ) : (
@@ -31579,6 +31583,72 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
         <button onClick={save} disabled={busy} className="w-full py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save supplier':'Add supplier'}</button>
       </div>
     </Modal>
+  );
+}
+
+// Trip "want to buy" checklist — a simple, tickable shopping list of the items
+// we actually intend to source on this trip. Lives as the first tab.
+function SourcingChecklist({ profile }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [f,setF]=useState({ item:'', category:'', qty:'', target:'' });
+  const [busy,setBusy]=useState(false);
+  async function load(){
+    setLoading(true);
+    const { data } = await sb.from('sourcing_checklist').select('*').is('deleted_at',null).order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
+    setRows(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function add(){
+    if(!f.item.trim()) return;
+    setBusy(true);
+    const pos=(rows.length?Math.max(...rows.map(r=>Number(r.position)||0)):0)+1;
+    const { error }=await sb.from('sourcing_checklist').insert({ event:SOURCING_EVENT, item:f.item.trim(), category:f.category||null, qty:f.qty||null, target:f.target||null, position:pos, created_by:profile.id });
+    setBusy(false);
+    if(error){ alert(error.message); return; }
+    setF({ item:'', category:'', qty:'', target:'' }); load();
+  }
+  async function toggle(r){
+    await sb.from('sourcing_checklist').update({ done:!r.done, done_at:!r.done?new Date().toISOString():null, updated_at:new Date().toISOString() }).eq('id', r.id);
+    load();
+  }
+  async function del(r){
+    await sb.from('sourcing_checklist').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', r.id);
+    load();
+  }
+  const CATS=['Fabric','Trims','Machine','Packaging','Accessories','Other'];
+  const doneN=rows.filter(r=>r.done).length;
+  return (
+    <div className="max-w-3xl">
+      <div className="bg-white border rounded-xl p-3 mb-3">
+        <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Add something we want to buy on this trip</div>
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+          <input value={f.item} onChange={e=>up('item',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="What to buy — e.g. 4-way stretch nylon" className="input !py-1.5 text-sm sm:col-span-5" />
+          <select value={f.category} onChange={e=>up('category',e.target.value)} className="input !py-1.5 text-sm sm:col-span-2"><option value="">Category</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+          <input value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="Qty / need" className="input !py-1.5 text-sm sm:col-span-2" />
+          <input value={f.target} onChange={e=>up('target',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="Target price / notes" className="input !py-1.5 text-sm sm:col-span-2" />
+          <button onClick={add} disabled={busy||!f.item.trim()} className="sm:col-span-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">Add</button>
+        </div>
+      </div>
+      {rows.length>0 && <div className="text-xs text-slate-500 mb-2">{doneN}/{rows.length} bought / sourced</div>}
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : rows.length===0 ? (
+        <div className="text-center text-slate-400 py-10 text-sm border border-dashed rounded-xl">Nothing on the list yet. Add the fabrics, trims, and machines you want to buy.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {rows.map(r=>(
+            <div key={r.id} className={`flex items-center gap-3 bg-white border rounded-lg px-3 py-2 ${r.done?'opacity-60':''}`}>
+              <input type="checkbox" checked={!!r.done} onChange={()=>toggle(r)} className="shrink-0 w-4 h-4" />
+              <div className="min-w-0 flex-1">
+                <div className={`text-sm font-medium text-slate-900 ${r.done?'line-through text-slate-400':''}`}>{r.item}</div>
+                <div className="text-[11px] text-slate-500">{[r.category, r.qty&&`Qty: ${r.qty}`, r.target].filter(Boolean).join(' · ')}</div>
+              </div>
+              <button onClick={()=>del(r)} className="shrink-0 text-slate-300 hover:text-rose-500" title="Remove">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
