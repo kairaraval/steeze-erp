@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 522 · Sourcing Trips has a new leftmost 🛒 Buy list tab — a tickable checklist of the items you actually want to buy on the trip.";
+const BUILD = "Live build 523 · Buy list now groups by category (custom categories allowed) with a category filter, and each item has a 'where to buy' field (booth / supplier).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31591,8 +31591,9 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
 function SourcingChecklist({ profile }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
-  const [f,setF]=useState({ item:'', category:'', qty:'', target:'' });
+  const [f,setF]=useState({ item:'', category:'', qty:'', where:'', target:'' });
   const [busy,setBusy]=useState(false);
+  const [catFilter,setCatFilter]=useState('');
   async function load(){
     setLoading(true);
     const { data } = await sb.from('sourcing_checklist').select('*').is('deleted_at',null).order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
@@ -31604,10 +31605,10 @@ function SourcingChecklist({ profile }){
     if(!f.item.trim()) return;
     setBusy(true);
     const pos=(rows.length?Math.max(...rows.map(r=>Number(r.position)||0)):0)+1;
-    const { error }=await sb.from('sourcing_checklist').insert({ event:SOURCING_EVENT, item:f.item.trim(), category:f.category||null, qty:f.qty||null, target:f.target||null, position:pos, created_by:profile.id });
+    const { error }=await sb.from('sourcing_checklist').insert({ event:SOURCING_EVENT, item:f.item.trim(), category:f.category||null, qty:f.qty||null, where_buy:f.where||null, target:f.target||null, position:pos, created_by:profile.id });
     setBusy(false);
     if(error){ alert(error.message); return; }
-    setF({ item:'', category:'', qty:'', target:'' }); load();
+    setF(p=>({ item:'', category:p.category, qty:'', where:'', target:'' })); load();
   }
   async function toggle(r){
     await sb.from('sourcing_checklist').update({ done:!r.done, done_at:!r.done?new Date().toISOString():null, updated_at:new Date().toISOString() }).eq('id', r.id);
@@ -31617,33 +31618,58 @@ function SourcingChecklist({ profile }){
     await sb.from('sourcing_checklist').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', r.id);
     load();
   }
-  const CATS=['Fabric','Trims','Machine','Packaging','Accessories','Other'];
+  const DEFAULT_CATS=['Fabric','Trims','Machine','Packaging','Accessories','Other'];
+  // Category options = the defaults + any custom ones already used.
+  const usedCats=Array.from(new Set(rows.map(r=>(r.category||'').trim()).filter(Boolean)));
+  const allCats=Array.from(new Set([...DEFAULT_CATS, ...usedCats]));
   const doneN=rows.filter(r=>r.done).length;
+  const shown=rows.filter(r=> !catFilter || (r.category||'Uncategorized')===catFilter);
+  // Group the shown rows by category for an organized view.
+  const groups={}; shown.forEach(r=>{ const g=r.category||'Uncategorized'; (groups[g]=groups[g]||[]).push(r); });
+  const groupNames=Object.keys(groups).sort((a,b)=> a==='Uncategorized'?1 : b==='Uncategorized'?-1 : a.localeCompare(b));
   return (
     <div className="max-w-3xl">
       <div className="bg-white border rounded-xl p-3 mb-3">
         <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Add something we want to buy on this trip</div>
+        <input value={f.item} onChange={e=>up('item',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="What to buy — e.g. 4-way stretch nylon" className="input !py-1.5 text-sm w-full mb-2" />
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-          <input value={f.item} onChange={e=>up('item',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="What to buy — e.g. 4-way stretch nylon" className="input !py-1.5 text-sm sm:col-span-5" />
-          <select value={f.category} onChange={e=>up('category',e.target.value)} className="input !py-1.5 text-sm sm:col-span-2"><option value="">Category</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+          <input list="buylist-cats" value={f.category} onChange={e=>up('category',e.target.value)} placeholder="Category" className="input !py-1.5 text-sm sm:col-span-3" />
+          <datalist id="buylist-cats">{allCats.map(c=><option key={c} value={c} />)}</datalist>
           <input value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="Qty / need" className="input !py-1.5 text-sm sm:col-span-2" />
-          <input value={f.target} onChange={e=>up('target',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="Target price / notes" className="input !py-1.5 text-sm sm:col-span-2" />
+          <input value={f.where} onChange={e=>up('where',e.target.value)} placeholder="Where to buy (booth / supplier)" className="input !py-1.5 text-sm sm:col-span-4" />
+          <input value={f.target} onChange={e=>up('target',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="Target $ / notes" className="input !py-1.5 text-sm sm:col-span-2" />
           <button onClick={add} disabled={busy||!f.item.trim()} className="sm:col-span-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">Add</button>
         </div>
       </div>
-      {rows.length>0 && <div className="text-xs text-slate-500 mb-2">{doneN}/{rows.length} bought / sourced</div>}
+      {rows.length>0 && (
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          <span className="text-xs text-slate-500">{doneN}/{rows.length} bought / sourced</span>
+          <div className="flex-1"></div>
+          <button onClick={()=>setCatFilter('')} className={`text-[11px] px-2 py-0.5 rounded-full border ${catFilter===''?'bg-slate-800 text-white border-slate-800':'bg-white'}`}>All</button>
+          {allCats.filter(c=>usedCats.includes(c)).map(c=>(
+            <button key={c} onClick={()=>setCatFilter(catFilter===c?'':c)} className={`text-[11px] px-2 py-0.5 rounded-full border ${catFilter===c?'bg-slate-800 text-white border-slate-800':'bg-white hover:bg-slate-50'}`}>{c}</button>
+          ))}
+        </div>
+      )}
       {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : rows.length===0 ? (
         <div className="text-center text-slate-400 py-10 text-sm border border-dashed rounded-xl">Nothing on the list yet. Add the fabrics, trims, and machines you want to buy.</div>
       ) : (
-        <div className="space-y-1.5">
-          {rows.map(r=>(
-            <div key={r.id} className={`flex items-center gap-3 bg-white border rounded-lg px-3 py-2 ${r.done?'opacity-60':''}`}>
-              <input type="checkbox" checked={!!r.done} onChange={()=>toggle(r)} className="shrink-0 w-4 h-4" />
-              <div className="min-w-0 flex-1">
-                <div className={`text-sm font-medium text-slate-900 ${r.done?'line-through text-slate-400':''}`}>{r.item}</div>
-                <div className="text-[11px] text-slate-500">{[r.category, r.qty&&`Qty: ${r.qty}`, r.target].filter(Boolean).join(' · ')}</div>
+        <div className="space-y-4">
+          {groupNames.map(g=>(
+            <div key={g}>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">{g} <span className="text-slate-400">({groups[g].length})</span></div>
+              <div className="space-y-1.5">
+                {groups[g].map(r=>(
+                  <div key={r.id} className={`flex items-center gap-3 bg-white border rounded-lg px-3 py-2 ${r.done?'opacity-60':''}`}>
+                    <input type="checkbox" checked={!!r.done} onChange={()=>toggle(r)} className="shrink-0 w-4 h-4" />
+                    <div className="min-w-0 flex-1">
+                      <div className={`text-sm font-medium text-slate-900 ${r.done?'line-through text-slate-400':''}`}>{r.item}</div>
+                      <div className="text-[11px] text-slate-500">{[r.qty&&`Qty: ${r.qty}`, r.where_buy&&`📍 ${r.where_buy}`, r.target].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <button onClick={()=>del(r)} className="shrink-0 text-slate-300 hover:text-rose-500" title="Remove">✕</button>
+                  </div>
+                ))}
               </div>
-              <button onClick={()=>del(r)} className="shrink-0 text-slate-300 hover:text-rose-500" title="Remove">✕</button>
             </div>
           ))}
         </div>
