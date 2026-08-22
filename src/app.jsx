@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 525 · Sourcing suppliers can be manually ranked — pick 'My ranking', then use ▲/▼ to arrange your top-tier suppliers; the order is saved per tab.";
+const BUILD = "Live build 526 · In 'My ranking', sourcing supplier cards can be dragged to reorder (grab a card and drop it) — ▲/▼ still work too; order saved per tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31371,6 +31371,7 @@ function SourcingView({ profile, profiles }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [tab,setTab]=useState('fabric'); // fabric | trims | machine
+  const [dragId,setDragId]=useState(null); // card being dragged in My-ranking mode
   const [search,setSearch]=useState('');
   const [minRating,setMinRating]=useState(0);
   const [sort,setSort]=useState('recent'); // 'recent' | 'rating' | 'code'
@@ -31414,13 +31415,26 @@ function SourcingView({ profile, profiles }){
   // Manual reorder (top-tier ranking). Only offered when the list isn't filtered
   // so ▲/▼ move relative to the true full order of this tab.
   const canReorder = sort==='manual' && !search && !minRating;
+  async function persistOrder(reordered){
+    await Promise.all(reordered.map((x,i)=> sb.from('sourcing_leads').update({ position:i }).eq('id', x.id)));
+    load();
+  }
   async function move(r, dir){
     const listAll = rows.filter(x=>typeOf(x)===tab).slice().sort(byManual);
     const idx = listAll.findIndex(x=>x.id===r.id); const swap = idx+dir;
     if(idx<0 || swap<0 || swap>=listAll.length) return;
     const reordered = listAll.slice(); const [it]=reordered.splice(idx,1); reordered.splice(swap,0,it);
-    await Promise.all(reordered.map((x,i)=> sb.from('sourcing_leads').update({ position:i }).eq('id', x.id)));
-    load();
+    persistOrder(reordered);
+  }
+  // Drag-and-drop reorder: drop the grabbed card onto another to slot it there.
+  async function dropOnCard(target){
+    if(!dragId || dragId===target.id){ setDragId(null); return; }
+    const listAll = rows.filter(x=>typeOf(x)===tab).slice().sort(byManual);
+    const from = listAll.findIndex(x=>x.id===dragId); const to = listAll.findIndex(x=>x.id===target.id);
+    setDragId(null);
+    if(from<0 || to<0) return;
+    const reordered = listAll.slice(); const [it]=reordered.splice(from,1); reordered.splice(to,0,it);
+    persistOrder(reordered);
   }
   const askedCount=(r)=>{ const c=SOURCING_TYPES[typeOf(r)]; return c.questions.filter(([k])=> r.questions && r.questions[k]).length; };
   const Flag=({on,children})=> <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${on?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-400'}`}>{on?'✓':'✕'} {children}</span>;
@@ -31461,9 +31475,16 @@ function SourcingView({ profile, profiles }){
             const nAtt=(Array.isArray(r.attachments)?r.attachments:[]).length; const asked=askedCount(r);
             const mainF=c.fields[0]; const specFields=c.fields.filter(x=>!['price','lead_time','moq','mcq','warranty','aftersales'].includes(x.k) && x.k!==mainF.k);
             return (
-              <div key={r.id} className={`bg-white rounded-xl border p-3 flex flex-col gap-2 ${canReorder?'ring-1 ring-slate-100':''}`}>
+              <div key={r.id}
+                draggable={canReorder}
+                onDragStart={canReorder?(e)=>{ setDragId(r.id); e.dataTransfer.effectAllowed='move'; }:undefined}
+                onDragOver={canReorder?(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; }:undefined}
+                onDrop={canReorder?(e)=>{ e.preventDefault(); dropOnCard(r); }:undefined}
+                onDragEnd={canReorder?()=>setDragId(null):undefined}
+                className={`bg-white rounded-xl border p-3 flex flex-col gap-2 ${canReorder?'ring-1 ring-slate-100 cursor-move':''} ${dragId===r.id?'opacity-40':''} ${dragId&&dragId!==r.id?'hover:ring-2 hover:ring-indigo-300':''}`}>
                 {canReorder && (
                   <div className="flex items-center gap-1.5 -mt-0.5 -mx-0.5 mb-0.5">
+                    <span className="text-slate-300 select-none" title="Drag to reorder">⠿</span>
                     <span className="text-[11px] font-bold text-white bg-indigo-600 rounded px-1.5 py-0.5">#{vi+1}</span>
                     <div className="flex-1"></div>
                     <button onClick={()=>move(r,-1)} disabled={vi===0} className="text-xs px-1.5 py-0.5 rounded border bg-white text-slate-500 hover:border-indigo-300 disabled:opacity-30" title="Move up">▲</button>
