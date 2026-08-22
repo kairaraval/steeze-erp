@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 523 · Buy list now groups by category (custom categories allowed) with a category filter, and each item has a 'where to buy' field (booth / supplier).";
+const BUILD = "Live build 524 · Sourcing supplier attachments now show as inline thumbnails — photos open in a lightbox and PDFs preview in-page instead of a new tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -663,7 +663,7 @@ async function resolveAttUrl(att){
 // Glyph for an attachment based on its type/name.
 function attGlyph(a){ const t=((a&&a.type)||'')+' '+((a&&a.name)||''); if(/image|png|jpe?g|gif|webp/i.test(t)) return '🖼'; if(/pdf/i.test(t)) return '📄'; if(/word|docx?/i.test(t)) return '📝'; if(/sheet|xlsx?|csv/i.test(t)) return '📊'; return '📎'; }
 // Reusable upload+remove field. value is an array of {type,name,path,mime}.
-function AttachmentsEditor({ value, onChange, scope='misc', label }){
+function AttachmentsEditor({ value, onChange, scope='misc', label, inline }){
   const [uploading,setUploading]=useState(false); const [err,setErr]=useState('');
   const list=Array.isArray(value)?value:[];
   async function pick(fileList){ const files=Array.from(fileList||[]).filter(Boolean); if(!files.length) return; setUploading(true); setErr('');
@@ -674,7 +674,16 @@ function AttachmentsEditor({ value, onChange, scope='misc', label }){
       {label && <label className="text-xs font-semibold text-slate-500">{label}</label>}
       <label className="mt-1 flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:border-slate-400 cursor-pointer w-max">📎 {uploading?'Uploading…':'Attach photo / PDF / file'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx" className="hidden" disabled={uploading} onChange={e=>{ pick(e.target.files); e.target.value=''; }} /></label>
       {err && <div className="text-[11px] text-rose-600 mt-1">{err}</div>}
-      {list.length>0 && <div className="mt-2 space-y-1">{list.map((a,i)=>(<div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5"><span>{attGlyph(a)}</span><button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name||'file'}</button><button type="button" onClick={()=>onChange(list.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-500">✕</button></div>))}</div>}
+      {/* inline mode → click-to-view thumbnails (image lightbox / PDF preview) with a hover remove; otherwise a plain row list. */}
+      {list.length>0 && (inline
+        ? <div className="mt-2 flex flex-wrap gap-2">{list.map((a,i)=>(
+            <div key={i} className="relative group">
+              <AttachmentChip att={a} gallery={list} />
+              <button type="button" onClick={()=>onChange(list.filter((_,x)=>x!==i))} title="Remove" className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white border border-slate-300 text-slate-400 hover:text-rose-500 hover:border-rose-300 text-[11px] leading-none opacity-0 group-hover:opacity-100 transition">✕</button>
+            </div>
+          ))}</div>
+        : <div className="mt-2 space-y-1">{list.map((a,i)=>(<div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5"><span>{attGlyph(a)}</span><button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name||'file'}</button><button type="button" onClick={()=>onChange(list.filter((_,x)=>x!==i))} className="text-slate-400 hover:text-rose-500">✕</button></div>))}</div>
+      )}
     </div>
   );
 }
@@ -31577,7 +31586,7 @@ function SourcingFormModal({ existing, type, suggestedCode, profile, onClose, on
         <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Very soft, Lululemon feel…" /></TpLbl>
         <div className="border-t pt-3">
           <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Photos / files (product, business card, WeChat QR, test reports)</div>
-          <AttachmentsEditor value={attachments} onChange={setAttachments} scope={`sourcing/${existing?.id||'new'}`} />
+          <AttachmentsEditor value={attachments} onChange={setAttachments} scope={`sourcing/${existing?.id||'new'}`} inline />
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save supplier':'Add supplier'}</button>
