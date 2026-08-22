@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 526 · In 'My ranking', sourcing supplier cards can be dragged to reorder (grab a card and drop it) — ▲/▼ still work too; order saved per tab.";
+const BUILD = "Live build 527 · Fixed drag-to-reorder in sourcing 'My ranking' (drag now starts reliably across browsers). ▲/▼ still work; on phones use the arrows.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31477,7 +31477,7 @@ function SourcingView({ profile, profiles }){
             return (
               <div key={r.id}
                 draggable={canReorder}
-                onDragStart={canReorder?(e)=>{ setDragId(r.id); e.dataTransfer.effectAllowed='move'; }:undefined}
+                onDragStart={canReorder?(e)=>{ setDragId(r.id); try{ e.dataTransfer.setData('text/plain', r.id); }catch(_){} e.dataTransfer.effectAllowed='move'; }:undefined}
                 onDragOver={canReorder?(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; }:undefined}
                 onDrop={canReorder?(e)=>{ e.preventDefault(); dropOnCard(r); }:undefined}
                 onDragEnd={canReorder?()=>setDragId(null):undefined}
