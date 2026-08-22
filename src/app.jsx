@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 524 · Sourcing supplier attachments now show as inline thumbnails — photos open in a lightbox and PDFs preview in-page instead of a new tab.";
+const BUILD = "Live build 525 · Sourcing suppliers can be manually ranked — pick 'My ranking', then use ▲/▼ to arrange your top-tier suppliers; the order is saved per tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31404,11 +31404,24 @@ function SourcingView({ profile, profiles }){
     (!minRating || Number(r.rating||0)>=minRating) &&
     (!search || `${r.code||''} ${r.company||''} ${r.contact||''} ${r.hall_booth||''} ${r.category||''} ${Object.values(r.specs||{}).join(' ')} ${r.notes||''}`.toLowerCase().includes(search.toLowerCase()))
   );
+  const byManual=(a,b)=>{ const pa=a.position==null?1e9:a.position, pb=b.position==null?1e9:b.position; return pa-pb || String(a.created_at||'').localeCompare(String(b.created_at||'')); };
   visible = visible.slice().sort((a,b)=>{
+    if(sort==='manual') return byManual(a,b);
     if(sort==='rating') return Number(b.rating||0)-Number(a.rating||0) || String(a.code||'').localeCompare(String(b.code||''));
     if(sort==='code')   return String(a.code||'').localeCompare(String(b.code||''));
     return String(b.created_at||'').localeCompare(String(a.created_at||''));
   });
+  // Manual reorder (top-tier ranking). Only offered when the list isn't filtered
+  // so ▲/▼ move relative to the true full order of this tab.
+  const canReorder = sort==='manual' && !search && !minRating;
+  async function move(r, dir){
+    const listAll = rows.filter(x=>typeOf(x)===tab).slice().sort(byManual);
+    const idx = listAll.findIndex(x=>x.id===r.id); const swap = idx+dir;
+    if(idx<0 || swap<0 || swap>=listAll.length) return;
+    const reordered = listAll.slice(); const [it]=reordered.splice(idx,1); reordered.splice(swap,0,it);
+    await Promise.all(reordered.map((x,i)=> sb.from('sourcing_leads').update({ position:i }).eq('id', x.id)));
+    load();
+  }
   const askedCount=(r)=>{ const c=SOURCING_TYPES[typeOf(r)]; return c.questions.filter(([k])=> r.questions && r.questions[k]).length; };
   const Flag=({on,children})=> <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${on?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-400'}`}>{on?'✓':'✕'} {children}</span>;
   return (
@@ -31432,7 +31445,7 @@ function SourcingView({ profile, profiles }){
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, booth, spec…" className="input !py-1.5 text-sm flex-1 min-w-[160px]" />
             <select value={minRating} onChange={e=>setMinRating(Number(e.target.value))} className="input !py-1.5 text-sm w-auto"><option value={0}>Any rating</option><option value={5}>★★★★★</option><option value={4}>★★★★+</option><option value={3}>★★★+</option></select>
-            <select value={sort} onChange={e=>setSort(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="recent">Newest</option><option value="rating">Top rated</option><option value="code">By ID</option></select>
+            <select value={sort} onChange={e=>setSort(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="recent">Newest</option><option value="rating">Top rated</option><option value="code">By ID</option><option value="manual">My ranking ↕</option></select>
           </div>
         )}
       </div>
@@ -31443,12 +31456,20 @@ function SourcingView({ profile, profiles }){
         <div className="text-center text-slate-400 py-12 text-sm border border-dashed rounded-xl">{(counts[tab]||0)===0?`No ${cfg.label.toLowerCase()} suppliers yet. Tap "+ New" at the first booth.`:'No suppliers match your filters.'}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {visible.map(r=>{
+          {visible.map((r,vi)=>{
             const c=SOURCING_TYPES[typeOf(r)];
             const nAtt=(Array.isArray(r.attachments)?r.attachments:[]).length; const asked=askedCount(r);
             const mainF=c.fields[0]; const specFields=c.fields.filter(x=>!['price','lead_time','moq','mcq','warranty','aftersales'].includes(x.k) && x.k!==mainF.k);
             return (
-              <div key={r.id} className="bg-white rounded-xl border p-3 flex flex-col gap-2">
+              <div key={r.id} className={`bg-white rounded-xl border p-3 flex flex-col gap-2 ${canReorder?'ring-1 ring-slate-100':''}`}>
+                {canReorder && (
+                  <div className="flex items-center gap-1.5 -mt-0.5 -mx-0.5 mb-0.5">
+                    <span className="text-[11px] font-bold text-white bg-indigo-600 rounded px-1.5 py-0.5">#{vi+1}</span>
+                    <div className="flex-1"></div>
+                    <button onClick={()=>move(r,-1)} disabled={vi===0} className="text-xs px-1.5 py-0.5 rounded border bg-white text-slate-500 hover:border-indigo-300 disabled:opacity-30" title="Move up">▲</button>
+                    <button onClick={()=>move(r,1)} disabled={vi===visible.length-1} className="text-xs px-1.5 py-0.5 rounded border bg-white text-slate-500 hover:border-indigo-300 disabled:opacity-30" title="Move down">▼</button>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-mono text-[11px] text-slate-400">{r.code||'—'}</div>
