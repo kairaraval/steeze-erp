@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 529 · Buy-list items are now editable, with notes and inline photo/file attachments (thumbnails show on the item, photos open in a lightbox).";
+const BUILD = "Live build 530 · Fixed the build error (duplicate landing hook) that blocked builds 528–529 — Kaira's Sourcing landing and the editable buy-list (notes + inline photos) now go live.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38277,15 +38277,6 @@ function App(){
     }catch(_){}
     return 'pipeline';
   });
-  // Personal landing override — Kaira lands on Sourcing Trips for now. Runs once
-  // when her profile loads, and only if the default (pipeline) wasn't already
-  // changed by a deep-link. Scoped to her user id only (not other admins).
-  const didLandRef = useRef(false);
-  useEffect(()=>{
-    if(!profile || didLandRef.current) return;
-    didLandRef.current = true;
-    if(profile.id === 'ffb1f60b-3872-4163-b7ac-df00bb9f70d8' && view === 'pipeline') setView('sourcing');
-  }, [profile]);
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
@@ -38728,6 +38719,8 @@ function App(){
     if(!profile || didLandRef.current) return;
     didLandRef.current = true;
     if(profile.role==='assistant' && view==='pipeline') setView('sales-tickets');
+    // Kaira lands on Sourcing Trips for now (scoped to her user id only).
+    else if(profile.id==='ffb1f60b-3872-4163-b7ac-df00bb9f70d8' && view==='pipeline') setView('sourcing');
   },[profile]);
 
   // System notifications: when the tab is in the background (or phone screen
