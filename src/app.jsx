@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 530 · Fixed the build error (duplicate landing hook) that blocked builds 528–529 — Kaira's Sourcing landing and the editable buy-list (notes + inline photos) now go live.";
+const BUILD = "Live build 531 · Buy list now has To buy / Done sub-tabs — checking an item moves it to Done so the main list is only what's left to buy; done items stay viewable under Done.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31646,6 +31646,7 @@ function SourcingChecklist({ profile }){
   const [busy,setBusy]=useState(false);
   const [catFilter,setCatFilter]=useState('');
   const [editing,setEditing]=useState(null); // checklist row being edited
+  const [subview,setSubview]=useState('todo'); // 'todo' | 'done'
   async function load(){
     setLoading(true);
     const { data } = await sb.from('sourcing_checklist').select('*').is('deleted_at',null).order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
@@ -31675,12 +31676,19 @@ function SourcingChecklist({ profile }){
   const usedCats=Array.from(new Set(rows.map(r=>(r.category||'').trim()).filter(Boolean)));
   const allCats=Array.from(new Set([...DEFAULT_CATS, ...usedCats]));
   const doneN=rows.filter(r=>r.done).length;
-  const shown=rows.filter(r=> !catFilter || (r.category||'Uncategorized')===catFilter);
+  const activeRows=rows.filter(r=>!r.done); const doneRows=rows.filter(r=>r.done);
+  const base = subview==='done' ? doneRows : activeRows;
+  const shown=base.filter(r=> !catFilter || (r.category||'Uncategorized')===catFilter);
   // Group the shown rows by category for an organized view.
   const groups={}; shown.forEach(r=>{ const g=r.category||'Uncategorized'; (groups[g]=groups[g]||[]).push(r); });
   const groupNames=Object.keys(groups).sort((a,b)=> a==='Uncategorized'?1 : b==='Uncategorized'?-1 : a.localeCompare(b));
   return (
     <div className="max-w-3xl">
+      <div className="flex items-center gap-1 mb-3">
+        <button onClick={()=>setSubview('todo')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${subview==='todo'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>🛍 To buy <span className={`ml-1 text-[11px] ${subview==='todo'?'text-indigo-100':'text-slate-400'}`}>{activeRows.length}</span></button>
+        <button onClick={()=>setSubview('done')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${subview==='done'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:border-indigo-300'}`}>✓ Done <span className={`ml-1 text-[11px] ${subview==='done'?'text-indigo-100':'text-slate-400'}`}>{doneRows.length}</span></button>
+      </div>
+      {subview==='todo' && (
       <div className="bg-white border rounded-xl p-3 mb-3">
         <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Add something we want to buy on this trip</div>
         <input value={f.item} onChange={e=>up('item',e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') add(); }} placeholder="What to buy — e.g. 4-way stretch nylon" className="input !py-1.5 text-sm w-full mb-2" />
@@ -31693,7 +31701,8 @@ function SourcingChecklist({ profile }){
           <button onClick={add} disabled={busy||!f.item.trim()} className="sm:col-span-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">Add</button>
         </div>
       </div>
-      {rows.length>0 && (
+      )}
+      {base.length>0 && (
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <span className="text-xs text-slate-500">{doneN}/{rows.length} bought / sourced</span>
           <div className="flex-1"></div>
@@ -31703,8 +31712,8 @@ function SourcingChecklist({ profile }){
           ))}
         </div>
       )}
-      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : rows.length===0 ? (
-        <div className="text-center text-slate-400 py-10 text-sm border border-dashed rounded-xl">Nothing on the list yet. Add the fabrics, trims, and machines you want to buy.</div>
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : base.length===0 ? (
+        <div className="text-center text-slate-400 py-10 text-sm border border-dashed rounded-xl">{subview==='done' ? 'Nothing bought yet — tick items in "To buy" and they move here.' : 'Nothing to buy right now. Add the fabrics, trims, and machines you want.'}</div>
       ) : (
         <div className="space-y-4">
           {groupNames.map(g=>(
