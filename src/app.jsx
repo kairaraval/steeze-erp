@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 528 · Kaira now lands on the Sourcing Trips list on login (personal default, only for her).";
+const BUILD = "Live build 529 · Buy-list items are now editable, with notes and inline photo/file attachments (thumbnails show on the item, photos open in a lightbox).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31645,6 +31645,7 @@ function SourcingChecklist({ profile }){
   const [f,setF]=useState({ item:'', category:'', qty:'', where:'', target:'' });
   const [busy,setBusy]=useState(false);
   const [catFilter,setCatFilter]=useState('');
+  const [editing,setEditing]=useState(null); // checklist row being edited
   async function load(){
     setLoading(true);
     const { data } = await sb.from('sourcing_checklist').select('*').is('deleted_at',null).order('done',{ascending:true}).order('position',{ascending:true}).order('created_at',{ascending:true});
@@ -31710,22 +31711,69 @@ function SourcingChecklist({ profile }){
             <div key={g}>
               <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">{g} <span className="text-slate-400">({groups[g].length})</span></div>
               <div className="space-y-1.5">
-                {groups[g].map(r=>(
-                  <div key={r.id} className={`flex items-center gap-3 bg-white border rounded-lg px-3 py-2 ${r.done?'opacity-60':''}`}>
-                    <input type="checkbox" checked={!!r.done} onChange={()=>toggle(r)} className="shrink-0 w-4 h-4" />
-                    <div className="min-w-0 flex-1">
-                      <div className={`text-sm font-medium text-slate-900 ${r.done?'line-through text-slate-400':''}`}>{r.item}</div>
-                      <div className="text-[11px] text-slate-500">{[r.qty&&`Qty: ${r.qty}`, r.where_buy&&`📍 ${r.where_buy}`, r.target].filter(Boolean).join(' · ')}</div>
+                {groups[g].map(r=>{ const atts=Array.isArray(r.attachments)?r.attachments:[]; return (
+                  <div key={r.id} className={`bg-white border rounded-lg px-3 py-2 ${r.done?'opacity-60':''}`}>
+                    <div className="flex items-center gap-3">
+                      <input type="checkbox" checked={!!r.done} onChange={()=>toggle(r)} className="shrink-0 w-4 h-4" />
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-sm font-medium text-slate-900 ${r.done?'line-through text-slate-400':''}`}>{r.item}</div>
+                        <div className="text-[11px] text-slate-500">{[r.qty&&`Qty: ${r.qty}`, r.where_buy&&`📍 ${r.where_buy}`, r.target].filter(Boolean).join(' · ')}</div>
+                        {r.notes && <div className="text-[11px] text-slate-500 italic mt-0.5 whitespace-pre-line">{r.notes}</div>}
+                      </div>
+                      <button onClick={()=>setEditing(r)} className="shrink-0 text-xs text-indigo-600 hover:underline">Edit</button>
+                      <button onClick={()=>del(r)} className="shrink-0 text-slate-300 hover:text-rose-500" title="Remove">✕</button>
                     </div>
-                    <button onClick={()=>del(r)} className="shrink-0 text-slate-300 hover:text-rose-500" title="Remove">✕</button>
+                    {atts.length>0 && <div className="mt-2 pl-7 flex flex-wrap gap-2">{atts.map((a,i)=><AttachmentChip key={i} att={a} gallery={atts} small />)}</div>}
                   </div>
-                ))}
+                ); })}
               </div>
             </div>
           ))}
         </div>
       )}
+      {editing && <SourcingChecklistItemModal existing={editing} profile={profile} catOptions={allCats} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
     </div>
+  );
+}
+
+function SourcingChecklistItemModal({ existing, profile, catOptions, onClose, onSaved }){
+  const [f,setF]=useState({
+    item: existing?.item||'', category: existing?.category||'', qty: existing?.qty||'',
+    where: existing?.where_buy||'', target: existing?.target||'', notes: existing?.notes||'',
+  });
+  const [attachments,setAttachments]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function save(){
+    if(!f.item.trim()){ setMsg('Item is required.'); return; }
+    setBusy(true); setMsg('');
+    const { error }=await sb.from('sourcing_checklist').update({
+      item:f.item.trim(), category:f.category||null, qty:f.qty||null, where_buy:f.where||null,
+      target:f.target||null, notes:f.notes||null, attachments, updated_at:new Date().toISOString(),
+    }).eq('id', existing.id);
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  return (
+    <Modal title="Edit buy-list item" onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Item *"><input className="input" value={f.item} onChange={e=>up('item',e.target.value)} placeholder="What to buy" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Category"><input list="buylist-cats-edit" className="input" value={f.category} onChange={e=>up('category',e.target.value)} placeholder="Category" /><datalist id="buylist-cats-edit">{(catOptions||[]).map(c=><option key={c} value={c} />)}</datalist></TpLbl>
+          <TpLbl t="Qty / need"><input className="input" value={f.qty} onChange={e=>up('qty',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Where to buy (booth / supplier)"><input className="input" value={f.where} onChange={e=>up('where',e.target.value)} /></TpLbl>
+        <TpLbl t="Target price / notes"><input className="input" value={f.target} onChange={e=>up('target',e.target.value)} placeholder="e.g. $3/yd" /></TpLbl>
+        <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Details, quality, follow-up…" /></TpLbl>
+        <div className="border-t pt-3">
+          <div className="text-[11px] uppercase font-semibold text-slate-400 mb-2">Photos / files</div>
+          <AttachmentsEditor value={attachments} onChange={setAttachments} scope={`sourcing-checklist/${existing.id}`} inline />
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>
+      </div>
+    </Modal>
   );
 }
 
