@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 531 · Buy list now has To buy / Done sub-tabs — checking an item moves it to Done so the main list is only what's left to buy; done items stay viewable under Done.";
+const BUILD = "Live build 532 · Added 'Intertextile Convention' as a buy-list category option.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31671,7 +31671,7 @@ function SourcingChecklist({ profile }){
     await sb.from('sourcing_checklist').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', r.id);
     load();
   }
-  const DEFAULT_CATS=['Fabric','Trims','Machine','Packaging','Accessories','Other'];
+  const DEFAULT_CATS=['Intertextile Convention','Fabric','Trims','Machine','Packaging','Accessories','Other'];
   // Category options = the defaults + any custom ones already used.
   const usedCats=Array.from(new Set(rows.map(r=>(r.category||'').trim()).filter(Boolean)));
   const allCats=Array.from(new Set([...DEFAULT_CATS, ...usedCats]));
