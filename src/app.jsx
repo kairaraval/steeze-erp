@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 532 · Added 'Intertextile Convention' as a buy-list category option.";
+const BUILD = "Live build 533 · Admins can reset a teammate's password in Settings → Team (🔑 Reset password) — sets a temporary password, no email needed. Server-verified admin-only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19463,6 +19463,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   const [editingNameId,setEditingNameId]=useState(null);
   const [draftName,setDraftName]=useState('');
   const [filterRole,setFilterRole]=useState('all');
+  const [pwReset,setPwReset]=useState(null); // member whose password an admin is resetting
   const appUrl = typeof window!=='undefined' ? window.location.origin : '';
 
   async function changeName(p){
@@ -19723,6 +19724,9 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
+                {profile.role==='admin' && p.id !== profile.id && (
+                  <button onClick={()=>setPwReset(p)} title="Set a temporary password" className="text-xs px-2 py-1 rounded bg-white border border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 text-slate-500 mr-1 opacity-0 group-hover:opacity-100 transition">🔑 Reset password</button>
+                )}
                 {p.id !== profile.id && (
                   <button onClick={()=>removeMember(p)} title="Remove from Steeze OS" className="text-xs px-2 py-1 rounded bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-500 opacity-0 group-hover:opacity-100 transition">🗑 Remove</button>
                 )}
@@ -19735,7 +19739,64 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
       </div>
 
       </>}
+      {pwReset && <AdminPasswordResetModal member={pwReset} onClose={()=>setPwReset(null)} />}
     </div>
+  );
+}
+
+// Admin-only: set a temporary password for a teammate who's locked out (no email
+// needed). Calls the JWT-verified `admin-set-password` edge function, which
+// re-checks that the CALLER is an admin server-side before using the service
+// role to update the target's auth password.
+function AdminPasswordResetModal({ member, onClose }){
+  const [pw,setPw]=useState('');
+  const [show,setShow]=useState(true);
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  const [done,setDone]=useState(false);
+  function gen(){ const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<10;i++) s+=chars[Math.floor(Math.random()*chars.length)]; setPw(s); }
+  async function submit(){
+    if((pw||'').length<6){ setMsg('Password must be at least 6 characters.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const { data, error } = await sb.functions.invoke('admin-set-password', { body: { user_id: member.id, password: pw } });
+      if(error){
+        let m = error.message || 'Failed';
+        try { const ctx = await error.context?.json?.(); if(ctx?.error) m = ctx.error; } catch(_){}
+        setMsg(m); setBusy(false); return;
+      }
+      if(data && data.error){ setMsg(data.error); setBusy(false); return; }
+      setDone(true); setBusy(false);
+    } catch(e){ setMsg(String(e?.message||e)); setBusy(false); }
+  }
+  return (
+    <Modal title={`Reset password — ${member.name||member.email}`} onClose={onClose}>
+      <div className="space-y-3">
+        {done ? (
+          <>
+            <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">✓ Password set for <strong>{member.name||member.email}</strong>.</div>
+            <div className="text-sm">Share this temporary password with them — they can change it later:</div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 px-3 py-2 rounded-lg bg-slate-100 border font-mono text-sm select-all break-all">{pw}</code>
+              <button onClick={()=>{ try{ navigator.clipboard.writeText(pw); }catch(_){} }} className="px-3 py-2 rounded-lg border text-sm shrink-0">Copy</button>
+            </div>
+            <div className="text-[11px] text-slate-500">Login email: <strong>{member.email}</strong></div>
+            <button onClick={onClose} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold">Done</button>
+          </>
+        ) : (
+          <>
+            <div className="text-xs text-slate-500">Set a temporary password for <strong>{member.name||member.email}</strong> (<span className="font-mono">{member.email}</span>). Give it to them to sign in — they can change it afterward.</div>
+            <div className="flex items-center gap-2">
+              <input type={show?'text':'password'} value={pw} onChange={e=>setPw(e.target.value)} placeholder="New temporary password" className="input flex-1" />
+              <button type="button" onClick={()=>setShow(s=>!s)} className="px-2 py-2 rounded-lg border text-xs shrink-0">{show?'Hide':'Show'}</button>
+              <button type="button" onClick={gen} className="px-2 py-2 rounded-lg border text-xs shrink-0">Generate</button>
+            </div>
+            {msg && <div className="text-xs text-rose-600">{msg}</div>}
+            <button onClick={submit} disabled={busy||(pw||'').length<6} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Setting…':'Set password'}</button>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
