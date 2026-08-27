@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 536 · The PO print now shows the preparer's actual e-signature (whoever finalized it, e.g. Jay-Ann) in the Prepared by (Purchasing) block.";
+const BUILD = "Live build 537 · New consolidated POs now include the client company on each material line (e.g. for \"TikTok Malaysia\" · ByteDance) when the item is tied to a project.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25911,7 +25911,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
      stamped flip to status='ordered' automatically.
    ============================================================ */
 
-function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload, onOpenPO }){
+function MaterialsQueueView({ profile, requests, items, suppliers, leads, clients, reload, onOpenPO }){
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
   const isAdmin = profile.role === 'admin';
@@ -25993,13 +25993,17 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, reload
       const seq = String(((todayPOs||[]).length)+1).padStart(3,'0');
       const number = `PO-${todayStr}-${seq}`;
 
-      const lines = bucket.items.map(({ line, lead })=>({
-        item_id: line.item_id || null,
-        description: line.description + (lead?` — for "${lead.title}"`:''),
-        qty: Number(line.qty)||0,
-        qty_received: 0,
-        unit_cost: Number(line.est_cost)||0,
-      }));
+      const lines = bucket.items.map(({ line, lead })=>{
+        const company = lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company||'') : '';
+        const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
+        return {
+          item_id: line.item_id || null,
+          description: line.description + forPart,
+          qty: Number(line.qty)||0,
+          qty_received: 0,
+          unit_cost: Number(line.est_cost)||0,
+        };
+      });
 
       const payload = {
         number,
@@ -39664,7 +39668,7 @@ function App(){
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} />}
-        {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} reload={loadAll} onOpenPO={()=>setView('orders')} />}
+        {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
