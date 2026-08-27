@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 533 · Admins can reset a teammate's password in Settings → Team (🔑 Reset password) — sets a temporary password, no email needed. Server-verified admin-only.";
+const BUILD = "Live build 534 · Graphic ticket queue now has a search box that matches the lead name, client company, task title, notes, and people.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11547,6 +11547,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const [loading,setLoading]=useState(true);
   const [filterType,setFilterType]=useState('all');
   const [mineOnly,setMineOnly]=useState(false);
+  const [search,setSearch]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [editTicket,setEditTicket]=useState(null);
   const role=profile.role;
@@ -11610,7 +11611,17 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const reopen =(t)=>patch(t,{ status:'open', assignee_id:null, claimed_at:null, done_at:null });
   async function del(t){ if(!confirm('Delete this ticket?')) return; const {error}=await sb.from('sales_tickets').update({ deleted_at:new Date().toISOString() }).eq('id',t.id); if(error){ alert(error.message); return; } load(); }
 
-  const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id));
+  // Search matches anything from the lead: its title (lead name), the client's
+  // company, plus the ticket's own title/notes and the people on it.
+  const q = search.trim().toLowerCase();
+  function matchesSearch(t){
+    if(!q) return true;
+    const lead=leadOf(t.lead_id);
+    const company = clientName(t.client_id) || (lead ? clientName(lead.client_id) : '') || lead?.client_name || '';
+    const hay = `${lead?.title||''} ${t.title||''} ${company} ${t.notes||''} ${prof(t.assignee_id)?.name||''} ${prof(t.created_by||t.requested_by)?.name||''}`.toLowerCase();
+    return hay.includes(q);
+  }
+  const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id) && matchesSearch(t));
   const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
   const byPrioDue=(a,b)=>{ const pr=prioRank(a)-prioRank(b); if(pr) return pr; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
   const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
@@ -11703,6 +11714,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search lead, company, task…" className="input !w-auto min-w-[220px]" />
         <select className="input !w-auto" value={filterType} onChange={e=>setFilterType(e.target.value)}>
           <option value="all">All types</option>
           {GRAPHIC_TICKET_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
