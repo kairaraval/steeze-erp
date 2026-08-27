@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 537 · New consolidated POs now include the client company on each material line (e.g. for \"TikTok Malaysia\" · ByteDance) when the item is tied to a project.";
+const BUILD = "Live build 538 · POs created from a single Purchase Request now also tag each material line with the project + client (matching the consolidated-queue behavior).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26139,7 +26139,7 @@ function nextPONumber(allOrders, dateStr){
   return `PO-${dateStr}-${String(n).padStart(3,'0')}`;
 }
 
-function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, reload, openFromPR, onClearPR }){
+function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, leads, clients, reload, openFromPR, onClearPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
   // Delete (soft-delete) is ADMIN-ONLY. Purchasing / Purchasing Admin can CANCEL
   // a PO instead — keeps the record, just marks it Cancelled.
@@ -26211,7 +26211,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <PurchaseOrderForm profile={profile} profiles={profiles} allOrders={orders} existing={editing} fromPR={creating?openFromPR:null} items={items} suppliers={suppliers} requests={requests} onClose={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); }} onSaved={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); reload(); }} onPrint={(po)=>setPrinting(po)} />}
+      {(creating||editing) && <PurchaseOrderForm profile={profile} profiles={profiles} allOrders={orders} existing={editing} fromPR={creating?openFromPR:null} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} onClose={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); }} onSaved={()=>{ setCreating(false); setEditing(null); onClearPR&&onClearPR(); reload(); }} onPrint={(po)=>setPrinting(po)} />}
       {receiving && <PurchaseOrderReceive po={receiving} items={items} profile={profile} onClose={()=>setReceiving(null)} onSaved={()=>{ setReceiving(null); reload(); }} />}
       {printing && <POPrintView po={printing} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPrinting(null)} />}
     </div>
@@ -26228,12 +26228,23 @@ const PO_PAYMENT_METHODS = [
   { key:'gcash',         label:'GCash' },
   { key:'others',        label:'Others' },
 ];
-function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, requests, onClose, onSaved, onPrint }){
+function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, requests, leads, clients, onClose, onSaved, onPrint }){
   // Same reservations map the PR form uses — POs are informational only
   // (no Pull-from-Stock since the buy decision is already made).
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   const isEdit=!!existing;
-  const initLines = isEdit ? (existing.lines||[]) : (fromPR ? (fromPR.lines||[]).map(l=>({ item_id:l.item_id||null, description:l.description||'', qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 })) : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
+  // From a single PR: seed the lines and, when the PR is tied to a project,
+  // append the project + client to each line's description (skip if the line
+  // already carries a "— for …" tag, e.g. BOM-generated PRs).
+  const initLines = isEdit ? (existing.lines||[]) : (fromPR ? (()=>{
+    const lead = fromPR.linked_lead_id ? (leads||[]).find(l=>l.id===fromPR.linked_lead_id) : null;
+    const company = lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company||'') : '';
+    const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
+    return (fromPR.lines||[]).map(l=>{
+      const desc = l.description||'';
+      return { item_id:l.item_id||null, description: desc + (forPart && !desc.includes('— for "') ? forPart : ''), qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 };
+    });
+  })() : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
     date: isEdit?existing.date:new Date().toISOString().slice(0,10),
     expected_date: isEdit?(existing.expected_date||''):'',
@@ -39669,7 +39680,7 @@ function App(){
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} reload={loadAll} onOpenPO={()=>setView('orders')} />}
-        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
+        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
