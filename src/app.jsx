@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 534 · Graphic ticket queue now has a search box that matches the lead name, client company, task title, notes, and people.";
+const BUILD = "Live build 535 · Design board (and dept boards) search now also matches the linked lead's name and company, not just the job number/item.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4490,7 +4490,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   const isAdmin=profile.role==='admin';
   const isAssistant=profile.role==='assistant';
   const canDelete = isAdmin || !isAssistant; // admin + managers
-  const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
+  const filtered=jobs.filter(j=>{ if(!search) return true; const l=(leads||[]).find(x=>x.id===j.lead_id); return `${j.number||''} ${j.client_name||''} ${j.item||''} ${l?.title||''} ${l?.client_name||''}`.toLowerCase().includes(search.toLowerCase()); });
   async function move(j,st){ const patch={ status:st }; if(jobType==='graphic' && st==='to do') patch.cl_done=false; const {error}=await sb.from(table).update(patch).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   // Graphic board: sales manager / assistant can send a card back to the SAME
   // assigned artist for revision — flips the linked graphic ticket to its
