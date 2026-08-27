@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 535 · Design board (and dept boards) search now also matches the linked lead's name and company, not just the job number/item.";
+const BUILD = "Live build 536 · The PO print now shows the preparer's actual e-signature (whoever finalized it, e.g. Jay-Ann) in the Prepared by (Purchasing) block.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24373,9 +24373,10 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
             </div>
           )}
 
-          {/* Signatures */}
+          {/* Signatures — Prepared by carries the preparer's e-signature (whoever
+              finalized the PO, else its creator). Manager/Finance stay as wet-sign lines. */}
           <div className="grid grid-cols-3 gap-4 mt-5">
-            <SignatureBox role="Prepared by (Purchasing)" name={finalizedBy?.name || profile?.name} />
+            <ApprovedSignature signerProfile={finalizedBy || (po.created_by ? (profiles||[]).find(p=>p.id===po.created_by) : null) || null} signedAt={po.finalized_at || po.date} role="Prepared by (Purchasing)" />
             <SignatureBox role="Reviewed by (Manager)" />
             <SignatureBox role="Approved by (Finance)" />
           </div>
