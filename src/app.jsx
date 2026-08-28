@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 541 · Accounting Reports: new Monthly Summary tab — booked (closed-won) total & per salesperson, payments collected, delivered value, total expenses, and an expense-category pie, all for a chosen month.";
+const BUILD = "Live build 542 · Monthly Summary closed-won now matches the Sales dashboard exactly — counts every SOLD-stage deal (won + delivered), dated by won_at with a created_at fallback, so July/August bookings reconcile.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33244,7 +33244,10 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   const inMonth = (d)=> String(d||'').slice(0,7)===month;
   const profName = (id)=> (profiles||[]).find(p=>p.id===id)?.name || 'Unassigned';
   // 1 & 2 — Closed-won leads booked this month, and per salesperson.
-  const wonLeads = (leads||[]).filter(l=> !l.deleted_at && l.stage==='won' && inMonth(l.won_at));
+  // Match the Sales dashboard exactly: any SOLD stage (won OR delivered), dated
+  // by won_at with a created_at fallback (a booked deal that later moved to
+  // "delivered" is still a booking for the month it closed).
+  const wonLeads = (leads||[]).filter(l=> !l.deleted_at && SOLD_STAGES.includes(l.stage) && inMonth(l.won_at || l.created_at));
   const wonTotal = wonLeads.reduce((s,l)=>s+(Number(l.value)||0),0);
   const wonByPerson = (()=>{ const m={}; wonLeads.forEach(l=>{ const k=l.manager_id||'unassigned'; (m[k]=m[k]||{amt:0,n:0}); m[k].amt+=Number(l.value)||0; m[k].n+=1; }); return Object.entries(m).map(([id,v])=>({ id, name:profName(id==='unassigned'?null:id), ...v })).sort((a,b)=>b.amt-a.amt); })();
   // 3 — Collected payments this month (verified, not voided).
