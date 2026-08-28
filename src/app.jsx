@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 542 · Monthly Summary closed-won now matches the Sales dashboard exactly — counts every SOLD-stage deal (won + delivered), dated by won_at with a created_at fallback, so July/August bookings reconcile.";
+const BUILD = "Live build 543 · Expenses-by-Category legend now shows full category names (wraps instead of truncating).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33360,13 +33360,13 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
                         <text x="90" y="86" textAnchor="middle" className="fill-slate-400" style={{fontSize:'10px'}}>Total</text>
                         <text x="90" y="102" textAnchor="middle" className="fill-slate-800 font-bold" style={{fontSize:'13px'}}>{fmtP(monthExpenseTotal)}</text>
                       </svg>
-                      <div className="flex-1 min-w-[160px] space-y-1">
+                      <div className="flex-1 min-w-[220px] space-y-1.5">
                         {segs.map((s,i)=>(
-                          <div key={i} className="flex items-center gap-2 text-xs">
-                            <span className="w-3 h-3 rounded-sm shrink-0" style={{background:s.color}}></span>
-                            <span className="flex-1 truncate">{s.name}</span>
-                            <span className="text-slate-500">{Math.round(s.frac*100)}%</span>
-                            <span className="font-semibold w-20 text-right">{fmtP(s.val)}</span>
+                          <div key={i} className="flex items-start gap-2 text-xs">
+                            <span className="w-3 h-3 rounded-sm shrink-0 mt-0.5" style={{background:s.color}}></span>
+                            <span className="flex-1 leading-tight break-words">{s.name}</span>
+                            <span className="text-slate-500 shrink-0 mt-0.5">{Math.round(s.frac*100)}%</span>
+                            <span className="font-semibold w-20 text-right shrink-0 mt-0.5">{fmtP(s.val)}</span>
                           </div>
                         ))}
                       </div>
