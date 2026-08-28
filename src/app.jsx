@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 543 · Expenses-by-Category legend now shows full category names (wraps instead of truncating).";
+const BUILD = "Live build 544 · A Sale lead can now carry a companion split part in one project — Client Procurement (billed to client, no commission), Steeze-Sponsored, or Free Sample. Commission is earned on the sale portion only (via commission_base); procurement bills to the SO/A-R; sponsored & free-sample costs feed the Marketing & Internal Expenses report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -94,6 +94,20 @@ const LEAD_TYPES = [
 ];
 function isSaleLead(l){ return !l || !l.lead_type || l.lead_type==='sale'; }
 function leadTypeMeta(k){ return LEAD_TYPES.find(t=>t.key===(k||'sale')) || LEAD_TYPES[0]; }
+// A Sale lead can carry ONE companion part so a single project holds both a
+// commissionable sale AND a non-commission portion:
+//  • procurement — client still pays (bills to the SO / A/R) but it is NOT part
+//    of the sales commission (e.g. buying ready-made shirts to resell).
+//  • sponsored   — Steeze shoulders it as a marketing cost. Not billed, not commission.
+//  • free_sample — given free to the client. Not billed, not commission.
+// billable ⇒ added to the Sales Order total & the client's balance.
+// expense  ⇒ tracked as a cost in the Marketing & Internal Expenses report.
+const COMPANION_KINDS = [
+  { key:'procurement', label:'Client Procurement (pass-through)', short:'Procurement', color:'bg-indigo-100 text-indigo-700', billable:true,  expense:false, note:'Client is billed & pays for this (shows in the Sales Order / A/R), but it is excluded from the sales commission.' },
+  { key:'sponsored',   label:'Steeze-Sponsored (marketing)',      short:'Sponsored',   color:'bg-pink-100 text-pink-700',     billable:false, expense:true,  note:'Steeze shoulders this as a marketing cost. Not billed to the client, not part of commission.' },
+  { key:'free_sample', label:'Free Client Sample',                short:'Free sample', color:'bg-sky-100 text-sky-700',       billable:false, expense:true,  note:'Given free to the client. Not billed, not part of commission — tracked as a cost.' },
+];
+function companionMeta(k){ return COMPANION_KINDS.find(c=>c.key===k) || null; }
 
 // ── Sales ticket queue ────────────────────────────────────────────────────
 // A shared, self-claim task pool for the sales assistants. Every piece of work
@@ -1126,6 +1140,11 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   // Production — their estimated cost feeds the Marketing & Internal Expenses report.
   const [leadType,setLeadType]=useState(existing?.lead_type||'sale');
   const [expenseCost,setExpenseCost]=useState(existing?.expense_cost!=null?String(existing.expense_cost):'');
+  // Optional companion split on a SALE lead — a second, non-commission part of
+  // the same project (client procurement / Steeze-sponsored / free sample).
+  const [companionKind,setCompanionKind]=useState(existing?.companion_kind||'');
+  const [companionAmount,setCompanionAmount]=useState(existing?.companion_amount!=null?String(existing.companion_amount):'');
+  const [companionLabel,setCompanionLabel]=useState(existing?.companion_label||'');
   const [expectedClose,setExpectedClose]=useState(existing?.expected_close||''); const [deliveryDate,setDeliveryDate]=useState(existing?.delivery_date||'');
   const [forecastClose,setForecastClose]=useState(existing?.forecast_close_date||'');
   // Payment terms set on the lead — flows through to the Sales Order on
@@ -1191,6 +1210,16 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   const subtotal=items.reduce((s,it)=>s+lineCalc(it).net,0);
   const vat=items.reduce((s,it)=>s+lineCalc(it).v,0);
   const total=items.reduce((s,it)=>s+lineCalc(it).total,0); const hasItems=items.some(it=>(Number(it.quantity)||0)>0&&(Number(it.pricePerItem)||0)>0); const value=hasItems?total:(Number(manualValue)||0);
+  // ── Companion split (Sale leads only) ──
+  // `value` above = the SALE (commissionable) portion. The companion adds either
+  // billable-but-non-commission revenue (procurement) or a tracked cost.
+  const cMeta = leadType==='sale' ? companionMeta(companionKind) : null;
+  const compAmt = Number(companionAmount)||0;
+  const saleBase = hasItems ? subtotal : value;               // ex-VAT sale base = commission base
+  const procurementAmt = (cMeta && cMeta.billable) ? compAmt : 0;
+  const companionCost  = (cMeta && cMeta.expense)  ? compAmt : 0;
+  const billableTotal  = value + procurementAmt;              // what the client pays (→ SO total)
+  const commissionBase = saleBase;                            // commission earned on the sale only
   function setItem(idx,k,v){ setItems(items.map((it,i)=>i===idx?{...it,[k]:v}:it)); }
   function addItem(){ setItems([...items,{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]); }
   function removeItem(idx){ setItems(items.length===1?[{ id:'i'+Date.now(), itemType:'', category:'', description:'', quantity:'', pricePerItem:'', withVat:false, vatInclusive:false }]:items.filter((_,i)=>i!==idx)); }
@@ -1267,7 +1296,14 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
       }
       const finalItems=items.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0; const c=lineCalc(it); return { itemType:it.itemType, category:it.category||'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, vatInclusive:!!it.vatInclusive, lineTotal:c.total }; });
       const nonSale = leadType!=='sale';
-      const payload={ client_id:finalClientId||null, title:title.trim(), value: nonSale?0:value, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      // Companion split (sale leads only). `value` stored = billable total (sale +
+      // procurement). commission_base = sale-only base, set ONLY when a billable
+      // companion exists (else null → commission falls back to the sale subtotal).
+      // An expense companion (sponsored / free sample) is stored in expense_cost
+      // so it surfaces in the Marketing & Internal Expenses report.
+      const hasCompanion = !nonSale && !!cMeta && compAmt>0;
+      const saleValueOut = nonSale ? 0 : billableTotal;
+      const payload={ client_id:finalClientId||null, title:title.trim(), value: saleValueOut, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : (companionCost>0?companionCost:null), commission_base: (hasCompanion && cMeta.billable) ? commissionBase : null, companion_kind: hasCompanion ? companionKind : null, companion_amount: hasCompanion ? compAmt : null, companion_label: hasCompanion ? (companionLabel.trim()||null) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -1414,6 +1450,39 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           </div>
           {leadType!=='sale' && <div className="text-[11px] text-pink-700 mt-1.5">Non-sale: excluded from revenue, forecast, commissions &amp; A/R and won't create a Sales Order — but still flows to Production. Its cost feeds the Marketing &amp; Internal Expenses report.</div>}
         </div>
+        {/* Companion split — a second, non-commission part of the SAME project.
+           Only offered on Sale leads. Keeps commission on the sale portion only. */}
+        {leadType==='sale' && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-slate-700">➕ Companion part <span className="font-normal text-slate-400">· optional · same project, not part of commission</span></div>
+              {companionKind && <button type="button" onClick={()=>{ setCompanionKind(''); setCompanionAmount(''); setCompanionLabel(''); }} className="text-[11px] text-slate-400 hover:text-rose-600">Remove</button>}
+            </div>
+            <div className="text-[11px] text-slate-500 -mt-1">Use this when one project mixes a commissionable sale with something that isn't — e.g. a printing fee (sale) plus ready-made shirts the client also pays for (procurement), a free sample, or a Steeze-sponsored portion.</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className="text-[10px] text-slate-500 uppercase">Companion type</label>
+                <select className="input mt-0.5" value={companionKind} onChange={e=>setCompanionKind(e.target.value)}>
+                  <option value="">— none —</option>
+                  {COMPANION_KINDS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+              </div>
+              {companionKind && <div><label className="text-[10px] text-slate-500 uppercase">{cMeta?.billable?'Amount client pays ₱':'Cost ₱'}</label>
+                <input type="number" className="input mt-0.5" value={companionAmount} onChange={e=>setCompanionAmount(e.target.value)} placeholder="e.g. 50000" /></div>}
+            </div>
+            {companionKind && <div><label className="text-[10px] text-slate-500 uppercase">Label <span className="text-slate-400 normal-case">· what it is</span></label>
+              <input className="input mt-0.5" value={companionLabel} onChange={e=>setCompanionLabel(e.target.value)} placeholder={cMeta?.key==='procurement'?'e.g. Ready-made shirts':'e.g. Free sample set'} /></div>}
+            {cMeta && <div className="text-[11px] text-indigo-700">{cMeta.note}</div>}
+            {cMeta && compAmt>0 && (
+              <div className="mt-1 pt-2 border-t text-xs space-y-1">
+                <div className="flex justify-between text-slate-600"><span>Sale portion (commissionable)</span><span className="font-semibold">{peso(value)}</span></div>
+                {cMeta.billable
+                  ? <><div className="flex justify-between text-slate-600"><span>{companionLabel.trim()||cMeta.label} <span className="text-indigo-500">· no commission</span></span><span className="font-semibold">{peso(compAmt)}</span></div>
+                      <div className="flex justify-between font-bold pt-1 border-t"><span>Total client pays</span><span>{peso(billableTotal)}</span></div></>
+                  : <div className="flex justify-between text-pink-600"><span>{companionLabel.trim()||cMeta.label} <span className="text-pink-400">· cost, not billed</span></span><span className="font-semibold">{peso(compAmt)}</span></div>}
+              </div>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-[10px] text-slate-500 uppercase">{hasItems?'Value (auto)':'Value ₱ (manual)'}</label><input className={`input mt-0.5 ${hasItems?'bg-slate-100 text-slate-500':''}`} type="number" disabled={hasItems} value={hasItems?total:manualValue} onChange={e=>setManualValue(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">Stage</label><select className="input mt-0.5" value={stage} onChange={e=>setStage(e.target.value)}>{STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
@@ -2850,6 +2919,16 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             <div><div className="text-[10px] uppercase text-slate-400">PO Number</div><div>{lead.po_number||'—'}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Techpack Number</div><div>{lead.techpack_number||'—'}</div></div>
           </div>
+          {(()=>{ const cm=companionMeta(lead.companion_kind); if(!cm) return null; const amt=Number(lead.companion_amount)||0; const sale=cm.billable?Math.max(0,(Number(lead.value)||0)-amt):(Number(lead.value)||0); return (
+            <div className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3 text-sm">
+              <div className="text-[10px] uppercase text-indigo-500 font-semibold mb-1.5">Companion split · <span className={`px-1.5 py-0.5 rounded ${cm.color}`}>{cm.short}</span></div>
+              <div className="flex justify-between py-0.5"><span className="text-slate-600">Sale portion (commissionable)</span><span className="font-semibold">{peso(sale)}</span></div>
+              {cm.billable
+                ? <><div className="flex justify-between py-0.5"><span className="text-slate-600">{lead.companion_label||cm.label} <span className="text-indigo-500 text-xs">· billed, no commission</span></span><span className="font-semibold">{peso(amt)}</span></div>
+                    <div className="flex justify-between py-0.5 pt-1 border-t font-bold"><span>Total client pays</span><span>{peso(Number(lead.value)||0)}</span></div></>
+                : <div className="flex justify-between py-0.5"><span className="text-pink-600">{lead.companion_label||cm.label} <span className="text-pink-400 text-xs">· cost, not billed</span></span><span className="font-semibold text-pink-600">{peso(amt)}</span></div>}
+            </div>
+          ); })()}
           {(lead.items||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Items</div><div className="border rounded-lg divide-y">{lead.items.map((it,i)=>(<div key={i} className="flex justify-between px-3 py-1.5 text-sm"><span>{it.itemType}{it.category?` · ${it.category}`:''} {it.withVat?<span className="text-[10px] text-emerald-600">+VAT</span>:''}</span><span className="font-medium">{it.quantity} × {peso(it.pricePerItem)}</span></div>))}</div></div>)}
           {(lead.attachments||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{lead.attachments.map((a,i)=><AttachmentChip key={i} att={a} small gallery={lead.attachments} />)}</div></div>)}
           {/* Inline notes box — quick-save without opening the Edit modal */}
@@ -11143,22 +11222,35 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
   const [yearFilter,setYearFilter]=useState('all');
   const clientName=(cid)=>{ const c=clients.find(x=>x.id===cid); return c?(c.company||c.name||'—'):'—'; };
   const expenseDate=(l)=> l.won_at || (l.created_at? String(l.created_at).slice(0,10) : '');
-  // All non-sale leads.
-  const nonSale = leads.filter(l=>!isSaleLead(l));
-  const years = Array.from(new Set(nonSale.map(l=>expenseDate(l).slice(0,4)).filter(Boolean))).sort().reverse();
-  const rows = nonSale
-    .filter(l=> typeFilter==='all' || (l.lead_type||'sale')===typeFilter)
+  // Expense entries = every non-sale lead PLUS every Sale lead carrying an
+  // EXPENSE companion (Steeze-sponsored / free sample). Each becomes an augmented
+  // row with a normalized type meta (__meta) + cost (__cost).
+  const expenseMetaOf=(key)=> leadTypeMeta(key) || companionMeta(key);
+  const entries = [];
+  leads.forEach(l=>{
+    if(!isSaleLead(l)){
+      entries.push({ ...l, __key:(l.lead_type||'sale'), __meta:leadTypeMeta(l.lead_type), __cost:Number(l.expense_cost)||0, __hasCost:l.expense_cost!=null });
+    } else if(l.companion_kind){
+      const cm=companionMeta(l.companion_kind);
+      if(cm && cm.expense){ entries.push({ ...l, __key:l.companion_kind, __meta:cm, __cost:Number(l.companion_amount)||0, __hasCost:l.companion_amount!=null, __companion:true }); }
+    }
+  });
+  const years = Array.from(new Set(entries.map(l=>expenseDate(l).slice(0,4)).filter(Boolean))).sort().reverse();
+  const rows = entries
+    .filter(l=> typeFilter==='all' || l.__key===typeFilter)
     .filter(l=> yearFilter==='all' || expenseDate(l).slice(0,4)===yearFilter)
     .slice()
     .sort((a,b)=> expenseDate(b).localeCompare(expenseDate(a)));
-  const costOf=(l)=> Number(l.expense_cost)||0;
+  const costOf=(l)=> l.__cost||0;
   const grandTotal = rows.reduce((s,l)=>s+costOf(l),0);
-  const withCost = rows.filter(l=>l.expense_cost!=null).length;
+  const withCost = rows.filter(l=>l.__hasCost).length;
   const missingCost = rows.length - withCost;
-  // Totals per type.
-  const byType = LEAD_TYPES.filter(t=>t.key!=='sale').map(t=>{
-    const ls=rows.filter(l=>(l.lead_type||'sale')===t.key);
-    return { ...t, count:ls.length, total:ls.reduce((s,l)=>s+costOf(l),0) };
+  // Totals per type — union of the type keys actually present.
+  const typeKeys = Array.from(new Set(entries.map(l=>l.__key)));
+  const byType = typeKeys.map(k=>{
+    const meta=expenseMetaOf(k)||{ short:k, color:'bg-slate-100 text-slate-600', label:k };
+    const ls=rows.filter(l=>l.__key===k);
+    return { ...meta, key:k, count:ls.length, total:ls.reduce((s,l)=>s+costOf(l),0) };
   });
   // Totals per month (YYYY-MM).
   const monthAgg={};
@@ -11178,7 +11270,7 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
         <div className="flex items-center gap-2">
           <select className="input" value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
             <option value="all">All types</option>
-            {LEAD_TYPES.filter(t=>t.key!=='sale').map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+            {[...LEAD_TYPES.filter(t=>t.key!=='sale'), ...COMPANION_KINDS.filter(c=>c.expense)].map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
           <select className="input" value={yearFilter} onChange={e=>setYearFilter(e.target.value)}>
             <option value="all">All years</option>
@@ -11233,16 +11325,16 @@ function MarketingExpensesReport({ profile, profiles, leads, clients, onOpenLead
               <th className="text-right px-4 py-2 font-medium">Est. cost</th>
             </tr></thead>
             <tbody>
-              {rows.length===0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No non-sale items yet. Tag a lead as Marketing, Internal, or Loaner to track it here.</td></tr>}
-              {rows.map(l=>{ const m=leadTypeMeta(l.lead_type); const q=qtyOf(l); return (
+              {rows.length===0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No expense items yet. Tag a lead as Marketing, Internal, or Loaner — or add a Sponsored / Free-sample companion to a Sale lead — to track it here.</td></tr>}
+              {rows.map(l=>{ const m=l.__meta||leadTypeMeta(l.lead_type); const q=qtyOf(l); return (
                 <tr key={l.id} className="border-t hover:bg-slate-50">
                   <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{fmtDate(expenseDate(l))||'—'}</td>
-                  <td className="px-3 py-2.5"><button onClick={()=>onOpenLead&&onOpenLead(l)} className="font-medium text-slate-900 hover:text-pink-600 text-left">{l.title||'—'}</button></td>
+                  <td className="px-3 py-2.5"><button onClick={()=>onOpenLead&&onOpenLead(l)} className="font-medium text-slate-900 hover:text-pink-600 text-left">{l.title||'—'}{l.__companion && <span className="ml-1 text-[9px] font-normal text-indigo-500">· companion</span>}</button></td>
                   <td className="px-3 py-2.5"><span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${m.color}`}>{m.short}</span></td>
                   <td className="px-3 py-2.5 text-slate-600 truncate max-w-[180px]">{clientName(l.client_id)}</td>
                   <td className="px-3 py-2.5 text-slate-500 text-xs capitalize">{String(l.stage||'').replace('_',' ')}</td>
                   <td className="px-3 py-2.5 text-right text-slate-600">{q>0?q:'—'}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{l.expense_cost!=null?peso(l.expense_cost):<span className="text-slate-300 font-normal">—</span>}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{l.__hasCost?peso(l.__cost):<span className="text-slate-300 font-normal">—</span>}</td>
                 </tr>
               ); })}
             </tbody>
@@ -24811,8 +24903,20 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
     // earned on the base, so store subtotal = base and total = base + VAT.
     const base = items.reduce((s,it)=> s + (Number(it.quantity)||0)*(Number(it.pricePerItem)||0), 0);
     const vat = items.reduce((s,it)=>{ const sub=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s + (it.withVat?sub*0.12:0); }, 0);
-    const total = base>0 ? (base + vat) : (Number(lead.value)||0);
-    const subtotal = base>0 ? base : total;
+    // ── Companion split ──  A billable companion (client procurement) is added
+    // to the SO total & the client's balance as a separate line, but is EXCLUDED
+    // from commission via commission_base (= sale-only ex-VAT base). lead.value
+    // already includes the procurement, so peel it back off for the sale portion.
+    const comp = companionMeta(lead.companion_kind);
+    const procurement = (comp && comp.billable) ? (Number(lead.companion_amount)||0) : 0;
+    const saleTotal = base>0 ? (base + vat) : Math.max(0, (Number(lead.value)||0) - procurement);
+    const saleBase  = base>0 ? base : saleTotal;                 // ex-VAT sale base
+    const soItems = procurement>0
+      ? [...items, { itemType: lead.companion_label || 'Client procurement (pass-through)', category:'Procurement', description:'Pass-through purchase — billed to the client, excluded from sales commission.', quantity:1, pricePerItem:procurement, lineTotal:procurement, noCommission:true }]
+      : items;
+    const total = saleTotal + procurement;                       // full billable
+    const subtotal = saleBase + procurement;                     // ex-VAT base (procurement assumed non-VAT)
+    const commission_base = procurement>0 ? saleBase : null;     // null → trigger falls back to subtotal
     const payload = {
       number,
       kind: 'production',
@@ -24821,9 +24925,10 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       manager_id: lead.manager_id||null,   // stamp the rep so a trashed lead can't orphan it
       client_id: lead.client_id||null,
       client_name: client?.company||'',
-      items,
+      items: soItems,
       subtotal,
       total,
+      commission_base,
       amount_paid: 0,
       balance_due: total,
       status: 'open',
