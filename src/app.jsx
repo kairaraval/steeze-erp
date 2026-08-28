@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 538 · POs created from a single Purchase Request now also tag each material line with the project + client (matching the consolidated-queue behavior).";
+const BUILD = "Live build 539 · Expense Log now includes journal-entry expenses (any JE debiting an expense account, e.g. payroll booked via JV) so the month's total is complete. Filter by 'Journal Entries'.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34318,7 +34318,7 @@ function PnLView({ salesOrders, soPayments, orders, expenses, vouchers, bankTran
      • Approved budget requests (planned spend)
    Aggregated to today / week / month / year tiles + a filterable feed.
 */
-function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances }){
+function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvances, journalEntries, chartAccounts }){
   // Build a normalized list of money-out items.
   const rows = useMemo(()=>{
     const out = [];
@@ -34406,8 +34406,25 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
         ref: c.number, raw:c,
       });
     });
+    // Journal-entry expenses — a posted JE that DEBITS an expense account is
+    // real spend that never went through a voucher/expense, so include each such
+    // line to make the Expense Log a complete money-out view for the month.
+    const expenseCodes = new Set((chartAccounts||[]).filter(a=>a.type==='Expense').map(a=>String(a.code)));
+    const acctName = (code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code))?.name || code;
+    (journalEntries||[]).forEach(j=>{
+      if(j.deleted_at || j.status==='cancelled' || j.status==='draft') return;
+      (j.lines||[]).forEach(l=>{
+        const debit = Number(l.debit)||0;
+        if(debit<=0 || !expenseCodes.has(String(l.account_code))) return;
+        out.push({
+          date: j.date, source:'journal', amount: debit,
+          label: l.description || j.memo || j.reference || '(journal expense)',
+          category: acctName(l.account_code), ref: j.number, raw:j,
+        });
+      });
+    });
     return out.filter(r => r.date).sort((a,b)=> String(b.date).localeCompare(String(a.date)));
-  },[vouchers,expenses,budgetRequests,cashAdvances]);
+  },[vouchers,expenses,budgetRequests,cashAdvances,journalEntries,chartAccounts]);
 
   const [search,setSearch]=useState('');
   const [src,setSrc]=useState('');
@@ -34460,6 +34477,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
       budget:       { label:'Budget',       cls:'bg-violet-100 text-violet-700' },
       petty_cash:   { label:'Petty Cash',   cls:'bg-emerald-100 text-emerald-700' },
       cash_advance: { label:'Cash Advance', cls:'bg-rose-100 text-rose-700' },
+      journal:      { label:'Journal',      cls:'bg-slate-200 text-slate-700' },
     };
     return map[s] || { label:'Other', cls:'bg-slate-100 text-slate-600' };
   }
@@ -34467,7 +34485,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <h1 className="text-2xl font-bold">📚 Expense Log</h1>
-        <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, and cash advances. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
+        <p className="text-slate-500 text-sm">Every actual money-out event in one place — vouchers, expenses, petty cash, cash advances, and journal-entry expenses. <span className="text-slate-400">Budget Requests are approval documents and don't appear here until a Voucher or Expense is created against them.</span></p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
@@ -34504,6 +34522,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
               <option value="budget">Budget Requests (Spent)</option>
               <option value="petty_cash">Petty Cash</option>
               <option value="cash_advance">Cash Advances</option>
+              <option value="journal">Journal Entries</option>
             </select>
           </TpLbl>
           <TpLbl t="From"><input type="date" className="input max-w-[10rem]" value={from} onChange={e=>setFrom(e.target.value)} /></TpLbl>
@@ -39695,7 +39714,7 @@ function App(){
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
-        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
+        {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} journalEntries={journalEntries} chartAccounts={chartAccounts} />}
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
