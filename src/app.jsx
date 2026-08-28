@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 540 · Expense Log now shows each journal entry as ONE summarized row (total of its expense debits, categorized by the dominant account) instead of a row per line.";
+const BUILD = "Live build 541 · Accounting Reports: new Monthly Summary tab — booked (closed-won) total & per salesperson, payments collected, delivered value, total expenses, and an expense-category pie, all for a chosen month.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33234,11 +33234,29 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
   );
 }
 
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances }){
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
+  const [month,setMonth]=useState(()=> new Date().toISOString().slice(0,7)); // YYYY-MM for the Monthly Summary
+  // ── Monthly Summary computations (selected `month`) ──
+  const inMonth = (d)=> String(d||'').slice(0,7)===month;
+  const profName = (id)=> (profiles||[]).find(p=>p.id===id)?.name || 'Unassigned';
+  // 1 & 2 — Closed-won leads booked this month, and per salesperson.
+  const wonLeads = (leads||[]).filter(l=> !l.deleted_at && l.stage==='won' && inMonth(l.won_at));
+  const wonTotal = wonLeads.reduce((s,l)=>s+(Number(l.value)||0),0);
+  const wonByPerson = (()=>{ const m={}; wonLeads.forEach(l=>{ const k=l.manager_id||'unassigned'; (m[k]=m[k]||{amt:0,n:0}); m[k].amt+=Number(l.value)||0; m[k].n+=1; }); return Object.entries(m).map(([id,v])=>({ id, name:profName(id==='unassigned'?null:id), ...v })).sort((a,b)=>b.amt-a.amt); })();
+  // 3 — Collected payments this month (verified, not voided).
+  const collected = (soPayments||[]).filter(p=> !p.voided_at && (p.status==='verified'||p.verified_at) && inMonth(p.date||p.verified_at)).reduce((s,p)=>s+(Number(p.amount)||0),0);
+  // 4 — Delivered orders this month (by delivered_at).
+  const deliveredSOs = (salesOrders||[]).filter(so=> !so.deleted_at && so.status!=='cancelled' && so.delivered_at && inMonth(so.delivered_at));
+  const deliveredTotal = deliveredSOs.reduce((s,so)=>s+(Number(so.total)||0),0);
+  // 5 & 6 — Expenses this month from the GL (Expense-type accounts), and per category for the pie.
+  const monthPostings = postings.filter(p=> inMonth(p.date));
+  const monthBal = glAccountBalances(monthPostings, chartAccounts);
+  const monthExpenseAccts = monthBal.filter(b=>b.type==='Expense' && b.balance>0.005).sort((a,b)=>b.balance-a.balance);
+  const monthExpenseTotal = monthExpenseAccts.reduce((s,b)=>s+b.balance,0);
   const periodPostings = postings.filter(p=> (p.date||'').slice(0,4)===year);      // P&L: within the year
   const cumulativePostings = postings.filter(p=> (p.date||'').slice(0,4)<=year);    // BS: up to end of year
   const plBal = glAccountBalances(periodPostings, chartAccounts);
@@ -33275,16 +33293,86 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📊 Financial Reports</h1><p className="text-slate-500 text-sm">Derived from the General Ledger. Revenue is on a cash (collection) basis. Review with your accountant before filing.</p></div>
           <div className="flex items-center gap-2">
-            <select value={year} onChange={e=>setYear(e.target.value)} className="input w-28">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            {tab==='monthly'
+              ? <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="input w-40" />
+              : <select value={year} onChange={e=>setYear(e.target.value)} className="input w-28">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>}
             <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
           </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          {[['pl','Income Statement'],['plsummary','P&L Summary'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
+          {[['monthly','Monthly Summary'],['pl','Income Statement'],['plsummary','P&L Summary'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
           ))}
         </div>
       </div>
+
+      {tab==='monthly' && (()=>{
+        const fmtP = (n)=> '₱'+(Math.round(Number(n)||0)).toLocaleString();
+        const monLabel = (()=>{ try { return new Date(month+'-01T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}); } catch(e){ return month; } })();
+        const PIE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7','#ec4899','#84cc16','#f97316','#14b8a6','#8b5cf6','#64748b'];
+        // Group tiny slices into "Other" for a readable pie.
+        const pieSlices = (()=>{ const top=monthExpenseAccts.slice(0,11); const rest=monthExpenseAccts.slice(11); const arr=top.map((b,i)=>({name:b.name, val:b.balance, color:PIE[i%PIE.length]})); if(rest.length){ arr.push({name:`Other (${rest.length})`, val:rest.reduce((s,b)=>s+b.balance,0), color:PIE[11]}); } return arr; })();
+        let acc=0; const R=70, C=90, SW=34;
+        const segs = pieSlices.map(s=>{ const frac=monthExpenseTotal>0?s.val/monthExpenseTotal:0; const seg={...s, frac, dash:frac*2*Math.PI*R, offset:acc*2*Math.PI*R}; acc+=frac; return seg; });
+        const Card=({label,val,sub})=> <div className="bg-white border rounded-xl p-4"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</div><div className="text-2xl font-bold mt-1">{val}</div>{sub&&<div className="text-xs text-slate-400 mt-0.5">{sub}</div>}</div>;
+        return (
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div className="text-center"><div className="font-bold text-lg">Monthly Summary</div><div className="text-xs text-slate-500">{monLabel}</div></div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Card label="Booked (Closed Won)" val={fmtP(wonTotal)} sub={`${wonLeads.length} project${wonLeads.length===1?'':'s'}`} />
+              <Card label="Payments Collected" val={fmtP(collected)} />
+              <Card label="Delivered" val={fmtP(deliveredTotal)} sub={`${deliveredSOs.length} SO${deliveredSOs.length===1?'':'s'}`} />
+              <Card label="Total Expenses" val={fmtP(monthExpenseTotal)} />
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b font-semibold text-sm">Closed Won by Salesperson</div>
+                {wonByPerson.length===0
+                  ? <div className="px-4 py-6 text-center text-sm text-slate-400">No closed-won deals this month.</div>
+                  : <table className="w-full text-sm">
+                      <tbody>
+                        {wonByPerson.map(r=>(
+                          <tr key={r.id} className="border-b last:border-0">
+                            <td className="px-4 py-2">{r.name}</td>
+                            <td className="px-4 py-2 text-right text-slate-400 text-xs">{r.n} deal{r.n===1?'':'s'}</td>
+                            <td className="px-4 py-2 text-right font-semibold">{fmtP(r.amt)}</td>
+                          </tr>
+                        ))}
+                        <tr className="bg-slate-50 font-bold"><td className="px-4 py-2">Total</td><td></td><td className="px-4 py-2 text-right">{fmtP(wonTotal)}</td></tr>
+                      </tbody>
+                    </table>}
+              </div>
+              <div className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b font-semibold text-sm">Expenses by Category</div>
+                {monthExpenseTotal<=0
+                  ? <div className="px-4 py-6 text-center text-sm text-slate-400">No expenses recorded this month.</div>
+                  : <div className="p-4 flex items-center gap-4 flex-wrap">
+                      <svg width="180" height="180" viewBox="0 0 180 180" className="shrink-0">
+                        <g transform="rotate(-90 90 90)">
+                          {segs.map((s,i)=>(
+                            <circle key={i} cx={C} cy={C} r={R} fill="none" stroke={s.color} strokeWidth={SW}
+                              strokeDasharray={`${s.dash} ${2*Math.PI*R-s.dash}`} strokeDashoffset={-s.offset} />
+                          ))}
+                        </g>
+                        <text x="90" y="86" textAnchor="middle" className="fill-slate-400" style={{fontSize:'10px'}}>Total</text>
+                        <text x="90" y="102" textAnchor="middle" className="fill-slate-800 font-bold" style={{fontSize:'13px'}}>{fmtP(monthExpenseTotal)}</text>
+                      </svg>
+                      <div className="flex-1 min-w-[160px] space-y-1">
+                        {segs.map((s,i)=>(
+                          <div key={i} className="flex items-center gap-2 text-xs">
+                            <span className="w-3 h-3 rounded-sm shrink-0" style={{background:s.color}}></span>
+                            <span className="flex-1 truncate">{s.name}</span>
+                            <span className="text-slate-500">{Math.round(s.frac*100)}%</span>
+                            <span className="font-semibold w-20 text-right">{fmtP(s.val)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {tab==='pl' && (
         <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
@@ -39745,7 +39833,7 @@ function App(){
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
