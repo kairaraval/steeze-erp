@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 539 · Expense Log now includes journal-entry expenses (any JE debiting an expense account, e.g. payroll booked via JV) so the month's total is complete. Filter by 'Journal Entries'.";
+const BUILD = "Live build 540 · Expense Log now shows each journal entry as ONE summarized row (total of its expense debits, categorized by the dominant account) instead of a row per line.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34413,14 +34413,20 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     const acctName = (code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code))?.name || code;
     (journalEntries||[]).forEach(j=>{
       if(j.deleted_at || j.status==='cancelled' || j.status==='draft') return;
+      // Summarise each JE into ONE row: total all its expense-account debits and
+      // categorise by the dominant (largest) expense account.
+      const byAcct={}; let total=0;
       (j.lines||[]).forEach(l=>{
         const debit = Number(l.debit)||0;
         if(debit<=0 || !expenseCodes.has(String(l.account_code))) return;
-        out.push({
-          date: j.date, source:'journal', amount: debit,
-          label: l.description || j.memo || j.reference || '(journal expense)',
-          category: acctName(l.account_code), ref: j.number, raw:j,
-        });
+        total += debit; byAcct[l.account_code] = (byAcct[l.account_code]||0) + debit;
+      });
+      if(total<=0) return;
+      const codes = Object.keys(byAcct).sort((a,b)=>byAcct[b]-byAcct[a]);
+      out.push({
+        date: j.date, source:'journal', amount: total,
+        label: j.memo || j.reference || '(journal entry)',
+        category: acctName(codes[0]), ref: j.number, raw:j,
       });
     });
     return out.filter(r => r.date).sort((a,b)=> String(b.date).localeCompare(String(a.date)));
