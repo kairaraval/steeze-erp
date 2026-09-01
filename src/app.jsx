@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 551 · Commission draft printout now flows across as many pages as needed — long lists were being clipped to a single page (fixed height + overflow:hidden); now every line prints.";
+const BUILD = "Live build 552 · Commissions view now has a Paid History panel — expand each sales manager to see which months are already settled (amount, item count, vouchers per month).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28537,6 +28537,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   function toggleComm(id){ setExcludedComm(prev=>{ const n=new Set(prev); if(n.has(id)) n.delete(id); else n.add(id); return n; }); }
   // Tracks which rep's payout breakdown is expanded in the green panel.
   const [expandedPayoutRep,setExpandedPayoutRep] = useState(null);
+  // Tracks which rep's PAID history is expanded, and whether the panel is shown.
+  const [expandedPaidRep,setExpandedPaidRep] = useState(null);
+  const [showPaidHistory,setShowPaidHistory] = useState(false);
   // Which rep's printable commission draft is open (review doc before payout).
   const [draftRep,setDraftRep] = useState(null);
   // The active rep filter — applies only when scope=team. When scope=mine,
@@ -28612,6 +28615,24 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // Reps that still have something to pay AFTER the month/selection filters.
   const payableReps = payoutByRep.filter(p => includedAmount(p) > 0.005);
   const payoutTotal = payableReps.reduce((s,x) => s + includedAmount(x), 0);
+
+  // Paid history — what's ALREADY been paid, grouped by rep → the month the
+  // voucher settled it (paid_at). Lets you check, per sales manager, which
+  // months are done. Respects the rep filter so you can audit one at a time.
+  const paidHistory = (()=>{
+    const byRep = new Map();
+    (salesCommissions||[]).filter(r => r.paid_at && matchesRepFilter(r.manager_id)).forEach(r=>{
+      const rid = r.manager_id; const mo = String(r.paid_at).slice(0,7);
+      let rep = byRep.get(rid); if(!rep){ rep = { manager_id:rid, total:0, count:0, months:new Map() }; byRep.set(rid, rep); }
+      rep.total += Number(r.amount||0); rep.count += 1;
+      let m = rep.months.get(mo); if(!m){ m = { month:mo, total:0, count:0, vouchers:new Set() }; rep.months.set(mo, m); }
+      m.total += Number(r.amount||0); m.count += 1; if(r.voucher_id) m.vouchers.add(r.voucher_id);
+    });
+    return Array.from(byRep.values())
+      .map(rep => ({ ...rep, months: Array.from(rep.months.values()).sort((a,b)=> b.month.localeCompare(a.month)) }))
+      .sort((a,b)=> b.total - a.total);
+  })();
+  const fmtMonthLabel = (ym)=>{ try { const [y,m]=ym.split('-'); return new Date(Number(y),Number(m)-1,1).toLocaleDateString('en-US',{month:'long',year:'numeric'}); } catch(_){ return ym; } };
 
   function repName(id){ const p = (profiles||[]).find(x => x.id === id); return p ? (p.name || p.email) : '—'; }
   function soNumber(id){ const s = (salesOrders||[]).find(x => x.id === id); return s ? s.number : '—'; }
@@ -28995,6 +29016,53 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
             </table>
           </div>
           {genMsg && <div className="mt-2 text-xs text-emerald-700 bg-white border border-emerald-200 rounded p-2">{genMsg}</div>}
+        </div>
+      )}
+
+      {/* Paid history — per sales manager, which months are already settled. */}
+      {paidHistory.length>0 && (
+        <div className="bg-white border rounded-xl mb-3 overflow-hidden">
+          <button onClick={()=>setShowPaidHistory(s=>!s)} className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-slate-400">{showPaidHistory?'▾':'▸'}</span>
+              <span className="font-bold text-slate-900">✅ Paid history</span>
+              <span className="text-xs text-slate-500 truncate">· commissions already paid, grouped by month{activeRepId?` · ${repName(activeRepId)}`:''}</span>
+            </div>
+            <span className="text-xs text-slate-500 shrink-0">{peso(paidHistory.reduce((s,r)=>s+r.total,0))} paid{scope==='team'?` · ${paidHistory.length} rep${paidHistory.length===1?'':'s'}`:''}</span>
+          </button>
+          {showPaidHistory && (
+            <div className="border-t divide-y">
+              {paidHistory.map(rep=>(
+                <div key={rep.manager_id}>
+                  <button onClick={()=>setExpandedPaidRep(x=>x===rep.manager_id?null:rep.manager_id)} className="w-full flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-slate-300 text-xs">{expandedPaidRep===rep.manager_id?'▾':'▸'}</span>
+                      <span className="font-semibold text-slate-800">{repName(rep.manager_id)}</span>
+                      <span className="text-[11px] text-slate-400">{rep.months.length} month{rep.months.length===1?'':'s'} · {rep.count} item{rep.count===1?'':'s'}</span>
+                    </div>
+                    <span className="font-bold text-emerald-700 shrink-0">{peso(rep.total)}</span>
+                  </button>
+                  {expandedPaidRep===rep.manager_id && (
+                    <div className="px-4 pb-3 pt-1 bg-slate-50/60">
+                      <table className="w-full text-sm">
+                        <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Month paid</th><th className="text-right py-1">Items</th><th className="text-right py-1">Vouchers</th><th className="text-right py-1">Amount</th></tr></thead>
+                        <tbody>
+                          {rep.months.map(m=>(
+                            <tr key={m.month} className="border-t border-slate-200">
+                              <td className="py-1.5 text-slate-700">{fmtMonthLabel(m.month)}</td>
+                              <td className="py-1.5 text-right text-slate-500">{m.count}</td>
+                              <td className="py-1.5 text-right text-slate-500">{m.vouchers.size||'—'}</td>
+                              <td className="py-1.5 text-right font-semibold text-emerald-700">{peso(m.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
