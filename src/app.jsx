@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 547 · Marketing photos & docs now view inline — image thumbnails open in a lightbox and PDFs render inline across Resources, the Content Planner board/list, and both editors (also fixes the old file links that 403'd).";
+const BUILD = "Live build 548 · Boot resilience: a dropped network request during load (Safari 'Load failed', WiFi blip) no longer strands you on 'Loading your workspace…' — it fetches your profile on its own, auto-retries the full load with backoff, and shows a Retry button.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38817,6 +38817,7 @@ function App(){
 
   const loadAllBusy = useRef(false);
   const loadAllAgain = useRef(false);
+  const loadRetries = useRef(0);
   const reloadTimer = useRef(null);
   // Debounced reload for realtime events. A burst of notifications (e.g. one
   // Closed-Won deal fanning PRs out to the whole purchasing team) used to make
@@ -39037,6 +39038,16 @@ function App(){
     setSalesCommissions(sccm && !sccm.error ? (sccm.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
+    loadRetries.current=0;   // full load succeeded — clear the retry backoff
+    } catch(e){
+      // A single failed network request (Safari "TypeError: Load failed", a WiFi
+      // blip, a captive portal) makes the whole Promise.all reject and used to
+      // strand the user on "Loading your workspace…" forever. Surface it and let
+      // the boot self-heal: fetch the profile on its own (so the gate can clear)
+      // and auto-retry the full load a few times with backoff.
+      setLoadErr(String(e?.message||e));
+      try { const me=session?.user?.id; if(me && !profile){ const { data }=await sb.from('profiles').select('*').eq('id',me).single(); if(data) setProfile(data); } } catch(_){}
+      if((loadRetries.current||0) < 4){ loadRetries.current=(loadRetries.current||0)+1; setTimeout(()=>loadAll(), 2000*loadRetries.current); }
     } finally {
       loadAllBusy.current = false;
       // If something asked to reload while we were busy, run exactly once more.
@@ -39479,7 +39490,15 @@ function App(){
 
   if(session===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Connecting…</div>;
   if(!session) return <LoginScreen />;
-  if(!profile) return <div className="min-h-screen flex items-center justify-center text-slate-400 flex-col gap-2"><div>Loading your workspace…</div>{loadErr && <div className="text-xs text-rose-600 max-w-md text-center">{loadErr}</div>}</div>;
+  if(!profile) return <div className="min-h-screen flex items-center justify-center text-slate-400 flex-col gap-3">
+    <div>Loading your workspace…</div>
+    {loadErr && <>
+      <div className="text-xs text-rose-600 max-w-md text-center">{loadErr}</div>
+      <div className="text-[11px] text-slate-400 max-w-xs text-center">This is usually a brief connection hiccup reaching the server — it retries on its own. If it sticks, tap Retry.</div>
+      <button onClick={()=>{ loadRetries.current=0; setLoadErr(''); loadAll(); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">↻ Retry</button>
+      <button onClick={()=>window.location.reload()} className="text-[11px] text-slate-400 hover:text-slate-600 underline">Reload the page</button>
+    </>}
+  </div>;
 
   const unreadInbox=mentions.filter(m=>!(m.read_by||[]).includes(profile.id)).length;
   const liveDetail=detailLead?(leads.find(l=>l.id===detailLead.id)||detailLead):null;
