@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 550 · Fixed a timezone bug where deals closed between midnight–8 AM Manila got a won_at date one day earlier (UTC), which could push them into the previous month. Closed-won dates now use the Philippine calendar date.";
+const BUILD = "Live build 551 · Commission draft printout now flows across as many pages as needed — long lists were being clipped to a single page (fixed height + overflow:hidden); now every line prints.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28439,7 +28439,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
         </div>
       </div>
       <div className="tp-print py-6">
-        <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
+        <div className="po-page flow mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
           <DocPrintHeader title="SALES COMMISSION — DRAFT" rightBlocks={
             <div>
               <div><strong>For:</strong> {repNm}</div>
