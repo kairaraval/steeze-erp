@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 546 · Marketing Resource files now support drag & drop and paste (⌘V) as well as click-to-browse.";
+const BUILD = "Live build 547 · Marketing photos & docs now view inline — image thumbnails open in a lightbox and PDFs render inline across Resources, the Content Planner board/list, and both editors (also fixes the old file links that 403'd).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16911,11 +16911,11 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
             <div className="text-xs text-slate-500">{uploading?'Uploading…':'Drag & drop files here, or click to browse'}</div>
             <input ref={fileInput} type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx" className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
           </div>
-          {attachments.length>0 && <div className="mt-2 space-y-1">
+          {attachments.length>0 && <div className="mt-2 flex flex-wrap gap-2" onClick={e=>e.stopPropagation()}>
             {attachments.map((a,i)=>(
-              <div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5">
-                <span>{attIcon(a)}</span>
-                <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-indigo-600 hover:underline" onClick={e=>e.stopPropagation()}>{a.name}</a>
+              <div key={i} className="flex items-center gap-1.5 text-xs bg-white border rounded px-2 py-1.5">
+                <AttachmentChip att={a} small gallery={attachments} />
+                <span className="truncate max-w-[140px] text-slate-700">{a.name}</span>
                 <button type="button" onClick={()=>removeAttachment(i)} className="text-slate-400 hover:text-rose-500">✕</button>
               </div>
             ))}
@@ -16994,7 +16994,8 @@ function MarketingResourceModal({ profile, existing, onClose, onSaved }){
             {attachments.length>0 && <div className="flex flex-wrap gap-2 mb-2">
               {attachments.map((a,i)=>(
                 <div key={i} className="flex items-center gap-1.5 border rounded px-2 py-1 bg-white" onClick={e=>e.stopPropagation()}>
-                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-700 hover:text-indigo-600 truncate max-w-[180px]">{resAttIcon(a)} {a.name||'file'}</a>
+                  <AttachmentChip att={a} small gallery={attachments} />
+                  <span className="text-xs text-slate-700 truncate max-w-[140px]">{a.name||'file'}</span>
                   <button onClick={()=>removeAttachment(i)} className="text-slate-400 hover:text-rose-600 text-xs">✕</button>
                 </div>
               ))}
@@ -17175,10 +17176,10 @@ function MarketingHub({ profile }){
         {camp && <div className="text-[10px] text-indigo-600 mt-0.5">🎯 {camp}</div>}
         {p.copy && <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">{p.copy}</div>}
       </button>
-      {(p.link&&/^https?:\/\//i.test(String(p.link).trim()) || (Array.isArray(p.attachments)&&p.attachments.length>0)) && <div className="flex items-center gap-2 flex-wrap mt-1">
-        {p.link && /^https?:\/\//i.test(String(p.link).trim()) && <a href={String(p.link).trim()} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(p.link)?'Canva':'Link'} ↗</a>}
-        {Array.isArray(p.attachments)&&p.attachments.length>0 && p.attachments.slice(0,3).map((a,i)=>(<a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="text-[10px] text-slate-500 hover:text-indigo-600 hover:underline">📎</a>))}
-        {Array.isArray(p.attachments)&&p.attachments.length>3 && <span className="text-[10px] text-slate-400">+{p.attachments.length-3}</span>}
+      {p.link && /^https?:\/\//i.test(String(p.link).trim()) && <div className="mt-1"><a href={String(p.link).trim()} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} className="text-[10px] text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(p.link)?'Canva':'Link'} ↗</a></div>}
+      {Array.isArray(p.attachments)&&p.attachments.length>0 && <div className="flex items-center gap-1.5 flex-wrap mt-1" onClick={e=>e.stopPropagation()}>
+        {p.attachments.slice(0,4).map((a,i)=>(<AttachmentChip key={i} att={a} small gallery={p.attachments} />))}
+        {p.attachments.length>4 && <span className="text-[10px] text-slate-400 self-center">+{p.attachments.length-4}</span>}
       </div>}
       {canEditContent && <select value={p.status} onChange={e=>movePost(p,e.target.value)} className="mt-1.5 w-full text-[11px] border rounded px-1 py-0.5 bg-slate-50">{MKT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>}
     </div>
@@ -17236,7 +17237,7 @@ function MarketingHub({ profile }){
                 <td className="px-3 py-2 text-xs text-indigo-600">{campName(p.campaign_id)||'—'}</td>
                 <td className="px-3 py-2 text-xs">{p.scheduled_date?fmtDate(p.scheduled_date):'—'}</td>
                 <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${st.color}`}>{st.label}</span></td>
-                <td className="px-3 py-2 text-xs whitespace-nowrap">{hasLink && <a href={String(p.link).trim()} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} className="text-indigo-600 hover:underline mr-2">🔗 {/canva\./i.test(p.link)?'Canva':'Link'}</a>}{atts.map((a,i)=>(<a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} onClick={e=>e.stopPropagation()} className="text-slate-500 hover:text-indigo-600 mr-1">📎</a>))}{!hasLink&&atts.length===0&&<span className="text-slate-300">—</span>}</td>
+                <td className="px-3 py-2 text-xs"><div className="flex items-center gap-1.5 flex-wrap" onClick={e=>e.stopPropagation()}>{hasLink && <a href={String(p.link).trim()} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline mr-1">🔗 {/canva\./i.test(p.link)?'Canva':'Link'}</a>}{atts.map((a,i)=>(<AttachmentChip key={i} att={a} small gallery={atts} />))}{!hasLink&&atts.length===0&&<span className="text-slate-300">—</span>}</div></td>
                 <td className="px-3 py-2 text-right">{canEdit && <button onClick={(e)=>{ e.stopPropagation(); delPost(p); }} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
               </tr>
             ); })}{filtered.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-10">No content yet.{canEdit?' Click "+ Content" to plan a post.':''}</td></tr>}</tbody>
@@ -17283,9 +17284,9 @@ function MarketingHub({ profile }){
                       </div>}
                       <div className="font-semibold text-slate-900 pr-16">{r.title}</div>
                       {r.description && <div className="text-sm text-slate-500 mt-1 whitespace-pre-line">{r.description}</div>}
-                      {(hasLink || atts.length>0) && <div className="flex items-center gap-2 flex-wrap mt-2">
-                        {hasLink && <a href={String(r.link).trim()} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(r.link)?'Canva':/drive\.google|docs\.google/i.test(r.link)?'Drive':'Link'} ↗</a>}
-                        {atts.map((a,i)=>(<a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="text-xs text-slate-600 hover:text-indigo-600 hover:underline inline-flex items-center gap-0.5 border rounded px-1.5 py-0.5 bg-slate-50">{resAttIcon(a)} <span className="truncate max-w-[140px]">{a.name||'file'}</span></a>))}
+                      {hasLink && <div className="mt-2"><a href={String(r.link).trim()} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(r.link)?'Canva':/drive\.google|docs\.google/i.test(r.link)?'Drive':'Link'} ↗</a></div>}
+                      {atts.length>0 && <div className="flex items-center gap-2 flex-wrap mt-2">
+                        {atts.map((a,i)=>(<AttachmentChip key={i} att={a} small gallery={atts} />))}
                       </div>}
                     </div>
                   ); })}
