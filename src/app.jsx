@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 548 · Boot resilience: a dropped network request during load (Safari 'Load failed', WiFi blip) no longer strands you on 'Loading your workspace…' — it fetches your profile on its own, auto-retries the full load with backoff, and shows a Retry button.";
+const BUILD = "Live build 549 · Kaira's landing page is back to the Sales Pipeline (removed the temporary Sourcing Trips landing).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39184,8 +39184,8 @@ function App(){
     if(!profile || didLandRef.current) return;
     didLandRef.current = true;
     if(profile.role==='assistant' && view==='pipeline') setView('sales-tickets');
-    // Kaira lands on Sourcing Trips for now (scoped to her user id only).
-    else if(profile.id==='ffb1f60b-3872-4163-b7ac-df00bb9f70d8' && view==='pipeline') setView('sourcing');
+    // (Kaira's temporary Sourcing Trips landing removed — she now opens on the
+    //  Sales Pipeline like the default.)
   },[profile]);
 
   // System notifications: when the tab is in the background (or phone screen
