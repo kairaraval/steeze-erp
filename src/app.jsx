@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 545 · Marketing module gains a Resources tab (branding SOPs, brand assets, templates, links & files, grouped by category). New Video Editor role lands in Marketing — can run the content planner and add Resources; campaigns & analytics stay view-only.";
+const BUILD = "Live build 546 · Marketing Resource files now support drag & drop and paste (⌘V) as well as click-to-browse.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16948,6 +16948,7 @@ function MarketingResourceModal({ profile, existing, onClose, onSaved }){
   const [f,setF]=useState({ title:existing?.title||'', category:existing?.category||RESOURCE_CATEGORIES[0], description:existing?.description||'', link:existing?.link||'' });
   const [attachments,setAttachments]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
   const [uploading,setUploading]=useState(false); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [drag,setDrag]=useState(false);
   const fileInput=useRef(null);
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function uploadFiles(fileList){
@@ -16958,6 +16959,14 @@ function MarketingResourceModal({ profile, existing, onClose, onSaved }){
     setUploading(false);
   }
   function removeAttachment(i){ setAttachments(prev=>prev.filter((_,x)=>x!==i)); }
+  // Paste (⌘V) anywhere in the modal, or drag-drop onto the Files area.
+  async function onPasteFiles(e){
+    const dt=e.clipboardData; if(!dt) return;
+    const files=[]; for(const f of Array.from(dt.files||[])) if(f) files.push(f);
+    if(!files.length){ for(const it of Array.from(dt.items||[])){ if(it.kind==='file'){ const f=it.getAsFile(); if(f) files.push(f); } } }
+    if(files.length){ e.preventDefault(); await uploadFiles(files); }
+  }
+  function onDropFiles(e){ e.preventDefault(); setDrag(false); const files=Array.from(e.dataTransfer?.files||[]).filter(Boolean); if(files.length) uploadFiles(files); }
   async function save(){ if(!f.title.trim()){ setMsg('Give the resource a title.'); return; } setBusy(true); setMsg('');
     try { const payload={ title:f.title.trim(), category:f.category||null, description:f.description||null, link:f.link.trim()||null, attachments };
       if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('marketing_resources').update(payload).eq('id',existing.id); if(error) throw error; }
@@ -16967,7 +16976,7 @@ function MarketingResourceModal({ profile, existing, onClose, onSaved }){
   }
   return (
     <Modal title={isEdit?'Edit resource':'+ New resource'} onClose={onClose} wide>
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3 text-sm" onPaste={onPasteFiles}>
         <div><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Steeze Branding SOP 2026"' /></div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-xs font-semibold text-slate-500">Category</label><select value={f.category} onChange={e=>up('category',e.target.value)} className="w-full border rounded px-2 py-1.5">{RESOURCE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
@@ -16975,15 +16984,22 @@ function MarketingResourceModal({ profile, existing, onClose, onSaved }){
         </div>
         <div><label className="text-xs font-semibold text-slate-500">Description / notes</label><textarea value={f.description} onChange={e=>up('description',e.target.value)} rows={4} className="w-full border rounded px-2 py-1.5" placeholder="What this is, when to use it, version notes…" /></div>
         <div>
-          <label className="text-xs font-semibold text-slate-500">Files</label>
-          <div className="mt-1 flex flex-wrap gap-2">
-            {attachments.map((a,i)=>(
-              <div key={i} className="flex items-center gap-1.5 border rounded px-2 py-1 bg-slate-50">
-                <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-700 hover:text-indigo-600 truncate max-w-[180px]">{resAttIcon(a)} {a.name||'file'}</a>
-                <button onClick={()=>removeAttachment(i)} className="text-slate-400 hover:text-rose-600 text-xs">✕</button>
-              </div>
-            ))}
-            <button type="button" onClick={()=>fileInput.current&&fileInput.current.click()} className="text-xs px-2.5 py-1 rounded border border-dashed border-slate-300 text-slate-500 hover:border-indigo-400 hover:text-indigo-600">{uploading?'Uploading…':'+ Attach files'}</button>
+          <label className="text-xs font-semibold text-slate-500">Files <span className="font-normal text-slate-400">· drag &amp; drop, paste (⌘V), or click to browse</span></label>
+          <div
+            onDragOver={e=>{ e.preventDefault(); setDrag(true); }}
+            onDragLeave={e=>{ e.preventDefault(); setDrag(false); }}
+            onDrop={onDropFiles}
+            onClick={()=>fileInput.current&&fileInput.current.click()}
+            className={`mt-1 rounded-lg border-2 border-dashed p-3 cursor-pointer transition-colors ${drag?'border-indigo-500 bg-indigo-50':'border-slate-300 hover:border-indigo-400 bg-slate-50/50'}`}>
+            {attachments.length>0 && <div className="flex flex-wrap gap-2 mb-2">
+              {attachments.map((a,i)=>(
+                <div key={i} className="flex items-center gap-1.5 border rounded px-2 py-1 bg-white" onClick={e=>e.stopPropagation()}>
+                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-700 hover:text-indigo-600 truncate max-w-[180px]">{resAttIcon(a)} {a.name||'file'}</a>
+                  <button onClick={()=>removeAttachment(i)} className="text-slate-400 hover:text-rose-600 text-xs">✕</button>
+                </div>
+              ))}
+            </div>}
+            <div className="text-center text-xs text-slate-400 py-1">{uploading?'Uploading…':(drag?'Drop files to upload':'📎 Drag & drop, paste, or click to add files & photos')}</div>
             <input ref={fileInput} type="file" multiple className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
           </div>
         </div>
