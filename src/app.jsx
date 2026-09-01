@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 549 · Kaira's landing page is back to the Sales Pipeline (removed the temporary Sourcing Trips landing).";
+const BUILD = "Live build 550 · Fixed a timezone bug where deals closed between midnight–8 AM Manila got a won_at date one day earlier (UTC), which could push them into the previous month. Closed-won dates now use the Philippine calendar date.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -79,6 +79,12 @@ const STAGES = [
 // Stages that count a deal as "sold" (post-won). Used for dashboards / pipeline filters.
 const SOLD_STAGES = ['won','delivered_pending','delivered_paid'];
 const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
+// Today's calendar date in Manila (YYYY-MM-DD), independent of the viewer's own
+// timezone. The browser's UTC date (new Date().toISOString()) mis-stamps any
+// action done between midnight and 8 AM PH time to the PREVIOUS day — which for
+// a deal closed early on the 1st pushes it into the previous month. Always stamp
+// business dates (won_at etc.) with the Philippine calendar date.
+function todayManila(){ try { return new Date().toLocaleDateString('en-CA',{ timeZone:'Asia/Manila' }); } catch(_){ return new Date(Date.now()+8*3600*1000).toISOString().slice(0,10); } }
 // Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
 const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
 function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
@@ -1303,7 +1309,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
       // so it surfaces in the Marketing & Internal Expenses report.
       const hasCompanion = !nonSale && !!cMeta && compAmt>0;
       const saleValueOut = nonSale ? 0 : billableTotal;
-      const payload={ client_id:finalClientId||null, title:title.trim(), value: saleValueOut, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : (companionCost>0?companionCost:null), commission_base: (hasCompanion && cMeta.billable) ? commissionBase : null, companion_kind: hasCompanion ? companionKind : null, companion_amount: hasCompanion ? compAmt : null, companion_label: hasCompanion ? (companionLabel.trim()||null) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || new Date().toISOString().slice(0,10)) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value: saleValueOut, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : (companionCost>0?companionCost:null), commission_base: (hasCompanion && cMeta.billable) ? commissionBase : null, companion_kind: hasCompanion ? companionKind : null, companion_amount: hasCompanion ? compAmt : null, companion_label: hasCompanion ? (companionLabel.trim()||null) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || todayManila()) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -11887,7 +11893,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
     // Stamp the move time so column rendering can sort the freshly-arrived
     // lead to the top of the new column (it's the most recent activity).
     if(l.stage !== st) patch.stage_changed_at = new Date().toISOString();
-    if(willBeSold && !l.won_at) patch.won_at=new Date().toISOString().slice(0,10);
+    if(willBeSold && !l.won_at) patch.won_at=todayManila();
     if(st==='delivered_paid') patch.payment_status='paid';
     const {error}=await sb.from('leads').update(patch).eq('id',l.id);
     if(error){ alert(error.message); return; }
