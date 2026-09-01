@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 544 · A Sale lead can now carry a companion split part in one project — Client Procurement (billed to client, no commission), Steeze-Sponsored, or Free Sample. Commission is earned on the sale portion only (via commission_base); procurement bills to the SO/A-R; sponsored & free-sample costs feed the Marketing & Internal Expenses report.";
+const BUILD = "Live build 545 · Marketing module gains a Resources tab (branding SOPs, brand assets, templates, links & files, grouped by category). New Video Editor role lands in Marketing — can run the content planner and add Resources; campaigns & analytics stay view-only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16833,6 +16833,10 @@ const MKT_CAMPAIGN_STATUSES = [['planning','Planning'],['active','Active'],['pau
 function mktChan(k){ return MKT_CHANNELS.find(c=>c.key===k) || MKT_CHANNELS[MKT_CHANNELS.length-1]; }
 function mktStat(k){ return MKT_STATUSES.find(s=>s.key===k) || MKT_STATUSES[0]; }
 function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='manager'; }
+// Video Editors work the content planner day-to-day, so they can create/edit/move
+// content posts and add Resources — but campaigns & analytics stay with admin/manager.
+function marketingCanEditContent(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
+function marketingCanEditResources(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
 
 function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
   const isEdit=!!existing;
@@ -16931,6 +16935,62 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add content')}</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const RESOURCE_CATEGORIES = ['Branding SOP','Brand Guidelines','Logo & Marks','Brand Assets','Templates','Fonts','Photo & Video','Tone of Voice','Other'];
+function resAttIcon(a){ const t=(a?.type||'')+' '+(a?.name||''); if(/image|png|jpe?g|gif|webp|svg/i.test(t)) return '🖼'; if(/pdf/i.test(t)) return '📄'; if(/word|docx?/i.test(t)) return '📝'; if(/sheet|xlsx?|csv/i.test(t)) return '📊'; if(/video|mp4|mov/i.test(t)) return '🎬'; return '📎'; }
+function MarketingResourceModal({ profile, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({ title:existing?.title||'', category:existing?.category||RESOURCE_CATEGORIES[0], description:existing?.description||'', link:existing?.link||'' });
+  const [attachments,setAttachments]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
+  const [uploading,setUploading]=useState(false); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const fileInput=useRef(null);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function uploadFiles(fileList){
+    const files=Array.from(fileList||[]).filter(Boolean); if(!files.length) return;
+    setUploading(true); setMsg('');
+    try { for(const file of files){ const ext=(file.name.split('.').pop()||'bin').toLowerCase(); const key=`marketing/resources/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`; const { error:upErr }=await sb.storage.from(BUCKET).upload(key,file,{ upsert:false, contentType:file.type||undefined }); if(upErr) throw upErr; const { data:pu }=await sb.storage.from(BUCKET).getPublicUrl(key); setAttachments(prev=>[...prev,{ name:file.name, url:pu.publicUrl, path:key, type:file.type||'', size:file.size }]); } }
+    catch(e){ setMsg('Upload failed: '+(e.message||String(e))); }
+    setUploading(false);
+  }
+  function removeAttachment(i){ setAttachments(prev=>prev.filter((_,x)=>x!==i)); }
+  async function save(){ if(!f.title.trim()){ setMsg('Give the resource a title.'); return; } setBusy(true); setMsg('');
+    try { const payload={ title:f.title.trim(), category:f.category||null, description:f.description||null, link:f.link.trim()||null, attachments };
+      if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('marketing_resources').update(payload).eq('id',existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('marketing_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved&&onSaved(); }
+    catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit resource':'+ New resource'} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "Steeze Branding SOP 2026"' /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-semibold text-slate-500">Category</label><select value={f.category} onChange={e=>up('category',e.target.value)} className="w-full border rounded px-2 py-1.5">{RESOURCE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+          <div><label className="text-xs font-semibold text-slate-500">Link {f.link && /^https?:\/\//i.test(f.link.trim()) && <a href={f.link.trim()} target="_blank" rel="noopener noreferrer" className="ml-1 text-indigo-600 hover:underline font-normal">↗ open</a>}</label><input value={f.link} onChange={e=>up('link',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="https://… (Drive, Canva, Notion)" /></div>
+        </div>
+        <div><label className="text-xs font-semibold text-slate-500">Description / notes</label><textarea value={f.description} onChange={e=>up('description',e.target.value)} rows={4} className="w-full border rounded px-2 py-1.5" placeholder="What this is, when to use it, version notes…" /></div>
+        <div>
+          <label className="text-xs font-semibold text-slate-500">Files</label>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {attachments.map((a,i)=>(
+              <div key={i} className="flex items-center gap-1.5 border rounded px-2 py-1 bg-slate-50">
+                <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-700 hover:text-indigo-600 truncate max-w-[180px]">{resAttIcon(a)} {a.name||'file'}</a>
+                <button onClick={()=>removeAttachment(i)} className="text-slate-400 hover:text-rose-600 text-xs">✕</button>
+              </div>
+            ))}
+            <button type="button" onClick={()=>fileInput.current&&fileInput.current.click()} className="text-xs px-2.5 py-1 rounded border border-dashed border-slate-300 text-slate-500 hover:border-indigo-400 hover:text-indigo-600">{uploading?'Uploading…':'+ Attach files'}</button>
+            <input ref={fileInput} type="file" multiple className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
+          </div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button>
+          <button onClick={save} disabled={busy||uploading} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add resource')}</button>
         </div>
       </div>
     </Modal>
@@ -17048,34 +17108,43 @@ function MetricSnapshotModal({ profile, existing, onClose, onSaved }){
 }
 
 function MarketingHub({ profile }){
-  const canEdit = marketingCanEdit(profile);
+  const canEdit = marketingCanEdit(profile);                 // campaigns + analytics (admin/manager)
+  const canEditContent = marketingCanEditContent(profile);   // content planner (+ video editor)
+  const canEditResources = marketingCanEditResources(profile);
   const [tab,setTab]=useState('content');
   const [layout,setLayout]=useState('board');
   const [campaigns,setCampaigns]=useState([]);
   const [content,setContent]=useState([]);
   const [metrics,setMetrics]=useState([]);
+  const [resources,setResources]=useState([]);
   const [loading,setLoading]=useState(true);
   const [chanFilter,setChanFilter]=useState('');
   const [campFilter,setCampFilter]=useState('');
   const [search,setSearch]=useState('');
+  const [resSearch,setResSearch]=useState('');
+  const [resCatFilter,setResCatFilter]=useState('');
   const [editingPost,setEditingPost]=useState(null);
   const [creatingPost,setCreatingPost]=useState(false);
   const [editingCampaign,setEditingCampaign]=useState(null);
   const [creatingCampaign,setCreatingCampaign]=useState(false);
   const [editingMetric,setEditingMetric]=useState(null);
   const [creatingMetric,setCreatingMetric]=useState(false);
+  const [editingResource,setEditingResource]=useState(null);
+  const [creatingResource,setCreatingResource]=useState(false);
   async function load(){
     setLoading(true);
-    const [c,p,m]=await Promise.all([
+    const [c,p,m,r]=await Promise.all([
       sb.from('marketing_campaigns').select('*').is('deleted_at',null).order('created_at',{ascending:false}),
       sb.from('marketing_content').select('*').is('deleted_at',null).order('scheduled_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
       sb.from('marketing_metrics').select('*').is('deleted_at',null).order('period',{ascending:false}),
+      sb.from('marketing_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false}),
     ]);
-    setCampaigns(c.data||[]); setContent(p.data||[]); setMetrics(m.data||[]); setLoading(false);
+    setCampaigns(c.data||[]); setContent(p.data||[]); setMetrics(m.data||[]); setResources(r.data||[]); setLoading(false);
   }
   async function delMetric(m){ if(!confirm('Delete this metric snapshot?')) return; const { error }=await sb.from('marketing_metrics').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } load(); }
+  async function delResource(r){ if(!confirm(`Delete "${r.title||'this resource'}"?`)) return; const { error }=await sb.from('marketing_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id); if(error){ alert(error.message); return; } load(); }
   useEffect(()=>{ load(); },[]);
-  async function movePost(post, status){ if(!canEdit) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
+  async function movePost(post, status){ if(!canEditContent) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delPost(post){ if(!confirm(`Delete "${post.title||'this post'}"?`)) return; const { error }=await sb.from('marketing_content').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delCampaign(c){ if(!confirm(`Delete campaign "${c.name}"? Its content stays but loses the campaign link.`)) return; const { error }=await sb.from('marketing_campaigns').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } load(); }
   const q=search.toLowerCase();
@@ -17083,7 +17152,7 @@ function MarketingHub({ profile }){
   const campName = (id)=> (campaigns.find(c=>c.id===id)||{}).name;
   const Card = ({p})=>{ const ch=mktChan(p.channel); const camp=campName(p.campaign_id); return (
     <div className="bg-white border rounded-lg shadow-sm p-2 group relative">
-      {canEdit && <button onClick={()=>delPost(p)} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 w-5 h-5 rounded-full bg-white border text-slate-400 hover:bg-rose-500 hover:text-white text-[10px]">✕</button>}
+      {canEditContent && <button onClick={()=>delPost(p)} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 w-5 h-5 rounded-full bg-white border text-slate-400 hover:bg-rose-500 hover:text-white text-[10px]">✕</button>}
       <button onClick={()=>setEditingPost(p)} className="text-left w-full">
         <div className="flex items-center gap-1 mb-1"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span>{p.scheduled_date && <span className="text-[10px] text-slate-500">{fmtDate(p.scheduled_date)}</span>}</div>
         <div className="text-sm font-semibold leading-tight">{p.title||'—'}</div>
@@ -17095,7 +17164,7 @@ function MarketingHub({ profile }){
         {Array.isArray(p.attachments)&&p.attachments.length>0 && p.attachments.slice(0,3).map((a,i)=>(<a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="text-[10px] text-slate-500 hover:text-indigo-600 hover:underline">📎</a>))}
         {Array.isArray(p.attachments)&&p.attachments.length>3 && <span className="text-[10px] text-slate-400">+{p.attachments.length-3}</span>}
       </div>}
-      {canEdit && <select value={p.status} onChange={e=>movePost(p,e.target.value)} className="mt-1.5 w-full text-[11px] border rounded px-1 py-0.5 bg-slate-50">{MKT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>}
+      {canEditContent && <select value={p.status} onChange={e=>movePost(p,e.target.value)} className="mt-1.5 w-full text-[11px] border rounded px-1 py-0.5 bg-slate-50">{MKT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>}
     </div>
   ); };
   return (
@@ -17105,20 +17174,26 @@ function MarketingHub({ profile }){
           <div><h1 className="text-2xl font-bold">📣 Marketing</h1><p className="text-slate-500 text-sm">Content planner + campaigns · plan, draft, schedule, track</p></div>
           <div className="flex items-center gap-2 flex-wrap">
             {tab==='content' && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button></div>}
-            {canEdit && tab==='content' && <button onClick={()=>setCreatingPost(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Content</button>}
+            {canEditContent && tab==='content' && <button onClick={()=>setCreatingPost(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Content</button>}
             {canEdit && tab==='campaigns' && <button onClick={()=>setCreatingCampaign(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Campaign</button>}
             {canEdit && tab==='analytics' && <button onClick={()=>setCreatingMetric(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Log metrics</button>}
+            {canEditResources && tab==='resources' && <button onClick={()=>setCreatingResource(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Resource</button>}
           </div>
         </div>
-        <div className="flex gap-1 mt-3">
+        <div className="flex gap-1 mt-3 flex-wrap">
           <button onClick={()=>setTab('content')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='content'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🗓 Content Planner ({content.length})</button>
           <button onClick={()=>setTab('campaigns')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='campaigns'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>🎯 Campaigns ({campaigns.length})</button>
           <button onClick={()=>setTab('analytics')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='analytics'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📊 Analytics</button>
+          <button onClick={()=>setTab('resources')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${tab==='resources'?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>📚 Resources ({resources.length})</button>
         </div>
         {tab==='content' && <div className="flex gap-2 mt-2 flex-wrap">
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
           <select value={chanFilter} onChange={e=>setChanFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white"><option value="">All channels</option>{MKT_CHANNELS.map(c=><option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}</select>
           <select value={campFilter} onChange={e=>setCampFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white"><option value="">All campaigns</option>{campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        </div>}
+        {tab==='resources' && <div className="flex gap-2 mt-2 flex-wrap">
+          <input value={resSearch} onChange={e=>setResSearch(e.target.value)} placeholder="Search resources…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-56" />
+          <select value={resCatFilter} onChange={e=>setResCatFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white"><option value="">All categories</option>{RESOURCE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
         </div>}
       </div>
 
@@ -17170,7 +17245,40 @@ function MarketingHub({ profile }){
           ); })}
           {campaigns.length===0 && <div className="md:col-span-2 bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">No campaigns yet.{canEdit?' Click "+ Campaign" to group your content under a theme.':''}</div>}
         </div>
-      ) : (()=>{
+      ) : tab==='resources' ? (()=>{
+        const rq=resSearch.toLowerCase();
+        const resRows = resources.filter(r=> (!resCatFilter||r.category===resCatFilter) && (!rq||`${r.title||''} ${r.description||''} ${r.category||''}`.toLowerCase().includes(rq)));
+        // Group by category for a clean SOP library.
+        const groups={}; resRows.forEach(r=>{ const k=r.category||'Other'; (groups[k]=groups[k]||[]).push(r); });
+        const catOrder=[...RESOURCE_CATEGORIES, 'Other'];
+        const cats=Object.keys(groups).sort((a,b)=>{ const ia=catOrder.indexOf(a), ib=catOrder.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+        return (
+          <div className="space-y-5 max-w-5xl">
+            {resRows.length===0 && <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No resources yet.{canEditResources?' Click "+ Resource" to add your branding SOP, brand assets, templates, and guidelines.':' Your team\'s branding SOPs and assets will appear here.'}</div>}
+            {cats.map(cat=>(
+              <div key={cat}>
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">{cat} <span className="text-slate-400 font-normal">({groups[cat].length})</span></div>
+                <div className="grid md:grid-cols-2 gap-3">
+                  {groups[cat].map(r=>{ const atts=Array.isArray(r.attachments)?r.attachments:[]; const hasLink=r.link&&/^https?:\/\//i.test(String(r.link).trim()); return (
+                    <div key={r.id} className="bg-white border rounded-xl p-4 group relative">
+                      {canEditResources && <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex gap-1">
+                        <button onClick={()=>setEditingResource(r)} className="text-[11px] px-2 py-0.5 rounded border bg-white text-slate-500 hover:text-indigo-600">Edit</button>
+                        <button onClick={()=>delResource(r)} className="text-[11px] px-2 py-0.5 rounded border bg-white text-slate-400 hover:text-rose-600">Delete</button>
+                      </div>}
+                      <div className="font-semibold text-slate-900 pr-16">{r.title}</div>
+                      {r.description && <div className="text-sm text-slate-500 mt-1 whitespace-pre-line">{r.description}</div>}
+                      {(hasLink || atts.length>0) && <div className="flex items-center gap-2 flex-wrap mt-2">
+                        {hasLink && <a href={String(r.link).trim()} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(r.link)?'Canva':/drive\.google|docs\.google/i.test(r.link)?'Drive':'Link'} ↗</a>}
+                        {atts.map((a,i)=>(<a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name} className="text-xs text-slate-600 hover:text-indigo-600 hover:underline inline-flex items-center gap-0.5 border rounded px-1.5 py-0.5 bg-slate-50">{resAttIcon(a)} <span className="truncate max-w-[140px]">{a.name||'file'}</span></a>))}
+                      </div>}
+                    </div>
+                  ); })}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })() : (()=>{
         const periods = Array.from(new Set(metrics.map(m=>m.period))).sort().reverse();
         const latest = periods[0], prev = periods[1];
         const snap = (ch,p)=> metrics.find(m=>m.channel===ch && m.period===p);
@@ -17232,6 +17340,7 @@ function MarketingHub({ profile }){
       {(creatingMetric||editingMetric) && <MetricSnapshotModal profile={profile} existing={editingMetric} onClose={()=>{ setCreatingMetric(false); setEditingMetric(null); }} onSaved={()=>{ setCreatingMetric(false); setEditingMetric(null); load(); }} />}
       {(creatingPost||editingPost) && <ContentPostModal profile={profile} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
       {(creatingCampaign||editingCampaign) && <MarketingCampaignModal profile={profile} existing={editingCampaign} onClose={()=>{ setCreatingCampaign(false); setEditingCampaign(null); }} onSaved={()=>{ setCreatingCampaign(false); setEditingCampaign(null); load(); }} />}
+      {(creatingResource||editingResource) && <MarketingResourceModal profile={profile} existing={editingResource} onClose={()=>{ setCreatingResource(false); setEditingResource(null); }} onSaved={()=>{ setCreatingResource(false); setEditingResource(null); load(); }} />}
     </div>
   );
 }
@@ -19375,6 +19484,7 @@ function roleLabel(r){
          r==='knit_embro_lead'        ? 'Knit / Embro Team Lead' :
          r==='hr'                     ? 'HR Department' :
          r==='logistics'              ? 'Logistics Team' :
+         r==='video_editor'           ? 'Video Editor' :
          'Sales Manager';
 }
 function RoleBadge({ role }){
@@ -19405,6 +19515,7 @@ function RoleBadge({ role }){
     role==='knit_embro_lead'        ? 'bg-orange-100 text-orange-700' :
     role==='hr'                     ? 'bg-fuchsia-100 text-fuchsia-700' :
     role==='logistics'              ? 'bg-cyan-100 text-cyan-700' :
+    role==='video_editor'           ? 'bg-rose-100 text-rose-700' :
     'bg-slate-100 text-slate-600';
   return <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>{roleLabel(role)}</span>;
 }
@@ -19652,10 +19763,11 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
     { key:'logistics',        label:'Logistics',       count:profiles.filter(p=>p.role==='logistics').length },
+    { key:'video_editor',     label:'Video Editor',    count:profiles.filter(p=>p.role==='video_editor').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics'];
+  const roleOrder = ['admin','manager','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -19715,6 +19827,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
               <option value="hr">HR Department</option>
               <option value="logistics">Logistics Team</option>
+              <option value="video_editor">Video Editor</option>
             </select>
           </div>
           <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Note (optional)</label><input className="input" placeholder="e.g. CRO, started June 1" value={inviteNote} onChange={e=>setInviteNote(e.target.value)} /></div>
@@ -19824,6 +19937,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
                   <option value="hr">HR Department</option>
                   <option value="logistics">Logistics Team</option>
+                  <option value="video_editor">Video Editor</option>
                 </select>
               </td>
               <td className="px-3 py-2 text-xs text-slate-500">{p.created_at?fmtDate(p.created_at):'—'}</td>
@@ -39016,6 +39130,10 @@ function App(){
       // Logistics Team — Daily Schedule + their Trip Tickets.
       allowed = new Set(['logistics','trip-tickets']);
       fallback = 'logistics';
+    } else if(profile.role==='video_editor'){
+      // Video Editor — the Marketing module only (+ inbox + their profile).
+      allowed = new Set(['inbox','marketing','profile']);
+      fallback = 'marketing';
     } else {
       return; // admin / manager — no restrictions
     }
@@ -39453,6 +39571,7 @@ function App(){
   const isProdAssistant=profile.role==='production_assistant';
   const isHR=profile.role==='hr';
   const isLogistics=profile.role==='logistics';
+  const isVideoEditor=profile.role==='video_editor';
   const isPatternMaker=profile.role==='pattern_maker';
   const isCuttingDept=profile.role==='cutting_dept';
   const isQc=profile.role==='qc';
@@ -39683,6 +39802,13 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
+      PERSONAL_GROUP,
+    ];
+  } else if(isVideoEditor){
+    // Video Editor — the Marketing module only (+ inbox + their profile).
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'] ] },
+      { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isManager){
