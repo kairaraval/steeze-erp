@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 552 · Commissions view now has a Paid History panel — expand each sales manager to see which months are already settled (amount, item count, vouchers per month).";
+const BUILD = "Live build 553 · NPA (Notice of Personnel Action): the Date Effectivity 'From' column no longer shows the hire date — effectivity is a single new date, so From now reads N/A.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15464,7 +15464,9 @@ function NPAPrintView({ movement, employees, profile, onClose }){
     ['Car Allowance', npa.car_from, npa.car_to],
     ['Commission Structure', npa.commission_from, npa.commission_to],
     ['Monthly Compensation', npa.monthly_from, npa.monthly_to],
-    ['Date Effectivity', emp?.hire_date ? fmtDate(emp.hire_date) : (npa.effectivity_from||''), movement.effective_date ? fmtDate(movement.effective_date) : ''],
+    // Effectivity is a single (new) date — there is no "from" effectivity, so
+    // leave the FROM column blank (renders N/A) instead of showing the hire date.
+    ['Date Effectivity', '', movement.effective_date ? fmtDate(movement.effective_date) : ''],
   ];
   const curPos = movement.previous_position || emp?.position || '';
   return (
