@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 562 · Training lessons now support inline images/screenshots — upload or paste (⌘V) a screenshot in the lesson editor and it renders inside the lesson, so you can build a per-page visual walkthrough.";
+const BUILD = "Live build 563 · Training is now invite-only — hidden from everyone by default. Admins use 'Manage access' to enroll exactly who can see and take the training.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3704,8 +3704,41 @@ function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, on
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy||imgBusy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
-function TrainingView({ profile, profiles, leads, onOpenTechpack }){
+function TrainingAccessModal({ profile, profiles, participants, reloadParticipants, onClose }){
+  const [busy,setBusy]=useState('');
+  const [local,setLocal]=useState(()=>new Set(participants||[]));
+  const [search,setSearch]=useState('');
+  async function toggle(id){
+    setBusy(id);
+    const on=local.has(id);
+    try{
+      if(on){ await sb.from('training_participants').delete().eq('user_id',id); const n=new Set(local); n.delete(id); setLocal(n); }
+      else { await sb.from('training_participants').upsert({ user_id:id, added_by:profile.id }, { onConflict:'user_id' }); const n=new Set(local); n.add(id); setLocal(n); }
+      reloadParticipants && reloadParticipants();
+    }catch(e){ alert(e.message||String(e)); }
+    setBusy('');
+  }
+  const q=search.toLowerCase();
+  const people=(profiles||[]).filter(p=>p.role!=='admin').filter(p=> !q || `${p.name||''} ${p.email||''}`.toLowerCase().includes(q)).sort((a,b)=>String(a.name||a.email).localeCompare(String(b.name||b.email)));
+  return (<Modal title="Manage Training access" onClose={onClose} wide><div className="space-y-3 text-sm">
+    <div className="text-xs text-slate-500">Training is hidden from everyone by default. Toggle a person on to let them see and take the training. (Admins always have access.)</div>
+    <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search people…" className="w-full border rounded px-2 py-1.5" />
+    <div className="border rounded-lg divide-y max-h-96 overflow-auto">
+      {people.map(p=>{ const on=local.has(p.id); return (
+        <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
+          <div className="min-w-0"><div className="font-medium text-slate-800 truncate">{p.name||p.email}</div><div className="text-[11px] text-slate-400">{roleLabel(p.role)}</div></div>
+          <button onClick={()=>toggle(p.id)} disabled={busy===p.id} className={`text-xs px-3 py-1.5 rounded-lg font-semibold shrink-0 ${on?'bg-emerald-100 text-emerald-700 hover:bg-emerald-200':'bg-slate-100 text-slate-600 hover:bg-slate-200'} disabled:opacity-50`}>{busy===p.id?'…':(on?'✓ Enrolled':'+ Add')}</button>
+        </div>
+      ); })}
+      {people.length===0 && <div className="px-3 py-6 text-center text-slate-400 text-sm">No people match.</div>}
+    </div>
+    <div className="flex justify-end pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold">Done</button></div>
+  </div></Modal>);
+}
+function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, reloadParticipants }){
   const canEdit = trainingCanEdit(profile);
+  const isAdmin = profile.role==='admin';
+  const [showAccess,setShowAccess]=useState(false);
   const me = profile.id;
   const [modules,setModules]=useState([]);
   const [lessons,setLessons]=useState([]);
@@ -3740,8 +3773,12 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack }){
     <div className="p-6">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
         <div><h1 className="text-2xl font-bold">🎓 Training</h1><p className="text-slate-500 text-sm">Learning modules &amp; onboarding · read the lessons and mark each complete</p></div>
-        {canEdit && <button onClick={()=>setCreatingMod(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New module</button>}
+        <div className="flex items-center gap-2">
+          {isAdmin && <button onClick={()=>setShowAccess(true)} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">👥 Manage access</button>}
+          {canEdit && <button onClick={()=>setCreatingMod(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New module</button>}
+        </div>
       </div>
+      {showAccess && <TrainingAccessModal profile={profile} profiles={profiles} participants={participants} reloadParticipants={reloadParticipants} onClose={()=>setShowAccess(false)} />}
       {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : modules.length===0 ? (
         <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No training modules yet.{canEdit?' Click "+ New module" to create one.':''}</div>
       ) : (
@@ -39106,6 +39143,11 @@ function App(){
   const [patternWorklist,setPatternWorklist]=useState([]);
   const [cuttingWorklist,setCuttingWorklist]=useState([]);
   const [replacementPending,setReplacementPending]=useState(0);
+  // Training is invite-only: hidden from everyone except admins and the people
+  // explicitly added to the participant list.
+  const [trainingParticipants,setTrainingParticipants]=useState([]);
+  const reloadTrainingParticipants=React.useCallback(async()=>{ try{ const { data }=await sb.from('training_participants').select('user_id'); setTrainingParticipants((data||[]).map(r=>r.user_id)); }catch(_){} },[]);
+  useEffect(()=>{ if(session) reloadTrainingParticipants(); },[session, reloadTrainingParticipants]);
   const [qcReports,setQcReports]=useState([]);
   const [extraExpenseCats,setExtraExpenseCats]=useState([]);
   const [styles,setStyles]=useState([]);
@@ -39532,10 +39574,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing','training']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing','training']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -39634,11 +39676,13 @@ function App(){
     if(allowed.has('logistics')) allowed.add('trip-tickets');
     // Anyone can open the evaluations HR assigned to them to rate.
     allowed.add('my-evals');
+    // Training is invite-only — grant it only to enrolled participants.
+    if((trainingParticipants||[]).includes(profile.id)) allowed.add('training');
     // Manual Purchase Request intake lives in the Sales module — only sales
     // managers + sales assistants (and admin, who is unrestricted) may open it.
     if(profile.role==='manager' || profile.role==='assistant') allowed.add('pr-request');
     if(!allowed.has(view)) setView(fallback);
-  },[profile, view]);
+  },[profile, view, trainingParticipants]);
 
   // Landing view: sales assistants open (and refresh) straight into the Sales
   // Ticket queue instead of the pipeline. Runs once when their profile loads,
@@ -40072,6 +40116,8 @@ function App(){
   const isHR=profile.role==='hr';
   const isLogistics=profile.role==='logistics';
   const isVideoEditor=profile.role==='video_editor';
+  // Admins always see Training (to manage it); everyone else only if enrolled.
+  const isTrainingParticipant = profile.role==='admin' || (trainingParticipants||[]).includes(profile.id);
   const isPatternMaker=profile.role==='pattern_maker';
   const isCuttingDept=profile.role==='cutting_dept';
   const isQc=profile.role==='qc';
@@ -40298,7 +40344,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -40315,7 +40361,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -40329,7 +40375,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -40347,6 +40393,10 @@ function App(){
   // Inbox / My Tasks (the first, ungrouped items block) for every role that has
   // a profile view. Roles without a profile (e.g. Logistics) are untouched.
   if(Array.isArray(NAV)){
+    // Training is invite-only — show it only to admins and enrolled participants.
+    if(isTrainingParticipant && !NAV.some(g=> (g.items||[]).some(it=>it[0]==='training'))){
+      NAV = [...NAV, { group:'Learning', items:[ ['training','Training','🎓'] ] }];
+    }
     const hadPersonal = NAV.some(g=> g.group==='Personal');
     NAV = NAV.filter(g=> g.group!=='Personal');
     if(hadPersonal && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='profile')){
@@ -40514,7 +40564,7 @@ function App(){
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
-        {view==='training' && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} />}
+        {view==='training' && isTrainingParticipant && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} participants={trainingParticipants} reloadParticipants={reloadTrainingParticipants} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
