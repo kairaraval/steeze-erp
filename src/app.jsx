@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 558 · Techpack Size Guide library now mirrors Sales → Resources → Size Charts (single master set). New charts added in Sales Resources appear here automatically; saving from the techpack also lands in the shared library.";
+const BUILD = "Live build 559 · Techpack size-chart picker now has category tabs (All / Traditional / Sublimation / Internal), matching the Sales Resources folders.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22695,6 +22695,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   // pickingChart is null when closed, or a slot key ('chartImage'|'chartImage2')
   // identifying which image slot the library pick should populate.
   const [pickingChart,setPickingChart]=useState(null);
+  const [chartTab,setChartTab]=useState(''); // '' = All; else a size-chart folder
   // Inventory library picker for the Materials / Trims sections — pull an item's
   // name + photo straight from Inventory. pickInv holds { section, index } of the
   // column to fill; invItems is the (photo-bearing) inventory list.
@@ -23381,10 +23382,17 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         </div>
       ) : null}
 
-      {pickingChart && <Modal title={`Pick size chart for ${pickingChart==='chartImage2'?'Photo 2':'Photo 1'}`} onClose={()=>setPickingChart(null)} wide>
+      {pickingChart && (()=>{
+       const catTabs = Array.from(new Set([ ...(RES_FOLDERS.size_charts||['TRADITIONAL','SUBLIMATION','INTERNAL (RM)']), ...libCharts.map(c=>c.garment_type).filter(Boolean) ]));
+       const shownCharts = libCharts.filter(c=> !chartTab || (c.garment_type||'')===chartTab);
+       return <Modal title={`Pick size chart for ${pickingChart==='chartImage2'?'Photo 2':'Photo 1'}`} onClose={()=>setPickingChart(null)} wide>
         <div className="text-[11px] text-slate-500 mb-2">Mirrored from Sales → Resources → Size Charts. To add or remove charts, manage them there.</div>
+        <div className="flex gap-1.5 flex-wrap mb-3">
+          <button onClick={()=>setChartTab('')} className={`text-xs px-3 py-1.5 rounded-lg font-semibold ${chartTab===''?'bg-indigo-600 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>All ({libCharts.length})</button>
+          {catTabs.map(t=>{ const n=libCharts.filter(c=>(c.garment_type||'')===t).length; return <button key={t} onClick={()=>setChartTab(t)} className={`text-xs px-3 py-1.5 rounded-lg font-semibold ${chartTab===t?'bg-indigo-600 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{t} ({n})</button>; })}
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {libCharts.map(c=>(
+          {shownCharts.map(c=>(
             <div key={c.id} className="border rounded-lg p-3 bg-white hover:border-indigo-500">
               <button onClick={()=>applyChart(c)} className="w-full text-left">
                 <div className="font-semibold text-sm">{c.name}</div>
@@ -23394,9 +23402,9 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               <div className="mt-2"><button onClick={()=>applyChart(c)} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Use this</button></div>
             </div>
           ))}
-          {libCharts.length===0 && <div className="col-span-3 text-center text-slate-400 py-8 text-sm">No size charts in Sales Resources yet. Add them in Sales → Resources → Size Charts and they'll appear here.</div>}
+          {shownCharts.length===0 && <div className="col-span-3 text-center text-slate-400 py-8 text-sm">{libCharts.length===0?'No size charts in Sales Resources yet. Add them in Sales → Resources → Size Charts and they\'ll appear here.':'No charts in this category.'}</div>}
         </div>
-      </Modal>}
+      </Modal>; })()}
 
       {pickInv && <Modal title="📦 Pick from inventory" onClose={()=>setPickInv(null)} wide>
         <div className="space-y-3">
