@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 554 · Techpack: new optional Design Canvas on Garment Details & Collar & Cuffs — a Canva-style editor to add text boxes, rectangles, circles, lines & arrows (with color fill) on a blank canvas or over an uploaded photo. Prints as its own page.";
+const BUILD = "Live build 555 · Techpack Design Canvas now fills the full page width in the preview/print (was rendering small in a corner).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22621,7 +22621,7 @@ function DesignCanvas({ value, onChange, readOnly }){
   function arrow_head(el){ const dx=el.x2-el.x1, dy=el.y2-el.y1; const len=Math.hypot(dx,dy)||1; const ux=dx/len, uy=dy/len; const size=12+(el.strokeW||3)*2.2; const bx=el.x2-ux*size, by=el.y2-uy*size; const px=-uy, py=ux; const half=size*0.55; return <polygon points={`${el.x2},${el.y2} ${bx+px*half},${by+py*half} ${bx-px*half},${by-py*half}`} fill={el.stroke} pointerEvents="none" />; }
 
   return (
-    <div>
+    <div style={{ width:'100%' }}>
       {!readOnly && (
         <div className="flex items-center gap-1.5 flex-wrap mb-2 p-2 bg-slate-100 rounded-lg no-print">
           {TOOLS.map(([k,ic,lbl])=>(
@@ -23443,7 +23443,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               if(cv && cv.enabled && ((Array.isArray(cv.els)&&cv.els.length) || cv.bg)){
                 n++;
                 pages.push(<TpPageFrame key={domKey+'-canvas'} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+' — DESIGN'+(isCopy?' (COPY)':'')}>
-                  <div style={{flex:1, display:'flex', padding:'10px', minHeight:0}}><div style={{flex:1, display:'flex', alignItems:'center'}}><DesignCanvas value={cv} readOnly /></div></div>
+                  <div style={{flex:1, padding:'12px', minHeight:0, display:'flex', flexDirection:'column', justifyContent:'center'}}><DesignCanvas value={cv} readOnly /></div>
                 </TpPageFrame>);
               }
             };
