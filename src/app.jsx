@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 555 · Techpack Design Canvas now fills the full page width in the preview/print (was rendering small in a corner).";
+const BUILD = "Live build 556 · Techpack Design Canvas: paste a photo (⌘V) to set it as the canvas background, in addition to the Upload button.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22584,7 +22584,11 @@ function DesignCanvas({ value, onChange, readOnly }){
   function elDown(e, el){ if(readOnly||tool!=='select') return; e.stopPropagation(); setSel(el.id); const p=evtPt(e); dragRef.current={ mode:'move', id:el.id, el:{...el}, px:p.x, py:p.y }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
   function handleDown(e, el, mode, handle){ if(readOnly) return; e.stopPropagation(); dragRef.current={ mode, id:el.id, el:{...el}, handle }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
 
-  async function uploadBg(e){ const f=e.target.files&&e.target.files[0]; if(!f) return; setUploading(true); try{ const dataUrl=await readFileAsDataUrl(f); const path=await uploadDataUrl('techpack/canvas', dataUrl); onChange({ ...v, bg:path }); }catch(err){ alert('Upload failed: '+(err.message||err)); } setUploading(false); e.target.value=''; }
+  async function setBgFromFile(f){ if(!f) return; setUploading(true); try{ const dataUrl=await readFileAsDataUrl(f); const path=await uploadDataUrl('techpack/canvas', dataUrl); onChange({ ...v, bg:path }); }catch(err){ alert('Upload failed: '+(err.message||err)); } setUploading(false); }
+  async function uploadBg(e){ const f=e.target.files&&e.target.files[0]; if(f) await setBgFromFile(f); e.target.value=''; }
+  // Paste a photo (⌘V) → set it as the canvas background. Skipped while editing a
+  // text box so text paste still works normally.
+  async function onPasteCanvas(e){ if(readOnly||editingId) return; const f=getPastedImage(e); if(!f) return; e.preventDefault(); await setBgFromFile(f); }
 
   const TOOLS = [['select','▹','Select'],['text','T','Text'],['rect','▭','Box'],['circle','◯','Circle'],['line','／','Line'],['arrow','↗','Arrow']];
   const renderEl = (el)=>{
@@ -22621,7 +22625,7 @@ function DesignCanvas({ value, onChange, readOnly }){
   function arrow_head(el){ const dx=el.x2-el.x1, dy=el.y2-el.y1; const len=Math.hypot(dx,dy)||1; const ux=dx/len, uy=dy/len; const size=12+(el.strokeW||3)*2.2; const bx=el.x2-ux*size, by=el.y2-uy*size; const px=-uy, py=ux; const half=size*0.55; return <polygon points={`${el.x2},${el.y2} ${bx+px*half},${by+py*half} ${bx-px*half},${by-py*half}`} fill={el.stroke} pointerEvents="none" />; }
 
   return (
-    <div style={{ width:'100%' }}>
+    <div style={{ width:'100%' }} tabIndex={readOnly?undefined:0} onPaste={readOnly?undefined:onPasteCanvas}>
       {!readOnly && (
         <div className="flex items-center gap-1.5 flex-wrap mb-2 p-2 bg-slate-100 rounded-lg no-print">
           {TOOLS.map(([k,ic,lbl])=>(
@@ -22632,7 +22636,7 @@ function DesignCanvas({ value, onChange, readOnly }){
           <label className="flex items-center gap-1 text-[11px] text-slate-600" title="Fill"><input type="checkbox" checked={selEl?selEl.fill&&selEl.fill!=='none':useFill} onChange={e=>{ const on=e.target.checked; setUseFill(on); applyStyle({fill:on?fill:'none'}); }} />Fill<input type="color" value={fill} onChange={e=>{ setFill(e.target.value); setUseFill(true); applyStyle({fill:e.target.value}); }} className="w-7 h-7 rounded border p-0" /></label>
           <label className="flex items-center gap-1 text-[11px] text-slate-600" title="Font size">A<input type="number" min="8" max="120" value={selEl&&selEl.type==='text'?selEl.fontSize:fontSize} onChange={e=>{ const n=Number(e.target.value)||26; setFontSize(n); if(selEl&&selEl.type==='text') updEl(selEl.id,{fontSize:n}); }} className="w-14 input" /></label>
           <div className="w-px h-6 bg-slate-300 mx-1" />
-          <button onClick={()=>fileRef.current&&fileRef.current.click()} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-600 hover:bg-slate-50">{uploading?'Uploading…':(v.bg?'Change photo':'Upload photo')}</button>
+          <button onClick={()=>fileRef.current&&fileRef.current.click()} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-600 hover:bg-slate-50" title="Upload or paste (⌘V) a background photo">{uploading?'Uploading…':(v.bg?'Change photo':'Upload / paste photo')}</button>
           {v.bg && <button onClick={()=>onChange({...v, bg:''})} className="text-xs px-2 py-1.5 rounded-md text-rose-500 hover:bg-rose-50">Remove photo</button>}
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={uploadBg} />
           {sel && <button onClick={()=>removeEl(sel)} className="text-xs px-2.5 py-1.5 rounded-md bg-rose-500 text-white ml-auto">🗑 Delete</button>}
@@ -22643,7 +22647,7 @@ function DesignCanvas({ value, onChange, readOnly }){
         {v.bg && <DesignCanvasBg path={v.bg} />}
         {els.map(renderEl)}
       </svg>
-      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick a tool, then drag on the canvas to draw. Double-click a text box to edit. Select a shape to move, resize (corner handle), recolor, or delete.</div>}
+      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick a tool, then drag on the canvas to draw. Double-click a text box to edit. Select a shape to move, resize (corner handle), recolor, or delete. Paste (⌘V) or upload a photo to use as the background.</div>}
     </div>
   );
 }
