@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 559 · Techpack size-chart picker now has category tabs (All / Traditional / Sublimation / Internal), matching the Sales Resources folders.";
+const BUILD = "Live build 560 · New Training module (Sales nav) — learning modules with lessons, per-person progress tracking, and admin/manager editing. Seeded with a full 'How to Build a Techpack' course (11 lessons + checklist).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3621,6 +3621,163 @@ function PricingView({ profile }){
         <div className="text-[11px] text-slate-400">Seeded from your past estimates (medians). Rows noted “CONFIRM” were bundled into old prices — verify. Base prices assume standard construction incl. 1 logo unless the fabric note says otherwise.</div>
       </div>
       )}
+    </div>
+  );
+}
+
+// ── Training / Academy ─────────────────────────────────────────────────────
+// Safe markdown → React renderer (headings, **bold**, bullet / numbered lists,
+// paragraphs). No dangerouslySetInnerHTML — builds real React nodes.
+function MiniMarkdown({ text }){
+  const lines = String(text||'').replace(/\r/g,'').split('\n');
+  const out=[]; let list=null; let listType=null; let key=0;
+  const inline=(s)=>{ const parts=[]; const re=/\*\*([^*]+)\*\*/g; let last=0, mm, i=0; while((mm=re.exec(s))){ if(mm.index>last) parts.push(s.slice(last,mm.index)); parts.push(<strong key={'b'+(i++)}>{mm[1]}</strong>); last=re.lastIndex; } if(last<s.length) parts.push(s.slice(last)); return parts.length?parts:s; };
+  const flush=()=>{ if(list){ out.push(listType==='ol'?<ol key={key++} className="list-decimal ml-5 space-y-1 my-2">{list}</ol>:<ul key={key++} className="list-disc ml-5 space-y-1 my-2">{list}</ul>); list=null; listType=null; } };
+  lines.forEach((ln)=>{ const t=ln.trimEnd(); let m;
+    if(/^###\s+/.test(t)){ flush(); out.push(<h4 key={key++} className="font-bold text-slate-800 mt-3 mb-1">{inline(t.replace(/^###\s+/,''))}</h4>); return; }
+    if(/^##\s+/.test(t)){ flush(); out.push(<h3 key={key++} className="font-bold text-lg text-slate-900 mt-4 mb-1">{inline(t.replace(/^##\s+/,''))}</h3>); return; }
+    if(/^#\s+/.test(t)){ flush(); out.push(<h2 key={key++} className="font-extrabold text-xl text-slate-900 mt-4 mb-2">{inline(t.replace(/^#\s+/,''))}</h2>); return; }
+    if((m=t.match(/^\s*[-*]\s+(.*)/))){ if(listType!=='ul'){ flush(); listType='ul'; list=[]; } list.push(<li key={key++}>{inline(m[1])}</li>); return; }
+    if((m=t.match(/^\s*\d+\.\s+(.*)/))){ if(listType!=='ol'){ flush(); listType='ol'; list=[]; } list.push(<li key={key++}>{inline(m[1])}</li>); return; }
+    if(t.trim()===''){ flush(); return; }
+    flush(); out.push(<p key={key++} className="my-1.5 leading-relaxed">{inline(t)}</p>);
+  });
+  flush();
+  return <div className="text-sm text-slate-700">{out}</div>;
+}
+function trainingCanEdit(p){ return p?.role==='admin' || p?.role==='manager'; }
+function TrainingModuleModal({ profile, existing, nextPos, onClose, onSaved }){
+  const [f,setF]=useState({ title:existing?.title||'', description:existing?.description||'', icon:existing?.icon||'🎓' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){ if(!f.title.trim()){ setMsg('Title required.'); return; } setBusy(true);
+    try{ const payload={ title:f.title.trim(), description:f.description||null, icon:f.icon||'🎓' };
+      if(existing){ await sb.from('training_modules').update({...payload, updated_at:new Date().toISOString()}).eq('id',existing.id); }
+      else { await sb.from('training_modules').insert({...payload, position:nextPos||0, created_by:profile.id}); }
+      setBusy(false); onSaved&&onSaved(); }catch(e){ setBusy(false); setMsg(e.message||String(e)); } }
+  return (<Modal title={existing?'Edit module':'+ New module'} onClose={onClose}><div className="space-y-3 text-sm">
+    <div className="flex gap-2"><div className="w-16"><label className="text-xs font-semibold text-slate-500">Icon</label><input value={f.icon} onChange={e=>setF({...f,icon:e.target.value})} className="w-full border rounded px-2 py-1.5 text-center" /></div><div className="flex-1"><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>setF({...f,title:e.target.value})} className="w-full border rounded px-2 py-1.5" placeholder="e.g. How to Build a Techpack" /></div></div>
+    <div><label className="text-xs font-semibold text-slate-500">Description</label><textarea value={f.description} onChange={e=>setF({...f,description:e.target.value})} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+    {msg&&<div className="text-xs text-rose-600">{msg}</div>}
+    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
+  </div></Modal>);
+}
+function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, onSaved }){
+  const [f,setF]=useState({ title:existing?.title||'', body:existing?.body||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){ if(!f.title.trim()){ setMsg('Title required.'); return; } setBusy(true);
+    try{ const payload={ title:f.title.trim(), body:f.body||'' };
+      if(existing){ await sb.from('training_lessons').update({...payload, updated_at:new Date().toISOString()}).eq('id',existing.id); }
+      else { await sb.from('training_lessons').insert({...payload, module_id:moduleId, position:nextPos||0}); }
+      setBusy(false); onSaved&&onSaved(); }catch(e){ setBusy(false); setMsg(e.message||String(e)); } }
+  return (<Modal title={existing?'Edit lesson':'+ New lesson'} onClose={onClose} wide><div className="space-y-3 text-sm">
+    <div><label className="text-xs font-semibold text-slate-500">Lesson title *</label><input value={f.title} onChange={e=>setF({...f,title:e.target.value})} className="w-full border rounded px-2 py-1.5" /></div>
+    <div><label className="text-xs font-semibold text-slate-500">Content <span className="font-normal text-slate-400">· Markdown: # heading, - bullet, 1. numbered, **bold**</span></label><textarea value={f.body} onChange={e=>setF({...f,body:e.target.value})} rows={16} className="w-full border rounded px-2 py-1.5 font-mono text-xs" /></div>
+    {f.body && <div className="border rounded-lg p-3 bg-slate-50"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Preview</div><MiniMarkdown text={f.body} /></div>}
+    {msg&&<div className="text-xs text-rose-600">{msg}</div>}
+    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
+  </div></Modal>);
+}
+function TrainingView({ profile, profiles }){
+  const canEdit = trainingCanEdit(profile);
+  const me = profile.id;
+  const [modules,setModules]=useState([]);
+  const [lessons,setLessons]=useState([]);
+  const [myDone,setMyDone]=useState(new Set());
+  const [teamProg,setTeamProg]=useState([]);
+  const [activeMod,setActiveMod]=useState(null);
+  const [activeLesson,setActiveLesson]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [editMod,setEditMod]=useState(null); const [creatingMod,setCreatingMod]=useState(false);
+  const [editLesson,setEditLesson]=useState(null); const [creatingLesson,setCreatingLesson]=useState(false);
+  const [showTeam,setShowTeam]=useState(false);
+  async function loadModules(){ setLoading(true); const { data }=await sb.from('training_modules').select('*').is('deleted_at',null).order('position').order('created_at'); const mods=data||[]; setModules(mods); setLoading(false); if(mods.length && !activeMod) selectModule(mods[0]); }
+  async function selectModule(m){ setActiveMod(m); setActiveLesson(null); setShowTeam(false);
+    const { data:ls }=await sb.from('training_lessons').select('*').eq('module_id',m.id).is('deleted_at',null).order('position').order('created_at');
+    const lessonRows=ls||[]; setLessons(lessonRows);
+    const ids=lessonRows.map(l=>l.id);
+    if(ids.length){ const { data:pg }=await sb.from('training_progress').select('*').in('lesson_id',ids); const all=pg||[]; setMyDone(new Set(all.filter(p=>p.user_id===me).map(p=>p.lesson_id))); setTeamProg(all); }
+    else { setMyDone(new Set()); setTeamProg([]); }
+  }
+  useEffect(()=>{ loadModules(); },[]);
+  async function toggleDone(lesson){ const done=myDone.has(lesson.id);
+    if(done){ await sb.from('training_progress').delete().eq('lesson_id',lesson.id).eq('user_id',me); }
+    else { await sb.from('training_progress').upsert({ lesson_id:lesson.id, user_id:me, completed_at:new Date().toISOString() }, { onConflict:'lesson_id,user_id' }); }
+    selectModule(activeMod);
+  }
+  async function delModule(m){ if(!confirm(`Delete module "${m.title}" and its lessons?`)) return; await sb.from('training_modules').update({deleted_at:new Date().toISOString()}).eq('id',m.id); await sb.from('training_lessons').update({deleted_at:new Date().toISOString()}).eq('module_id',m.id); setActiveMod(null); setLessons([]); loadModules(); }
+  async function delLesson(l){ if(!confirm(`Delete lesson "${l.title}"?`)) return; await sb.from('training_lessons').update({deleted_at:new Date().toISOString()}).eq('id',l.id); if(activeLesson&&activeLesson.id===l.id) setActiveLesson(null); selectModule(activeMod); }
+  async function moveLesson(l,dir){ const idx=lessons.findIndex(x=>x.id===l.id); const j=idx+dir; if(j<0||j>=lessons.length) return; const a=lessons[idx], b=lessons[j]; await sb.from('training_lessons').update({position:j}).eq('id',a.id); await sb.from('training_lessons').update({position:idx}).eq('id',b.id); selectModule(activeMod); }
+  const total=lessons.length; const done=lessons.filter(l=>myDone.has(l.id)).length; const pct=total?Math.round(done/total*100):0;
+  const teamRoster=(()=>{ const m={}; teamProg.forEach(p=>{ m[p.user_id]=(m[p.user_id]||0)+1; }); return (profiles||[]).map(pf=>({ pf, n:m[pf.id]||0 })).filter(r=>r.n>0||canEdit).sort((a,b)=>b.n-a.n); })();
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div><h1 className="text-2xl font-bold">🎓 Training</h1><p className="text-slate-500 text-sm">Learning modules &amp; onboarding · read the lessons and mark each complete</p></div>
+        {canEdit && <button onClick={()=>setCreatingMod(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New module</button>}
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : modules.length===0 ? (
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No training modules yet.{canEdit?' Click "+ New module" to create one.':''}</div>
+      ) : (
+        <div className="grid md:grid-cols-[280px_1fr] gap-4">
+          {/* Left: modules + lessons */}
+          <div className="space-y-3">
+            <div className="bg-white border rounded-xl overflow-hidden">
+              {modules.map(m=>(
+                <button key={m.id} onClick={()=>selectModule(m)} className={`w-full text-left px-3 py-2.5 border-b last:border-0 hover:bg-slate-50 ${activeMod&&activeMod.id===m.id?'bg-indigo-50':''}`}>
+                  <div className="font-semibold text-sm text-slate-800">{m.icon} {m.title}</div>
+                  {m.description && <div className="text-[11px] text-slate-500 line-clamp-2">{m.description}</div>}
+                </button>
+              ))}
+            </div>
+            {activeMod && (
+              <div className="bg-white border rounded-xl p-3">
+                <div className="flex items-center justify-between mb-2"><div className="text-xs font-bold uppercase text-slate-500">Lessons</div>{canEdit && <button onClick={()=>setCreatingLesson(true)} className="text-xs text-indigo-600 font-semibold">+ Add</button>}</div>
+                <div className="mb-2"><div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}}></div></div><div className="text-[11px] text-slate-500 mt-1">{done}/{total} complete ({pct}%)</div></div>
+                <div className="space-y-1">
+                  {lessons.map((l,i)=>(
+                    <div key={l.id} className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 ${activeLesson&&activeLesson.id===l.id?'bg-indigo-50':'hover:bg-slate-50'}`}>
+                      <span className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center text-[10px] ${myDone.has(l.id)?'bg-emerald-500 text-white':'border border-slate-300'}`}>{myDone.has(l.id)?'✓':''}</span>
+                      <button onClick={()=>setActiveLesson(l)} className="flex-1 text-left text-sm text-slate-700 truncate">{i+1}. {l.title}</button>
+                      {canEdit && <><button onClick={()=>moveLesson(l,-1)} className="text-slate-300 hover:text-slate-600 text-xs">↑</button><button onClick={()=>moveLesson(l,1)} className="text-slate-300 hover:text-slate-600 text-xs">↓</button></>}
+                    </div>
+                  ))}
+                  {lessons.length===0 && <div className="text-xs text-slate-400 py-2">No lessons yet.</div>}
+                </div>
+                {canEdit && <div className="flex gap-2 mt-3 pt-2 border-t"><button onClick={()=>setEditMod(activeMod)} className="text-[11px] text-slate-500 hover:underline">Edit module</button><button onClick={()=>setShowTeam(s=>!s)} className="text-[11px] text-indigo-600 hover:underline">{showTeam?'Hide':'Team'} progress</button><button onClick={()=>delModule(activeMod)} className="text-[11px] text-rose-500 hover:underline ml-auto">Delete</button></div>}
+              </div>
+            )}
+          </div>
+          {/* Right: lesson reader / team progress */}
+          <div className="bg-white border rounded-xl p-5 min-h-[300px]">
+            {showTeam ? (
+              <div>
+                <div className="font-bold text-slate-900 mb-3">Team progress · {activeMod?.title}</div>
+                <table className="w-full text-sm"><tbody>
+                  {teamRoster.map(r=>{ const rp=teamProg.filter(p=>p.user_id===r.pf.id).length; return (<tr key={r.pf.id} className="border-b last:border-0"><td className="py-2">{r.pf.name||r.pf.email}</td><td className="py-2 text-right"><span className="text-slate-500 mr-2">{rp}/{total}</span><span className={`text-xs font-semibold ${rp>=total&&total>0?'text-emerald-600':'text-slate-400'}`}>{total?Math.round(rp/total*100):0}%</span></td></tr>); })}
+                  {teamRoster.length===0 && <tr><td className="py-4 text-slate-400 text-sm">No one has started yet.</td></tr>}
+                </tbody></table>
+              </div>
+            ) : activeLesson ? (
+              <div>
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <h2 className="text-xl font-bold text-slate-900">{activeLesson.title}</h2>
+                  {canEdit && <div className="flex gap-2 shrink-0"><button onClick={()=>setEditLesson(activeLesson)} className="text-xs text-slate-500 hover:underline">Edit</button><button onClick={()=>delLesson(activeLesson)} className="text-xs text-rose-500 hover:underline">Delete</button></div>}
+                </div>
+                <MiniMarkdown text={activeLesson.body} />
+                <div className="mt-5 pt-3 border-t">
+                  <button onClick={()=>toggleDone(activeLesson)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${myDone.has(activeLesson.id)?'bg-emerald-100 text-emerald-700':'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{myDone.has(activeLesson.id)?'✓ Completed — mark as not done':'Mark this lesson complete'}</button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-slate-400 text-sm flex items-center justify-center h-full py-16 text-center">{activeMod?'Select a lesson on the left to start reading.':'Select a module.'}</div>
+            )}
+          </div>
+        </div>
+      )}
+      {creatingMod && <TrainingModuleModal profile={profile} nextPos={modules.length} onClose={()=>setCreatingMod(false)} onSaved={()=>{ setCreatingMod(false); loadModules(); }} />}
+      {editMod && <TrainingModuleModal profile={profile} existing={editMod} onClose={()=>setEditMod(null)} onSaved={()=>{ setEditMod(null); loadModules(); }} />}
+      {creatingLesson && activeMod && <TrainingLessonModal profile={profile} moduleId={activeMod.id} nextPos={lessons.length} onClose={()=>setCreatingLesson(false)} onSaved={()=>{ setCreatingLesson(false); selectModule(activeMod); }} />}
+      {editLesson && <TrainingLessonModal profile={profile} moduleId={activeMod.id} existing={editLesson} onClose={()=>setEditLesson(null)} onSaved={()=>{ setEditLesson(null); selectModule(activeMod); if(activeLesson&&activeLesson.id===editLesson.id) setActiveLesson({...activeLesson}); }} />}
     </div>
   );
 }
@@ -39340,10 +39497,10 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing','training']);
       fallback = 'pipeline';
     } else if(profile.role==='manager'){
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing','training']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -40106,7 +40263,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -40123,7 +40280,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -40137,7 +40294,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['training','Training','🎓'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -40322,6 +40479,7 @@ function App(){
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
+        {view==='training' && <TrainingView profile={profile} profiles={profiles} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
