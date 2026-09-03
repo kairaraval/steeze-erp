@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 566 · Marketing content editor now shows the Team conversation in a column on the right (beside the fields) instead of below, so it's easy to see while editing.";
+const BUILD = "Live build 567 · Marketing content editor is now wider (xwide) so the content fields, Notes box, and right-side Team conversation all have more room.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17130,8 +17130,8 @@ function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onS
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title={isEdit?'Edit content':'+ New content'} onClose={onClose} wide>
-      <div className="grid lg:grid-cols-[1fr_360px] gap-4 text-sm items-start">
+    <Modal title={isEdit?'Edit content':'+ New content'} onClose={onClose} xwide>
+      <div className="grid lg:grid-cols-[1fr_400px] gap-5 text-sm items-start">
         <div className="space-y-3 min-w-0">
         <div><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "New Collection teaser — carousel"' /></div>
         <div className="grid grid-cols-3 gap-3">
