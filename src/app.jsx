@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 563 · Training is now invite-only — hidden from everyone by default. Admins use 'Manage access' to enroll exactly who can see and take the training.";
+const BUILD = "Live build 564 · Steeze 101 orientation lessons now show the actual deck slides as images (embedded as static assets), so the module looks like the presentation. Lesson images can be storage paths, data/http URLs, or root-relative assets.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3629,8 +3629,11 @@ function PricingView({ profile }){
 // Signed-URL image for lesson content (stored as a storage path so links never
 // expire in saved lessons).
 function LessonImg({ path }){
-  const [u,setU]=useState('');
-  useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on) setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]);
+  // Accept a storage path (signed on the fly), OR an already-usable URL:
+  // data:… , http(s):… , or a root-relative static asset like /training-assets/…
+  const direct = /^(data:|https?:|\/)/i.test(path||'');
+  const [u,setU]=useState(()=> direct ? path : '');
+  useEffect(()=>{ let on=true; if(!path){ setU(''); return; } if(/^(data:|https?:|\/)/i.test(path)){ setU(path); return () => { on=false; }; } signedUrl(path).then(x=>{ if(on) setU(x); }).catch(()=>{}); return ()=>{on=false;}; },[path]);
   if(!u) return <div className="my-3 h-40 bg-slate-100 border rounded-lg flex items-center justify-center text-slate-300 text-xs">loading image…</div>;
   return <img src={u} alt="" className="my-3 w-full rounded-lg border shadow-sm" />;
 }
