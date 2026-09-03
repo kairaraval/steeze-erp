@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 568 · For Approval → HR Memos: Management can now Return a memo to HR (with a note) for checking, or Cancel it, not just approve. HR sees the return note on the memo card.";
+const BUILD = "Live build 569 · Load resilience: the profile fetch uses maybeSingle so a transient 0/2-row read can't blank the whole app (e.g. Production Board showing 0 jobs with a 'cannot coerce' error). Fresh build to recover the /app.js load.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39381,7 +39381,7 @@ function App(){
     // below resolve (several seconds), because profile is only set after the
     // whole Promise.all. This fires the profile fetch on its own so the gate
     // clears in ~150ms; the rest of the data then fills in behind it.
-    if(!profile){ sb.from('profiles').select('*').eq('id',me).single().then(r=>{ if(r.data) setProfile(r.data); }).catch(()=>{}); }
+    if(!profile){ sb.from('profiles').select('*').eq('id',me).maybeSingle().then(r=>{ if(r.data) setProfile(r.data); }).catch(()=>{}); }
     // Also stream the essentials the default Pipeline / Dashboard need so cards
     // show in well under a second instead of after the full Promise.all. These
     // are re-fetched (identically) in the batch below — harmless idempotent set.
@@ -39402,7 +39402,7 @@ function App(){
     sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
     sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
-      sb.from('profiles').select('*').eq('id',me).single(),
+      sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate'),
       sb.from('clients').select('*').order('company'),
       sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
@@ -39592,7 +39592,7 @@ function App(){
       // the boot self-heal: fetch the profile on its own (so the gate can clear)
       // and auto-retry the full load a few times with backoff.
       setLoadErr(String(e?.message||e));
-      try { const me=session?.user?.id; if(me && !profile){ const { data }=await sb.from('profiles').select('*').eq('id',me).single(); if(data) setProfile(data); } } catch(_){}
+      try { const me=session?.user?.id; if(me && !profile){ const { data }=await sb.from('profiles').select('*').eq('id',me).maybeSingle(); if(data) setProfile(data); } } catch(_){}
       if((loadRetries.current||0) < 4){ loadRetries.current=(loadRetries.current||0)+1; setTimeout(()=>loadAll(), 2000*loadRetries.current); }
     } finally {
       loadAllBusy.current = false;
