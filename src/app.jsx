@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 560 · New Training module (Sales nav) — learning modules with lessons, per-person progress tracking, and admin/manager editing. Seeded with a full 'How to Build a Techpack' course (11 lessons + checklist).";
+const BUILD = "Live build 561 · Training lessons can embed a live sample techpack ([[TECHPACK:id]]) — the techpack course now opens the real Ayala Land RBG polo techpack so trainees can page through an actual approved example.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3677,7 +3677,7 @@ function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, on
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
-function TrainingView({ profile, profiles }){
+function TrainingView({ profile, profiles, leads, onOpenTechpack }){
   const canEdit = trainingCanEdit(profile);
   const me = profile.id;
   const [modules,setModules]=useState([]);
@@ -3757,18 +3757,26 @@ function TrainingView({ profile, profiles }){
                   {teamRoster.length===0 && <tr><td className="py-4 text-slate-400 text-sm">No one has started yet.</td></tr>}
                 </tbody></table>
               </div>
-            ) : activeLesson ? (
+            ) : activeLesson ? (()=>{
+              // A lesson can embed a live sample techpack via [[TECHPACK:<leadId>]].
+              const mt=(activeLesson.body||'').match(/\[\[TECHPACK:([0-9a-fA-F-]+)\]\]/);
+              const sampleLead = mt && (leads||[]).find(l=>l.id===mt[1]);
+              const cleanBody=(activeLesson.body||'').replace(/\[\[TECHPACK:[0-9a-fA-F-]+\]\]/g,'').trim();
+              return (
               <div>
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <h2 className="text-xl font-bold text-slate-900">{activeLesson.title}</h2>
                   {canEdit && <div className="flex gap-2 shrink-0"><button onClick={()=>setEditLesson(activeLesson)} className="text-xs text-slate-500 hover:underline">Edit</button><button onClick={()=>delLesson(activeLesson)} className="text-xs text-rose-500 hover:underline">Delete</button></div>}
                 </div>
-                <MiniMarkdown text={activeLesson.body} />
+                <MiniMarkdown text={cleanBody} />
+                {mt && (sampleLead
+                  ? <button onClick={()=>onOpenTechpack&&onOpenTechpack(sampleLead)} className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 Open the sample techpack — {sampleLead.title} <span className="opacity-80">(all pages)</span></button>
+                  : <div className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">The linked sample techpack isn't available right now.</div>)}
                 <div className="mt-5 pt-3 border-t">
                   <button onClick={()=>toggleDone(activeLesson)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${myDone.has(activeLesson.id)?'bg-emerald-100 text-emerald-700':'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{myDone.has(activeLesson.id)?'✓ Completed — mark as not done':'Mark this lesson complete'}</button>
                 </div>
               </div>
-            ) : (
+              ); })() : (
               <div className="text-slate-400 text-sm flex items-center justify-center h-full py-16 text-center">{activeMod?'Select a lesson on the left to start reading.':'Select a module.'}</div>
             )}
           </div>
@@ -40479,7 +40487,7 @@ function App(){
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} />}
-        {view==='training' && <TrainingView profile={profile} profiles={profiles} />}
+        {view==='training' && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='knitting' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Knitting" icon="🧶" table="knitting_jobs" jobType="knitting" statuses={KNITTING_STATUSES} doneStatuses={KNITTING_DONE} jobs={knittingJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
