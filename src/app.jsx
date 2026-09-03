@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 557 · Techpack: Garment Details / Collar & Cuffs no longer print a blank base page when empty — if there's only a Design canvas, just that design page prints.";
+const BUILD = "Live build 558 · Techpack Size Guide library now mirrors Sales → Resources → Size Charts (single master set). New charts added in Sales Resources appear here automatically; saving from the techpack also lands in the shared library.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22702,16 +22702,23 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   const [pickInv,setPickInv]=useState(null);
   const [invSearch,setInvSearch]=useState('');
   useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('items').select('id,name,image_path,bucket,color,category,unit').order('name'); if(data) setInvItems(data); }catch(_){} })(); },[]);
+  // The Size Guide library MIRRORS Sales → Resources → Size Charts (the single
+  // master set the company uses). We read those rows live so any chart added in
+  // Sales Resources shows up here automatically, and normalize them to the shape
+  // the picker expects ({ id, name, garment_type, chart_image:<storage path> }).
+  const [libCharts,setLibCharts]=useState([]);
+  async function loadLibCharts(){ try{ const { data }=await sb.from('sales_resources').select('*').eq('category','size_charts').is('deleted_at',null).order('created_at',{ascending:false}); const isImg=(r)=>{ const ref=`${r.file_type||''} ${r.file_name||r.file_path||''}`.toLowerCase(); return r.file_path && (ref.includes('image') || /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif)(?:$|\?)/.test(ref)); }; setLibCharts((data||[]).filter(isImg).map(r=>({ id:r.id, name:r.title||r.file_name||'Size chart', garment_type:r.folder||'', chart_image:r.file_path||'' }))); }catch(_){} }
+  useEffect(()=>{ loadLibCharts(); },[]);
   async function saveChartToLibrary(){
-    const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return;
-    const garment=(prompt('Garment type (optional):')||'').trim();
     const s=tp.sizechart||{};
-    // We still save the legacy text fields so the library entry stays
-    // backward-compatible, but the editor no longer exposes them.
-    const { error }=await sb.from('size_charts').insert({ name, garment_type:garment, chart_image:s.chartImage||'', title_heading:s.titleHeading||'', fabric_note:s.fabricNote||'', footer_note1:s.footerNote1||'', footer_note2:s.footerNote2||'', created_by:profile.id });
+    if(!s.chartImage){ alert('Add a Photo 1 first, then save it to the library.'); return; }
+    const name=(prompt('Save this size chart as:')||'').trim(); if(!name) return;
+    const garment=(prompt('Garment type / folder (optional):')||'').trim();
+    // Save into the SAME store as Sales Resources so the two stay in sync.
+    const { error }=await sb.from('sales_resources').insert({ category:'size_charts', folder: garment||null, title:name, file_path:s.chartImage, file_name:name, file_type:'image', created_by:profile.id });
     if(error){ alert(error.message); return; }
-    alert('Saved "'+name+'" to library.');
-    reloadCharts&&reloadCharts();
+    alert('Saved "'+name+'" to the shared Size Charts library (Sales Resources).');
+    loadLibCharts();
   }
   function applyChart(c){
     // Only the image goes into the chosen slot — text metadata is no longer
@@ -22851,18 +22858,18 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         // from saved size-chart photos. Title heading / fabric note /
         // footer notes were removed — the printed page is just photos.
         <div className="space-y-3">
-          <div className="text-[10px] text-slate-500">Upload up to two photos. If only one is set, it'll print centered. Use the library buttons to pick from saved size charts.</div>
+          <div className="text-[10px] text-slate-500">Upload up to two photos. If only one is set, it'll print centered. The library mirrors <strong>Sales → Resources → Size Charts</strong> — add new charts there and they appear here automatically.</div>
           <div className="flex gap-2 flex-wrap">
-            <button onClick={saveChartToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save Photo 1 to library</button>
+            <button onClick={saveChartToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save Photo 1 to shared library</button>
           </div>
           <TpRow>
             <div>
               <TpImage scope={scope} label="Photo 1" value={sec.chartImage} onChange={v=>setSec('sizechart',{chartImage:v})} h="h-72" />
-              <button onClick={()=>setPickingChart('chartImage')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 1 from library ({sizeCharts?sizeCharts.length:0})</button>
+              <button onClick={()=>setPickingChart('chartImage')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 1 from library ({libCharts.length})</button>
             </div>
             <div>
               <TpImage scope={scope} label="Photo 2 (optional)" value={sec.chartImage2} onChange={v=>setSec('sizechart',{chartImage2:v})} h="h-72" />
-              <button onClick={()=>setPickingChart('chartImage2')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 2 from library ({sizeCharts?sizeCharts.length:0})</button>
+              <button onClick={()=>setPickingChart('chartImage2')} className="text-xs px-3 py-1.5 mt-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 w-full">📚 Pick Photo 2 from library ({libCharts.length})</button>
             </div>
           </TpRow>
         </div>
@@ -23375,19 +23382,19 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       ) : null}
 
       {pickingChart && <Modal title={`Pick size chart for ${pickingChart==='chartImage2'?'Photo 2':'Photo 1'}`} onClose={()=>setPickingChart(null)} wide>
+        <div className="text-[11px] text-slate-500 mb-2">Mirrored from Sales → Resources → Size Charts. To add or remove charts, manage them there.</div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {(sizeCharts||[]).map(c=>(
+          {libCharts.map(c=>(
             <div key={c.id} className="border rounded-lg p-3 bg-white hover:border-indigo-500">
               <button onClick={()=>applyChart(c)} className="w-full text-left">
                 <div className="font-semibold text-sm">{c.name}</div>
                 {c.garment_type && <div className="text-[10px] text-slate-500 uppercase mb-1">{c.garment_type}</div>}
                 <div className="h-28 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mt-1">{c.chart_image ? <TImg path={c.chart_image} maxH="6.5rem" /> : <span className="text-slate-300 text-xs">no image</span>}</div>
-                {c.title_heading && <div className="text-xs text-slate-600 mt-1 truncate">{c.title_heading}</div>}
               </button>
-              <div className="flex justify-between mt-2"><button onClick={()=>applyChart(c)} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Use this</button><button onClick={async()=>{ if(!confirm('Delete "'+c.name+'" from library?')) return; const {error}=await sb.from('size_charts').delete().eq('id',c.id); if(error){ alert(error.message); return; } reloadCharts&&reloadCharts(); }} className="text-xs text-rose-500 hover:underline">Delete</button></div>
+              <div className="mt-2"><button onClick={()=>applyChart(c)} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Use this</button></div>
             </div>
           ))}
-          {(sizeCharts||[]).length===0 && <div className="col-span-3 text-center text-slate-400 py-8 text-sm">No saved size charts yet. Use "💾 Save to library" on a size guide section to add your first one.</div>}
+          {libCharts.length===0 && <div className="col-span-3 text-center text-slate-400 py-8 text-sm">No size charts in Sales Resources yet. Add them in Sales → Resources → Size Charts and they'll appear here.</div>}
         </div>
       </Modal>}
 
