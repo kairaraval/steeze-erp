@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 564 · Steeze 101 orientation lessons now show the actual deck slides as images (embedded as static assets), so the module looks like the presentation. Lesson images can be storage paths, data/http URLs, or root-relative assets.";
+const BUILD = "Live build 565 · Marketing content posts now have a Discussion thread (comments, @mentions, attachments, reactions) that flows to the inbox. Notes box is bigger and remembers the height you drag it to.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11185,6 +11185,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     if(m.source==='sales_order') return 'sales_order:'+(m.sales_order_id||'');
     if(m.source==='pr') return 'pr:'+(m.id||'');
     if(m.source==='notification') return 'notification:'+(m.id||'');
+    if(m.source==='marketing') return 'marketing:'+(m.id||'');
     return m.source+':'+(m.job_id||'');
   }
   // Map an inbox mention's source → activity table name. Single place to
@@ -11237,6 +11238,9 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     }
     if(m.source==='delivery'){
       return { company:'', title:'Daily Delivery Schedule', label:'Daily Delivery Schedule', tag:'Logistics', icon:'🚚', color:'text-orange-600' };
+    }
+    if(m.source==='marketing'){
+      return { company:'', title:'Marketing content', label:'Content discussion', tag:'Marketing', icon:'📣', color:'text-pink-600' };
     }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
@@ -17078,8 +17082,12 @@ function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' ||
 function marketingCanEditContent(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
 function marketingCanEditResources(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
 
-function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
+function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onSaved }){
   const isEdit=!!existing;
+  // Persist the Notes textarea height across sessions so it doesn't reset.
+  const notesRef=useRef(null);
+  useEffect(()=>{ try{ const h=localStorage.getItem('mkt_notes_h'); if(h && notesRef.current) notesRef.current.style.height=h; }catch(_){} },[]);
+  function saveNotesH(){ try{ if(notesRef.current) localStorage.setItem('mkt_notes_h', notesRef.current.style.height || (notesRef.current.offsetHeight+'px')); }catch(_){} }
   const [f,setF]=useState({
     title: existing?.title||'', channel: existing?.channel||'facebook', status: existing?.status||'idea',
     scheduled_date: existing?.scheduled_date||'', campaign_id: existing?.campaign_id||'',
@@ -17161,7 +17169,7 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
             ))}
           </div>}
         </div>
-        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea value={f.notes} onChange={e=>up('notes',e.target.value)} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea ref={notesRef} value={f.notes} onChange={e=>up('notes',e.target.value)} onMouseUp={saveNotesH} onBlur={saveNotesH} rows={6} className="w-full border rounded px-2 py-1.5 min-h-[120px]" /></div>
         <div className="border-t pt-2">
           <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Results (fill in after posting)</div>
           <div className="grid grid-cols-3 gap-3">
@@ -17170,6 +17178,14 @@ function ContentPostModal({ profile, campaigns, existing, onClose, onSaved }){
             <div><label className="text-xs font-semibold text-slate-500">Clicks</label><input type="number" value={f.clicks} onChange={e=>up('clicks',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
           </div>
         </div>
+        {isEdit && (
+          <div className="border-t pt-3">
+            <div className="text-xs font-semibold text-slate-600 mb-1.5">💬 Discussion <span className="font-normal text-slate-400">· comment on this content, tag with @firstname</span></div>
+            <div className="border rounded-lg bg-slate-50/50 p-2">
+              <ThreadBody profile={profile} profiles={profiles} table="marketing_content_activity" match={{ content_id: existing.id }} scope={'marketing/content/'+existing.id} titleText={existing.title||'Content'} headerless embedded />
+            </div>
+          </div>
+        )}
         {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add content')}</button>
@@ -17364,7 +17380,7 @@ function MetricSnapshotModal({ profile, existing, onClose, onSaved }){
   );
 }
 
-function MarketingHub({ profile }){
+function MarketingHub({ profile, profiles }){
   const canEdit = marketingCanEdit(profile);                 // campaigns + analytics (admin/manager)
   const canEditContent = marketingCanEditContent(profile);   // content planner (+ video editor)
   const canEditResources = marketingCanEditResources(profile);
@@ -17595,7 +17611,7 @@ function MarketingHub({ profile }){
       })()}
 
       {(creatingMetric||editingMetric) && <MetricSnapshotModal profile={profile} existing={editingMetric} onClose={()=>{ setCreatingMetric(false); setEditingMetric(null); }} onSaved={()=>{ setCreatingMetric(false); setEditingMetric(null); load(); }} />}
-      {(creatingPost||editingPost) && <ContentPostModal profile={profile} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
+      {(creatingPost||editingPost) && <ContentPostModal profile={profile} profiles={profiles} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
       {(creatingCampaign||editingCampaign) && <MarketingCampaignModal profile={profile} existing={editingCampaign} onClose={()=>{ setCreatingCampaign(false); setEditingCampaign(null); }} onSaved={()=>{ setCreatingCampaign(false); setEditingCampaign(null); load(); }} />}
       {(creatingResource||editingResource) && <MarketingResourceModal profile={profile} existing={editingResource} onClose={()=>{ setCreatingResource(false); setEditingResource(null); }} onSaved={()=>{ setCreatingResource(false); setEditingResource(null); load(); }} />}
     </div>
@@ -39463,7 +39479,10 @@ function App(){
     // Generic notifications (e.g. a loan awaiting Accounting's processing).
     let noteMentions=[];
     try { const notes = await sb.from('notifications').select('*').eq('recipient_id',me).order('created_at',{ascending:false}).limit(100); noteMentions = (notes && !notes.error ? (notes.data||[]) : []).map(r=>({ ...r, source:'notification', mentions:[me] })); } catch(_){}
-    setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions,...noteMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
+    // Marketing content discussion @mentions.
+    let mktMentions=[];
+    try { const mkt = await sb.from('marketing_content_activity').select('*').contains('mentions',[me]).order('created_at',{ascending:false}).limit(100); mktMentions = (mkt && !mkt.error ? (mkt.data||[]) : []).map(r=>({ ...r, source:'marketing' })); } catch(_){}
+    setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions,...noteMentions,...mktMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
     const counts={}; (ac.data||[]).forEach(r=>{ counts[r.lead_id]=(counts[r.lead_id]||0)+1; }); setActivityCounts(counts);
     // Same pattern but for dept-job activity. Key is job_id (uuid) so it
     // works across production / graphic / printing / sampling boards.
@@ -40041,6 +40060,7 @@ function App(){
       if(so) setInboxOpenSO(so);
       return;
     }
+    if(m.source==='marketing'){ setView('marketing'); return; }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
     const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
@@ -40566,7 +40586,7 @@ function App(){
         {view==='pricing' && <PricingView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
-        {view==='marketing' && <MarketingHub profile={profile} />}
+        {view==='marketing' && <MarketingHub profile={profile} profiles={profiles} />}
         {view==='training' && isTrainingParticipant && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} participants={trainingParticipants} reloadParticipants={reloadTrainingParticipants} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
