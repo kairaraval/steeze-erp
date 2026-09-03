@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 556 · Techpack Design Canvas: paste a photo (⌘V) to set it as the canvas background, in addition to the Upload button.";
+const BUILD = "Live build 557 · Techpack: Garment Details / Collar & Cuffs no longer print a blank base page when empty — if there's only a Design canvas, just that design page prints.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23437,10 +23437,18 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
           <style>{`@media print { .tp-print { zoom: 1 !important; } }`}</style>
           {(()=>{
             const pages=[]; let n=0;
+            // For the canvas-capable sections, if the base page has no real
+            // content (no photos / annotations), don't print a blank page — the
+            // Design page (if any) is shown on its own instead.
+            const baseHasContent=(type,s)=>{
+              if(type==='garment1') return !!(s.frontImage || s.backImage || (s.annotations||[]).some(a=>String(a||'').trim()));
+              if(type==='collarCuffs') return !!(s.photo1 || s.photo2);
+              return true;
+            };
             const add=(type,s,domKey,isCopy)=>{
               if(!s) return;
               const meta=TECHPACK_SECTIONS.find(x=>x.key===type);
-              if(s.enabled!==false){ n++; pages.push(<TpPageFrame key={domKey} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+(isCopy?' (COPY)':'')}>{sectionBody(type,s)}</TpPageFrame>); }
+              if(s.enabled!==false && baseHasContent(type,s)){ n++; pages.push(<TpPageFrame key={domKey} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+(isCopy?' (COPY)':'')}>{sectionBody(type,s)}</TpPageFrame>); }
               // Optional design canvas prints as its own page (whether or not the
               // base photo page above is turned on).
               const cv=s.canvas;
