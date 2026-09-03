@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 565 · Marketing content posts now have a Discussion thread (comments, @mentions, attachments, reactions) that flows to the inbox. Notes box is bigger and remembers the height you drag it to.";
+const BUILD = "Live build 566 · Marketing content editor now shows the Team conversation in a column on the right (beside the fields) instead of below, so it's easy to see while editing.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17131,7 +17131,8 @@ function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onS
   }
   return (
     <Modal title={isEdit?'Edit content':'+ New content'} onClose={onClose} wide>
-      <div className="space-y-3 text-sm">
+      <div className="grid lg:grid-cols-[1fr_360px] gap-4 text-sm items-start">
+        <div className="space-y-3 min-w-0">
         <div><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>up('title',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "New Collection teaser — carousel"' /></div>
         <div className="grid grid-cols-3 gap-3">
           <div><label className="text-xs font-semibold text-slate-500">Channel</label><select value={f.channel} onChange={e=>up('channel',e.target.value)} className="w-full border rounded px-2 py-1.5">{MKT_CHANNELS.map(c=><option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}</select></div>
@@ -17178,20 +17179,21 @@ function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onS
             <div><label className="text-xs font-semibold text-slate-500">Clicks</label><input type="number" value={f.clicks} onChange={e=>up('clicks',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
           </div>
         </div>
-        {isEdit && (
-          <div className="border-t pt-3">
-            <div className="text-xs font-semibold text-slate-600 mb-1.5">💬 Discussion <span className="font-normal text-slate-400">· comment on this content, tag with @firstname</span></div>
-            <div className="border rounded-lg bg-slate-50/50 p-2">
-              <ThreadBody profile={profile} profiles={profiles} table="marketing_content_activity" match={{ content_id: existing.id }} scope={'marketing/content/'+existing.id} titleText={existing.title||'Content'} headerless embedded />
-            </div>
-          </div>
-        )}
         {msg && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Add content')}</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
         </div>
+        </div>{/* left column */}
+        {isEdit && (
+          <div className="lg:border-l lg:pl-4 min-w-0">
+            <div className="text-xs font-semibold text-slate-600 mb-1.5">💬 Team conversation <span className="font-normal text-slate-400">· tag with @firstname</span></div>
+            <div className="border rounded-lg bg-white p-2">
+              <ThreadBody profile={profile} profiles={profiles} table="marketing_content_activity" match={{ content_id: existing.id }} scope={'marketing/content/'+existing.id} titleText={existing.title||'Content'} headerless embedded />
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );
