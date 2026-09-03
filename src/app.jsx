@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 567 · Marketing content editor is now wider (xwide) so the content fields, Notes box, and right-side Team conversation all have more room.";
+const BUILD = "Live build 568 · For Approval → HR Memos: Management can now Return a memo to HR (with a note) for checking, or Cancel it, not just approve. HR sees the return note on the memo card.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15046,7 +15046,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
   async function togglePin(m){ const { error }=await sb.from('hr_memos').update({ pinned:!m.pinned }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
   async function del(m){ if(!confirm('Delete this memo?')) return; const { error }=await sb.from('hr_memos').update({ deleted_at:new Date().toISOString() }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
   async function sendForApproval(m){
-    const { error }=await sb.from('hr_memos').update({ status:'pending' }).eq('id',m.id);
+    const { error }=await sb.from('hr_memos').update({ status:'pending', return_note:null }).eq('id',m.id);
     if(error){ alert(error.message); return; } reload();
   }
   async function approveSign(m){
@@ -15094,6 +15094,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
               {m.body && <div className="text-sm text-slate-600 mt-1 whitespace-pre-wrap line-clamp-4">{m.body}</div>}
               {Array.isArray(m.attachments)&&m.attachments.length>0 && <div className="flex flex-wrap gap-1.5 mt-2">{m.attachments.map((a,i)=>(<button key={i} onClick={()=>openSignedAttachment(a.path||a.url)} className="text-[11px] text-indigo-600 hover:underline bg-indigo-50 rounded px-2 py-0.5">📎 {a.name}</button>))}</div>}
               {m.status==='approved' && m.approved_by && <div className="text-[11px] text-emerald-700 font-medium mt-2">✓ Approved &amp; signed by {who(m.approved_by)}</div>}
+              {m.status==='draft' && m.return_note && <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mt-2">↩ <strong>Returned by Management for checking:</strong> {m.return_note}</div>}
               <div className="flex items-center gap-3 mt-3 pt-2 border-t text-[11px] text-slate-400 flex-wrap">
                 <span>Prepared by {who(m.posted_by)}</span>
                 <div className="ml-auto flex gap-2 items-center flex-wrap">
@@ -31417,6 +31418,19 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
     const { error }=await sb.from('hr_memos').update({ status:'approved', approved_by:profile.id, approved_at:now }).eq('id',m.id);
     if(error){ alert(error.message); return; } reload && reload();
   }
+  // Send a memo back to HR (draft) with a note so they can fix and re-submit.
+  async function returnMemo(m){
+    const note=prompt('Return this memo to HR for checking. What needs to change? (optional)');
+    if(note===null) return;
+    const { error }=await sb.from('hr_memos').update({ status:'draft', approved_by:null, approved_at:null, return_note:(note||'').trim()||'Returned for checking' }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  // Cancel a memo entirely — removes it from the queue (soft delete).
+  async function cancelMemo(m){
+    if(!confirm(`Cancel memo "${m.title||''}"? It will be removed from the approval queue.`)) return;
+    const { error }=await sb.from('hr_memos').update({ deleted_at:new Date().toISOString() }).eq('id',m.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
   const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
   // Pending SO payments — only accounting + admin can verify these; rendered
@@ -31489,6 +31503,8 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
                   <div className="text-[11px] text-slate-500">Prepared by {memoWho(m.posted_by)} · {fmtDate(m.memo_date)}</div>
                 </div>
                 <button onClick={()=>setOpenMemo(m)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold">👁 View</button>
+                <button onClick={()=>returnMemo(m)} className="text-xs px-2.5 py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200" title="Send back to HR for checking">↩ Return to HR</button>
+                <button onClick={()=>cancelMemo(m)} className="text-xs px-2.5 py-1 rounded bg-rose-50 text-rose-600 font-semibold hover:bg-rose-100" title="Cancel this memo">✕ Cancel</button>
                 <button onClick={()=>approveMemo(m)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✍️ Approve &amp; sign</button>
               </div>
             ); })}
