@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 553 · NPA (Notice of Personnel Action): the Date Effectivity 'From' column no longer shows the hire date — effectivity is a single new date, so From now reads N/A.";
+const BUILD = "Live build 554 · Techpack: new optional Design Canvas on Garment Details & Collar & Cuffs — a Canva-style editor to add text boxes, rectangles, circles, lines & arrows (with color fill) on a blank canvas or over an uploaded photo. Prints as its own page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20243,8 +20243,8 @@ function blankTechpack(lead, client, profile){
     colourways:{ enabled:true, columns:[{headerTitle:'',image:'',detailTitle:'COLOURWAY 01:',detailLines:['','','','','','']},{headerTitle:'',image:'',detailTitle:'COLOURWAY 02:',detailLines:['','','','','','']},{headerTitle:'',image:'',detailTitle:'COLOURWAY 03:',detailLines:['','','','','','']}] },
     cover1:{ enabled:true, designTitle:'WITH NAMES', frontImage:'', backImage:'', mainLine:'', details:'', sizeColMale:'MALE', sizeColFemale:'FEMALE', sizeRows:[{size:'M',male:'',female:''}], totalMale:'', totalFemale:'' },
     breakdown:{ enabled:false, sizeColMale:'MALE', sizeColFemale:'FEMALE', sizeRows:[{size:'M',male:'',female:''}], names:[] },
-    garment1:{ enabled:false, sectionSubLabel:'(FOR WITH NAMES)', frontImage:'', backImage:'', annotations:[] },
-    collarCuffs:{ enabled:false, photo1:'', photo2:'', caption1:'Collar Design', caption2:'Cuffs Design' },
+    garment1:{ enabled:false, sectionSubLabel:'(FOR WITH NAMES)', frontImage:'', backImage:'', annotations:[], canvas:blankCanvas() },
+    collarCuffs:{ enabled:false, photo1:'', photo2:'', caption1:'Collar Design', caption2:'Cuffs Design', canvas:blankCanvas() },
     sizechart:{ enabled:false, chartImage:'', chartImage2:'', titleHeading:'', fabricNote:'', footerNote1:'MEASUREMENTS ARE IN INCHES', footerNote2:'' },
     materials:{ enabled:false, columns:[{title:'MAIN FABRIC',name:'',colorCode:'',image:''},{title:'LINING FABRIC',name:'',colorCode:'',image:''},{title:'COLLAR PELON',name:'',colorCode:'',image:''}] },
     trims:{ enabled:false, columns:[{title:'WOVEN SIZE LABEL',name:'',image:''},{title:'YKK ZIPPER',name:'',image:''},{title:'BUTTONS',name:'',image:''}], packaging:{title:'PACKAGING',type:'REGULAR PLASTIC',size:''} },
@@ -22509,6 +22509,145 @@ function DriversManageModal({ drivers, onClose, onChanged }){
   );
 }
 
+// ── Design Canvas ────────────────────────────────────────────────────────
+// A lightweight Canva-style editor for techpack pages: drop text boxes, boxes,
+// circles, lines and arrows onto a blank canvas or on top of an uploaded photo.
+// Stored as { bg, w, h, els:[] } and rendered from a viewBox SVG so it scales
+// crisply on screen and in print. Coordinates live in canvas units (W×H).
+const DC_W = 1000, DC_H = 700;
+function blankCanvas(){ return { enabled:false, bg:'', w:DC_W, h:DC_H, els:[] }; }
+function DesignCanvasBg({ path }){
+  const [u,setU]=useState('');
+  useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on) setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]);
+  if(!u) return null;
+  return <image href={u} x={0} y={0} width={DC_W} height={DC_H} preserveAspectRatio="xMidYMid meet" />;
+}
+function DesignCanvas({ value, onChange, readOnly }){
+  const v = value || blankCanvas();
+  const els = Array.isArray(v.els) ? v.els : [];
+  const svgRef = useRef(null);
+  const fileRef = useRef(null);
+  const dragRef = useRef(null);
+  const [tool,setTool] = useState('select');
+  const [sel,setSel] = useState(null);
+  const [editingId,setEditingId] = useState(null);
+  const [stroke,setStroke] = useState('#c0392b');
+  const [useFill,setUseFill] = useState(false);
+  const [fill,setFill] = useState('#ffe08a');
+  const [fontSize,setFontSize] = useState(26);
+  const [uploading,setUploading] = useState(false);
+
+  const commit = (nextEls)=> onChange({ ...v, w:DC_W, h:DC_H, els:nextEls });
+  const addEl = (el)=> commit([...els, el]);
+  const updEl = (id,patch)=> commit(els.map(e=> e.id===id ? { ...e, ...patch } : e));
+  const removeEl = (id)=> { commit(els.filter(e=>e.id!==id)); setSel(null); };
+  const selEl = els.find(e=>e.id===sel) || null;
+  const nid = ()=> 'e'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+  function evtPt(e){ const svg=svgRef.current; if(!svg) return {x:0,y:0}; const r=svg.getBoundingClientRect(); return { x:(e.clientX-r.left)/r.width*DC_W, y:(e.clientY-r.top)/r.height*DC_H }; }
+
+  // Apply a style change to the selected element (and remember it as the default
+  // for the next new element).
+  function applyStyle(patch){ if(selEl) updEl(selEl.id, patch); }
+  useEffect(()=>{ if(readOnly) return; const onKey=(e)=>{ if((e.key==='Delete'||e.key==='Backspace') && sel && editingId!==sel){ const t=(e.target&&e.target.tagName)||''; if(t==='INPUT'||t==='TEXTAREA'||e.target?.isContentEditable) return; e.preventDefault(); removeEl(sel); } }; window.addEventListener('keydown',onKey); return ()=>window.removeEventListener('keydown',onKey); },[sel,editingId,els,readOnly]);
+
+  function onSvgDown(e){
+    if(readOnly) return;
+    if(tool==='select'){ setSel(null); setEditingId(null); return; }
+    const p=evtPt(e);
+    const id=nid();
+    let el;
+    if(tool==='text') el={ id, type:'text', x:p.x, y:p.y, w:240, h:56, text:'Text', color:stroke, fill:useFill?fill:'none', fontSize };
+    else if(tool==='rect') el={ id, type:'rect', x:p.x, y:p.y, w:2, h:2, stroke, fill:useFill?fill:'none', strokeW:3 };
+    else if(tool==='circle') el={ id, type:'circle', x:p.x, y:p.y, w:2, h:2, stroke, fill:useFill?fill:'none', strokeW:3 };
+    else if(tool==='line'||tool==='arrow') el={ id, type:tool, x1:p.x, y1:p.y, x2:p.x, y2:p.y, stroke, strokeW:3 };
+    else return;
+    addEl(el); setSel(id);
+    dragRef.current = { mode:'create', id, type:tool, sx:p.x, sy:p.y };
+    try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){}
+  }
+  function onSvgMove(e){
+    const d=dragRef.current; if(!d) return; const p=evtPt(e);
+    if(d.mode==='create'){
+      if(d.type==='line'||d.type==='arrow') updEl(d.id,{ x2:p.x, y2:p.y });
+      else if(d.type!=='text'){ updEl(d.id,{ x:Math.min(d.sx,p.x), y:Math.min(d.sy,p.y), w:Math.max(3,Math.abs(p.x-d.sx)), h:Math.max(3,Math.abs(p.y-d.sy)) }); }
+    } else if(d.mode==='move'){
+      const dx=p.x-d.px, dy=p.y-d.py;
+      if(d.el.type==='line'||d.el.type==='arrow') updEl(d.id,{ x1:d.el.x1+dx, y1:d.el.y1+dy, x2:d.el.x2+dx, y2:d.el.y2+dy });
+      else updEl(d.id,{ x:d.el.x+dx, y:d.el.y+dy });
+    } else if(d.mode==='resize'){
+      updEl(d.id,{ w:Math.max(8,p.x-d.el.x), h:Math.max(8,p.y-d.el.y) });
+    } else if(d.mode==='pt'){
+      updEl(d.id, d.handle==='a' ? { x1:p.x, y1:p.y } : { x2:p.x, y2:p.y });
+    }
+  }
+  function onSvgUp(){ const d=dragRef.current; dragRef.current=null; if(d && d.mode==='create'){ if(d.type!=='text') setTool('select'); else { setTool('select'); setEditingId(d.id); } } }
+  function elDown(e, el){ if(readOnly||tool!=='select') return; e.stopPropagation(); setSel(el.id); const p=evtPt(e); dragRef.current={ mode:'move', id:el.id, el:{...el}, px:p.x, py:p.y }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
+  function handleDown(e, el, mode, handle){ if(readOnly) return; e.stopPropagation(); dragRef.current={ mode, id:el.id, el:{...el}, handle }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
+
+  async function uploadBg(e){ const f=e.target.files&&e.target.files[0]; if(!f) return; setUploading(true); try{ const dataUrl=await readFileAsDataUrl(f); const path=await uploadDataUrl('techpack/canvas', dataUrl); onChange({ ...v, bg:path }); }catch(err){ alert('Upload failed: '+(err.message||err)); } setUploading(false); e.target.value=''; }
+
+  const TOOLS = [['select','▹','Select'],['text','T','Text'],['rect','▭','Box'],['circle','◯','Circle'],['line','／','Line'],['arrow','↗','Arrow']];
+  const renderEl = (el)=>{
+    const isSel = el.id===sel && !readOnly;
+    const common = { onPointerDown:(e)=>elDown(e,el), style:{ cursor: readOnly?'default':(tool==='select'?'move':'crosshair') } };
+    if(el.type==='rect') return <g key={el.id}><rect x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill==='none'?'none':el.fill} stroke={el.stroke} strokeWidth={el.strokeW||3} {...common} pointerEvents="all" />{isSel && sel_box(el)}</g>;
+    if(el.type==='circle') return <g key={el.id}><ellipse cx={el.x+el.w/2} cy={el.y+el.h/2} rx={el.w/2} ry={el.h/2} fill={el.fill==='none'?'none':el.fill} stroke={el.stroke} strokeWidth={el.strokeW||3} {...common} pointerEvents="all" />{isSel && sel_box(el)}</g>;
+    if(el.type==='line'||el.type==='arrow') return <g key={el.id}>
+      <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.stroke} strokeWidth={el.strokeW||3} {...common} pointerEvents="stroke" />
+      {el.type==='arrow' && arrow_head(el)}
+      {/* invisible fat hit line for easier grabbing */}
+      <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke="transparent" strokeWidth={18} {...common} pointerEvents="stroke" />
+      {isSel && <>{pt_handle(el,'a',el.x1,el.y1)}{pt_handle(el,'b',el.x2,el.y2)}</>}
+    </g>;
+    if(el.type==='text') return <g key={el.id}>
+      <foreignObject x={el.x} y={el.y} width={el.w} height={el.h} {...common} pointerEvents="all">
+        <div xmlns="http://www.w3.org/1999/xhtml"
+          contentEditable={!readOnly && editingId===el.id}
+          suppressContentEditableWarning
+          onDoubleClick={()=>{ if(!readOnly){ setSel(el.id); setEditingId(el.id); } }}
+          onBlur={(ev)=>{ if(editingId===el.id){ updEl(el.id,{ text:ev.currentTarget.textContent||'' }); setEditingId(null); } }}
+          style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'transparent':el.fill, outline: editingId===el.id?'2px solid #6366f1':'none', overflow:'hidden', whiteSpace:'pre-wrap', wordBreak:'break-word' }}
+        >{el.text}</div>
+      </foreignObject>
+      {isSel && sel_box(el)}
+    </g>;
+    return null;
+  };
+  function sel_box(el){ return <>
+    <rect x={el.x} y={el.y} width={el.w} height={el.h} fill="none" stroke="#6366f1" strokeWidth={1.5} strokeDasharray="6 4" pointerEvents="none" />
+    <rect x={el.x+el.w-9} y={el.y+el.h-9} width={18} height={18} fill="#6366f1" style={{cursor:'nwse-resize'}} onPointerDown={(e)=>handleDown(e,el,'resize')} />
+  </>; }
+  function pt_handle(el,handle,cx,cy){ return <circle cx={cx} cy={cy} r={10} fill="#6366f1" style={{cursor:'grab'}} onPointerDown={(e)=>handleDown(e,el,'pt',handle)} />; }
+  function arrow_head(el){ const dx=el.x2-el.x1, dy=el.y2-el.y1; const len=Math.hypot(dx,dy)||1; const ux=dx/len, uy=dy/len; const size=12+(el.strokeW||3)*2.2; const bx=el.x2-ux*size, by=el.y2-uy*size; const px=-uy, py=ux; const half=size*0.55; return <polygon points={`${el.x2},${el.y2} ${bx+px*half},${by+py*half} ${bx-px*half},${by-py*half}`} fill={el.stroke} pointerEvents="none" />; }
+
+  return (
+    <div>
+      {!readOnly && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-2 p-2 bg-slate-100 rounded-lg no-print">
+          {TOOLS.map(([k,ic,lbl])=>(
+            <button key={k} onClick={()=>setTool(k)} title={lbl} className={`w-9 h-9 rounded-md text-sm font-bold flex items-center justify-center ${tool===k?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>{ic}</button>
+          ))}
+          <div className="w-px h-6 bg-slate-300 mx-1" />
+          <label className="flex items-center gap-1 text-[11px] text-slate-600" title="Stroke / text color">✏️<input type="color" value={stroke} onChange={e=>{ setStroke(e.target.value); applyStyle(selEl&&selEl.type==='text'?{color:e.target.value}:{stroke:e.target.value}); }} className="w-7 h-7 rounded border p-0" /></label>
+          <label className="flex items-center gap-1 text-[11px] text-slate-600" title="Fill"><input type="checkbox" checked={selEl?selEl.fill&&selEl.fill!=='none':useFill} onChange={e=>{ const on=e.target.checked; setUseFill(on); applyStyle({fill:on?fill:'none'}); }} />Fill<input type="color" value={fill} onChange={e=>{ setFill(e.target.value); setUseFill(true); applyStyle({fill:e.target.value}); }} className="w-7 h-7 rounded border p-0" /></label>
+          <label className="flex items-center gap-1 text-[11px] text-slate-600" title="Font size">A<input type="number" min="8" max="120" value={selEl&&selEl.type==='text'?selEl.fontSize:fontSize} onChange={e=>{ const n=Number(e.target.value)||26; setFontSize(n); if(selEl&&selEl.type==='text') updEl(selEl.id,{fontSize:n}); }} className="w-14 input" /></label>
+          <div className="w-px h-6 bg-slate-300 mx-1" />
+          <button onClick={()=>fileRef.current&&fileRef.current.click()} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-600 hover:bg-slate-50">{uploading?'Uploading…':(v.bg?'Change photo':'Upload photo')}</button>
+          {v.bg && <button onClick={()=>onChange({...v, bg:''})} className="text-xs px-2 py-1.5 rounded-md text-rose-500 hover:bg-rose-50">Remove photo</button>}
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={uploadBg} />
+          {sel && <button onClick={()=>removeEl(sel)} className="text-xs px-2.5 py-1.5 rounded-md bg-rose-500 text-white ml-auto">🗑 Delete</button>}
+        </div>
+      )}
+      <svg ref={svgRef} viewBox={`0 0 ${DC_W} ${DC_H}`} onPointerDown={onSvgDown} onPointerMove={onSvgMove} onPointerUp={onSvgUp}
+        style={{ width:'100%', aspectRatio:`${DC_W} / ${DC_H}`, background:'#fff', border:'1px solid #cbd5e1', touchAction:'none', display:'block' }}>
+        {v.bg && <DesignCanvasBg path={v.bg} />}
+        {els.map(renderEl)}
+      </svg>
+      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick a tool, then drag on the canvas to draw. Double-click a text box to edit. Select a shape to move, resize (corner handle), recolor, or delete.</div>}
+    </div>
+  );
+}
+
 function TechpackEditor({ profile, profiles, lead, client, onClose, reload, readOnly, sizeCharts, reloadCharts, garmentMockups, reloadMockups, overrideTechpack, snapshotMeta, onOpenSnapshot }){
   const ro = readOnly || !!overrideTechpack; // snapshots are always view-only
   const [tp,setTp]=useState(()=>mergeTechpack(overrideTechpack||lead.techpack, lead, client, profile));
@@ -22589,6 +22728,23 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   const sec=active==='header'?null:(isExtra?extra.data:tp[active]);
   // Writes go to the active page (base or duplicate). Editor cases pass their own type as key — ignored when extra.
   function setSec(key,patch){ setTp(t=>{ if(isExtra) return {...t, extraPages:(t.extraPages||[]).map(p=>p.id===active?{...p,data:{...p.data,...patch}}:p)}; const enabled=('enabled' in patch)?patch.enabled:true; return {...t,[key]:{...t[key],...patch,enabled}}; }); }
+  // Optional Canva-style design canvas for a section (garment1 / collarCuffs).
+  // Enabling the canvas must NOT auto-enable the base section — we pass the
+  // current `enabled` through so the canvas can print as its own page whether or
+  // not the base photo page is turned on.
+  const canvasBlock = (key)=>{
+    const cv = (sec && sec.canvas) || blankCanvas();
+    const setCanvas = (c)=> setSec(key, { canvas:c, enabled: !!(sec && sec.enabled!==false) });
+    return (
+      <div className="mt-4 border-t pt-3">
+        <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <input type="checkbox" checked={!!cv.enabled} onChange={e=>setCanvas({...cv, enabled:e.target.checked})} />
+          🎨 Design canvas <span className="font-normal text-slate-400">· text, shapes, lines &amp; arrows — blank or over a photo · prints as its own page</span>
+        </label>
+        {cv.enabled && <div className="mt-2"><DesignCanvas value={cv} onChange={c=>setCanvas({...c, enabled:true})} /></div>}
+      </div>
+    );
+  };
   function toggleSection(key,val){ setTp(t=>({...t,[key]:{...t[key],enabled:val}})); }
   function duplicateSection(key){ const id='xp'+Date.now()+Math.random().toString(36).slice(2,5); setTp(t=>({...t, extraPages:[...(t.extraPages||[]), { id, type:key, data:{ ...JSON.parse(JSON.stringify(t[key])), enabled:true } }]})); setActive(id); }
   function removeExtra(id){ if(!confirm('Delete this duplicated page?')) return; setTp(t=>({...t, extraPages:(t.extraPages||[]).filter(p=>p.id!==id)})); if(active===id) setActive('header'); }
@@ -22683,8 +22839,8 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
       case 'colourways': return (<div className="grid grid-cols-3 gap-3">{sec.columns.map((c,i)=>(<div key={i} className="border rounded-lg p-2 space-y-2"><input className="input" placeholder="Header" value={c.headerTitle} onChange={e=>setSec('colourways',{columns:sec.columns.map((x,j)=>j===i?{...x,headerTitle:e.target.value}:x)})} /><TpImage scope={scope} value={c.image} onChange={v=>setSec('colourways',{columns:sec.columns.map((x,j)=>j===i?{...x,image:v}:x)})} h="h-28" /><input className="input text-xs" value={c.detailTitle} onChange={e=>setSec('colourways',{columns:sec.columns.map((x,j)=>j===i?{...x,detailTitle:e.target.value}:x)})} />{c.detailLines.map((dl,k)=>(<input key={k} className="input text-xs" placeholder={'Line '+(k+1)} value={dl} onChange={e=>setSec('colourways',{columns:sec.columns.map((x,j)=>j===i?{...x,detailLines:x.detailLines.map((y,m)=>m===k?e.target.value:y)}:x)})} />))}</div>))}</div>);
       case 'cover1': return (<div className="space-y-3"><TpRow><TpLbl t="Design title"><input className="input" value={sec.designTitle} onChange={e=>setSec('cover1',{designTitle:e.target.value})} /></TpLbl><TpLbl t="Main line"><input className="input" value={sec.mainLine} onChange={e=>setSec('cover1',{mainLine:e.target.value})} /></TpLbl></TpRow><TpRow><TpImage scope={scope} label="Front" value={sec.frontImage} onChange={v=>setSec('cover1',{frontImage:v})} /><TpImage scope={scope} label="Back" value={sec.backImage} onChange={v=>setSec('cover1',{backImage:v})} /></TpRow>{sizeTablesEditor()}</div>);
       case 'breakdown': return (<div className="space-y-3">{sizeTablesEditor()}<TpLbl t="Names"><div className="space-y-1">{(sec.names||[]).map((n,i)=>(<div key={i} className="flex gap-1"><input className="input text-xs" value={n} onChange={e=>setSec('breakdown',{names:sec.names.map((x,j)=>j===i?e.target.value:x)})} /><button onClick={()=>setSec('breakdown',{names:sec.names.filter((_,j)=>j!==i)})} className="text-rose-400 px-2">✕</button></div>))}<button onClick={()=>setSec('breakdown',{names:[...(sec.names||[]),'']})} className="text-xs text-indigo-600">+ Add name</button></div></TpLbl></div>);
-      case 'garment1': return (<div className="space-y-3"><div className="flex gap-2 flex-wrap"><button onClick={()=>setPickingMockup(true)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📚 Pick mockup from library ({garmentMockups?garmentMockups.length:0})</button><button onClick={saveMockupToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save to library</button></div><TpRow><TpImage scope={scope} label="Front" value={sec.frontImage} onChange={v=>setSec('garment1',{frontImage:v})} /><TpImage scope={scope} label="Back" value={sec.backImage} onChange={v=>setSec('garment1',{backImage:v})} /></TpRow><TpLbl t="Annotations / callouts"><div className="space-y-1">{(sec.annotations||[]).map((a,i)=>(<div key={i} className="flex gap-1"><input className="input text-xs" value={a} onChange={e=>setSec('garment1',{annotations:sec.annotations.map((x,j)=>j===i?e.target.value:x)})} /><button onClick={()=>setSec('garment1',{annotations:sec.annotations.filter((_,j)=>j!==i)})} className="text-rose-400 px-2">✕</button></div>))}<button onClick={()=>setSec('garment1',{annotations:[...(sec.annotations||[]),'']})} className="text-xs text-indigo-600">+ Add note</button></div></TpLbl></div>);
-      case 'collarCuffs': return (<div className="space-y-3"><TpRow><div><TpImage scope={scope} label="Photo 1" value={sec.photo1} onChange={v=>setSec('collarCuffs',{photo1:v})} /><input className="input mt-1 text-xs" value={sec.caption1} onChange={e=>setSec('collarCuffs',{caption1:e.target.value})} /></div><div><TpImage scope={scope} label="Photo 2" value={sec.photo2} onChange={v=>setSec('collarCuffs',{photo2:v})} /><input className="input mt-1 text-xs" value={sec.caption2} onChange={e=>setSec('collarCuffs',{caption2:e.target.value})} /></div></TpRow></div>);
+      case 'garment1': return (<div className="space-y-3"><div className="flex gap-2 flex-wrap"><button onClick={()=>setPickingMockup(true)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📚 Pick mockup from library ({garmentMockups?garmentMockups.length:0})</button><button onClick={saveMockupToLibrary} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">💾 Save to library</button></div><TpRow><TpImage scope={scope} label="Front" value={sec.frontImage} onChange={v=>setSec('garment1',{frontImage:v})} /><TpImage scope={scope} label="Back" value={sec.backImage} onChange={v=>setSec('garment1',{backImage:v})} /></TpRow><TpLbl t="Annotations / callouts"><div className="space-y-1">{(sec.annotations||[]).map((a,i)=>(<div key={i} className="flex gap-1"><input className="input text-xs" value={a} onChange={e=>setSec('garment1',{annotations:sec.annotations.map((x,j)=>j===i?e.target.value:x)})} /><button onClick={()=>setSec('garment1',{annotations:sec.annotations.filter((_,j)=>j!==i)})} className="text-rose-400 px-2">✕</button></div>))}<button onClick={()=>setSec('garment1',{annotations:[...(sec.annotations||[]),'']})} className="text-xs text-indigo-600">+ Add note</button></div></TpLbl>{canvasBlock('garment1')}</div>);
+      case 'collarCuffs': return (<div className="space-y-3"><TpRow><div><TpImage scope={scope} label="Photo 1" value={sec.photo1} onChange={v=>setSec('collarCuffs',{photo1:v})} /><input className="input mt-1 text-xs" value={sec.caption1} onChange={e=>setSec('collarCuffs',{caption1:e.target.value})} /></div><div><TpImage scope={scope} label="Photo 2" value={sec.photo2} onChange={v=>setSec('collarCuffs',{photo2:v})} /><input className="input mt-1 text-xs" value={sec.caption2} onChange={e=>setSec('collarCuffs',{caption2:e.target.value})} /></div></TpRow>{canvasBlock('collarCuffs')}</div>);
       case 'sizechart': return (
         // Photo-only Size Guide. Two slots side by side. Each slot has its
         // own "Pick from library" button so the user can fill either slot
@@ -23277,7 +23433,20 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
           <style>{`@media print { .tp-print { zoom: 1 !important; } }`}</style>
           {(()=>{
             const pages=[]; let n=0;
-            const add=(type,s,domKey,isCopy)=>{ if(!s||s.enabled===false) return; n++; const meta=TECHPACK_SECTIONS.find(x=>x.key===type); pages.push(<TpPageFrame key={domKey} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+(isCopy?' (COPY)':'')}>{sectionBody(type,s)}</TpPageFrame>); };
+            const add=(type,s,domKey,isCopy)=>{
+              if(!s) return;
+              const meta=TECHPACK_SECTIONS.find(x=>x.key===type);
+              if(s.enabled!==false){ n++; pages.push(<TpPageFrame key={domKey} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+(isCopy?' (COPY)':'')}>{sectionBody(type,s)}</TpPageFrame>); }
+              // Optional design canvas prints as its own page (whether or not the
+              // base photo page above is turned on).
+              const cv=s.canvas;
+              if(cv && cv.enabled && ((Array.isArray(cv.els)&&cv.els.length) || cv.bg)){
+                n++;
+                pages.push(<TpPageFrame key={domKey+'-canvas'} hdr={tp} pageNo={n} title={(meta?meta.label.toUpperCase():'')+' — DESIGN'+(isCopy?' (COPY)':'')}>
+                  <div style={{flex:1, display:'flex', padding:'10px', minHeight:0}}><div style={{flex:1, display:'flex', alignItems:'center'}}><DesignCanvas value={cv} readOnly /></div></div>
+                </TpPageFrame>);
+              }
+            };
             TECHPACK_SECTIONS.forEach(s=>{ add(s.key, tp[s.key], s.key, false); (tp.extraPages||[]).filter(p=>p.type===s.key).forEach(p=>add(p.type,p.data,p.id,true)); });
             if(pages.length===0) pages.push(<div key="empty" className="text-center text-slate-400 py-12">No sections included yet. Tick or edit a section, then come back to Preview.</div>);
             return pages;
