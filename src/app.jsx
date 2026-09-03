@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 561 · Training lessons can embed a live sample techpack ([[TECHPACK:id]]) — the techpack course now opens the real Ayala Land RBG polo techpack so trainees can page through an actual approved example.";
+const BUILD = "Live build 562 · Training lessons now support inline images/screenshots — upload or paste (⌘V) a screenshot in the lesson editor and it renders inside the lesson, so you can build a per-page visual walkthrough.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3626,14 +3626,23 @@ function PricingView({ profile }){
 }
 
 // ── Training / Academy ─────────────────────────────────────────────────────
+// Signed-URL image for lesson content (stored as a storage path so links never
+// expire in saved lessons).
+function LessonImg({ path }){
+  const [u,setU]=useState('');
+  useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on) setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]);
+  if(!u) return <div className="my-3 h-40 bg-slate-100 border rounded-lg flex items-center justify-center text-slate-300 text-xs">loading image…</div>;
+  return <img src={u} alt="" className="my-3 w-full rounded-lg border shadow-sm" />;
+}
 // Safe markdown → React renderer (headings, **bold**, bullet / numbered lists,
-// paragraphs). No dangerouslySetInnerHTML — builds real React nodes.
+// paragraphs, and [[IMG:path]] images). No dangerouslySetInnerHTML.
 function MiniMarkdown({ text }){
   const lines = String(text||'').replace(/\r/g,'').split('\n');
   const out=[]; let list=null; let listType=null; let key=0;
   const inline=(s)=>{ const parts=[]; const re=/\*\*([^*]+)\*\*/g; let last=0, mm, i=0; while((mm=re.exec(s))){ if(mm.index>last) parts.push(s.slice(last,mm.index)); parts.push(<strong key={'b'+(i++)}>{mm[1]}</strong>); last=re.lastIndex; } if(last<s.length) parts.push(s.slice(last)); return parts.length?parts:s; };
   const flush=()=>{ if(list){ out.push(listType==='ol'?<ol key={key++} className="list-decimal ml-5 space-y-1 my-2">{list}</ol>:<ul key={key++} className="list-disc ml-5 space-y-1 my-2">{list}</ul>); list=null; listType=null; } };
   lines.forEach((ln)=>{ const t=ln.trimEnd(); let m;
+    if((m=t.match(/^\[\[IMG:(.+?)\]\]$/))){ flush(); out.push(<LessonImg key={key++} path={m[1]} />); return; }
     if(/^###\s+/.test(t)){ flush(); out.push(<h4 key={key++} className="font-bold text-slate-800 mt-3 mb-1">{inline(t.replace(/^###\s+/,''))}</h4>); return; }
     if(/^##\s+/.test(t)){ flush(); out.push(<h3 key={key++} className="font-bold text-lg text-slate-900 mt-4 mb-1">{inline(t.replace(/^##\s+/,''))}</h3>); return; }
     if(/^#\s+/.test(t)){ flush(); out.push(<h2 key={key++} className="font-extrabold text-xl text-slate-900 mt-4 mb-2">{inline(t.replace(/^#\s+/,''))}</h2>); return; }
@@ -3664,6 +3673,16 @@ function TrainingModuleModal({ profile, existing, nextPos, onClose, onSaved }){
 function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, onSaved }){
   const [f,setF]=useState({ title:existing?.title||'', body:existing?.body||'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [imgBusy,setImgBusy]=useState(false);
+  const fileRef=useRef(null); const bodyRef=useRef(null);
+  // Upload an image and insert an [[IMG:path]] marker at the cursor (or at end).
+  async function addImageFile(file){ if(!file) return; setImgBusy(true); setMsg('');
+    try{ const dataUrl=await readFileAsDataUrl(file); const path=await uploadDataUrl('training', dataUrl); const marker=`[[IMG:${path}]]`;
+      setF(p=>{ const ta=bodyRef.current; const b=p.body||''; if(ta && typeof ta.selectionStart==='number'){ const s=ta.selectionStart, e=ta.selectionEnd; const ins=(s>0&&b[s-1]!=='\n'?'\n\n':'')+marker+'\n\n'; return {...p, body:b.slice(0,s)+ins+b.slice(e)}; } return {...p, body:(b?b+'\n\n':'')+marker+'\n\n'}; });
+    }catch(e){ setMsg('Image upload failed: '+(e.message||e)); }
+    setImgBusy(false);
+  }
+  async function onBodyPaste(e){ const img=getPastedImage(e); if(img){ e.preventDefault(); await addImageFile(img); } }
   async function save(){ if(!f.title.trim()){ setMsg('Title required.'); return; } setBusy(true);
     try{ const payload={ title:f.title.trim(), body:f.body||'' };
       if(existing){ await sb.from('training_lessons').update({...payload, updated_at:new Date().toISOString()}).eq('id',existing.id); }
@@ -3671,10 +3690,18 @@ function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, on
       setBusy(false); onSaved&&onSaved(); }catch(e){ setBusy(false); setMsg(e.message||String(e)); } }
   return (<Modal title={existing?'Edit lesson':'+ New lesson'} onClose={onClose} wide><div className="space-y-3 text-sm">
     <div><label className="text-xs font-semibold text-slate-500">Lesson title *</label><input value={f.title} onChange={e=>setF({...f,title:e.target.value})} className="w-full border rounded px-2 py-1.5" /></div>
-    <div><label className="text-xs font-semibold text-slate-500">Content <span className="font-normal text-slate-400">· Markdown: # heading, - bullet, 1. numbered, **bold**</span></label><textarea value={f.body} onChange={e=>setF({...f,body:e.target.value})} rows={16} className="w-full border rounded px-2 py-1.5 font-mono text-xs" /></div>
-    {f.body && <div className="border rounded-lg p-3 bg-slate-50"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Preview</div><MiniMarkdown text={f.body} /></div>}
+    <div>
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-slate-500">Content <span className="font-normal text-slate-400">· Markdown: # heading, - bullet, 1. numbered, **bold**</span></label>
+        <button type="button" onClick={()=>fileRef.current&&fileRef.current.click()} className="text-xs px-2.5 py-1 rounded-md bg-white border text-slate-600 hover:bg-slate-50">{imgBusy?'Uploading…':'🖼 Add image / screenshot'}</button>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl) addImageFile(fl); e.target.value=''; }} />
+      </div>
+      <textarea ref={bodyRef} value={f.body} onChange={e=>setF({...f,body:e.target.value})} onPaste={onBodyPaste} rows={16} className="w-full border rounded px-2 py-1.5 font-mono text-xs mt-1" placeholder="Write the lesson. Paste (⌘V) a screenshot to drop it in, or use 'Add image'. Images appear as [[IMG:…]] markers." />
+      <div className="text-[10px] text-slate-400 mt-0.5">Tip: paste a screenshot right into the box to insert it where your cursor is.</div>
+    </div>
+    {f.body && <div className="border rounded-lg p-3 bg-slate-50 max-h-72 overflow-auto"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Preview</div><MiniMarkdown text={f.body} /></div>}
     {msg&&<div className="text-xs text-rose-600">{msg}</div>}
-    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
+    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy||imgBusy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
 function TrainingView({ profile, profiles, leads, onOpenTechpack }){
