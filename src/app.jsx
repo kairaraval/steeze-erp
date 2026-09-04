@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 571 · Accounts Receivable → Statement of Account: SO numbers are now clickable (in the ledger and open balances) to open the Sales Order, alongside the Open-lead button.";
+const BUILD = "Live build 572 · Fixed inventory items disappearing: item + stock-movement lists were silently capped at 1000 rows (you have 1202 items) so newer items like Taslan never loaded. Raised the row limits so all items show.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4147,7 +4147,7 @@ function PurchasingResourcesView({ profile }){
   const [supMap,setSupMap]=useState({});
   useEffect(()=>{ let alive=true; (async()=>{
     const [its,sups]=await Promise.all([
-      sb.from('items').select('name,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims']),
+      sb.from('items').select('name,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims']).range(0,99999),
       sb.from('suppliers').select('id,company'),
     ]);
     if(!alive) return;
@@ -4363,7 +4363,7 @@ function CostingCalculatorView({ profile }){
   async function loadSaved(){ const { data }=await sb.from('costings').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
   async function loadSources(){
     const [it, g] = await Promise.all([
-      sb.from('items').select('id,name,cost,price,unit,bucket').order('name',{ascending:true}),
+      sb.from('items').select('id,name,cost,price,unit,bucket').order('name',{ascending:true}).range(0,99999),
       sb.from('payroll_garments').select('name,operations'),
     ]);
     setInv(it.data||[]);
@@ -22953,7 +22953,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   const [invItems,setInvItems]=useState([]);
   const [pickInv,setPickInv]=useState(null);
   const [invSearch,setInvSearch]=useState('');
-  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('items').select('id,name,image_path,bucket,color,category,unit').order('name'); if(data) setInvItems(data); }catch(_){} })(); },[]);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('items').select('id,name,image_path,bucket,color,category,unit').order('name').range(0,99999); if(data) setInvItems(data); }catch(_){} })(); },[]);
   // The Size Guide library MIRRORS Sales → Resources → Size Charts (the single
   // master set the company uses). We read those rows live so any chart added in
   // Sales Resources shows up here automatically, and normalize them to the shape
@@ -39419,7 +39419,7 @@ function App(){
       sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
-      sb.from('items').select('*').order('name'),
+      sb.from('items').select('*').order('name').range(0,99999),
       sb.from('suppliers').select('*').order('company'),
       sb.from('departments').select('*').order('name'),
       sb.from('purchase_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
@@ -39441,7 +39441,7 @@ function App(){
       sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
       sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false}),
       // Stock movements for the Stock Out view (Purchasing Layer 3).
-      sb.from('stock_movements').select('*').order('created_at',{ascending:false}).limit(1000),
+      sb.from('stock_movements').select('*').order('created_at',{ascending:false}).limit(100000),
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
       sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
