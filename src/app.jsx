@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 572 · Fixed inventory items disappearing: item + stock-movement lists were silently capped at 1000 rows (you have 1202 items) so newer items like Taslan never loaded. Raised the row limits so all items show.";
+const BUILD = "Live build 573 · Inventory really uncapped now — the 1000-row ceiling is a Supabase server cap that .range can't beat, so items + stock movements are now fetched in pages (all 1202 items load, incl. Taslan).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -482,6 +482,24 @@ function getPastedImage(e){
   return null;
 }
 
+// Fetch EVERY row from a table, paging past PostgREST's per-request row cap
+// (Supabase caps responses at ~1000 rows regardless of .range/.limit). Returns
+// the same { data, error } shape as a normal query so callers don't change.
+async function fetchAllRows(table, cols='*', orderCol=null, ascending=true){
+  const size=1000; const all=[]; let from=0;
+  for(;;){
+    let q=sb.from(table).select(cols);
+    if(orderCol) q=q.order(orderCol,{ ascending });
+    q=q.range(from, from+size-1);
+    const { data, error } = await q;
+    if(error) return { data:all, error };
+    all.push(...(data||[]));
+    if(!data || data.length<size) break;
+    from += size;
+    if(from>500000) break; // hard safety stop
+  }
+  return { data:all, error:null };
+}
 // The Attachments bucket is PRIVATE, but some uploads saved a getPublicUrl()
 // link (which 403s). Pull the storage key out of any of our URLs (or accept a
 // bare key) so we can mint a working signed URL for display.
@@ -4363,7 +4381,7 @@ function CostingCalculatorView({ profile }){
   async function loadSaved(){ const { data }=await sb.from('costings').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
   async function loadSources(){
     const [it, g] = await Promise.all([
-      sb.from('items').select('id,name,cost,price,unit,bucket').order('name',{ascending:true}).range(0,99999),
+      fetchAllRows('items','id,name,cost,price,unit,bucket','name',true),
       sb.from('payroll_garments').select('name,operations'),
     ]);
     setInv(it.data||[]);
@@ -22953,7 +22971,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   const [invItems,setInvItems]=useState([]);
   const [pickInv,setPickInv]=useState(null);
   const [invSearch,setInvSearch]=useState('');
-  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('items').select('id,name,image_path,bucket,color,category,unit').order('name').range(0,99999); if(data) setInvItems(data); }catch(_){} })(); },[]);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await fetchAllRows('items','id,name,image_path,bucket,color,category,unit','name',true); if(data) setInvItems(data); }catch(_){} })(); },[]);
   // The Size Guide library MIRRORS Sales → Resources → Size Charts (the single
   // master set the company uses). We read those rows live so any chart added in
   // Sales Resources shows up here automatically, and normalize them to the shape
@@ -39419,7 +39437,7 @@ function App(){
       sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
-      sb.from('items').select('*').order('name').range(0,99999),
+      fetchAllRows('items','*','name',true),
       sb.from('suppliers').select('*').order('company'),
       sb.from('departments').select('*').order('name'),
       sb.from('purchase_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
@@ -39441,7 +39459,7 @@ function App(){
       sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
       sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false}),
       // Stock movements for the Stock Out view (Purchasing Layer 3).
-      sb.from('stock_movements').select('*').order('created_at',{ascending:false}).limit(100000),
+      fetchAllRows('stock_movements','*','created_at',false),
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
       sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
       sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
