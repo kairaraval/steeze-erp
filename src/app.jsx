@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 569 · Load resilience: the profile fetch uses maybeSingle so a transient 0/2-row read can't blank the whole app (e.g. Production Board showing 0 jobs with a 'cannot coerce' error). Fresh build to recover the /app.js load.";
+const BUILD = "Live build 570 · Accounts Receivable → Statement of Account: each open balance now has an 'Open lead' button that jumps to the linked Sales Pipeline lead, so you can act on overdue accounts fast.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29597,7 +29597,7 @@ async function advanceLeadOnSOPaid(leadId){
 function arDaysPast(so, todayMs){ const due=arDueDate(so); if(!due) return null; return Math.floor((todayMs-due.getTime())/86400000); }
 function arBucketKey(so, todayMs){ const days=arDaysPast(so, todayMs); if(days==null || days<=0) return 'current'; if(days<=30) return '1-30'; if(days<=60) return '31-60'; if(days<=90) return '61-90'; return '90+'; }
 
-function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profile, profiles, bankAccounts, reload }){
+function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, reload }){
   const [search,setSearch]=useState('');
   const [openClient,setOpenClient]=useState(null);
   const [onlyOwing,setOnlyOwing]=useState(true);
@@ -29661,12 +29661,14 @@ function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profil
         ))}{filtered.length===0 && <tr><td colSpan={AR_BUCKETS.length+3} className="text-center text-slate-400 py-8">No receivables. Balances appear once a Sales Order is created and (for aging) delivered.</td></tr>}</tbody>
         <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">TOTAL</td>{AR_BUCKETS.map(([k])=><td key={k} className="px-3 py-2 text-right">{peso(bucketTotals[k])}</td>)}<td className="px-3 py-2 text-right text-rose-700">{peso(totalAR)}</td><td></td></tr></tfoot>
       </table></div></div>
-      {openClient && <CustomerLedgerDetailModal client={openClient} sos={(salesOrders||[]).filter(s=>s.client_id===openClient.id)} payments={(soPayments||[]).filter(p=>(salesOrders||[]).find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={reload} onClose={()=>setOpenClient(null)} />}
+      {openClient && <CustomerLedgerDetailModal client={openClient} sos={(salesOrders||[]).filter(s=>s.client_id===openClient.id)} payments={(soPayments||[]).filter(p=>(salesOrders||[]).find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={onOpenLead} reload={reload} onClose={()=>setOpenClient(null)} />}
     </div>
   );
 }
 
-function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, profiles, bankAccounts, reload, onClose }){
+function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, reload, onClose }){
+  const leadForSO=(s)=> s && s.lead_id ? (leads||[]).find(l=>l.id===s.lead_id) : null;
+  const openLeadFor=(s)=>{ const l=leadForSO(s); if(l && onOpenLead){ onClose && onClose(); onOpenLead(l); } };
   const [paying,setPaying]=useState(null); // SO to record a payment against
   const todayMs=(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const openSOs=(sos||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at && soOpenBalance(s)>0.01)
@@ -29719,7 +29721,10 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, p
                   <td className="px-3 py-2 text-xs">{due?fmtDate(due.toISOString().slice(0,10)):'on delivery'}</td>
                   <td className="px-3 py-2">{agingChip(s)}</td>
                   <td className="px-3 py-2 text-right font-semibold text-rose-700">{peso(soOpenBalance(s))}</td>
-                  <td className="px-3 py-2 text-right">{canPay && <button onClick={()=>setPaying(s)} className="text-xs px-2.5 py-1 rounded bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Record payment</button>}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {leadForSO(s) && onOpenLead && <button onClick={()=>openLeadFor(s)} className="text-xs px-2.5 py-1 rounded bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-200 mr-1.5" title="Open the linked sales pipeline lead">🧭 Open lead</button>}
+                    {canPay && <button onClick={()=>setPaying(s)} className="text-xs px-2.5 py-1 rounded bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Record payment</button>}
+                  </td>
                 </tr>
               ); })}</tbody>
             </table></div></div>
@@ -40650,7 +40655,7 @@ function App(){
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
-        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
