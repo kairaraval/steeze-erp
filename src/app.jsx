@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 570 · Accounts Receivable → Statement of Account: each open balance now has an 'Open lead' button that jumps to the linked Sales Pipeline lead, so you can act on overdue accounts fast.";
+const BUILD = "Live build 571 · Accounts Receivable → Statement of Account: SO numbers are now clickable (in the ledger and open balances) to open the Sales Order, alongside the Open-lead button.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29597,7 +29597,7 @@ async function advanceLeadOnSOPaid(leadId){
 function arDaysPast(so, todayMs){ const due=arDueDate(so); if(!due) return null; return Math.floor((todayMs-due.getTime())/86400000); }
 function arBucketKey(so, todayMs){ const days=arDaysPast(so, todayMs); if(days==null || days<=0) return 'current'; if(days<=30) return '1-30'; if(days<=60) return '31-60'; if(days<=90) return '61-90'; return '90+'; }
 
-function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, reload }){
+function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, onOpenSO, reload }){
   const [search,setSearch]=useState('');
   const [openClient,setOpenClient]=useState(null);
   const [onlyOwing,setOnlyOwing]=useState(true);
@@ -29661,14 +29661,15 @@ function CustomerLedgerView({ clients, salesOrders, soPayments, invoices, profil
         ))}{filtered.length===0 && <tr><td colSpan={AR_BUCKETS.length+3} className="text-center text-slate-400 py-8">No receivables. Balances appear once a Sales Order is created and (for aging) delivered.</td></tr>}</tbody>
         <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">TOTAL</td>{AR_BUCKETS.map(([k])=><td key={k} className="px-3 py-2 text-right">{peso(bucketTotals[k])}</td>)}<td className="px-3 py-2 text-right text-rose-700">{peso(totalAR)}</td><td></td></tr></tfoot>
       </table></div></div>
-      {openClient && <CustomerLedgerDetailModal client={openClient} sos={(salesOrders||[]).filter(s=>s.client_id===openClient.id)} payments={(soPayments||[]).filter(p=>(salesOrders||[]).find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={onOpenLead} reload={reload} onClose={()=>setOpenClient(null)} />}
+      {openClient && <CustomerLedgerDetailModal client={openClient} sos={(salesOrders||[]).filter(s=>s.client_id===openClient.id)} payments={(soPayments||[]).filter(p=>(salesOrders||[]).find(s=>s.id===p.sales_order_id && s.client_id===openClient.id))} invoices={(invoices||[]).filter(iv=>iv.client_id===openClient.id)} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={onOpenLead} onOpenSO={onOpenSO} reload={reload} onClose={()=>setOpenClient(null)} />}
     </div>
   );
 }
 
-function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, reload, onClose }){
+function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, profiles, bankAccounts, leads, onOpenLead, onOpenSO, reload, onClose }){
   const leadForSO=(s)=> s && s.lead_id ? (leads||[]).find(l=>l.id===s.lead_id) : null;
   const openLeadFor=(s)=>{ const l=leadForSO(s); if(l && onOpenLead){ onClose && onClose(); onOpenLead(l); } };
+  const openSO=(s)=>{ if(s && onOpenSO){ onClose && onClose(); onOpenSO(s); } };
   const [paying,setPaying]=useState(null); // SO to record a payment against
   const todayMs=(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const openSOs=(sos||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at && soOpenBalance(s)>0.01)
@@ -29698,7 +29699,7 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, p
           <tbody>{withRunning.map((r,i)=>(
             <tr key={i} className={`border-t ${r.type==='payment'?'bg-emerald-50/30':''}`}>
               <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
-              <td className="px-3 py-2">{r.ref}</td>
+              <td className="px-3 py-2">{r.type==='so' && onOpenSO && r.raw ? <button onClick={()=>openSO(r.raw)} className="text-indigo-600 hover:underline font-medium" title="Open this Sales Order">{r.ref}</button> : r.ref}</td>
               <td className="px-3 py-2 text-right">{r.debit?peso(r.debit):''}</td>
               <td className="px-3 py-2 text-right text-emerald-700">{r.credit?peso(r.credit):''}</td>
               <td className={`px-3 py-2 text-right font-bold ${r.running>0.01?'text-rose-700':''}`}>{peso(r.running)}</td>
@@ -29715,7 +29716,7 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, p
               <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">SO</th><th className="text-left px-3 py-2">Delivered</th><th className="text-left px-3 py-2">Terms</th><th className="text-left px-3 py-2">Due</th><th className="text-left px-3 py-2">Aging</th><th className="text-right px-3 py-2">Balance</th><th></th></tr></thead>
               <tbody>{openSOs.map(s=>{ const due=arDueDate(s); return (
                 <tr key={s.id} className="border-t">
-                  <td className="px-3 py-2 font-mono text-xs font-semibold">{s.number}</td>
+                  <td className="px-3 py-2 font-mono text-xs font-semibold">{onOpenSO ? <button onClick={()=>openSO(s)} className="text-indigo-600 hover:underline" title="Open this Sales Order">{s.number}</button> : s.number}</td>
                   <td className="px-3 py-2 text-xs">{s.delivered_at?fmtDate(String(s.delivered_at).slice(0,10)):'—'}</td>
                   <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[140px]" title={s.payment_terms||''}>{s.payment_terms||'—'}</td>
                   <td className="px-3 py-2 text-xs">{due?fmtDate(due.toISOString().slice(0,10)):'on delivery'}</td>
@@ -40655,7 +40656,7 @@ function App(){
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
-        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} reload={loadAll} />}
+        {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} onOpenSO={(so)=>setInboxOpenSO(so)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
