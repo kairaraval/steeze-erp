@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 576 · Expense Log now posts every Journal Voucher expense classification (a row per expense account, multi-account JVs fully broken out). Petty Cash detail: click a liquidation/replenishment date to filter that period's expenses (details, amounts, receipts).";
+const BUILD = "Live build 577 · Cash Advances: full detail view (breakdown, categorized receipts, supporting docs, totals — CA, liquidated, excess, over-expense), CA expenses now categorized & posted to the GL, excess-returned & over-expense-reimbursed status buttons (with method), and liquidation is blocked until every receipt has a photo + category. CA-005 custodian → Minda; CA-004 cancelled (full backout).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33601,7 +33601,9 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
                     <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Recognise spend to Expense Log + request replenishment from Admin">Liquidate →</button>
                   </>
                 ) : (
-                  c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
+                  c.status==='open' && canEdit
+                    ? <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
+                    : <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View liquidation details, receipts & settlement">👁 View</button>
                 )}
                 {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteCA(c);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
               </td>
@@ -33612,7 +33614,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
 
       {(creating||editing) && <CashAdvanceFormModal existing={editing} kind={kind} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {detail && <PettyCashDetailModal pettyCash={detail} expensesAll={expenses} profile={profile} profiles={profiles} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={replenishments} bankAccounts={bankAccounts} onLiquidate={liquidatePetty} onApproveRepl={approveReplenishment} onReleaseRepl={releaseReplenishment} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload && reload(); }} />}
-      {liquidating && <LiquidationModal ca={liquidating} profile={profile} bankAccounts={bankAccounts} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload(); }} />}
+      {liquidating && <LiquidationModal ca={liquidating} profile={profile} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload(); }} />}
     </div>
   );
 }
@@ -33704,14 +33706,25 @@ function CashAdvanceFormModal({ existing, kind, profile, profiles, bankAccounts,
   );
 }
 
-function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
+function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenters, onClose, onSaved }){
   const issued = Number(ca.amount)||0;
-  const [receipts,setReceipts]=useState(ca.receipts||[]);
+  const isLiquidated = ca.status==='liquidated';
+  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const [receipts,setReceipts]=useState(Array.isArray(ca.receipts)?ca.receipts:[]);
+  const [docs,setDocs]=useState(Array.isArray(ca.supporting_docs)?ca.supporting_docs:[]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [upIdx,setUpIdx]=useState(null);
+  // Status fields (local mirror so buttons persist without closing the modal).
+  const [exRet,setExRet]=useState(ca.excess_returned_at||null);
+  const [exMethod,setExMethod]=useState(ca.excess_return_method||'bank_deposit');
+  const [ovReim,setOvReim]=useState(ca.overexpense_reimbursed_at||null);
+  const [ovMethod,setOvMethod]=useState(ca.overexpense_method||'bank_transfer');
+  const receiptKind = (u)=> /\.pdf(\?|$)/i.test(String(u||'')) ? 'pdf' : 'image';
   const total = receipts.reduce((s,r)=>s+Number(r.amount||0), 0);
-  const returned = Math.max(0, issued - total);
-  function addReceipt(){ setReceipts(rs=>[...rs, { description:'', amount:0, receipt_url:'' }]); }
+  const returned = Math.max(0, issued - total);   // excess / remaining
+  const overExpense = Math.max(0, total - issued); // custodian covered
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?a.name:''; };
+  function addReceipt(){ setReceipts(rs=>[...rs, { description:'', amount:0, receipt_url:'', gl_account_code:'', category:'', cost_center_id:'' }]); }
   function setReceipt(i, patch){ setReceipts(rs=>rs.map((r,j)=>j===i?{...r,...patch}:r)); }
   function removeReceipt(i){ setReceipts(rs=>rs.filter((_,j)=>j!==i)); }
   async function handleReceiptPhoto(i, file){
@@ -33726,12 +33739,22 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
     } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
     setUpIdx(null);
   }
-  async function save(){
-    if(receipts.length===0){ setMsg('Add at least one receipt.'); return; }
-    if(total > issued + 0.01){ if(!confirm(`Receipts total (${peso(total)}) exceeds CA amount (${peso(issued)}). Save anyway?`)) return; }
+  // Which receipt lines are incomplete (have an amount but no photo or no category).
+  const incompleteLines = receipts.filter(r=>Number(r.amount)>0 && (!r.receipt_url || !r.gl_account_code));
+  // Persist just the receipts/docs (used after liquidation to complete proof).
+  async function saveDocsOnly(nextReceipts, nextDocs){
+    const rc = nextReceipts||receipts, dc = nextDocs||docs;
+    const t = rc.reduce((s,r)=>s+Number(r.amount||0),0);
+    try{ await sb.from('cash_advances').update({ receipts:rc, supporting_docs:dc, amount_liquidated:t, amount_returned:Math.max(0,issued-t) }).eq('id', ca.id); }catch(e){ setMsg('Save failed: '+(e.message||e)); }
+  }
+  async function setStatus(patch, setters){
+    try{ await sb.from('cash_advances').update(patch).eq('id', ca.id); setters&&setters(); }catch(e){ setMsg('Save failed: '+(e.message||e)); }
+  }
+  async function liquidate(){
+    if(receipts.length===0){ setMsg('Add at least one receipt before liquidating.'); return; }
+    if(incompleteLines.length>0){ setMsg(`⚠ ${incompleteLines.length} receipt line(s) are incomplete — every expense needs an uploaded receipt AND a category before you can liquidate/close.`); return; }
     setBusy(true); setMsg('');
     try {
-      // If money is being returned, create a bank txn (in) to the original source bank.
       if(returned > 0.01 && ca.bank_id){
         await sb.from('bank_transactions').insert({
           bank_id: ca.bank_id, date: new Date().toISOString().slice(0,10), direction:'in', amount: returned,
@@ -33740,7 +33763,7 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
         });
       }
       const { error } = await sb.from('cash_advances').update({
-        receipts, amount_liquidated: total, amount_returned: returned,
+        receipts, supporting_docs:docs, amount_liquidated: total, amount_returned: returned,
         status: 'liquidated', liquidated_at: new Date().toISOString().slice(0,10),
       }).eq('id', ca.id);
       if(error) throw error;
@@ -33748,36 +33771,83 @@ function LiquidationModal({ ca, profile, bankAccounts, onClose, onSaved }){
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title={`Liquidate ${ca.number||'CA'}`} onClose={onClose} wide>
-      <div className="space-y-3">
+    <Modal title={`${isLiquidated?'Cash Advance':'Liquidate'} ${ca.number||'CA'}`} onClose={onClose} xwide>
+      <div className="grid lg:grid-cols-[1fr_300px] gap-4">
+        <div className="space-y-3 min-w-0">
         <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs">
-          <strong>{ca.custodian_name||''}</strong> · Issued <strong>{peso(issued)}</strong> on {fmtDate(ca.date)} · Purpose: {ca.purpose||'—'}
+          <strong>{ca.custodian_name||''}</strong> · Issued <strong>{peso(issued)}</strong> on {fmtDate(ca.date)} · Purpose: {ca.purpose||'—'} {isLiquidated && <span className="ml-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Liquidated {ca.liquidated_at?fmtDate(ca.liquidated_at):''}</span>}
         </div>
+        {/* Expense breakdown / receipts — categorized (posts to the GL). */}
         <div className="bg-slate-50 border rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Receipts</div><button onClick={addReceipt} className="text-xs text-indigo-600 font-semibold">+ Add receipt</button></div>
-          <div className="space-y-2">{receipts.map((r,i)=>(
-            <div key={i} className="bg-white border rounded p-2">
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Expense breakdown &amp; receipts</div>{canEdit && <button onClick={addReceipt} className="text-xs text-indigo-600 font-semibold">+ Add expense</button>}</div>
+          <div className="space-y-2">{receipts.map((r,i)=>{ const bad=Number(r.amount)>0 && (!r.receipt_url||!r.gl_account_code); return (
+            <div key={i} className={`bg-white border rounded p-2 ${bad?'border-rose-300':''}`}>
               <div className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-8"><label className="text-[10px] uppercase text-slate-500">Description</label><input className="input mt-0.5 text-xs" value={r.description} onChange={e=>setReceipt(i,{description:e.target.value})} placeholder="e.g. Bond paper x5 reams · National Bookstore" /></div>
-                <div className="col-span-3"><label className="text-[10px] uppercase text-slate-500">Amount</label><input type="number" className="input mt-0.5 text-xs" value={r.amount} onChange={e=>setReceipt(i,{amount:e.target.value})} /></div>
-                <div className="col-span-1 text-right"><button onClick={()=>removeReceipt(i)} className="text-rose-400 text-sm">✕</button></div>
+                <div className="col-span-6"><label className="text-[10px] uppercase text-slate-500">Description</label><input disabled={!canEdit} className="input mt-0.5 text-xs" value={r.description} onChange={e=>setReceipt(i,{description:e.target.value})} placeholder="e.g. Bond paper x5 · National Bookstore" /></div>
+                <div className="col-span-4"><label className="text-[10px] uppercase text-slate-500">Category (COA)</label><select disabled={!canEdit} className="input mt-0.5 text-xs" value={r.gl_account_code||''} onChange={e=>setReceipt(i,{gl_account_code:e.target.value, category:acctName(e.target.value)})}><option value="">— account —</option>{coaExpenseOptions(chartAccounts)}</select></div>
+                <div className="col-span-2"><label className="text-[10px] uppercase text-slate-500">Amount</label><input type="number" disabled={!canEdit} className="input mt-0.5 text-xs" value={r.amount} onChange={e=>setReceipt(i,{amount:e.target.value})} /></div>
               </div>
               <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-[10px] uppercase text-slate-400">Receipt photo</span>
-                <input type="file" accept="image/*,application/pdf" onChange={e=>{ handleReceiptPhoto(i, e.target.files?.[0]); e.target.value=''; }} className="text-[11px] flex-1" />
-                {upIdx===i && <span className="text-[11px] text-slate-500">Uploading…</span>}
-                {r.receipt_url && <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-indigo-600 hover:underline shrink-0">📎 View</button>}
+                {r.receipt_url ? (receiptKind(r.receipt_url)==='image'
+                  ? <button onClick={()=>openSignedAttachment(r.receipt_url)} className="shrink-0"><SignedImg path={r.receipt_url} className="h-10 w-10 object-cover rounded border" alt="receipt" /></button>
+                  : <button onClick={()=>openSignedAttachment(r.receipt_url)} className="text-[11px] text-indigo-600 hover:underline">📄 PDF</button>)
+                  : <span className="text-[10px] text-rose-500 font-semibold">No receipt uploaded</span>}
+                {canEdit && <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer">{upIdx===i?'Uploading…':(r.receipt_url?'Replace':'📎 Upload receipt')}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ handleReceiptPhoto(i, e.target.files?.[0]); e.target.value=''; }} /></label>}
+                <div className="flex-1"></div>
+                {canEdit && <button onClick={()=>removeReceipt(i)} className="text-rose-400 text-sm">✕</button>}
               </div>
             </div>
-          ))}{receipts.length===0 && <div className="text-xs text-slate-400 text-center py-3">No receipts yet. Click "Add receipt".</div>}</div>
+          ); })}{receipts.length===0 && <div className="text-xs text-slate-400 text-center py-3">No expenses yet.{canEdit?' Click "+ Add expense".':''}</div>}</div>
+          {incompleteLines.length>0 && <div className="text-[11px] text-rose-600 mt-2">⚠ {incompleteLines.length} line(s) missing a receipt or category — required before liquidating.</div>}
         </div>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Issued</div><div className="font-bold">{peso(issued)}</div></div>
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-700">Receipts total</div><div className="font-bold text-emerald-700">{peso(total)}</div></div>
-          <div className={`border rounded p-2 ${returned>0.01?'bg-blue-50 border-blue-200':'bg-slate-50'}`}><div className="text-[10px] uppercase text-blue-700">To return</div><div className="font-bold text-blue-700">{peso(returned)}</div></div>
+        {/* Other supporting documents */}
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="text-xs font-semibold text-slate-700 mb-1">Other supporting documents</div>
+          {canEdit ? <AttachmentsEditor value={docs} onChange={(v)=>{ setDocs(v); saveDocsOnly(receipts, v); }} scope={'ca/'+ca.id} inline />
+            : (docs.length>0 ? <div className="flex flex-wrap gap-2">{docs.map((a,i)=><AttachmentChip key={i} att={a} small gallery={docs} />)}</div> : <div className="text-[11px] text-slate-400">None.</div>)}
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'✓ Liquidate'}</button>
+        <div className="flex gap-2">
+          {!isLiquidated && canEdit && <button onClick={liquidate} disabled={busy||incompleteLines.length>0} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50" title={incompleteLines.length>0?'Complete all receipts + categories first':''}>{busy?'Posting…':'✓ Liquidate & close'}</button>}
+          {isLiquidated && canEdit && <button onClick={async()=>{ await saveDocsOnly(); onSaved&&onSaved(); }} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">Save receipts / documents</button>}
+        </div>
+        </div>{/* left col */}
+
+        {/* Summary + settlement status (right column) */}
+        <div className="space-y-3 min-w-0">
+          <div className="border rounded-lg p-3 bg-white space-y-1.5 text-sm">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold">Summary</div>
+            <div className="flex justify-between"><span className="text-slate-600">Total Cash Advance</span><span className="font-semibold">{peso(issued)}</span></div>
+            <div className="flex justify-between"><span className="text-slate-600">Total Liquidated Expenses</span><span className="font-semibold">{peso(total)}</span></div>
+            {returned>0.01 && <div className="flex justify-between text-blue-700"><span>Excess / Remaining</span><span className="font-bold">{peso(returned)}</span></div>}
+            {overExpense>0.01 && <div className="flex justify-between text-rose-700"><span>Over-expense (custodian paid)</span><span className="font-bold">{peso(overExpense)}</span></div>}
+            {returned<0.01 && overExpense<0.01 && <div className="flex justify-between text-emerald-700"><span>Fully liquidated</span><span className="font-bold">✓</span></div>}
+          </div>
+          {/* Excess returned/deposited status */}
+          {returned>0.01 && (
+            <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 text-xs space-y-1.5">
+              <div className="font-semibold text-blue-800">Excess cash: {peso(returned)}</div>
+              {exRet ? <div className="text-emerald-700">✓ Returned/deposited to bank on {fmtDate(String(exRet).slice(0,10))}{ca.excess_return_method?` · ${ca.excess_return_method.replace('_',' ')}`:''}</div>
+                : canEdit ? <div className="space-y-1.5">
+                    <div className="text-slate-500">Not yet marked returned.</div>
+                    <select value={exMethod} onChange={e=>setExMethod(e.target.value)} className="input text-xs"><option value="bank_deposit">Bank deposit</option><option value="bank_transfer">Bank transfer</option><option value="cash_on_hand">Returned to petty cash / on hand</option></select>
+                    <button onClick={()=>{ const now=new Date().toISOString(); setStatus({ excess_returned_at:now, excess_return_method:exMethod }, ()=>setExRet(now)); }} className="w-full py-1.5 rounded-lg bg-blue-600 text-white font-semibold">Mark returned/deposited</button>
+                  </div> : <div className="text-slate-500">Awaiting return.</div>}
+            </div>
+          )}
+          {/* Over-expense reimbursement status */}
+          {overExpense>0.01 && (
+            <div className="border rounded-lg p-3 bg-rose-50/50 border-rose-200 text-xs space-y-1.5">
+              <div className="font-semibold text-rose-800">Over-expense: {peso(overExpense)}</div>
+              {ovReim ? <div className="text-emerald-700">✓ Reimbursed to custodian via {(ca.overexpense_method||ovMethod).replace('_',' ')} on {fmtDate(String(ovReim).slice(0,10))}</div>
+                : canEdit ? <div className="space-y-1.5">
+                    <div className="text-slate-500">Custodian covered this — not yet reimbursed.</div>
+                    <select value={ovMethod} onChange={e=>setOvMethod(e.target.value)} className="input text-xs"><option value="bank_transfer">Bank Transfer</option><option value="petty_cash">Petty Cash</option></select>
+                    <button onClick={()=>{ const now=new Date().toISOString(); setStatus({ overexpense_reimbursed_at:now, overexpense_method:ovMethod }, ()=>setOvReim(now)); }} className="w-full py-1.5 rounded-lg bg-rose-600 text-white font-semibold">Mark reimbursed</button>
+                  </div> : <div className="text-slate-500">Awaiting reimbursement.</div>}
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   );
@@ -34006,7 +34076,7 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[] } = data;
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
   const push=(date,code,debit,credit,source,ref,memo,cc)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null }); };
@@ -34061,6 +34131,17 @@ function buildGLPostings(data){
       else { push(b.date, '501003', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
     }
   });
+  // C2. Cash-advance liquidations — reclassify the SPENT portion out of Cash on
+  // Hand (debited at issuance) into the proper expense accounts, categorised per
+  // receipt. The returned portion is already handled by the return bank txn
+  // above, so this only books the liquidated expenses. Balanced: Σ expense
+  // debits = Cr Cash on Hand for the total spent.
+  (cashAdvances||[]).filter(c=>!c.deleted_at && c.kind==='cash_advance' && c.status==='liquidated').forEach(c=>{
+    const recs = Array.isArray(c.receipts) ? c.receipts : [];
+    let spent=0;
+    recs.forEach(r=>{ const amt=Number(r.amount)||0; if(amt<=0) return; spent+=amt; const code=r.gl_account_code || categoryToAccountCode(r.category||''); push(c.liquidated_at||c.date, code, amt, 0, 'CA', c.number, r.description||'Cash advance expense', r.cost_center_id); });
+    if(spent>0) push(c.liquidated_at||c.date, CASH_HAND, 0, spent, 'CA', c.number, 'Liquidated from cash advance');
+  });
   // D. Petty-cash expenses (paid from the float) — Dr expense (net) + Dr Input VAT,
   // Cr Cash on Hand (total). Replenishment tops Cash on Hand back from the bank.
   expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash').forEach(e=>{
@@ -34091,8 +34172,8 @@ function finReportYears(postings){
   const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
 }
 
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -34145,7 +34226,7 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
 }
 
 function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts]);
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -40798,7 +40879,7 @@ function App(){
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} />}
         {view.indexOf('soon-')===0 && (
