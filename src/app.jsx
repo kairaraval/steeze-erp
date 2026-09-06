@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 577 · Cash Advances: full detail view (breakdown, categorized receipts, supporting docs, totals — CA, liquidated, excess, over-expense), CA expenses now categorized & posted to the GL, excess-returned & over-expense-reimbursed status buttons (with method), and liquidation is blocked until every receipt has a photo + category. CA-005 custodian → Minda; CA-004 cancelled (full backout).";
+const BUILD = "Live build 578 · Journal Vouchers: attach supporting docs/proof per JV (viewable after posting), plus a Bulk upload flow (download CSV template, group lines per voucher, validate & import as posted JVs). Budget Requests: liquidation once approved — categorized multi-line actual expenses with COA classifications & cost centers, per-line receipts + supporting-doc attachments, and a complete view (approved vs actual vs remaining/over-budget). Docs stay accessible after finalizing for the audit trail.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32851,7 +32851,7 @@ function SourcingItineraryModal({ existing, profile, onClose, onSaved }){
   );
 }
 
-function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
+function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, costCenters, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState('');
@@ -32931,7 +32931,7 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
         {myRequests.length===0 && (
           <div className="text-center text-slate-400 text-sm py-8">No requests yet. Submit your first one above.</div>
         )}
-        {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={false} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+        {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={false} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       </div>
     );
   }
@@ -32993,13 +32993,13 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, reload }){
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No budget requests yet. Click "+ New request" to submit one.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Attachment" onClose={()=>setReceiptView(null)} />}
     </div>
   );
 }
 
-function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSaved }){
+function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, costCenters, onClose, onSaved }){
   const isEdit = !!existing;
   const [f,setF]=useState({
     department: existing?.department || (DEPARTMENT_OPTIONS[0]),
@@ -33013,6 +33013,47 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
   const [uploading,setUploading]=useState(false);
   const status = existing?.status || 'pending';
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // ── Liquidation state (used once the request is approved) ──
+  const acctName=(code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code))?.name || '';
+  const blankLiq=()=>({ id:Math.random().toString(36).slice(2,9), description:'', amount:'', gl_account_code:'', category:'', cost_center_id:'', receipt_url:'' });
+  const [liqLines,setLiqLines]=useState(()=> (existing?.liquidation_lines&&existing.liquidation_lines.length)
+    ? existing.liquidation_lines.map(l=>({ id:Math.random().toString(36).slice(2,9), description:l.description||'', amount:l.amount||'', gl_account_code:l.gl_account_code||'', category:l.category||'', cost_center_id:l.cost_center_id||'', receipt_url:l.receipt_url||'' }))
+    : [blankLiq()]);
+  const [liqDocs,setLiqDocs]=useState(existing?.attachments||[]);
+  const [liqUploadingId,setLiqUploadingId]=useState('');
+  function setLiq(id,patch){ setLiqLines(ls=>ls.map(l=>l.id===id?{...l,...patch}:l)); }
+  function addLiq(){ setLiqLines(ls=>[...ls, blankLiq()]); }
+  function removeLiq(id){ setLiqLines(ls=>ls.filter(l=>l.id!==id)); }
+  const liqTotal = liqLines.reduce((s,l)=>s+(Number(l.amount)||0), 0);
+  const approvedAmt = Number(existing?.amount)||0;
+  const liqRemaining = approvedAmt - liqTotal;
+  const isLiquidated = status==='spent' || !!existing?.liquidated_at;
+  async function saveLiqDocs(next){ setLiqDocs(next); if(isEdit){ try { await sb.from('budget_requests').update({ attachments: next }).eq('id', existing.id); } catch(_){} } }
+  async function handleLiqReceipt(id, file){
+    if(!file) return; setLiqUploadingId(id);
+    try {
+      const ext=file.name.split('.').pop();
+      const key=`budget-requests/liq/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(key, file, { upsert:false });
+      if(upErr) throw upErr;
+      setLiq(id,{ receipt_url:key });
+    } catch(e){ alert('Upload failed: '+e.message); }
+    setLiqUploadingId('');
+  }
+  async function saveLiquidation(finalize){
+    const clean=liqLines.filter(l=>(Number(l.amount)||0)>0).map(l=>({ description:l.description||'', amount:Number(l.amount)||0, gl_account_code:l.gl_account_code||'', category:l.category||acctName(l.gl_account_code), cost_center_id:l.cost_center_id||null, receipt_url:l.receipt_url||'' }));
+    if(finalize){
+      if(clean.length===0){ setMsg('Add at least one actual-expense line before finalizing.'); return; }
+      const missing=clean.find(l=>!l.gl_account_code);
+      if(missing){ setMsg('Every expense line needs an accounting category (chart of accounts).'); return; }
+    }
+    setBusy(true); setMsg('');
+    const payload={ liquidation_lines:clean, amount_liquidated:clean.reduce((s,l)=>s+l.amount,0), attachments:liqDocs };
+    if(finalize){ payload.status='spent'; payload.liquidated_at=new Date().toISOString(); payload.liquidated_by=profile.id; }
+    const { error } = await sb.from('budget_requests').update(payload).eq('id', existing.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
   // In-page attachment viewer (no new tab). Resolve a signed URL + bare storage
   // key so both new keys and legacy public URLs render inline.
   const [receiptView,setReceiptView]=useState(null); // { url, path, kind }
@@ -33082,12 +33123,13 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
+  const showLiq = isEdit && (status==='approved' || isLiquidated);
   return (
-    <Modal title={isEdit?'Budget Request':'New budget request'} onClose={onClose}>
+    <Modal title={isEdit?'Budget Request':'New budget request'} onClose={onClose} wide={showLiq}>
       <div className="space-y-3">
         {isEdit && (
           <div className={`border rounded-lg p-2 text-sm font-bold ${status==='approved'?'bg-emerald-50 border-emerald-200 text-emerald-700':status==='rejected'?'bg-rose-50 border-rose-200 text-rose-700':status==='spent'?'bg-slate-100 border-slate-200 text-slate-700':'bg-amber-50 border-amber-200 text-amber-700'}`}>
-            Status: {status.toUpperCase()}
+            Status: {status.toUpperCase()}{isLiquidated && existing?.liquidated_at ? ` · Liquidated ${fmtDate(String(existing.liquidated_at).slice(0,10))}` : ''}
           </div>
         )}
         <div className="grid grid-cols-2 gap-2">
@@ -33112,8 +33154,70 @@ function BudgetRequestFormModal({ existing, profile, canApprove, onClose, onSave
             <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
           </div>
         )}
-        {isEdit && status==='approved' && canApprove && (
-          <button onClick={markSpent} disabled={busy} className="w-full py-2 rounded-lg bg-slate-600 text-white font-semibold disabled:opacity-50">Mark as spent</button>
+        {showLiq && (
+          <div className="border-t pt-3 mt-1 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-800">🧾 Liquidation {isLiquidated && <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 align-middle">FINALIZED</span>}</h3>
+            </div>
+            <p className="text-xs text-slate-500 -mt-1">Record the actual expenses charged against this approved budget, each with its accounting classification and receipt. Supports multiple lines / categories.</p>
+
+            {/* Summary */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg border bg-slate-50 p-2"><div className="text-[10px] uppercase text-slate-400">Approved budget</div><div className="text-lg font-bold">{peso(approvedAmt)}</div></div>
+              <div className="rounded-lg border bg-slate-50 p-2"><div className="text-[10px] uppercase text-slate-400">Actual expenses</div><div className="text-lg font-bold">{peso(liqTotal)}</div></div>
+              <div className={`rounded-lg border p-2 ${liqRemaining<0?'bg-rose-50 border-rose-200':'bg-emerald-50 border-emerald-200'}`}><div className="text-[10px] uppercase text-slate-400">{liqRemaining<0?'Over budget':'Remaining'}</div><div className={`text-lg font-bold ${liqRemaining<0?'text-rose-700':'text-emerald-700'}`}>{peso(Math.abs(liqRemaining))}</div></div>
+            </div>
+
+            {/* Lines */}
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                  <th className="text-left px-2 py-1.5">Description</th>
+                  <th className="text-left px-2 py-1.5 w-44">Accounting category (COA)</th>
+                  <th className="text-left px-2 py-1.5 w-36">Cost center</th>
+                  <th className="text-right px-2 py-1.5 w-24">Amount</th>
+                  <th className="text-center px-2 py-1.5 w-28">Receipt</th>
+                  {!isLiquidated && <th className="w-6"></th>}
+                </tr></thead>
+                <tbody>
+                  {liqLines.map(l=>(
+                    <tr key={l.id} className="border-t">
+                      <td className="px-2 py-1"><input disabled={isLiquidated} className="input !py-1" value={l.description} onChange={e=>setLiq(l.id,{description:e.target.value})} placeholder="what was bought" /></td>
+                      <td className="px-2 py-1"><select disabled={isLiquidated} className="input !py-1" value={l.gl_account_code} onChange={e=>setLiq(l.id,{gl_account_code:e.target.value, category:acctName(e.target.value)})}><option value="">— account —</option>{coaExpenseOptions(chartAccounts)}</select></td>
+                      <td className="px-2 py-1"><select disabled={isLiquidated} className="input !py-1" value={l.cost_center_id||''} onChange={e=>setLiq(l.id,{cost_center_id:e.target.value})}><option value="">— none —</option>{(costCenters||[]).filter(c=>c.active!==false).map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select></td>
+                      <td className="px-2 py-1"><input disabled={isLiquidated} type="number" className="input !py-1 text-right" value={l.amount} onChange={e=>setLiq(l.id,{amount:e.target.value})} /></td>
+                      <td className="px-2 py-1 text-center">
+                        {l.receipt_url ? <button type="button" onClick={()=>openReceipt(l.receipt_url)} className="text-indigo-600 hover:underline">📎 View</button>
+                          : isLiquidated ? <span className="text-slate-300">—</span>
+                          : (liqUploadingId===l.id ? <span className="text-slate-400">…</span> : <label className="text-indigo-600 hover:underline cursor-pointer">＋ Add<input type="file" className="hidden" onChange={e=>handleLiqReceipt(l.id, e.target.files?.[0])} /></label>)}
+                      </td>
+                      {!isLiquidated && <td className="px-1 py-1 text-center"><button onClick={()=>removeLiq(l.id)} className="text-slate-400 hover:text-rose-600">✕</button></td>}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t bg-slate-50 font-semibold">
+                    <td className="px-2 py-1.5" colSpan={!isLiquidated?3:3}>{!isLiquidated && <button onClick={addLiq} className="text-indigo-600 hover:underline">+ Add expense line</button>}</td>
+                    <td className="px-2 py-1.5 text-right">{peso(liqTotal)}</td>
+                    <td colSpan={!isLiquidated?2:1}></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* Supporting docs */}
+            <div className="border rounded-lg p-3 bg-slate-50/50">
+              <AttachmentsEditor value={liqDocs} onChange={saveLiqDocs} scope={'budget/'+existing.id} label="📎 Supporting documents (invoices, proof of payment, etc.)" inline />
+              <div className="text-[11px] text-slate-400 mt-1">Stays viewable after the budget is liquidated for the audit trail.</div>
+            </div>
+
+            {canApprove && !isLiquidated && (
+              <div className="flex gap-2">
+                <button onClick={()=>saveLiquidation(false)} disabled={busy} className="py-2 px-4 rounded-lg border font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Save progress</button>
+                <button onClick={()=>saveLiquidation(true)} disabled={busy} className="flex-1 py-2 rounded-lg bg-slate-700 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'✓ Finalize liquidation (mark spent)'}</button>
+              </div>
+            )}
+          </div>
         )}
       </div>
       {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Attachment" onClose={()=>setReceiptView(null)} />}
@@ -34449,6 +34553,7 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
   const [editing,setEditing]=useState(null);   // entry or {} for new
   const [viewing,setViewing]=useState(null);
   const [addingAcct,setAddingAcct]=useState(false);
+  const [bulk,setBulk]=useState(false);
   const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   const entries = (journalEntries||[]).filter(j=>!j.deleted_at);
   const monthKey = new Date().toISOString().slice(0,7);
@@ -34462,8 +34567,11 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
             <h1 className="text-2xl font-bold">📓 Journal Entries</h1>
             <p className="text-slate-500 text-sm">{entries.length} journal vouchers · {peso(monthTotal)} posted this month · {accounts.length} accounts</p>
           </div>
-          {canEdit && tab==='journal' && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New journal entry</button>}
-          {canEdit && tab==='coa' && <button onClick={()=>setAddingAcct(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add account</button>}
+          <div className="flex items-center gap-2">
+            {canEdit && tab==='journal' && <button onClick={()=>setBulk(true)} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⬆ Bulk upload</button>}
+            {canEdit && tab==='journal' && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New journal entry</button>}
+            {canEdit && tab==='coa' && <button onClick={()=>setAddingAcct(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add account</button>}
+          </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
           <button onClick={()=>setTab('journal')} className={`px-3 py-1.5 rounded-md ${tab==='journal'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Journal Entries</button>
@@ -34517,7 +34625,139 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
       {editing && <JournalFormModal entry={editing} chartAccounts={accounts} bankAccounts={bankAccounts} costCenters={costCenters} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
       {viewing && <JournalViewModal entry={viewing} bankAccounts={bankAccounts} profile={profile} profiles={profiles} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} onSaved={()=>{ setViewing(null); reload && reload(); }} />}
       {addingAcct && <ChartAccountModal profile={profile} onClose={()=>setAddingAcct(false)} onSaved={()=>{ setAddingAcct(false); reload && reload(); }} />}
+      {bulk && <JVBulkUploadModal chartAccounts={accounts} bankAccounts={bankAccounts} costCenters={costCenters} profile={profile} onClose={()=>setBulk(false)} onSaved={()=>{ setBulk(false); reload && reload(); }} />}
     </div>
+  );
+}
+function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, onClose, onSaved }){
+  const [rows,setRows]=useState([]);       // parsed line rows
+  const [errors,setErrors]=useState([]);
+  const [fileName,setFileName]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const acctFor=(code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code));
+  function downloadTemplate(){
+    const header='jv_group,date,reference,memo,account_code,description,debit,credit';
+    const sample=[
+      '1,2026-09-05,OR-1234,Monthly office rent,6200,Rent for September,25000,0',
+      '1,2026-09-05,OR-1234,Monthly office rent,1010,Paid from BDO,0,25000',
+      '2,2026-09-05,,Depreciation accrual,6800,Equipment depreciation,5000,0',
+      '2,2026-09-05,,Depreciation accrual,1520,Accumulated depreciation,0,5000',
+    ];
+    const csv=[header,...sample].join('\n');
+    const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='JV_bulk_upload_template.csv'; a.click(); URL.revokeObjectURL(url);
+  }
+  function parseCSV(text){
+    const lines=text.split(/\r?\n/).filter(l=>l.trim());
+    if(!lines.length) return { rows:[], errors:['File is empty.'] };
+    const head=lines[0].split(',').map(h=>h.trim().toLowerCase());
+    const idx=(name)=>head.indexOf(name);
+    const need=['jv_group','date','account_code'];
+    const missing=need.filter(n=>idx(n)<0);
+    if(missing.length) return { rows:[], errors:['Missing required column(s): '+missing.join(', ')+'. Download the template for the correct format.'] };
+    const out=[]; const errs=[];
+    for(let i=1;i<lines.length;i++){
+      const c=lines[i].split(',');
+      const g=(c[idx('jv_group')]||'').trim();
+      const date=(c[idx('date')]||'').trim();
+      const code=(c[idx('account_code')]||'').trim();
+      const ref=idx('reference')>=0?(c[idx('reference')]||'').trim():'';
+      const memo=idx('memo')>=0?(c[idx('memo')]||'').trim():'';
+      const desc=idx('description')>=0?(c[idx('description')]||'').trim():'';
+      const debit=idx('debit')>=0?Number((c[idx('debit')]||'0').trim())||0:0;
+      const credit=idx('credit')>=0?Number((c[idx('credit')]||'0').trim())||0:0;
+      if(!g && !code && !memo) continue;
+      const ln=i+1;
+      if(!g) errs.push(`Line ${ln}: jv_group is required.`);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) errs.push(`Line ${ln}: date must be YYYY-MM-DD.`);
+      if(!code) errs.push(`Line ${ln}: account_code is required.`);
+      else if(!acctFor(code)) errs.push(`Line ${ln}: account code "${code}" is not in the chart of accounts.`);
+      if(debit===0 && credit===0) errs.push(`Line ${ln}: needs a debit or a credit amount.`);
+      if(debit>0 && credit>0) errs.push(`Line ${ln}: a line can't have both a debit and a credit.`);
+      out.push({ group:g, date, ref, memo, code, desc, debit, credit });
+    }
+    return { rows:out, errors:errs };
+  }
+  function onFile(f){
+    if(!f) return; setFileName(f.name); setMsg('');
+    const r=new FileReader();
+    r.onload=()=>{ const { rows:rr, errors:ee }=parseCSV(String(r.result||'')); setRows(rr); setErrors(ee); };
+    r.readAsText(f);
+  }
+  const groups=(()=>{
+    const m=new Map();
+    rows.forEach(r=>{ if(!m.has(r.group)) m.set(r.group, []); m.get(r.group).push(r); });
+    return Array.from(m.entries()).map(([g,ls])=>{
+      const debit=ls.reduce((s,l)=>s+l.debit,0), credit=ls.reduce((s,l)=>s+l.credit,0);
+      return { group:g, lines:ls, debit, credit, balanced:Math.abs(debit-credit)<0.005 };
+    });
+  })();
+  const groupErrors=groups.filter(g=>!g.balanced).map(g=>`JV group "${g.group}" is out of balance (Dr ${peso(g.debit)} vs Cr ${peso(g.credit)}).`);
+  const allErrors=[...errors,...groupErrors];
+  const canImport = rows.length>0 && allErrors.length===0;
+  async function doImport(){
+    if(!canImport) return;
+    setBusy(true); setMsg('');
+    try {
+      let created=0;
+      for(const g of groups){
+        const first=g.lines[0];
+        const monthKey=(first.date||'').slice(0,7);
+        const { data: exist } = await sb.from('journal_entries').select('number').like('number', `JV-${monthKey}-%`);
+        let max=0; (exist||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+        const number=`JV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        const clean=g.lines.map(l=>({ account_code:l.code, account_name:acctFor(l.code)?.name||'', cost_center_id:null, description:l.desc||'', debit:l.debit, credit:l.credit }));
+        const payload={ number, date:first.date, reference:first.ref||null, memo:first.memo||null, bank_id:null, cost_center_id:null, lines:clean, total_debit:g.debit, total_credit:g.credit, status:'posted', created_by:profile.id };
+        const { error } = await sb.from('journal_entries').insert(payload);
+        if(error) throw new Error(`JV group "${g.group}": ${error.message}`);
+        created++;
+      }
+      setBusy(false); alert(`Imported ${created} journal voucher${created===1?'':'s'} ✓`); onSaved();
+    } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="⬆ Bulk upload journal vouchers" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-sm text-slate-700">
+          <div className="font-semibold text-indigo-800 mb-1">How it works</div>
+          Download the template, fill one row per <strong>account line</strong>, and group the lines of a single voucher with the same <strong>jv_group</strong> value. Each group becomes one posted JV and its debits must equal its credits.
+          <div className="mt-2"><button onClick={downloadTemplate} className="px-3 py-1.5 rounded bg-white border font-semibold text-indigo-700 hover:bg-indigo-50">⬇ Download template (CSV)</button></div>
+        </div>
+        <div>
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Upload completed template (.csv)</span>
+            <input type="file" accept=".csv,text/csv" onChange={e=>onFile(e.target.files&&e.target.files[0])} className="mt-1 block w-full text-sm" />
+          </label>
+          {fileName && <div className="text-xs text-slate-500 mt-1">📄 {fileName} · {rows.length} line(s) · {groups.length} voucher(s)</div>}
+        </div>
+        {allErrors.length>0 && (
+          <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm text-rose-700 max-h-48 overflow-auto">
+            <div className="font-semibold mb-1">{allErrors.length} issue(s) to fix:</div>
+            <ul className="list-disc pl-5 space-y-0.5">{allErrors.slice(0,50).map((e,i)=><li key={i}>{e}</li>)}</ul>
+          </div>
+        )}
+        {groups.length>0 && (
+          <div className="border rounded-lg overflow-hidden max-h-72 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr>
+                <th className="text-left px-2 py-1.5">Group</th><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Memo</th>
+                <th className="text-right px-2 py-1.5">Debit</th><th className="text-right px-2 py-1.5">Credit</th><th className="text-center px-2 py-1.5">Balance</th>
+              </tr></thead>
+              <tbody>
+                {groups.map((g,i)=>(
+                  <tr key={i} className="border-t"><td className="px-2 py-1.5 font-semibold">{g.group}</td><td className="px-2 py-1.5">{g.lines[0].date}</td><td className="px-2 py-1.5 text-slate-500">{g.lines[0].memo||'—'} <span className="text-slate-400">({g.lines.length} lines)</span></td><td className="px-2 py-1.5 text-right">{peso(g.debit)}</td><td className="px-2 py-1.5 text-right">{peso(g.credit)}</td><td className="px-2 py-1.5 text-center">{g.balanced?<span className="text-emerald-600">✓</span>:<span className="text-rose-600">✕</span>}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={doImport} disabled={!canImport||busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Importing…':`Import ${groups.length||''} voucher${groups.length===1?'':'s'}`}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Cancel</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, profile, onClose, onSaved }){
@@ -34527,6 +34767,8 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
   const [memo,setMemo]=useState(entry.memo||'');
   const [bankId,setBankId]=useState(entry.bank_id||'');
   const [costCenterId,setCostCenterId]=useState(entry.cost_center_id||'');
+  const [atts,setAtts]=useState(entry.attachments||[]);
+  async function saveAtts(next){ setAtts(next); if(isEdit){ try { await sb.from('journal_entries').update({ attachments: next }).eq('id', entry.id); } catch(_){} } }
   const blank=()=>({ account_code:'', cost_center_id:'', description:'', debit:'', credit:'' });
   const [lines,setLines]=useState(()=> (entry.lines&&entry.lines.length) ? entry.lines.map(l=>({ account_code:l.account_code||'', cost_center_id:l.cost_center_id||'', description:l.description||'', debit:l.debit||'', credit:l.credit||'' })) : [blank(), blank()]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -34577,7 +34819,7 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
     if(status==='posted' && !tt.balanced){ setMsg(`Debits (${peso(tt.debit)}) must equal Credits (${peso(tt.credit)}) to post.`); return; }
     setBusy(true); setMsg('');
     try {
-      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, bank_id:bankId||null, cost_center_id:costCenterId||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status };
+      const payload = { date, reference:reference.trim()||null, memo:memo.trim()||null, bank_id:bankId||null, cost_center_id:costCenterId||null, lines:clean, total_debit:tt.debit, total_credit:tt.credit, status, attachments:atts };
       if(isEdit){ const { error } = await sb.from('journal_entries').update(payload).eq('id', entry.id); if(error) throw error; }
       else {
         const monthKey = date.slice(0,7);
@@ -34647,6 +34889,10 @@ function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, pro
         <div className={`text-sm text-center py-1.5 rounded-lg ${t.balanced?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>
           {t.balanced ? '✓ Balanced — debits equal credits' : `Out of balance by ${peso(Math.abs(t.debit-t.credit))} — a journal entry must balance to post`}
         </div>
+        <div className="border rounded-lg p-3 bg-slate-50/50">
+          <AttachmentsEditor value={atts} onChange={saveAtts} scope={'jv/'+(isEdit?entry.id:'new')} label="📎 Supporting documents & proof" inline />
+          <div className="text-[11px] text-slate-400 mt-1">Attach the source document, computation, or proof behind this entry. Stays viewable after posting for the audit trail.</div>
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           <button onClick={()=>save('posted')} disabled={busy||!t.balanced} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'✓ Post entry'}</button>
@@ -34701,6 +34947,12 @@ function JournalViewModal({ entry, bankAccounts, profile, profiles, canEdit, onE
           <div><div className="border-b border-slate-800 h-8"></div><div className="mt-1">Approved by</div></div>
         </div>
       </div>
+      {(entry.attachments||[]).length>0 && (
+        <div className="no-print mt-3 border rounded-lg p-3 bg-slate-50">
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">📎 Supporting documents</div>
+          <AttachmentList attachments={entry.attachments} />
+        </div>
+      )}
       <div className="no-print flex gap-2 mt-3">
         <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print</button>
         {canEdit && !isCancelled && <button onClick={onEdit} className="py-2 px-4 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">Edit</button>}
@@ -40860,7 +41112,7 @@ function App(){
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
-        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} reload={loadAll} />}
+        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
