@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 578 · Journal Vouchers: attach supporting docs/proof per JV (viewable after posting), plus a Bulk upload flow (download CSV template, group lines per voucher, validate & import as posted JVs). Budget Requests: liquidation once approved — categorized multi-line actual expenses with COA classifications & cost centers, per-line receipts + supporting-doc attachments, and a complete view (approved vs actual vs remaining/over-budget). Docs stay accessible after finalizing for the audit trail.";
+const BUILD = "Live build 579 · Training: new 'All About Clothes' module — a full illustrated garment-vocabulary lesson (parts, cuts, trims, plackets, pockets, measurements + a knowledge-check quiz), rendered richly in-app. Admins can edit the lesson content and swap in real photos per slot (cover + each garment). New HTML-lesson support in the Training module.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3675,6 +3675,109 @@ function MiniMarkdown({ text }){
   flush();
   return <div className="text-sm text-slate-700">{out}</div>;
 }
+// ── Rich HTML lessons ───────────────────────────────────────────
+// A lesson can be a full self-contained HTML document (styled cards,
+// SVG diagrams, an interactive quiz, etc.). We render it inside a
+// sandboxed iframe so its own CSS/JS never clashes with the app.
+// Photo "slots" — <figure class="photo-slot" data-slot="KEY"> — let an
+// admin drop real photos in without touching code; the uploaded image
+// paths live in lesson.images ({KEY: storagePath|url}).
+async function resolveLessonHtml(lesson){
+  let raw = String(lesson?.html||'');
+  if(raw.startsWith('asset:')){
+    try{ const res = await fetch(raw.slice(6)); raw = await res.text(); }catch(e){ raw = '<p style="font-family:sans-serif;color:#b91c1c">Could not load lesson content.</p>'; }
+  }
+  return raw;
+}
+function parsePhotoSlots(html){
+  const slots=[]; const re=/<figure class="photo-slot[^"]*" data-slot="([^"]+)">([\s\S]*?)<\/figure>/g; let m;
+  while((m=re.exec(html))){ const cap=m[2].match(/<figcaption>([\s\S]*?)<\/figcaption>/); slots.push({ key:m[1], label:(cap?cap[1]:m[1]).replace(/<[^>]+>/g,'').trim() }); }
+  return slots;
+}
+async function substitutePhotoSlots(html, images, canEdit){
+  const map=images||{}; const keys=Object.keys(map).filter(k=>map[k]);
+  const resolved={};
+  for(const k of keys){ const v=map[k]; resolved[k]= /^(data:|https?:|\/)/i.test(v) ? v : await signedUrl(v).catch(()=> ''); }
+  return String(html||'').replace(/<figure class="photo-slot([^"]*)" data-slot="([^"]+)">([\s\S]*?)<\/figure>/g, (mm,cls,key,inner)=>{
+    const capM=inner.match(/<figcaption>[\s\S]*?<\/figcaption>/); const cap=capM?capM[0]:'';
+    const url=resolved[key];
+    if(url) return `<figure class="photo-slot${cls} has-photo" data-slot="${key}"><img src="${url}" alt="" style="width:100%;height:auto;display:block;border:1px solid var(--line,#e5e7eb);border-radius:6px">${cap}</figure>`;
+    return canEdit ? mm : '';
+  });
+}
+function TrainingHtmlLesson({ lesson, canEdit }){
+  const [doc,setDoc]=useState('');
+  const [h,setH]=useState(600);
+  const iref=useRef(null);
+  useEffect(()=>{ let on=true; (async()=>{
+    const raw=await resolveLessonHtml(lesson);
+    const sub=await substitutePhotoSlots(raw, lesson?.images, canEdit);
+    if(on) setDoc(sub);
+  })(); return ()=>{on=false;}; },[lesson?.id, lesson?.html, JSON.stringify(lesson?.images||{}), canEdit]);
+  function fit(){ try{ const d=iref.current&&iref.current.contentDocument; if(d&&d.body){ setH(Math.max(400, d.body.scrollHeight+40)); } }catch(_){} }
+  return (
+    <iframe ref={iref} title={lesson?.title||'lesson'} srcDoc={doc} onLoad={()=>{ fit(); setTimeout(fit,300); setTimeout(fit,1200); }}
+      sandbox="allow-scripts allow-same-origin" className="w-full rounded-lg border bg-white" style={{ height:h+'px' }} />
+  );
+}
+function TrainingHtmlLessonModal({ profile, lesson, onClose, onSaved }){
+  const [tab,setTab]=useState('photos');
+  const [effective,setEffective]=useState('');   // as-loaded (asset or inline)
+  const [htmlText,setHtmlText]=useState('');
+  const [images,setImages]=useState(lesson?.images||{});
+  const [slots,setSlots]=useState([]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [upKey,setUpKey]=useState('');
+  useEffect(()=>{ let on=true; (async()=>{ const raw=await resolveLessonHtml(lesson); if(!on) return; setEffective(raw); setHtmlText(raw); setSlots(parsePhotoSlots(raw)); })(); return ()=>{on=false;}; },[lesson?.id]);
+  async function setPhoto(key, file){ if(!file) return; setUpKey(key); setMsg('');
+    try{ const dataUrl=await readFileAsDataUrl(file); const path=await uploadDataUrl('training', dataUrl); setImages(p=>({...p,[key]:path})); }
+    catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUpKey('');
+  }
+  function removePhoto(key){ setImages(p=>{ const n={...p}; delete n[key]; return n; }); }
+  async function save(){ setBusy(true); setMsg('');
+    try{
+      const payload={ images, updated_at:new Date().toISOString() };
+      // Only persist inline HTML if the admin actually edited it — otherwise
+      // keep the lightweight asset reference.
+      if(htmlText!==effective) payload.html=htmlText;
+      const { error } = await sb.from('training_lessons').update(payload).eq('id', lesson.id);
+      if(error) throw error;
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (<Modal title={`Edit: ${lesson?.title||'lesson'}`} onClose={onClose} xwide><div className="space-y-3 text-sm">
+    <div className="inline-flex rounded-lg border bg-slate-100 p-0.5">
+      <button onClick={()=>setTab('photos')} className={`px-3 py-1.5 rounded-md text-xs font-semibold ${tab==='photos'?'bg-white shadow-sm':'text-slate-600'}`}>🖼 Photos</button>
+      <button onClick={()=>setTab('html')} className={`px-3 py-1.5 rounded-md text-xs font-semibold ${tab==='html'?'bg-white shadow-sm':'text-slate-600'}`}>&lt;/&gt; Content (HTML)</button>
+    </div>
+    {tab==='photos' && (
+      <div className="space-y-2">
+        <div className="text-xs text-slate-500">Swap in real photos for any slot below. They appear in the lesson where the placeholder is; learners only see slots that have a photo.</div>
+        {slots.length===0 && <div className="text-slate-400 py-6 text-center">This lesson has no photo slots.</div>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {slots.map(s=>(
+            <div key={s.key} className="border rounded-lg p-3">
+              <div className="font-medium text-slate-800 mb-1">{s.label}</div>
+              {images[s.key]
+                ? <div className="space-y-2"><LessonImg path={images[s.key]} /><div className="flex gap-3"><label className="text-xs text-indigo-600 hover:underline cursor-pointer">{upKey===s.key?'Uploading…':'Replace'}<input type="file" accept="image/*" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl) setPhoto(s.key,fl); e.target.value=''; }} /></label><button onClick={()=>removePhoto(s.key)} className="text-xs text-rose-500 hover:underline">Remove</button></div></div>
+                : <label className="flex flex-col items-center justify-center gap-1 h-28 border-2 border-dashed rounded-lg text-slate-400 text-xs cursor-pointer hover:bg-slate-50">{upKey===s.key?'Uploading…':'＋ Upload photo'}<input type="file" accept="image/*" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl) setPhoto(s.key,fl); e.target.value=''; }} /></label>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+    {tab==='html' && (
+      <div className="space-y-1">
+        <div className="text-xs text-slate-500">Full lesson HTML. Edit the text/sections here. Keep the <code>&lt;figure class="photo-slot" data-slot="…"&gt;</code> blocks to keep photo slots working.</div>
+        <textarea value={htmlText} onChange={e=>setHtmlText(e.target.value)} rows={20} className="w-full border rounded px-2 py-1.5 font-mono text-[11px]" spellCheck={false} />
+        {htmlText!==effective && <div className="text-[11px] text-amber-600">Edited — saving will store your changes on this lesson.</div>}
+      </div>
+    )}
+    {msg&&<div className="text-xs text-rose-600">{msg}</div>}
+    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy||!!upKey} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
+  </div></Modal>);
+}
 function trainingCanEdit(p){ return p?.role==='admin' || p?.role==='manager'; }
 function TrainingModuleModal({ profile, existing, nextPos, onClose, onSaved }){
   const [f,setF]=useState({ title:existing?.title||'', description:existing?.description||'', icon:existing?.icon||'🎓' });
@@ -3770,6 +3873,7 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
   const [loading,setLoading]=useState(true);
   const [editMod,setEditMod]=useState(null); const [creatingMod,setCreatingMod]=useState(false);
   const [editLesson,setEditLesson]=useState(null); const [creatingLesson,setCreatingLesson]=useState(false);
+  const [editHtmlLesson,setEditHtmlLesson]=useState(null);
   const [showTeam,setShowTeam]=useState(false);
   async function loadModules(){ setLoading(true); const { data }=await sb.from('training_modules').select('*').is('deleted_at',null).order('position').order('created_at'); const mods=data||[]; setModules(mods); setLoading(false); if(mods.length && !activeMod) selectModule(mods[0]); }
   async function selectModule(m){ setActiveMod(m); setActiveLesson(null); setShowTeam(false);
@@ -3843,6 +3947,7 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
                 </tbody></table>
               </div>
             ) : activeLesson ? (()=>{
+              const isHtml = activeLesson.content_type==='html';
               // A lesson can embed a live sample techpack via [[TECHPACK:<leadId>]].
               const mt=(activeLesson.body||'').match(/\[\[TECHPACK:([0-9a-fA-F-]+)\]\]/);
               const sampleLead = mt && (leads||[]).find(l=>l.id===mt[1]);
@@ -3851,9 +3956,9 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
               <div>
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <h2 className="text-xl font-bold text-slate-900">{activeLesson.title}</h2>
-                  {canEdit && <div className="flex gap-2 shrink-0"><button onClick={()=>setEditLesson(activeLesson)} className="text-xs text-slate-500 hover:underline">Edit</button><button onClick={()=>delLesson(activeLesson)} className="text-xs text-rose-500 hover:underline">Delete</button></div>}
+                  {canEdit && <div className="flex gap-2 shrink-0"><button onClick={()=> isHtml ? setEditHtmlLesson(activeLesson) : setEditLesson(activeLesson)} className="text-xs text-slate-500 hover:underline">Edit</button><button onClick={()=>delLesson(activeLesson)} className="text-xs text-rose-500 hover:underline">Delete</button></div>}
                 </div>
-                <MiniMarkdown text={cleanBody} />
+                {isHtml ? <TrainingHtmlLesson lesson={activeLesson} canEdit={canEdit} /> : <MiniMarkdown text={cleanBody} />}
                 {mt && (sampleLead
                   ? <button onClick={()=>onOpenTechpack&&onOpenTechpack(sampleLead)} className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 Open the sample techpack — {sampleLead.title} <span className="opacity-80">(all pages)</span></button>
                   : <div className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">The linked sample techpack isn't available right now.</div>)}
@@ -3871,6 +3976,7 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
       {editMod && <TrainingModuleModal profile={profile} existing={editMod} onClose={()=>setEditMod(null)} onSaved={()=>{ setEditMod(null); loadModules(); }} />}
       {creatingLesson && activeMod && <TrainingLessonModal profile={profile} moduleId={activeMod.id} nextPos={lessons.length} onClose={()=>setCreatingLesson(false)} onSaved={()=>{ setCreatingLesson(false); selectModule(activeMod); }} />}
       {editLesson && <TrainingLessonModal profile={profile} moduleId={activeMod.id} existing={editLesson} onClose={()=>setEditLesson(null)} onSaved={()=>{ setEditLesson(null); selectModule(activeMod); if(activeLesson&&activeLesson.id===editLesson.id) setActiveLesson({...activeLesson}); }} />}
+      {editHtmlLesson && <TrainingHtmlLessonModal profile={profile} lesson={editHtmlLesson} onClose={()=>setEditHtmlLesson(null)} onSaved={async ()=>{ const id=editHtmlLesson.id; setEditHtmlLesson(null); await selectModule(activeMod); const { data:fresh }=await sb.from('training_lessons').select('*').eq('id',id).maybeSingle(); if(fresh) setActiveLesson(fresh); }} />}
     </div>
   );
 }
