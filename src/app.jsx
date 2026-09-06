@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 573 · Inventory really uncapped now — the 1000-row ceiling is a Supabase server cap that .range can't beat, so items + stock movements are now fetched in pages (all 1202 items load, incl. Taslan).";
+const BUILD = "Live build 574 · RFP enhancements: proof-of-transaction / receipts attachments on every RFP (add anytime, even after Paid; viewable inline in RFP + APV), Finance approval now requires proof, Paid RFPs show accounting entries (expense classification per voucher, incl. splits). Removed test RFP-2026-08-005 with full backout.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29885,19 +29885,26 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <button disabled={!sameSupplier} onClick={()=>setBatchPaying(selectedRfps)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">💰 Pay together as one check</button>
         </div>
       )}
-      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
+      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
-      {viewingAp && <APVoucherModal ap={viewingAp} profiles={profiles} onClose={()=>setViewingAp(null)} />}
+      {viewingAp && <APVoucherModal ap={viewingAp} profiles={profiles} rfps={rfps} orders={orders} onClose={()=>setViewingAp(null)} />}
     </div>
   );
 }
 
-function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose, onSaved, onPay }){
+function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, onClose, onSaved, onPay }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const [showPO,setShowPO]=useState(false);
   const [poPrint,setPoPrint]=useState(false);
+  // RFP supporting documents — proof of transaction (from Purchasing), receipts,
+  // and invoices. Editable in ANY status (including Paid) so complete proof of
+  // expense can always be attached. Persisted immediately, without closing.
+  const [atts,setAtts]=useState(Array.isArray(rfp.attachments)?rfp.attachments:[]);
+  const [attSaving,setAttSaving]=useState(false);
+  async function saveAtts(next){ setAtts(next); setAttSaving(true); try{ await sb.from('rfps').update({ attachments: next }).eq('id', rfp.id); }catch(e){ setMsg('Save attachment failed: '+(e.message||e)); } setAttSaving(false); }
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:(code||'—'); };
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const po = orders.find(o=>o.id===rfp.po_id);
@@ -29915,6 +29922,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose
 
   async function approveFinance(){
     if(!isAccounting && !isAdmin){ setMsg('Only Finance/Accounting can approve at this step.'); return; }
+    if((atts||[]).length===0){ setMsg('⚠ Attach the proof of transaction (from Purchasing) below before approving — Accounting needs it to validate the amount and VAT status.'); return; }
     setBusy(true);
     const { error } = await sb.from('rfps').update({ status:'pending_admin', finance_approved_by:profile.id, finance_approved_at:new Date().toISOString(), finance_notes:notes||null }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -30003,6 +30011,42 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, onClose
             )}
           </div>
         )}
+
+        {/* Proof of transaction / receipts / invoices — attached by Purchasing
+            and Accounting. Editable in ANY status (including Paid) so the full
+            proof of expense is always documented. */}
+        <div className="border rounded-lg p-3 bg-amber-50/40 border-amber-200">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs font-semibold uppercase text-amber-700">🧾 Proof of transaction & receipts {atts.length>0?`(${atts.length})`:''}</div>
+            {attSaving && <span className="text-[10px] text-slate-400">Saving…</span>}
+          </div>
+          <div className="text-[11px] text-slate-500 mb-2">Upload the supplier proof of transaction (to validate amount + VAT), plus receipts/invoices. You can add these anytime — even after the RFP is paid.</div>
+          <AttachmentsEditor value={atts} onChange={saveAtts} scope={'rfp/'+rfp.id} inline />
+          {atts.length===0 && (rfp.status==='pending_finance') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: attach the proof of transaction before Finance can approve.</div>}
+        </div>
+
+        {/* Accounting entries — expense classifications booked when this RFP was
+            paid (from the payment voucher's GL split). Supports multiple accounts. */}
+        {(rfp.status==='paid'||rfp.status==='partial') && rfpVouchers.length>0 && (()=>{
+          const rows=[];
+          rfpVouchers.forEach(v=>{
+            const splits = Array.isArray(v.split_lines) ? v.split_lines.filter(l=>(Number(l.debit)||0)>0 || (Number(l.credit)||0)>0) : [];
+            if(splits.length){ splits.forEach(l=> rows.push({ voucher:v.number, account:acctName(l.account_code), desc:l.description||'', amount:Number(l.debit)||0 })); }
+            else { rows.push({ voucher:v.number, account: v.gl_account_code?acctName(v.gl_account_code):(v.expense_category||'(unclassified)'), desc:v.particulars||'', amount:Number(v.amount)||0 }); }
+          });
+          const tot=rows.reduce((s,r)=>s+r.amount,0);
+          return (
+            <div className="border rounded-lg p-3 bg-sky-50/40 border-sky-100">
+              <div className="text-[10px] uppercase text-sky-700 font-semibold mb-1.5">📊 Accounting entries (expense classification)</div>
+              <div className="overflow-x-auto"><table className="w-full text-xs bg-white rounded-lg overflow-hidden border">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Voucher</th><th className="text-left px-2 py-1.5">Expense account</th><th className="text-left px-2 py-1.5">Description</th><th className="text-right px-2 py-1.5">Amount</th></tr></thead>
+                <tbody>{rows.map((r,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1.5 font-mono">{r.voucher}</td><td className="px-2 py-1.5">{r.account}</td><td className="px-2 py-1.5 text-slate-500">{r.desc}</td><td className="px-2 py-1.5 text-right font-semibold">{peso(r.amount)}</td></tr>))}
+                  <tr className="border-t bg-slate-50 font-bold"><td colSpan={3} className="px-2 py-1.5 text-right uppercase text-[10px]">Total</td><td className="px-2 py-1.5 text-right">{peso(tot)}</td></tr>
+                </tbody>
+              </table></div>
+            </div>
+          );
+        })()}
 
         {/* Payments recorded against this RFP — multiple entries for partial /
             multi-payment suppliers. */}
@@ -31158,7 +31202,7 @@ const AP_STATUSES = [
 ];
 const apMeta = (k)=> AP_STATUSES.find(s=>s.key===k) || AP_STATUSES[0];
 
-function APVouchersView({ profile, profiles, apVouchers, reload }){
+function APVouchersView({ profile, profiles, apVouchers, rfps, orders, reload }){
   const [tab,setTab]=useState('for_payment');
   const [search,setSearch]=useState('');
   const [viewing,setViewing]=useState(null);
@@ -31218,14 +31262,18 @@ function APVouchersView({ profile, profiles, apVouchers, reload }){
           </tbody>
         </table>
       </div>
-      {viewing && <APVoucherModal ap={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
+      {viewing && <APVoucherModal ap={viewing} profiles={profiles} rfps={rfps} orders={orders} onClose={()=>setViewing(null)} />}
     </div>
   );
 }
 
-function APVoucherModal({ ap, profiles, onClose }){
+function APVoucherModal({ ap, profiles, rfps, orders, onClose }){
   const finBy = (profiles||[]).find(p=>p.id===ap.finance_approved_by);
   const admBy = (profiles||[]).find(p=>p.id===ap.admin_approved_by);
+  const linkedRfp = ap.rfp_id ? (rfps||[]).find(r=>r.id===ap.rfp_id) : null;
+  const rfpAtts = linkedRfp && Array.isArray(linkedRfp.attachments) ? linkedRfp.attachments : [];
+  const linkedPo = ap.po_id ? (orders||[]).find(o=>o.id===ap.po_id) : null;
+  const poAtts = linkedPo && Array.isArray(linkedPo.attachments) ? linkedPo.attachments : [];
   const m = (Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status);
   return (
     <Modal title={`Accounts Payable Voucher — ${ap.number}`} onClose={onClose} wide>
@@ -31250,6 +31298,13 @@ function APVoucherModal({ ap, profiles, onClose }){
           </tbody>
         </table>
         <div className="text-sm italic text-slate-600 mb-4">{amountInWords(ap.amount)}</div>
+        {(rfpAtts.length>0 || poAtts.length>0) && (
+          <div className="no-print border rounded-lg p-3 bg-amber-50/40 border-amber-200 mb-4">
+            <div className="text-[10px] uppercase text-amber-700 font-semibold mb-1.5">🧾 Supporting documents</div>
+            {rfpAtts.length>0 && <div className="mb-2"><div className="text-[10px] uppercase text-slate-400 mb-1">Proof of transaction / receipts (from RFP)</div><div className="flex flex-wrap gap-2">{rfpAtts.map((a,i)=><AttachmentChip key={i} att={a} small gallery={rfpAtts} />)}</div></div>}
+            {poAtts.length>0 && <div><div className="text-[10px] uppercase text-slate-400 mb-1">PO attachments (quotation / invoice)</div><div className="flex flex-wrap gap-2">{poAtts.map((a,i)=><AttachmentChip key={i} att={a} small gallery={poAtts} />)}</div></div>}
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-6 mt-6">
           <div className="text-center">
             <div className="text-[10px] uppercase text-slate-500 mb-1">Approved by Finance</div>
@@ -40678,7 +40733,7 @@ function App(){
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
-        {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
+        {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} />}
