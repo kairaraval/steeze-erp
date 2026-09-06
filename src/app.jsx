@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 575 · APV enhancements: upload/view proof of payment & receipts on any APV (Paid or Unpaid), inline view of RFP proof + PO attachments + a View-PO-form button, and accounting entries (expense classification) on paid APVs. Removed test APV-2026-07-001 chain with full backout.";
+const BUILD = "Live build 576 · Expense Log now posts every Journal Voucher expense classification (a row per expense account, multi-account JVs fully broken out). Petty Cash detail: click a liquidation/replenishment date to filter that period's expenses (details, amounts, receipts).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33153,6 +33153,13 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   const onHand = Number(pc.amount||0) - totalSpentEver + replenishedTotal;
   const cycleSpent = linkedExpenses.filter(e=>!e.pc_liquidated_at).reduce((s,e)=>s+Number(e.amount||0),0); // unliquidated
   const totalSpent = totalSpentEver; const outstanding = onHand; // spendable cash
+  // Liquidation periods — each distinct pc_liquidated_at stamp is one liquidated/
+  // replenished cycle. Clicking a period (or its replenishment) filters the
+  // expense list to just that period. null = all, 'current' = unliquidated cycle.
+  const [periodFilter,setPeriodFilter]=useState(null);
+  const periods = (()=>{ const m=new Map(); linkedExpenses.forEach(e=>{ const k=e.pc_liquidated_at; if(!k) return; const g=m.get(k)||{ key:k, count:0, total:0 }; g.count++; g.total+=Number(e.amount||0); m.set(k,g); }); return Array.from(m.values()).sort((a,b)=>String(b.key).localeCompare(String(a.key))); })();
+  const currentCount = linkedExpenses.filter(e=>!e.pc_liquidated_at).length;
+  function periodForRepl(r){ const t=new Date(r.requested_at||r.created_at||0).getTime(); let best=null, bestDiff=Infinity; periods.forEach(p=>{ const d=Math.abs(new Date(p.key).getTime()-t); if(d<bestDiff){ bestDiff=d; best=p.key; } }); return (best && bestDiff < 1000*60*60*24*3) ? best : 'current'; }
   // Local state for the add-expense form — MULTI-LINE.
   const today = new Date().toISOString().slice(0,10);
   const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, gl_account_code:'', category:'', cost_center_id:'', vendor:'', description:'', amount:'', input_vat:'', receipt_url:'' });
@@ -33250,7 +33257,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                 <div key={r.id} className="flex items-center gap-2 flex-wrap bg-white border rounded px-2 py-1.5 text-xs">
                   <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${st==='pending_admin'?'bg-amber-100 text-amber-700':st==='approved'?'bg-blue-100 text-blue-700':st==='released'?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{st==='pending_admin'?'Pending admin':st}</span>
                   <span className="font-semibold">{peso(r.amount)}</span>
-                  <span className="text-slate-400">requested {fmtDate(String(r.requested_at||r.created_at).slice(0,10))}</span>
+                  <button onClick={()=>{ const p=periodForRepl(r); setPeriodFilter(p); }} className="text-indigo-600 hover:underline" title="Show the expenses in this liquidation period">📂 requested {fmtDate(String(r.requested_at||r.created_at).slice(0,10))} — view expenses</button>
                   <div className="flex-1"></div>
                   {st==='pending_admin' && isAdmin && <button onClick={()=>onApproveRepl && onApproveRepl(r)} className="px-2 py-0.5 rounded bg-blue-600 text-white font-semibold">✓ Approve</button>}
                   {st==='approved' && isAcct && <>
@@ -33315,7 +33322,16 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
 
         {/* Expense list */}
         <div className="bg-white border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 bg-slate-50 border-b text-xs uppercase font-semibold text-slate-500">Expense history ({linkedExpenses.length})</div>
+          <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs uppercase font-semibold text-slate-500">Expense history</div>
+            {(periods.length>0 || currentCount>0) && (
+              <div className="flex items-center gap-1 flex-wrap">
+                <button onClick={()=>setPeriodFilter(null)} className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold ${periodFilter==null?'bg-indigo-600 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>All</button>
+                {currentCount>0 && <button onClick={()=>setPeriodFilter('current')} className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold ${periodFilter==='current'?'bg-indigo-600 text-white':'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>Current cycle ({currentCount})</button>}
+                {periods.map(p=>(<button key={p.key} onClick={()=>setPeriodFilter(p.key)} className={`text-[11px] px-2 py-0.5 rounded-lg font-semibold ${periodFilter===p.key?'bg-indigo-600 text-white':'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'}`} title={`Liquidated ${fmtDate(String(p.key).slice(0,10))} · ${peso(p.total)}`}>Liq. {fmtDate(String(p.key).slice(0,10))} ({p.count})</button>))}
+              </div>
+            )}
+          </div>
           {linkedExpenses.length === 0 ? (
             <div className="text-center py-6 text-sm text-slate-400">No expenses charged yet. Click <b>+ Add expense</b> to log one.</div>
           ) : (
@@ -33336,7 +33352,10 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                 const oldestFirst = linkedExpenses.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
                 let running = Number(pc.amount||0);
                 const withBal = oldestFirst.map(e => { running -= Number(e.amount||0); return { ...e, _balAfter: running }; });
-                return withBal.slice().reverse().map(e => (
+                const inPeriod = (e)=> periodFilter==null ? true : periodFilter==='current' ? !e.pc_liquidated_at : e.pc_liquidated_at===periodFilter;
+                const shown = withBal.slice().reverse().filter(inPeriod);
+                if(shown.length===0) return (<tr><td colSpan={6} className="text-center py-6 text-sm text-slate-400">No expenses in this period.</td></tr>);
+                return shown.map(e => (
                   <tr key={e.id} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="px-3 py-2">
@@ -35395,20 +35414,25 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
     const acctName = (code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code))?.name || code;
     (journalEntries||[]).forEach(j=>{
       if(j.deleted_at || j.status==='cancelled' || j.status==='draft') return;
-      // Summarise each JE into ONE row: total all its expense-account debits and
-      // categorise by the dominant (largest) expense account.
-      const byAcct={}; let total=0;
+      // Post EACH expense classification in the JV as its own Expense Log row, so
+      // multi-account journal vouchers show every expense type + amount (complete
+      // classification), not just the dominant one. Same-account lines are summed.
+      const byAcct={};
       (j.lines||[]).forEach(l=>{
         const debit = Number(l.debit)||0;
         if(debit<=0 || !expenseCodes.has(String(l.account_code))) return;
-        total += debit; byAcct[l.account_code] = (byAcct[l.account_code]||0) + debit;
+        byAcct[l.account_code] = (byAcct[l.account_code]||0) + debit;
       });
-      if(total<=0) return;
       const codes = Object.keys(byAcct).sort((a,b)=>byAcct[b]-byAcct[a]);
-      out.push({
-        date: j.date, source:'journal', amount: total,
-        label: j.memo || j.reference || '(journal entry)',
-        category: acctName(codes[0]), ref: j.number, raw:j,
+      if(codes.length===0) return;
+      const multi = codes.length>1;
+      const base = j.memo || j.reference || '(journal voucher)';
+      codes.forEach(code=>{
+        out.push({
+          date: j.date, source:'journal', amount: byAcct[code],
+          label: multi ? `${base} · ${acctName(code)}` : base,
+          category: acctName(code), ref: j.number, raw:j,
+        });
       });
     });
     return out.filter(r => r.date).sort((a,b)=> String(b.date).localeCompare(String(a.date)));
