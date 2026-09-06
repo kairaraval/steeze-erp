@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 579 · Training: new 'All About Clothes' module — a full illustrated garment-vocabulary lesson (parts, cuts, trims, plackets, pockets, measurements + a knowledge-check quiz), rendered richly in-app. Admins can edit the lesson content and swap in real photos per slot (cover + each garment). New HTML-lesson support in the Training module.";
+const BUILD = "Live build 580 · Training: new 'All About Clothes' module — a full illustrated garment-vocabulary lesson (parts, cuts, trims, plackets, pockets, measurements + a knowledge-check quiz), rendered richly in-app with loading/error states. Admins can edit the lesson content and swap in real photos per slot (cover + each garment). New HTML-lesson support in the Training module.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3707,14 +3707,20 @@ async function substitutePhotoSlots(html, images, canEdit){
 }
 function TrainingHtmlLesson({ lesson, canEdit }){
   const [doc,setDoc]=useState('');
+  const [status,setStatus]=useState('loading'); // loading | ready | error
   const [h,setH]=useState(600);
   const iref=useRef(null);
-  useEffect(()=>{ let on=true; (async()=>{
-    const raw=await resolveLessonHtml(lesson);
-    const sub=await substitutePhotoSlots(raw, lesson?.images, canEdit);
-    if(on) setDoc(sub);
+  useEffect(()=>{ let on=true; setStatus('loading'); (async()=>{
+    try{
+      const raw=await resolveLessonHtml(lesson);
+      if(!raw || !/[<]/.test(raw)) throw new Error('empty');
+      const sub=await substitutePhotoSlots(raw, lesson?.images, canEdit);
+      if(on){ setDoc(sub); setStatus('ready'); }
+    }catch(e){ if(on) setStatus('error'); }
   })(); return ()=>{on=false;}; },[lesson?.id, lesson?.html, JSON.stringify(lesson?.images||{}), canEdit]);
   function fit(){ try{ const d=iref.current&&iref.current.contentDocument; if(d&&d.body){ setH(Math.max(400, d.body.scrollHeight+40)); } }catch(_){} }
+  if(status==='loading') return <div className="h-64 rounded-lg border bg-slate-50 flex items-center justify-center text-slate-400 text-sm">Loading lesson…</div>;
+  if(status==='error') return <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">This lesson's content couldn't be loaded. If you just deployed, give it a moment and reload — the lesson file ships with the latest build.</div>;
   return (
     <iframe ref={iref} title={lesson?.title||'lesson'} srcDoc={doc} onLoad={()=>{ fit(); setTimeout(fit,300); setTimeout(fit,1200); }}
       sandbox="allow-scripts allow-same-origin" className="w-full rounded-lg border bg-white" style={{ height:h+'px' }} />
