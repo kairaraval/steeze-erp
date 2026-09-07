@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 580 · Training: new 'All About Clothes' module — a full illustrated garment-vocabulary lesson (parts, cuts, trims, plackets, pockets, measurements + a knowledge-check quiz), rendered richly in-app with loading/error states. Admins can edit the lesson content and swap in real photos per slot (cover + each garment). New HTML-lesson support in the Training module.";
+const BUILD = "Live build 581 · Removing a team member now actually sticks: they're hidden from the team list and every picker, their login is blocked, and the leads they managed become Unassigned — while their past records & signatures stay intact for the audit trail. (Previously the delete could silently fail because of linked records.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20105,13 +20105,13 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     const label = p.name || p.email;
     if(!confirm(
       `Remove ${label} from Steeze OS?\n\n`+
-      `• Their profile + role will be deleted.\n`+
-      `• Leads they were managing get re-assigned to "Unassigned" — you can re-assign them later in the Sales Pipeline.\n`+
-      `• Their past comments stay (attributed to a deleted user).\n\n`+
-      `To fully block them from signing in again, also delete their auth account in Supabase → Authentication → Users.\n\n`+
+      `• They're immediately removed from the team list and every picker.\n`+
+      `• Their login is blocked — they can't sign back in.\n`+
+      `• Leads they were managing become "Unassigned" — re-assign them later in the Sales Pipeline.\n`+
+      `• Their past records & signatures stay intact for the audit trail (shown as a former member).\n\n`+
       `Continue?`
     )) return;
-    const { error } = await sb.from('profiles').delete().eq('id', p.id);
+    const { error } = await sb.rpc('admin_remove_member', { target: p.id });
     if(error){ alert('Remove failed: '+error.message); return; }
     reload && reload();
   }
@@ -39977,7 +39977,7 @@ function App(){
     // gating load hit the 8s statement timeout — so every page "just loaded".
     // Fetch only the small columns here; hydrate signatures once in the
     // background so printed documents still render them.
-    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').then(r=>{ if(r.data){
+    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null).then(r=>{ if(r.data){
       // Merge-preserve any signatures already hydrated, so the constant reloads
       // don't wipe signature_data off the team list (that made techpack/DR/PO
       // printouts lose their e-signatures after the first reload).
@@ -39989,7 +39989,7 @@ function App(){
     sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
-      sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate'),
+      sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null),
       sb.from('clients').select('*').order('company'),
       sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
