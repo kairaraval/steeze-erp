@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 581 · Removing a team member now actually sticks: they're hidden from the team list and every picker, their login is blocked, and the leads they managed become Unassigned — while their past records & signatures stay intact for the audit trail. (Previously the delete could silently fail because of linked records.)";
+const BUILD = "Live build 582 · New team role: Sales Representative — a full sales role with exactly the same view and access as a Sales Manager (pipeline, sales orders, commissions, marketing, team, etc.), shown as its own label on the team. Eunice Marquez promoted from Sales Assistant to Sales Representative.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1814,7 +1814,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   // decision) — this flips status only, they can't edit content. Accepting a
   // sample estimate spins up the Sample Sales Order.
   const isSample = purpose==='sample';
-  const canDecide = canEdit || (isSample && (profile.role==='manager' || profile.role==='assistant'));
+  const canDecide = canEdit || (isSample && (isManagerRole(profile.role) || profile.role==='assistant'));
   // editable fields
   const [number,setNumber]=useState('');
   const [status,setStatus]=useState('draft');
@@ -2907,7 +2907,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   // shared queue for whichever assistant is free to claim.
   const [showTicket,setShowTicket]=useState(false);
   const [showGraphicTicket,setShowGraphicTicket]=useState(false);
-  const canTicket = profile.role==='admin'||profile.role==='manager'||profile.role==='assistant'||lead.manager_id===profile.id;
+  const canTicket = profile.role==='admin'||isManagerRole(profile.role)||profile.role==='assistant'||lead.manager_id===profile.id;
   const notesDirty = (notesDraft||'') !== (lead.notes||'');
   useEffect(()=>{ setNotesDraft(lead.notes||''); setNotesMsg(''); },[lead.id, lead.notes]);
   async function saveNotes(){
@@ -3031,7 +3031,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
   const scope = job ? ('dept/'+job.id) : 'dept/new';
   // Graphic revision — sales manager / assistant sends the project back to the
   // SAME assigned artist's Assigned pool (keeps the artist) and pings them.
-  const canRevise = jobType==='graphic' && !!job && ['admin','manager','assistant'].includes(profile.role);
+  const canRevise = jobType==='graphic' && !!job && ['admin','manager','sales_representative','assistant'].includes(profile.role);
   async function ping(recipientId, text, ticketId){ if(!recipientId||recipientId===profile.id) return; try{ await sb.from('notifications').insert({ recipient_id:recipientId, actor_id:profile.id, text, link_view:'graphic', ref_type:'graphic_ticket', ref_id:ticketId, type:'system' }); }catch(_){} }
   async function requestRevision(){
     if(!job) return;
@@ -3351,7 +3351,7 @@ function DesignResourcesBoard({ profile }){
   const [addDefaultBoard,setAddDefaultBoard]=useState('');
   const [editingRes,setEditingRes]=useState(null);
   const [lightbox,setLightbox]=useState(null);
-  const canEdit = ['admin','manager','assistant','graphic'].includes(profile?.role);
+  const canEdit = ['admin','manager','sales_representative','assistant','graphic'].includes(profile?.role);
   async function load(){
     setLoading(true);
     const [b,r]=await Promise.all([
@@ -3458,7 +3458,7 @@ const SALES_RES_TABS = [
 function salesResCanEdit(category, profile){
   const r = profile?.role;
   if(category === 'pricelist') return r === 'admin';
-  return r === 'admin' || r === 'manager' || r === 'assistant';
+  return r === 'admin' || isManagerRole(r) || r === 'assistant';
 }
 // Preset folders per tab (Size Charts + Designs). Others have no folders.
 const RES_FOLDERS = {
@@ -3784,7 +3784,7 @@ function TrainingHtmlLessonModal({ profile, lesson, onClose, onSaved }){
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy||!!upKey} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
-function trainingCanEdit(p){ return p?.role==='admin' || p?.role==='manager'; }
+function trainingCanEdit(p){ return p?.role==='admin' || isManagerRole(p?.role); }
 function TrainingModuleModal({ profile, existing, nextPos, onClose, onSaved }){
   const [f,setF]=useState({ title:existing?.title||'', description:existing?.description||'', icon:existing?.icon||'🎓' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -4942,7 +4942,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   // Graphic board: sales manager / assistant can send a card back to the SAME
   // assigned artist for revision — flips the linked graphic ticket to its
   // Assigned pool (keeps the artist), moves the card to To Do, and pings them.
-  const canRevise = ['admin','manager','assistant'].includes(profile.role);
+  const canRevise = ['admin','manager','sales_representative','assistant'].includes(profile.role);
   async function requestRevision(j){
     const reason=(prompt('Request a revision — note for the artist (optional):','')||'').trim();
     try {
@@ -10912,7 +10912,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   const isAssistant=profile.role==='assistant';
   const canDelete=isAdmin || !isAssistant;
   // Who may edit a sample's due date directly on the board.
-  const canEditDue=['admin','manager','assistant','production_supervisor'].includes(profile.role);
+  const canEditDue=['admin','manager','sales_representative','assistant','production_supervisor'].includes(profile.role);
   async function saveDue(j, val){
     const { error } = await sb.from('sampling_jobs').update({ due_date: val||null }).eq('id', j.id);
     if(error){ alert(error.message); return; }
@@ -11899,7 +11899,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
             {t.archived_at ? (canManage && <button onClick={()=>unarchive(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Unarchive</button>) : <>
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
             {t.status==='in_progress' && canAct && <button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button>}
-            {t.status==='in_progress' && canAct && profile.role!=='manager' && <button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button>}
+            {t.status==='in_progress' && canAct && !isManagerRole(profile.role) && <button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
             {t.status==='done' && canAct && <button onClick={()=>archive(t)} title="Archive — hide from the board" className="text-xs px-2 py-1 rounded-lg border text-slate-500">🗄 Archive</button>}
             </>}
@@ -12015,8 +12015,8 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const [showForm,setShowForm]=useState(false);
   const [editTicket,setEditTicket]=useState(null);
   const role=profile.role;
-  const canManage = ['admin','manager'].includes(role);
-  const isSalesSide = ['admin','manager','assistant'].includes(role);
+  const canManage = ['admin','manager','sales_representative'].includes(role);
+  const isSalesSide = ['admin','manager','sales_representative','assistant'].includes(role);
   const today=new Date().toISOString().slice(0,10);
 
   async function load(){
@@ -12223,7 +12223,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   const selectedMgr = managerFilter && managerFilter!=='all' ? profiles.find(p=>p.id===managerFilter) : null;
   // Only sales managers + sales assistants own leads / appear in the pipeline
   // filter (they're the only roles with a Sales Pipeline).
-  const salesPeople = profiles.filter(p=>['manager','assistant'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const salesPeople = profiles.filter(p=>['manager','sales_representative','assistant'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   function ownerMatch(l){
     if(isAdmin && managerFilter==='all') return true;
@@ -14145,7 +14145,7 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
   const [fillRev,setFillRev]=useState(null);
   const [printRev,setPrintRev]=useState(null);
   const [starting,setStarting]=useState(false);
-  const canManage = ['admin','hr','manager'].includes(profile.role);
+  const canManage = ['admin','hr','manager','sales_representative'].includes(profile.role);
   const tplName=(id)=>(evalTemplates||[]).find(t=>t.id===id)?.name||'—';
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   async function seedSalesAssociate(){
@@ -14327,7 +14327,7 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
     if(over && over.notify){ try{ await over.notify(savedId); }catch(_){} }
     onSaved();
   }
-  const canAssign = ['admin','hr','manager'].includes(profile.role);
+  const canAssign = ['admin','hr','manager','sales_representative'].includes(profile.role);
   const isLeaderView = !!review.assigned_to && review.assigned_to===profile.id;
   const assignedName = review.assigned_to ? (()=>{ const p=(profiles||[]).find(x=>x.id===review.assigned_to); return p?(p.name||p.email):'a team leader'; })() : '';
   const [assignTo,setAssignTo]=useState(review.assigned_to||'');
@@ -17207,11 +17207,11 @@ const MKT_STATUSES = [
 const MKT_CAMPAIGN_STATUSES = [['planning','Planning'],['active','Active'],['paused','Paused'],['completed','Completed']];
 function mktChan(k){ return MKT_CHANNELS.find(c=>c.key===k) || MKT_CHANNELS[MKT_CHANNELS.length-1]; }
 function mktStat(k){ return MKT_STATUSES.find(s=>s.key===k) || MKT_STATUSES[0]; }
-function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='manager'; }
+function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' || isManagerRole(r); }
 // Video Editors work the content planner day-to-day, so they can create/edit/move
 // content posts and add Resources — but campaigns & analytics stay with admin/manager.
-function marketingCanEditContent(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
-function marketingCanEditResources(profile){ const r=profile?.role; return r==='admin' || r==='manager' || r==='video_editor'; }
+function marketingCanEditContent(profile){ const r=profile?.role; return r==='admin' || isManagerRole(r) || r==='video_editor'; }
+function marketingCanEditResources(profile){ const r=profile?.role; return r==='admin' || isManagerRole(r) || r==='video_editor'; }
 
 function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onSaved }){
   const isEdit=!!existing;
@@ -17989,7 +17989,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
 
   // ───── Sales Meeting: booked per month + pipeline + clients per rep ─────
   // Sales team = managers + assistants, plus admins (Kaira & Miko carry their own accounts).
-  const salesTeam = (profiles||[]).filter(p=>['manager','assistant','admin'].includes(p.role))
+  const salesTeam = (profiles||[]).filter(p=>['manager','sales_representative','assistant','admin'].includes(p.role))
     .sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
   // Last 6 months for the booked-per-month matrix.
   const meetingMonths = [];
@@ -19185,7 +19185,7 @@ function ClientsView({ profile, profiles, clients, leads, onOpen, reload }){
 function ClientEditForm({ client, profile, profiles, onClose, onSaved }){
   const isEdit=!!client;
   const [managerId,setManagerId]=useState(client?.manager_id || profile?.id || null);
-  const salesPeople = (profiles||[]).filter(p=>['admin','manager'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const salesPeople = (profiles||[]).filter(p=>['admin','manager','sales_representative'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   // Build initial contacts: existing array, or migrate legacy fields, or one empty row.
   const initialContacts = (()=>{
     if(client && Array.isArray(client.contacts) && client.contacts.length>0) return client.contacts.map((c,i)=>({...c, id:'c'+i}));
@@ -19282,7 +19282,7 @@ function ClientDetail({ client, profile, profiles, leads, reload, onBack, onOpen
   // Sales managers + assistants can edit ANY client (not just the ones they
   // own). Admin always can. Other roles (production, graphic, printing, etc.)
   // see clients in read-only mode.
-  const SALES_ROLES = ['admin','manager','assistant'];
+  const SALES_ROLES = ['admin','manager','sales_representative','assistant'];
   const canEdit = SALES_ROLES.includes(profile.role);
   const tags=live.tags||[];
   const tagColor=(t)=>/vip/i.test(t)?'bg-amber-100 text-amber-700':/repeat/i.test(t)?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600';
@@ -19614,7 +19614,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
   const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
-  const isSalesRole = ['admin','manager','assistant'].includes(profile.role);
+  const isSalesRole = ['admin','manager','sales_representative','assistant'].includes(profile.role);
   // Admin always gets the sales dashboard (even with 0 personally-owned leads);
   // managers/assistants get it once they carry at least one lead.
   const showSalesDash = isSalesRole && (profile.role==='admin' || mine.length > 0);
@@ -19863,8 +19863,12 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
 
 /* ----------------------- Team Overview ----------------------- */
 // Shared role helpers used by Team Overview + Settings.
+// A "Sales Representative" is a full-view sales role that behaves exactly like a
+// Sales Manager everywhere in the app; it's only a distinct label on the team.
+function isManagerRole(r){ return r==='manager' || r==='sales_representative'; }
 function roleLabel(r){
   return r==='admin'                  ? 'Administrator' :
+         r==='sales_representative'   ? 'Sales Representative' :
          r==='assistant'              ? 'Sales Assistant' :
          r==='production'             ? 'Production Team' :
          r==='production_supervisor'  ? 'Production Supervisor' :
@@ -19941,7 +19945,7 @@ function TeamOverview({ profile, profiles, leads, clients, salesTargets, reload 
   // admin (you) + sales managers + sales assistants. Production / purchasing /
   // accounting teammates live in Settings instead.
   const visibleProfiles = profiles.filter(p =>
-    p.role==='admin' || p.role==='manager' || p.role==='assistant'
+    p.role==='admin' || isManagerRole(p.role) || p.role==='assistant'
   );
   const rows = visibleProfiles.map(p=>{
     const mine=leads.filter(l=>l.manager_id===p.id);
@@ -20144,6 +20148,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'all',         label:'All',           count:profiles.length },
     { key:'admin',       label:'Admin',         count:profiles.filter(p=>p.role==='admin').length },
     { key:'manager',     label:'Sales Manager', count:profiles.filter(p=>p.role==='manager').length },
+    { key:'sales_representative', label:'Sales Representative', count:profiles.filter(p=>p.role==='sales_representative').length },
     { key:'assistant',   label:'Sales Asst.',   count:profiles.filter(p=>p.role==='assistant').length },
     { key:'production',  label:'Production',    count:profiles.filter(p=>p.role==='production').length },
     { key:'production_supervisor', label:'Prod Supervisor', count:profiles.filter(p=>p.role==='production_supervisor').length },
@@ -20173,7 +20178,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
+  const roleOrder = ['admin','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -20207,6 +20212,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
             <select className="input" value={inviteRole} onChange={e=>setInviteRole(e.target.value)}>
               <option value="admin">Administrator</option>
               <option value="manager">Sales Manager</option>
+              <option value="sales_representative">Sales Representative</option>
               <option value="assistant">Sales Assistant</option>
               <option disabled>──────────</option>
               <option value="production">Production Team</option>
@@ -20317,6 +20323,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                 <select value={p.role||'manager'} onChange={e=>changeRole(p,e.target.value)} className="text-xs border rounded-md px-2 py-1 bg-white">
                   <option value="admin">Administrator</option>
                   <option value="manager">Sales Manager</option>
+                  <option value="sales_representative">Sales Representative</option>
                   <option value="assistant">Sales Assistant</option>
                   <option disabled>──────────</option>
                   <option value="production">Production Team</option>
@@ -23181,7 +23188,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
     // save), notify the sales assistant who prepared it + the production
     // supervisor(s) so production knows the techpack is signed and ready.
     try {
-      const isMgr = profile.role==='manager' || profile.role==='admin';
+      const isMgr = isManagerRole(profile.role) || profile.role==='admin';
       const prevSignedByMe = (((lead.techpack||{}).signatures||{}).rows||[]).some(r=>r.signedByUserId===profile.id);
       const nowSignedByMe  = ((payload.signatures||{}).rows||[]).some(r=>r.signedByUserId===profile.id);
       if(isMgr && nowSignedByMe && !prevSignedByMe){
@@ -27807,7 +27814,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   // see only SOs whose underlying lead is owned by them. Accounting + admin
   // see everything by default; admin can toggle "Mine" or pick a specific
   // manager from the dropdown.
-  const restrictToOwn = (profile.role === 'assistant' || profile.role === 'manager');
+  const restrictToOwn = (profile.role === 'assistant' || isManagerRole(profile.role));
   // Prefer the rep stamped on the SO itself; fall back to the linked lead (for
   // any older SOs that predate the manager_id column and whose lead is still live).
   function ownerOf(o){
@@ -28748,7 +28755,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
 // Permission helpers — easy to reuse elsewhere.
 function canLogSOPayment(profile){
   // Anyone in sales / accounting / manager / admin / assistant chain can log a pending payment.
-  return ['admin','accounting','manager','assistant'].includes(profile?.role);
+  return ['admin','accounting','manager','sales_representative','assistant'].includes(profile?.role);
 }
 function canVerifySOPayment(profile){
   // Only Accounting + Admin can convert Pending → Verified.
@@ -31268,7 +31275,7 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, costCent
 
       {/* Action bar (hidden in print) */}
       <div className="no-print flex gap-2 mt-3 flex-wrap">
-        {!v.approved_by && profile && (profile.role==='admin' || profile.role==='manager') && (
+        {!v.approved_by && profile && (profile.role==='admin' || isManagerRole(profile.role)) && (
           <>
             <button disabled={approving} onClick={approveAndSign} className="py-2 px-3 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">✍ Approve & Sign</button>
             <button disabled={approving} onClick={rejectVoucher} className="py-2 px-3 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700 disabled:opacity-50" title="Reject this voucher — it won't be paid and leaves the approval queue">✕ Reject</button>
@@ -37057,7 +37064,7 @@ function trnTypeLabel(k){ return (TRN_ITEM_TYPES.find(t=>t.key===k)||{}).label |
 // Permission: who can create/edit transmittals.
 function canManageTrn(profile){
   const r = profile?.role;
-  return r==='admin' || r==='manager' || r==='assistant' || r==='sales_assistant' || r==='production_supervisor';
+  return r==='admin' || isManagerRole(r) || r==='assistant' || r==='sales_assistant' || r==='production_supervisor';
 }
 
 // Compute outstanding qty for a transmittal across all its lines.
@@ -37354,7 +37361,7 @@ function TransmittalModal({ profile, profiles, clients, salesOrders, leads, samp
             <label className="text-xs font-semibold text-slate-500">Sales Manager (owns the client)</label>
             <select value={salesManagerId} onChange={e=>setSalesManagerId(e.target.value)} disabled={lockedFromStatus} className="w-full border rounded px-2 py-1.5">
               <option value="">— pick a manager —</option>
-              {(profiles||[]).filter(p=> ['admin','manager','assistant'].includes(p.role)).sort((a,b)=> String(a.name||a.email||'').localeCompare(String(b.name||b.email||''))).map(p=> (
+              {(profiles||[]).filter(p=> ['admin','manager','sales_representative','assistant'].includes(p.role)).sort((a,b)=> String(a.name||a.email||'').localeCompare(String(b.name||b.email||''))).map(p=> (
                 <option key={p.id} value={p.id}>{p.name||p.email}</option>
               ))}
             </select>
@@ -40202,7 +40209,8 @@ function App(){
       // Plus commissions so they can see their own commission ledger.
       allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
       fallback = 'pipeline';
-    } else if(profile.role==='manager'){
+    } else if(isManagerRole(profile.role)){
+      // Sales Manager (and Sales Representative — identical access).
       allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
@@ -40306,7 +40314,7 @@ function App(){
     if((trainingParticipants||[]).includes(profile.id)) allowed.add('training');
     // Manual Purchase Request intake lives in the Sales module — only sales
     // managers + sales assistants (and admin, who is unrestricted) may open it.
-    if(profile.role==='manager' || profile.role==='assistant') allowed.add('pr-request');
+    if(isManagerRole(profile.role) || profile.role==='assistant') allowed.add('pr-request');
     if(!allowed.has(view)) setView(fallback);
   },[profile, view, trainingParticipants]);
 
@@ -40733,7 +40741,7 @@ function App(){
   const isPurchasingAdmin=profile.role==='purchasing_admin';
   const isAccounting=profile.role==='accounting';
   const isAccountingOfficer=profile.role==='accounting_officer';
-  const isManager=profile.role==='manager';
+  const isManager=isManagerRole(profile.role);
   const isGraphicTeam=profile.role==='graphic';
   const isPrintingTeam=profile.role==='printing';
   const isSewingLead=profile.role==='sewing_lead';
