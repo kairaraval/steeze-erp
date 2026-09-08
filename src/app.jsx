@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 583 · All About Clothes training module: removed the top 'Cover photo' slot.";
+const BUILD = "Live build 584 · Sales Representative now works as the Sales Manager's associate: same lead access as a Sales Assistant (create, edit & move ANY lead, build techpacks, raise tickets) plus they carry their own leads & commissions. Fixes Eunice being blocked from editing/creating leads.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2881,7 +2881,7 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
 }
 
 function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoices, salesOrders, onEdit, onSendProduction, onSendGraphic, onSendSampling, onSendPrinting, onSendToPR, onOpenTechpack, onDuplicate, onClose, activityCount }){
-  const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||profile.role==='assistant'||lead.manager_id===profile.id;
+  const client=clients.find(c=>c.id===lead.client_id); const canEdit=profile.role==='admin'||isAssistantRole(profile.role)||lead.manager_id===profile.id;
   const mgr=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
   // Estimates are an Accounting/Admin-only tool (also enforced by RLS).
   const canEstimate = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
@@ -2962,7 +2962,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               {notesMsg && <div className={`text-[10px] ${/fail/i.test(notesMsg)?'text-rose-600':'text-emerald-600'}`}>{notesMsg}</div>}
             </div>
             <textarea className="w-full text-sm px-2 py-1.5 rounded border border-amber-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 min-h-[80px]" value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} disabled={!canEdit&&profile.role!=='assistant'} placeholder="Quick context — call summary, follow-up plan, special pricing, etc." />
-            {(canEdit || profile.role==='assistant') && (
+            {(canEdit || isAssistantRole(profile.role)) && (
               <div className="flex justify-end mt-1.5">
                 <button disabled={notesBusy||!notesDirty} onClick={saveNotes} className="text-xs px-3 py-1 rounded bg-amber-600 text-white font-semibold hover:bg-amber-700 disabled:opacity-50">{notesBusy?'Saving…':(notesDirty?'💾 Save note':'✓ Saved')}</button>
               </div>
@@ -4935,7 +4935,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   const [mainTab,setMainTab]=useState('jobs'); // 'jobs' | 'resources' (resources only when showResources)
   const replCount=useReplacementCount(replacementDept);
   const isAdmin=profile.role==='admin';
-  const isAssistant=profile.role==='assistant';
+  const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant; // admin + managers
   const filtered=jobs.filter(j=>{ if(!search) return true; const l=(leads||[]).find(x=>x.id===j.lead_id); return `${j.number||''} ${j.client_name||''} ${j.item||''} ${l?.title||''} ${l?.client_name||''}`.toLowerCase().includes(search.toLowerCase()); });
   async function move(j,st){ const patch={ status:st }; if(jobType==='graphic' && st==='to do') patch.cl_done=false; const {error}=await sb.from(table).update(patch).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
@@ -6545,7 +6545,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   const [reportFor,setReportFor]=useState(null); // job we're viewing the report for
   const [replacements,setReplacements]=useState([]);
   const [bump,setBump]=useState(0);
-  const isAdmin=profile.role==='admin'; const isAssistant=profile.role==='assistant';
+  const isAdmin=profile.role==='admin'; const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant;
   // Load all replacements (for card badges + the Report tab). Refresh on bump.
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('sewing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
@@ -7058,7 +7058,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   const [activityFor,setActivityFor]=useState(null);
   const [replacements,setReplacements]=useState([]);
   const [bump,setBump]=useState(0);
-  const isAdmin=profile.role==='admin'; const isAssistant=profile.role==='assistant';
+  const isAdmin=profile.role==='admin'; const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant;
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('packing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.packing_job_id]=replByJob[r.packing_job_id]||[]).push(r); });
@@ -8039,7 +8039,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   const [collapsed,setCollapsed]=useState({}); // status.key -> true if collapsed
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   const isAdmin=profile.role==='admin';
-  const isAssistant=profile.role==='assistant';
+  const isAssistant=isAssistantRole(profile.role);
   // Production board delete is now admin-only. Managers can still edit /
   // move jobs, but only admin can send to Trash. Recover from Settings → Trash.
   const canDelete=isAdmin;
@@ -10909,7 +10909,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
   const [collapsed,setCollapsed]=useState({});
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   const isAdmin=profile.role==='admin';
-  const isAssistant=profile.role==='assistant';
+  const isAssistant=isAssistantRole(profile.role);
   const canDelete=isAdmin || !isAssistant;
   // Who may edit a sample's due date directly on the board.
   const canEditDue=['admin','manager','sales_representative','assistant','production_supervisor'].includes(profile.role);
@@ -12214,7 +12214,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   const [draggedLeadId,setDraggedLeadId]=useState(null);
   const [dragOverStage,setDragOverStage]=useState(null);
   const isAdmin=profile.role==='admin';
-  const isAssistant=profile.role==='assistant';
+  const isAssistant=isAssistantRole(profile.role);
   // Admin-only: pick which manager's pipeline to view.
   //   '' = use the mineOnly toggle behaviour (default)
   //   'all' = every manager
@@ -19866,6 +19866,11 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
 // A "Sales Representative" is a full-view sales role that behaves exactly like a
 // Sales Manager everywhere in the app; it's only a distinct label on the team.
 function isManagerRole(r){ return r==='manager' || r==='sales_representative'; }
+// A Sales Representative is the Sales Manager's associate: they keep every
+// capability a Sales Assistant has (create/edit/move ANY lead, build techpacks,
+// raise tickets) AND carry their own leads + commissions. So they satisfy the
+// same gates as an assistant everywhere in the app.
+function isAssistantRole(r){ return r==='assistant' || r==='sales_representative'; }
 function roleLabel(r){
   return r==='admin'                  ? 'Administrator' :
          r==='sales_representative'   ? 'Sales Representative' :
@@ -40735,7 +40740,7 @@ function App(){
     setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
 
-  const isAssistant=profile.role==='assistant';
+  const isAssistant=isAssistantRole(profile.role);
   const isProduction=profile.role==='production';
   const isPurchasing=profile.role==='purchasing';
   const isPurchasingAdmin=profile.role==='purchasing_admin';
