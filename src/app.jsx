@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 586 · Delivery Receipts: fixed multi-size DRs under-counting (e.g. Quanta DR-2026-09-031 showed 240 of its real 300). The line-items load was capped at 1000 rows and dropped the highest-position size lines across all DRs; now fully paginated. Same fix applied to Transmittal items. No data was lost — the totals now display correctly.";
+const BUILD = "Live build 587 · System-wide fix for the 1000-row limit: every growing table (leads, sales orders, payments, production/graphic/printing/sampling/sewing/packing jobs, RFPs, vouchers, expenses, cash advances, bank transactions, commissions, delivery receipts + items, transmittals + items, subcon records, HR records, comment counts, item-type suggestions, etc.) now loads in full pages instead of stopping at 1000 rows. As the team keeps adding data, nothing will silently disappear from lists or totals again.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -497,6 +497,24 @@ async function fetchAllRows(table, cols='*', orderCol=null, ascending=true){
     if(!data || data.length<size) break;
     from += size;
     if(from>500000) break; // hard safety stop
+  }
+  return { data:all, error:null };
+}
+// Like fetchAllRows, but for queries that need filters/ordering: pass a factory
+// that returns a FRESH PostgREST builder each call (e.g. () => sb.from('leads')
+// .select('*').is('deleted_at',null).order('created_at',{ascending:false})).
+// We apply .range() to page past the ~1000-row cap, preserving your filters &
+// order, and return the same { data, error } shape. Use this for ANY list load
+// on a table that grows with day-to-day use so it can never silently truncate.
+async function fetchAll(makeQuery){
+  const size=1000; const all=[]; let from=0;
+  for(;;){
+    const { data, error } = await makeQuery().range(from, from+size-1);
+    if(error) return { data:all, error };
+    all.push(...(data||[]));
+    if(!data || data.length<size) break;
+    from += size;
+    if(from>1000000) break; // hard safety stop
   }
   return { data:all, error:null };
 }
@@ -1215,8 +1233,8 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   useEffect(()=>{ let alive=true; (async()=>{
     try {
       const [lds,est] = await Promise.all([
-        sb.from('leads').select('items'),
-        sb.from('estimates').select('items'),
+        fetchAll(()=>sb.from('leads').select('items')),
+        fetchAll(()=>sb.from('estimates').select('items')),
       ]);
       const map=new Map();
       for(const row of [...(lds.data||[]), ...(est.data||[])]){
@@ -4277,8 +4295,8 @@ function PurchasingResourcesView({ profile }){
   const [supMap,setSupMap]=useState({});
   useEffect(()=>{ let alive=true; (async()=>{
     const [its,sups]=await Promise.all([
-      sb.from('items').select('name,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims']).range(0,99999),
-      sb.from('suppliers').select('id,company'),
+      fetchAll(()=>sb.from('items').select('name,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims'])),
+      fetchAll(()=>sb.from('suppliers').select('id,company')),
     ]);
     if(!alive) return;
     setInvItems(its.data||[]);
@@ -39996,90 +40014,90 @@ function App(){
       setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return r.data.map(p=> sig[p.id]!==undefined ? {...p, signature_data:sig[p.id]} : p); });
       if(!window.__steezeSig){ window.__steezeSig=1; sb.from('profiles').select('id,signature_data').then(s=>{ if(s&&!s.error&&s.data){ const m={}; s.data.forEach(x=>{ if(x.signature_data) m[x.id]=x.signature_data; }); setProfiles(ps=>(ps||[]).map(p=>m[p.id]!==undefined?{...p,signature_data:m[p.id]}:p)); } }).catch(()=>{}); } } }).catch(()=>{});
     sb.from('clients').select('*').order('company').then(r=>{ if(r.data) setClients(r.data); }).catch(()=>{});
-    sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
-    sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false }).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
+    fetchAll(()=>sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false })).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
+    fetchAll(()=>sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false })).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
     sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
-      sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null),
-      sb.from('clients').select('*').order('company'),
-      sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
+      fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null)),
+      fetchAll(()=>sb.from('clients').select('*').order('company')),
+      fetchAll(()=>sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
-      sb.from('lead_activity').select('lead_id').eq('type','comment'),
-      sb.from('dept_job_activity').select('job_id,job_type').eq('type','comment'),
-      sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
-      sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
-      sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false }),
+      fetchAll(()=>sb.from('lead_activity').select('lead_id').eq('type','comment')),
+      fetchAll(()=>sb.from('dept_job_activity').select('job_id,job_type').eq('type','comment')),
+      fetchAll(()=>sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
+      fetchAll(()=>sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
+      fetchAll(()=>sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
       fetchAllRows('items','*','name',true),
-      sb.from('suppliers').select('*').order('company'),
+      fetchAll(()=>sb.from('suppliers').select('*').order('company')),
       sb.from('departments').select('*').order('name'),
-      sb.from('purchase_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('purchase_orders').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('sampling_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('size_charts').select('*').order('name'),
-      sb.from('garment_mockups').select('*').order('name'),
-      sb.from('styles').select('*').order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('purchase_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('purchase_orders').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('sampling_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('size_charts').select('*').order('name')),
+      fetchAll(()=>sb.from('garment_mockups').select('*').order('name')),
+      fetchAll(()=>sb.from('styles').select('*').order('created_at',{ascending:false})),
       sb.from('pending_invites').select('*').order('created_at',{ascending:false}),
       // Finance Sprint 1 — fail-safe with empty fallback if SQL hasn't been run yet
-      sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('sales_order_payments').select('*').order('date',{ascending:false}),
+      fetchAll(()=>sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('sales_order_payments').select('*').order('date',{ascending:false})),
       sb.from('bank_accounts').select('*').order('position'),
-      sb.from('bank_transactions').select('*').order('date',{ascending:false}),
-      sb.from('rfps').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('vouchers').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('budget_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('bank_transactions').select('*').order('date',{ascending:false})),
+      fetchAll(()=>sb.from('rfps').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('vouchers').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('budget_requests').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       // Sprint 2 — graceful if tables aren't there yet
-      sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false}),
-      sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false}),
+      fetchAll(()=>sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false})),
+      fetchAll(()=>sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false})),
       // Stock movements for the Stock Out view (Purchasing Layer 3).
       fetchAllRows('stock_movements','*','created_at',false),
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
-      sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       // HR module — 201 file system
-      sb.from('employees').select('*').is('deleted_at', null).order('last_name',{ascending:true}),
-      sb.from('employee_documents').select('*').order('uploaded_at',{ascending:false}),
-      sb.from('employee_memos').select('*').order('date',{ascending:false}),
-      sb.from('employee_notes').select('*').order('date',{ascending:false}),
+      fetchAll(()=>sb.from('employees').select('*').is('deleted_at', null).order('last_name',{ascending:true})),
+      fetchAll(()=>sb.from('employee_documents').select('*').order('uploaded_at',{ascending:false})),
+      fetchAll(()=>sb.from('employee_memos').select('*').order('date',{ascending:false})),
+      fetchAll(()=>sb.from('employee_notes').select('*').order('date',{ascending:false})),
       // HR Tier 2
       sb.from('hr_checklist_templates').select('*').order('name',{ascending:true}),
-      sb.from('hr_checklists').select('*').order('started_at',{ascending:false}),
-      sb.from('hr_trainings').select('*').order('date_completed',{ascending:false}),
+      fetchAll(()=>sb.from('hr_checklists').select('*').order('started_at',{ascending:false})),
+      fetchAll(()=>sb.from('hr_trainings').select('*').order('date_completed',{ascending:false})),
       // HR Tier 3
-      sb.from('hr_review_cycles').select('*').order('created_at',{ascending:false}),
-      sb.from('hr_reviews').select('*').order('created_at',{ascending:false}),
-      sb.from('hr_job_postings').select('*').order('created_at',{ascending:false}),
-      sb.from('hr_applicants').select('*').order('applied_date',{ascending:false}),
+      fetchAll(()=>sb.from('hr_review_cycles').select('*').order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('hr_reviews').select('*').order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('hr_job_postings').select('*').order('created_at',{ascending:false})),
+      fetchAll(()=>sb.from('hr_applicants').select('*').order('applied_date',{ascending:false})),
       // Custom Payment Calendar events
-      sb.from('calendar_events').select('*').order('date',{ascending:true}),
+      fetchAll(()=>sb.from('calendar_events').select('*').order('date',{ascending:true})),
       // Delivery Receipts + line items (graceful empty if SQL not yet run)
-      sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       // Paginated past Supabase's 1000-row cap — otherwise the highest-position
       // size lines across ALL DRs get dropped, making multi-size DRs under-count
       // (e.g. a 13-line / 300pc DR showing only 9 lines / 240pc).
       fetchAllRows('dr_items','*','position',true),
       // Transmittals (loaned items) + line items (graceful empty if SQL not yet run)
-      sb.from('transmittals').select('*').is('deleted_at', null).order('date_sent',{ascending:false}),
+      fetchAll(()=>sb.from('transmittals').select('*').is('deleted_at', null).order('date_sent',{ascending:false})),
       fetchAllRows('transmittal_items','*','position',true),
       // Subcon monitoring + weekly payroll (graceful empty if SQL not yet run)
-      sb.from('subcons').select('*').is('deleted_at', null).order('name'),
-      sb.from('subcon_sends').select('*').is('deleted_at', null).order('date_sent',{ascending:false}),
-      sb.from('subcon_returns').select('*').order('date_returned',{ascending:false}),
-      sb.from('subcon_payrolls').select('*').is('deleted_at', null).order('week_ending',{ascending:false}),
-      sb.from('subcon_payroll_items').select('*').order('position',{ascending:true}),
-      sb.from('subcon_projects').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('subcons').select('*').is('deleted_at', null).order('name')),
+      fetchAll(()=>sb.from('subcon_sends').select('*').is('deleted_at', null).order('date_sent',{ascending:false})),
+      fetchAll(()=>sb.from('subcon_returns').select('*').order('date_returned',{ascending:false})),
+      fetchAll(()=>sb.from('subcon_payrolls').select('*').is('deleted_at', null).order('week_ending',{ascending:false})),
+      fetchAll(()=>sb.from('subcon_payroll_items').select('*').order('position',{ascending:true})),
+      fetchAll(()=>sb.from('subcon_projects').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       // Sales-order activity: mentions for me (Inbox feed) + all comments
       // (so the per-SO comment count badge can render in the SO modal).
       // Graceful empty fallback if SQL hasn't been run yet.
       sb.from('sales_order_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
-      sb.from('sales_order_activity').select('sales_order_id').eq('type','comment'),
+      fetchAll(()=>sb.from('sales_order_activity').select('sales_order_id').eq('type','comment')),
       // Sales commissions ledger (graceful empty if SQL not yet run).
-      sb.from('sales_commissions').select('*').order('earned_at',{ ascending:false }),
+      fetchAll(()=>sb.from('sales_commissions').select('*').order('earned_at',{ ascending:false })),
       // Sewing board (graceful empty if SQL not yet run).
-      sb.from('sewing_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('sewing_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       // Packing board (graceful empty if SQL not yet run).
-      sb.from('packing_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
+      fetchAll(()=>sb.from('packing_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
     ]);
     const firstErr=[pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st].find(r=>r.error); if(firstErr) setLoadErr(firstErr.error.message);
     // pending_invites may be RLS-denied for non-admins; that's expected, fail silently
