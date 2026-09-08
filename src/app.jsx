@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 585 · Sales Representative can mark their own Sales Tickets as Done again (like a Sales Assistant) — only true Sales Managers keep the oversight-only view. Fixes Eunice losing the ✓ Done button on her tickets.";
+const BUILD = "Live build 586 · Delivery Receipts: fixed multi-size DRs under-counting (e.g. Quanta DR-2026-09-031 showed 240 of its real 300). The line-items load was capped at 1000 rows and dropped the highest-position size lines across all DRs; now fully paginated. Same fix applied to Transmittal items. No data was lost — the totals now display correctly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40055,10 +40055,13 @@ function App(){
       sb.from('calendar_events').select('*').order('date',{ascending:true}),
       // Delivery Receipts + line items (graceful empty if SQL not yet run)
       sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false}),
-      sb.from('dr_items').select('*').order('position',{ascending:true}),
+      // Paginated past Supabase's 1000-row cap — otherwise the highest-position
+      // size lines across ALL DRs get dropped, making multi-size DRs under-count
+      // (e.g. a 13-line / 300pc DR showing only 9 lines / 240pc).
+      fetchAllRows('dr_items','*','position',true),
       // Transmittals (loaned items) + line items (graceful empty if SQL not yet run)
       sb.from('transmittals').select('*').is('deleted_at', null).order('date_sent',{ascending:false}),
-      sb.from('transmittal_items').select('*').order('position',{ascending:true}),
+      fetchAllRows('transmittal_items','*','position',true),
       // Subcon monitoring + weekly payroll (graceful empty if SQL not yet run)
       sb.from('subcons').select('*').is('deleted_at', null).order('name'),
       sb.from('subcon_sends').select('*').is('deleted_at', null).order('date_sent',{ascending:false}),
