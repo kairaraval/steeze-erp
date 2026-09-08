@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 584 · Sales Representative now works as the Sales Manager's associate: same lead access as a Sales Assistant (create, edit & move ANY lead, build techpacks, raise tickets) plus they carry their own leads & commissions. Fixes Eunice being blocked from editing/creating leads.";
+const BUILD = "Live build 585 · Sales Representative can mark their own Sales Tickets as Done again (like a Sales Assistant) — only true Sales Managers keep the oversight-only view. Fixes Eunice losing the ✓ Done button on her tickets.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11899,7 +11899,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
             {t.archived_at ? (canManage && <button onClick={()=>unarchive(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Unarchive</button>) : <>
             {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
             {t.status==='in_progress' && canAct && <button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button>}
-            {t.status==='in_progress' && canAct && !isManagerRole(profile.role) && <button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button>}
+            {t.status==='in_progress' && canAct && profile.role!=='manager' && <button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Done</button>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
             {t.status==='done' && canAct && <button onClick={()=>archive(t)} title="Archive — hide from the board" className="text-xs px-2 py-1 rounded-lg border text-slate-500">🗄 Archive</button>}
             </>}
