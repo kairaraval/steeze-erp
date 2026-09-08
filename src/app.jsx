@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 582 · New team role: Sales Representative — a full sales role with exactly the same view and access as a Sales Manager (pipeline, sales orders, commissions, marketing, team, etc.), shown as its own label on the team. Eunice Marquez promoted from Sales Assistant to Sales Representative.";
+const BUILD = "Live build 583 · All About Clothes training module: removed the top 'Cover photo' slot.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
