@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 588 · Training: new 'Print Techniques' module — an illustrated guide to garment decoration (full & spot sublimation, embroidery, DTF, vinyl, patches) with cost/lead-time comparisons, placement guide, artwork requirements, and a knowledge-check quiz. Admins can edit it and add real sample photos per method.";
+const BUILD = "Live build 589 · Sewing Payroll: new Summary tab — every sewer's payroll totals for a period, toggle Per week (a per-day matrix across the Wed→Tue week) or Per day, with Prev/Next navigation, pieces, regular/overtime split, and pending vs done. Also fixed Sales Representative write access to transmittals, delivery receipts & design resources.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21110,6 +21110,7 @@ function SewingPayroll({ profile, bankAccounts }){
     { key:'dashboard', label:'Dashboard',  icon:'📊' },
     { key:'entry',     label:'Daily Entry', icon:'✍️' },
     { key:'payroll',   label:'Payroll',    icon:'💰' },
+    { key:'summary',   label:'Summary',    icon:'📋' },
     ...(payoutCanRun(profile) ? [{ key:'payout', label:'Payout', icon:'💵' }] : []),
     { key:'sewers',    label:'Sewers',     icon:'👥' },
     { key:'garments',  label:'Garments',   icon:'👕' },
@@ -21214,6 +21215,7 @@ function SewingPayroll({ profile, bankAccounts }){
       {tab==='dashboard' && <PayrollDashboard sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} toggleEntryStatus={toggleEntryStatus} />}
       {tab==='entry' && <PayrollDailyEntry sewers={sewers} garments={garments} entries={entries} clients={clients} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} reload={loadAll} toggleEntryStatus={toggleEntryStatus} deleteEntry={deleteEntry} />}
       {tab==='payroll' && <PayrollPayslips sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} entryDescribe={entryDescribe} pSettings={pSettings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} />}
+      {tab==='summary' && <PayrollSummary sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} />}
       {tab==='payout' && <PayrollPayout sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} bankAccounts={bankAccounts} profile={profile} todayISOd={todayISOd} getWeekStart={getWeekStart} addDaysISO={addDaysISO} fmtPayrollDate={fmtPayrollDate} reload={loadAll} />}
       {tab==='sewers' && <PayrollSewers sewers={sewers} entries={entries} money={money} entryEarnings={entryEarnings} addSewer={addSewer} toggleSewerActive={toggleSewerActive} renameSewer={renameSewer} deleteSewer={deleteSewer} />}
       {tab==='garments' && <PayrollGarments garments={garments} money={money} addGarment={addGarment} updateGarmentOps={updateGarmentOps} renameGarment={renameGarment} deleteGarment={deleteGarment} />}
@@ -21222,6 +21224,157 @@ function SewingPayroll({ profile, bankAccounts }){
   );
 }
 
+// Summary of every sewer's payroll for a period — toggle between a WEEK view
+// (per-day matrix across the Wed→Tue payroll week) and a single-DAY view.
+function PayrollSummary({ sewers, entries, money, entryEarnings, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate }){
+  const [mode,setMode]=useState('week');            // 'week' | 'day'
+  const [weekFrom,setWeekFrom]=useState(getWeekStart(todayISOd()));
+  const [day,setDay]=useState(todayISOd());
+  const weekTo=addDaysISO(weekFrom,6);
+  const weekDays=Array.from({length:7},(_,i)=>addDaysISO(weekFrom,i));
+  const sewerName=(id)=> (sewers.find(s=>s.id===id)||{}).name || '(deleted sewer)';
+
+  const inRange = mode==='week'
+    ? (e)=> e.date>=weekFrom && e.date<=weekTo
+    : (e)=> e.date===day;
+  const scoped = entries.filter(inRange);
+
+  // Per-sewer aggregation for the selected period.
+  const rows = sewers.map(s=>{
+    const es = scoped.filter(e=>e.sewer_id===s.id);
+    const regAmt = es.filter(e=>e.time_slot!=='overtime').reduce((a,e)=>a+entryEarnings(e),0);
+    const otAmt  = es.filter(e=>e.time_slot==='overtime').reduce((a,e)=>a+entryEarnings(e),0);
+    const pieces = es.reduce((a,e)=>a+(Number(e.quantity)||0),0);
+    const doneAmt= es.filter(e=>e.status==='done').reduce((a,e)=>a+entryEarnings(e),0);
+    const pendAmt= es.filter(e=>e.status!=='done').reduce((a,e)=>a+entryEarnings(e),0);
+    const byDay={}; weekDays.forEach(d=>{ byDay[d]=es.filter(e=>e.date===d).reduce((a,e)=>a+entryEarnings(e),0); });
+    return { s, count:es.length, reg:regAmt, ot:otAmt, pieces, total:regAmt+otAmt, done:doneAmt, pending:pendAmt, byDay };
+  }).filter(r=>r.count>0).sort((a,b)=>b.total-a.total);
+
+  const gTotal = rows.reduce((a,r)=>a+r.total,0);
+  const gPieces= rows.reduce((a,r)=>a+r.pieces,0);
+  const gReg   = rows.reduce((a,r)=>a+r.reg,0);
+  const gOt    = rows.reduce((a,r)=>a+r.ot,0);
+  const gPend  = rows.reduce((a,r)=>a+r.pending,0);
+  const gDone  = rows.reduce((a,r)=>a+r.done,0);
+  const dayTotals={}; weekDays.forEach(d=>{ dayTotals[d]=rows.reduce((a,r)=>a+r.byDay[d],0); });
+  const dowLabel=(d)=> new Date(d+'T00:00:00').toLocaleDateString(undefined,{weekday:'short'});
+  const dmLabel=(d)=> new Date(d+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'});
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="bg-white border rounded-xl p-3 flex flex-wrap items-end gap-3">
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5">
+          <button onClick={()=>setMode('week')} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${mode==='week'?'bg-white shadow-sm text-rose-700':'text-slate-600'}`}>Per week</button>
+          <button onClick={()=>setMode('day')} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${mode==='day'?'bg-white shadow-sm text-rose-700':'text-slate-600'}`}>Per day</button>
+        </div>
+        {mode==='week' ? (
+          <>
+            <div><label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Week from</label><input type="date" value={weekFrom} onChange={e=>setWeekFrom(getWeekStart(e.target.value))} className="border rounded-lg px-3 py-2 text-sm" /></div>
+            <div><label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">To</label><input type="date" value={weekTo} disabled className="border rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-500" /></div>
+            <div className="flex gap-2">
+              <button onClick={()=>setWeekFrom(addDaysISO(weekFrom,-7))} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">← Prev week</button>
+              <button onClick={()=>setWeekFrom(addDaysISO(weekFrom,7))} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">Next week →</button>
+              <button onClick={()=>setWeekFrom(getWeekStart(todayISOd()))} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">This week</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div><label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Day</label><input type="date" value={day} onChange={e=>setDay(e.target.value||todayISOd())} className="border rounded-lg px-3 py-2 text-sm" /></div>
+            <div className="flex gap-2">
+              <button onClick={()=>setDay(addDaysISO(day,-1))} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">← Prev day</button>
+              <button onClick={()=>setDay(addDaysISO(day,1))} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">Next day →</button>
+              <button onClick={()=>setDay(todayISOd())} className="px-3 py-2 rounded-lg border text-sm font-medium hover:bg-slate-50">Today</button>
+            </div>
+          </>
+        )}
+        <div className="ml-auto text-right">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">{mode==='week'?`${fmtPayrollDate(weekFrom)} → ${fmtPayrollDate(weekTo)}`:fmtPayrollDate(day)}</div>
+          <div className="text-xl font-bold text-slate-800">{money(gTotal)}</div>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Sewers with output</div><div className="text-2xl font-bold">{rows.length}</div></div>
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Pieces</div><div className="text-2xl font-bold">{gPieces.toLocaleString('en-PH')}</div></div>
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Regular · Overtime</div><div className="text-sm font-bold text-slate-700 mt-1">{money(gReg)} <span className="text-slate-300">·</span> {money(gOt)}</div></div>
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Done · Pending</div><div className="text-sm font-bold mt-1"><span className="text-emerald-600">{money(gDone)}</span> <span className="text-slate-300">·</span> <span className="text-amber-600">{money(gPend)}</span></div></div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          {mode==='week' ? (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2 sticky left-0 bg-slate-50">Sewer</th>
+                {weekDays.map(d=>(<th key={d} className="text-right px-2 py-2 whitespace-nowrap">{dowLabel(d)}<br/><span className="text-slate-400 font-normal">{dmLabel(d)}</span></th>))}
+                <th className="text-right px-3 py-2">Pieces</th>
+                <th className="text-right px-3 py-2">Week total</th>
+              </tr></thead>
+              <tbody>
+                {rows.map(r=>(
+                  <tr key={r.s.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white">{r.s.name}</td>
+                    {weekDays.map(d=>(<td key={d} className={`px-2 py-2 text-right ${r.byDay[d]?'text-slate-700':'text-slate-300'}`}>{r.byDay[d]?money(r.byDay[d]):'—'}</td>))}
+                    <td className="px-3 py-2 text-right text-slate-500">{r.pieces.toLocaleString('en-PH')}</td>
+                    <td className="px-3 py-2 text-right font-bold">{money(r.total)}{r.pending>0.005 && <div className="text-[10px] font-normal text-amber-600">{money(r.pending)} pending</div>}</td>
+                  </tr>
+                ))}
+                {rows.length===0 && <tr><td colSpan={weekDays.length+3} className="text-center text-slate-400 py-8">No entries for this week.</td></tr>}
+              </tbody>
+              {rows.length>0 && (
+                <tfoot><tr className="border-t bg-slate-50 font-bold">
+                  <td className="px-3 py-2 sticky left-0 bg-slate-50">TOTAL</td>
+                  {weekDays.map(d=>(<td key={d} className="px-2 py-2 text-right">{dayTotals[d]?money(dayTotals[d]):'—'}</td>))}
+                  <td className="px-3 py-2 text-right">{gPieces.toLocaleString('en-PH')}</td>
+                  <td className="px-3 py-2 text-right">{money(gTotal)}</td>
+                </tr></tfoot>
+              )}
+            </table>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+                <th className="text-left px-3 py-2">Sewer</th>
+                <th className="text-right px-3 py-2">Pieces</th>
+                <th className="text-right px-3 py-2">Regular</th>
+                <th className="text-right px-3 py-2">Overtime</th>
+                <th className="text-right px-3 py-2">Pending</th>
+                <th className="text-right px-3 py-2">Total</th>
+              </tr></thead>
+              <tbody>
+                {rows.map(r=>(
+                  <tr key={r.s.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium text-slate-800">{r.s.name}</td>
+                    <td className="px-3 py-2 text-right text-slate-500">{r.pieces.toLocaleString('en-PH')}</td>
+                    <td className="px-3 py-2 text-right">{money(r.reg)}</td>
+                    <td className="px-3 py-2 text-right">{r.ot?money(r.ot):'—'}</td>
+                    <td className={`px-3 py-2 text-right ${r.pending>0.005?'text-amber-600':'text-slate-300'}`}>{r.pending>0.005?money(r.pending):'—'}</td>
+                    <td className="px-3 py-2 text-right font-bold">{money(r.total)}</td>
+                  </tr>
+                ))}
+                {rows.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No entries for this day.</td></tr>}
+              </tbody>
+              {rows.length>0 && (
+                <tfoot><tr className="border-t bg-slate-50 font-bold">
+                  <td className="px-3 py-2">TOTAL</td>
+                  <td className="px-3 py-2 text-right">{gPieces.toLocaleString('en-PH')}</td>
+                  <td className="px-3 py-2 text-right">{money(gReg)}</td>
+                  <td className="px-3 py-2 text-right">{money(gOt)}</td>
+                  <td className="px-3 py-2 text-right text-amber-600">{gPend>0.005?money(gPend):'—'}</td>
+                  <td className="px-3 py-2 text-right">{money(gTotal)}</td>
+                </tr></tfoot>
+              )}
+            </table>
+          )}
+        </div>
+      </div>
+      <p className="text-[11px] text-slate-400">Totals include both Pending and Done entries so you see full output. The Payout tab pays only Done, unpaid work.</p>
+    </div>
+  );
+}
 function PayrollDashboard({ sewers, entries, money, entryEarnings, entryDescribe, pSettings, todayISOd, getWeekStart, addDaysISO, fmtPayrollDate, toggleEntryStatus }){
   const t = todayISOd();
   const ws = getWeekStart(t);
