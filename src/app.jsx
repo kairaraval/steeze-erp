@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 587 · System-wide fix for the 1000-row limit: every growing table (leads, sales orders, payments, production/graphic/printing/sampling/sewing/packing jobs, RFPs, vouchers, expenses, cash advances, bank transactions, commissions, delivery receipts + items, transmittals + items, subcon records, HR records, comment counts, item-type suggestions, etc.) now loads in full pages instead of stopping at 1000 rows. As the team keeps adding data, nothing will silently disappear from lists or totals again.";
+const BUILD = "Live build 588 · Training: new 'Print Techniques' module — an illustrated guide to garment decoration (full & spot sublimation, embroidery, DTF, vinyl, patches) with cost/lead-time comparisons, placement guide, artwork requirements, and a knowledge-check quiz. Admins can edit it and add real sample photos per method.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
