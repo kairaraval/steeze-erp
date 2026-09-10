@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 601 · Performance: the app's auto-refresh is now visibility-aware and throttled — background tabs no longer re-run the full data load on every ping (they refresh when you return), bursts collapse into one refresh, and full reloads happen at most ~once per 15s. Cuts office-wide database load. Paired with the DB index + RLS fixes that removed the statement timeouts.";
+const BUILD = "Live build 602 · Renamed 'Request from Purchasing' → 'Request for Purchasing'. Fixed: when a sales user was @mentioned in a purchasing request, opening it from the Inbox landed on the Sales Pipeline instead of the request — it now opens their Request for Purchasing item and its activity thread.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26523,7 +26523,7 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title="Request from Purchasing" onClose={onClose}>
+    <Modal title="Request for Purchasing" onClose={onClose}>
       <div className="space-y-3 text-sm">
         <div className="text-xs text-slate-500">Ask Purchasing to buy or source anything. Your request lands in their board as a <b>Manual request</b> and they’re notified right away.</div>
         <div><label className="text-xs font-semibold text-slate-500">What do you need? *</label><input value={f.item} onChange={e=>up('item',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder='e.g. "2 rolls of white bias tape" or "Stapler + staples for office"' /></div>
@@ -26561,11 +26561,12 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
   );
 }
 
-function PurchaseIntakeView({ profile, profiles }){
+function PurchaseIntakeView({ profile, profiles, openPRId }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [creating,setCreating]=useState(false);
   const [activityFor,setActivityFor]=useState(null);
+  const openedRef=useRef(null);
   async function load(){
     setLoading(true);
     const { data }=await sb.from('purchase_requests').select('*')
@@ -26574,11 +26575,18 @@ function PurchaseIntakeView({ profile, profiles }){
     setRows(data||[]); setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
+  // Deep-link from an Inbox @mention: open that request's activity thread.
+  useEffect(()=>{
+    if(openPRId && openPRId!==openedRef.current && rows.length){
+      const r=rows.find(x=>x.id===openPRId);
+      if(r){ setActivityFor(r); openedRef.current=openPRId; }
+    }
+  },[openPRId, rows]);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">🛒 Request from Purchasing</h1><p className="text-slate-500 text-sm">Ask Purchasing to buy or source anything — with photos. Track your requests below.</p></div>
+          <div><h1 className="text-2xl font-bold">🛒 Request for Purchasing</h1><p className="text-slate-500 text-sm">Ask Purchasing to buy or source anything — with photos. Track your requests below.</p></div>
           <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New request</button>
         </div>
       </div>
@@ -41485,7 +41493,7 @@ function App(){
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.link_view) setView(m.link_view); return;
     }
-    if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
+    if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
       // Open the SO directly — the Edit modal has the Activity tab built in.
@@ -41513,7 +41521,7 @@ function App(){
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.link_view) setView(m.link_view); return;
     }
-    if(m.source==='pr'){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
+    if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
     if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
@@ -41800,7 +41808,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -41817,7 +41825,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -41831,7 +41839,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -42032,7 +42040,7 @@ function App(){
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
-        {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} />}
+        {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} openPRId={inboxPRId} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
