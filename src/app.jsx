@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 595 · Client Portal: the order form is now a player ROSTER (name, jersey no., shirt size, short size, color, notes) with add-a-line — matching how sports kit sheets look. Plus a per-client DESIGN LIBRARY: clients pick a saved design when ordering/reordering, and staff can manage each client's designs (🎨 Design library in the Client Orders inbox).";
+const BUILD = "Live build 596 · Client Portal: 'Save draft' on the order form — clients can save an unfinished order and come back to it (drafts stay private, are not sent to Steeze, open straight back into the form to continue, and become a real order when submitted).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39993,7 +39993,7 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
   const [busy,setBusy]=useState(false);
   const clientName=(id)=>{ const c=(clients||[]).find(x=>x.id===id); return c?(c.company||c.name||'—'):'—'; };
   const designName=(id)=>{ const d=designs.find(x=>x.id===id); return d?d.name:''; };
-  async function load(){ setLoading(true); const [oRes,dRes]=await Promise.all([ sb.from('client_orders').select('*').order('created_at',{ascending:false}), sb.from('client_designs').select('id,name,client_id').order('created_at',{ascending:false}) ]); setOrders(oRes.data||[]); setDesigns(dRes.data||[]); setLoading(false); }
+  async function load(){ setLoading(true); const [oRes,dRes]=await Promise.all([ sb.from('client_orders').select('*').neq('status','draft').order('created_at',{ascending:false}), sb.from('client_designs').select('id,name,client_id').order('created_at',{ascending:false}) ]); setOrders(oRes.data||[]); setDesigns(dRes.data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
   const STAT=['submitted','received','in_production','ready','delivered','cancelled'];
   const counts=STAT.reduce((a,s)=>{ a[s]=orders.filter(o=>o.status===s).length; return a; },{});
@@ -40189,6 +40189,7 @@ function ClientInviteModal({ profile, clients, onClose }){
 // It ONLY ever touches client_orders (scoped to the signed-in client by RLS)
 // and the client-uploads storage bucket — never any internal OS data.
 const CLIENT_ORDER_STATUS = {
+  draft:         { label:'Draft',               color:'bg-slate-100 text-slate-500',   step:-1 },
   submitted:     { label:'Submitted',          color:'bg-amber-100 text-amber-700',   step:0 },
   received:      { label:'Received by Steeze',  color:'bg-blue-100 text-blue-700',     step:1 },
   in_production: { label:'In production',       color:'bg-indigo-100 text-indigo-700', step:2 },
@@ -40252,20 +40253,24 @@ function ClientPortal({ session, clientUser, onSignOut }){
   }
   function removeFile(i){ setForm(f=>({...f, attachments:f.attachments.filter((_,j)=>j!==i)})); }
 
-  async function submit(){
+  async function save(status){
     const cleanItems=form.items.filter(it=> (it.name||it.number||it.shirt||it.short||'').toString().trim());
-    if(!form.title.trim()){ setMsg('Give this order a title (e.g. "2026 Local Kit").'); return; }
-    if(cleanItems.length===0){ setMsg('Add at least one player to the order.'); return; }
+    if(status==='submitted'){
+      if(!form.title.trim()){ setMsg('Give this order a title (e.g. "2026 Local Kit").'); return; }
+      if(cleanItems.length===0){ setMsg('Add at least one player to the order.'); return; }
+    } else {
+      if(!form.title.trim() && cleanItems.length===0 && !(form.notes||'').trim()){ setMsg('Add a title or some details before saving a draft.'); return; }
+    }
     setBusy(true); setMsg('');
     try{
-      const base={ title:form.title.trim(), design_id:form.design_id||null, delivery_date:form.delivery_date||null, notes:form.notes||null, items:cleanItems, attachments:form.attachments||[] };
+      const base={ title:form.title.trim()||'Untitled draft', design_id:form.design_id||null, delivery_date:form.delivery_date||null, notes:form.notes||null, items:cleanItems, attachments:form.attachments||[], status };
       if(active && active.id){
         const { error }=await sb.from('client_orders').update({ ...base, updated_at:new Date().toISOString() }).eq('id', active.id);
         if(error) throw error;
       } else {
         const monthKey=new Date().toISOString().slice(0,7).replace('-','');
         const number=`CO-${monthKey}-${Date.now().toString().slice(-6)}`;
-        const { error }=await sb.from('client_orders').insert({ ...base, number, client_id:clientId, submitted_by:session.user.id, status:'submitted' });
+        const { error }=await sb.from('client_orders').insert({ ...base, number, client_id:clientId, submitted_by:session.user.id });
         if(error) throw error;
       }
       setBusy(false); setScreen('list'); loadOrders();
@@ -40357,9 +40362,11 @@ function ClientPortal({ session, clientUser, onSignOut }){
           </div>
           {msg && <div className="text-sm text-rose-600">{msg}</div>}
           <div className="flex gap-2 pt-1">
-            <button onClick={submit} disabled={busy||uploading} className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(active?'Save changes':'Submit order')}</button>
+            <button onClick={()=>save('submitted')} disabled={busy||uploading} className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':((active&&active.status!=='draft')?'Save changes':'Submit order')}</button>
+            <button onClick={()=>save('draft')} disabled={busy||uploading} className="py-2.5 px-4 rounded-lg border border-slate-300 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Save without submitting — you can finish it later">💾 Save draft</button>
             <button onClick={()=>setScreen('list')} className="py-2.5 px-4 rounded-lg border font-semibold text-slate-600">Cancel</button>
           </div>
+          <div className="text-[11px] text-slate-400 -mt-1">A draft is saved to your account and not sent to Steeze until you submit it.</div>
         </div>
       </div>
     </div>
@@ -40373,10 +40380,10 @@ function ClientPortal({ session, clientUser, onSignOut }){
         <div className="max-w-4xl mx-auto px-4 py-6">
           <button onClick={()=>setScreen('list')} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← Back to my orders</button>
           <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
-            <div><h1 className="text-2xl font-bold">{active.title||'Order'}</h1><div className="text-xs text-slate-400 font-mono">{active.number} · submitted {fmtDate(String(active.created_at).slice(0,10))}</div></div>
+            <div><h1 className="text-2xl font-bold">{active.title||'Order'}</h1><div className="text-xs text-slate-400 font-mono">{active.number} · {active.status==='draft'?'saved':'submitted'} {fmtDate(String(active.created_at).slice(0,10))}</div></div>
             <span className={`text-xs px-2.5 py-1 rounded font-semibold ${meta.color}`}>{meta.label}</span>
           </div>
-          {active.status!=='cancelled' && (
+          {active.status!=='cancelled' && active.status!=='draft' && (
             <div className="bg-white border rounded-xl p-3 mb-3 flex items-center gap-1 overflow-x-auto">
               {steps.map((s,i)=>{ const done=i<=curStep; return (<React.Fragment key={s}><div className="flex flex-col items-center gap-1 min-w-[64px]"><div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${done?'bg-emerald-500 text-white':'bg-slate-200 text-slate-400'}`}>{done?'✓':i+1}</div><span className={`text-[10px] text-center ${done?'text-slate-700':'text-slate-400'}`}>{coStatusMeta(s).label}</span></div>{i<steps.length-1 && <div className={`flex-1 h-0.5 ${i<curStep?'bg-emerald-500':'bg-slate-200'}`}></div>}</React.Fragment>); })}
             </div>
@@ -40418,14 +40425,15 @@ function ClientPortal({ session, clientUser, onSignOut }){
             </div>
           ) : (
             <div className="space-y-2">
-              {orders.map(o=>{ const meta=coStatusMeta(o.status); const n=(Array.isArray(o.items)?o.items:[]).length; return (
-                <div key={o.id} className="bg-white border rounded-xl p-3 flex items-center gap-3 hover:border-indigo-300 cursor-pointer" onClick={()=>{ setActive(o); setScreen('detail'); }}>
+              {orders.map(o=>{ const meta=coStatusMeta(o.status); const isDraft=o.status==='draft'; const n=(Array.isArray(o.items)?o.items:[]).length; return (
+                <div key={o.id} className={`bg-white border rounded-xl p-3 flex items-center gap-3 hover:border-indigo-300 cursor-pointer ${isDraft?'border-dashed':''}`} onClick={()=>{ if(isDraft){ startEdit(o); } else { setActive(o); setScreen('detail'); } }}>
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-slate-800 truncate">{o.title||'Order'}</div>
-                    <div className="text-xs text-slate-400">{o.number} · {n} item{n===1?'':'s'} · {fmtDate(String(o.created_at).slice(0,10))}</div>
+                    <div className="font-semibold text-slate-800 truncate">{o.title||'Untitled draft'}</div>
+                    <div className="text-xs text-slate-400">{o.number} · {n} player{n===1?'':'s'} · {fmtDate(String(o.created_at).slice(0,10))}</div>
                   </div>
+                  {isDraft && <span className="text-[11px] text-indigo-600 font-semibold shrink-0">Continue →</span>}
                   <span className={`text-[11px] px-2 py-1 rounded font-semibold shrink-0 ${meta.color}`}>{meta.label}</span>
-                  <button onClick={(e)=>{ e.stopPropagation(); startDuplicate(o); }} className="text-xs text-slate-500 hover:text-indigo-600 shrink-0" title="Reorder">⧉</button>
+                  {!isDraft && <button onClick={(e)=>{ e.stopPropagation(); startDuplicate(o); }} className="text-xs text-slate-500 hover:text-indigo-600 shrink-0" title="Reorder">⧉</button>}
                 </div>
               ); })}
             </div>
