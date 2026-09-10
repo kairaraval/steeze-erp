@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 596 · Client Portal: 'Save draft' on the order form — clients can save an unfinished order and come back to it (drafts stay private, are not sent to Steeze, open straight back into the form to continue, and become a real order when submitted).";
+const BUILD = "Live build 597 · Client Portal Phase 3: a Billing tab where clients see their own outstanding balance, their invoices (read-only, client-safe fields only — never internal costs/margins), and how to pay. Staff manage the payment channels shown to clients (💳 in Client Orders). Delivered via a security-definer view so the invoices table stays locked down. (Phase 2 reorders + status timeline already shipped in Phase 1.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39989,6 +39989,7 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
   const [active,setActive]=useState(null);
   const [showInvite,setShowInvite]=useState(false);
   const [showDesigns,setShowDesigns]=useState(false);
+  const [showChannels,setShowChannels]=useState(false);
   const [designs,setDesigns]=useState([]);
   const [busy,setBusy]=useState(false);
   const clientName=(id)=>{ const c=(clients||[]).find(x=>x.id===id); return c?(c.company||c.name||'—'):'—'; };
@@ -40021,8 +40022,9 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📦 Client Orders</h1><p className="text-slate-500 text-sm">Orders submitted by clients through the portal · {counts.submitted||0} new</p></div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button onClick={()=>setShowDesigns(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">🎨 Design library</button>
+            <button onClick={()=>setShowChannels(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">💳 Payment channels</button>
             <button onClick={()=>setShowInvite(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">👤 Manage client accounts</button>
           </div>
         </div>
@@ -40079,7 +40081,31 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
 
       {showInvite && <ClientInviteModal profile={profile} clients={clients} onClose={()=>setShowInvite(false)} />}
       {showDesigns && <ClientDesignsModal profile={profile} clients={clients} onClose={()=>{ setShowDesigns(false); load(); }} />}
+      {showChannels && <PaymentChannelsModal onClose={()=>setShowChannels(false)} />}
     </div>
+  );
+}
+function PaymentChannelsModal({ onClose }){
+  const [rows,setRows]=useState([]); const [busy,setBusy]=useState(false);
+  async function load(){ const { data }=await sb.from('payment_channels').select('*').order('position',{ascending:true}); setRows(data||[]); }
+  useEffect(()=>{ load(); },[]);
+  async function add(){ setBusy(true); const { error }=await sb.from('payment_channels').insert({ label:'New channel', details:'', position:(rows.length) }); setBusy(false); if(error){ alert(error.message); return; } load(); }
+  async function save(r, patch){ const { error }=await sb.from('payment_channels').update(patch).eq('id', r.id); if(error){ alert(error.message); return; } setRows(rs=>rs.map(x=>x.id===r.id?{...x,...patch}:x)); }
+  async function del(r){ if(!confirm('Delete this payment channel?')) return; await sb.from('payment_channels').delete().eq('id', r.id); load(); }
+  return (
+    <Modal title="💳 Payment channels (shown to clients)" onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="text-xs text-slate-500">These appear on every client's Billing page. Display only — clients don't pay through the portal.</div>
+        {rows.map(r=>(
+          <div key={r.id} className="border rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2"><input defaultValue={r.label} onBlur={e=>save(r,{label:e.target.value})} placeholder="e.g. BDO Savings · Steeze Corp" className="flex-1 border rounded px-2 py-1.5 font-medium" /><label className="text-xs flex items-center gap-1"><input type="checkbox" checked={r.active!==false} onChange={e=>save(r,{active:e.target.checked})} /> Active</label><button onClick={()=>del(r)} className="text-rose-500 text-xs hover:underline">Delete</button></div>
+            <textarea defaultValue={r.details} onBlur={e=>save(r,{details:e.target.value})} rows={2} placeholder="Account number / GCash number / instructions" className="w-full border rounded px-2 py-1.5" />
+          </div>
+        ))}
+        {rows.length===0 && <div className="text-slate-400 text-center py-4">No channels yet.</div>}
+        <button onClick={add} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">+ Add channel</button>
+      </div>
+    </Modal>
   );
 }
 function ClientDesignsModal({ profile, clients, onClose }){
@@ -40213,6 +40239,14 @@ function ClientPortal({ session, clientUser, onSignOut }){
   const [orders,setOrders]=useState([]);
   const [loading,setLoading]=useState(true);
   const [screen,setScreen]=useState('list');   // list | form | detail
+  const [tab,setTab]=useState('orders');        // orders | billing
+  const [invoices,setInvoices]=useState(null);  // null until loaded
+  const [channels,setChannels]=useState([]);
+  async function loadBilling(){
+    const [inv,ch]=await Promise.all([ sb.rpc('my_client_invoices'), sb.from('payment_channels').select('*').eq('active',true).order('position',{ascending:true}) ]);
+    setInvoices(inv && !inv.error ? (inv.data||[]) : []);
+    setChannels(ch && !ch.error ? (ch.data||[]) : []);
+  }
   const [active,setActive]=useState(null);      // order being viewed/edited
   // A line is ONE player: matches how the client's roster sheets look.
   const emptyItem=()=>({ name:'', number:'', shirt:'', short:'', color:'', notes:'' });
@@ -40293,8 +40327,51 @@ function ClientPortal({ session, clientUser, onSignOut }){
           <button onClick={onSignOut} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm">Sign out</button>
         </div>
       </div>
+      <div className="max-w-4xl mx-auto px-4 flex gap-1">
+        <button onClick={()=>{ setTab('orders'); setScreen('list'); }} className={`px-4 py-2 text-sm font-semibold border-b-2 ${tab==='orders'?'border-indigo-400 text-white':'border-transparent text-slate-300 hover:text-white'}`}>My Orders</button>
+        <button onClick={()=>{ setTab('billing'); if(invoices===null) loadBilling(); }} className={`px-4 py-2 text-sm font-semibold border-b-2 ${tab==='billing'?'border-indigo-400 text-white':'border-transparent text-slate-300 hover:text-white'}`}>Billing</button>
+      </div>
     </div>
   );
+
+  // ---------- BILLING ----------
+  if(tab==='billing'){
+    const totalBalance=(invoices||[]).reduce((s,i)=>s+(Number(i.balance)||0),0);
+    const totalPaid=(invoices||[]).reduce((s,i)=>s+(Number(i.paid)||0),0);
+    return (
+      <div className="min-h-screen bg-slate-100">
+        <Header />
+        <div className="max-w-4xl mx-auto px-4 py-6">
+          <h1 className="text-2xl font-bold mb-1">Billing</h1>
+          <p className="text-slate-500 text-sm mb-4">Your invoices and outstanding balance with Steeze.</p>
+          {invoices===null ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : (
+            <>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className={`rounded-xl border p-4 ${totalBalance>0?'bg-rose-50 border-rose-200':'bg-emerald-50 border-emerald-200'}`}><div className="text-[10px] uppercase text-slate-400">Outstanding balance</div><div className={`text-2xl font-bold ${totalBalance>0?'text-rose-700':'text-emerald-700'}`}>{peso(totalBalance)}</div></div>
+                <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Total paid</div><div className="text-2xl font-bold text-slate-800">{peso(totalPaid)}</div></div>
+              </div>
+              <div className="bg-white border rounded-xl overflow-hidden mb-5"><div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Invoice</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Due</th><th className="text-right px-3 py-2">Total</th><th className="text-right px-3 py-2">Paid</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Status</th></tr></thead>
+                  <tbody>
+                    {(invoices||[]).length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No invoices yet.</td></tr>}
+                    {(invoices||[]).map((i,ix)=>(<tr key={ix} className="border-t"><td className="px-3 py-2 font-mono text-xs">{i.number||'—'}</td><td className="px-3 py-2 text-xs">{i.issue_date?fmtDate(i.issue_date):'—'}</td><td className="px-3 py-2 text-xs">{i.due_date?fmtDate(i.due_date):'—'}</td><td className="px-3 py-2 text-right">{peso(i.total)}</td><td className="px-3 py-2 text-right text-slate-500">{peso(i.paid)}</td><td className={`px-3 py-2 text-right font-semibold ${Number(i.balance)>0?'text-rose-600':'text-emerald-600'}`}>{peso(i.balance)}</td><td className="px-3 py-2"><span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 uppercase">{i.status||'—'}</span></td></tr>))}
+                  </tbody>
+                </table>
+              </div></div>
+              <div className="bg-white border rounded-xl p-4">
+                <div className="font-semibold text-slate-800 mb-2">💳 How to pay</div>
+                {channels.length===0 ? <div className="text-sm text-slate-500">Please coordinate with your Steeze contact for payment details.</div> : (
+                  <div className="space-y-2">{channels.map(c=>(<div key={c.id} className="border rounded-lg p-3"><div className="font-medium text-slate-800">{c.label}</div><div className="text-sm text-slate-600 whitespace-pre-wrap">{c.details}</div></div>))}</div>
+                )}
+                <div className="text-[11px] text-slate-400 mt-2">After paying, please send your proof of payment to your Steeze contact. Balances update once we confirm receipt.</div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ---------- ORDER FORM ----------
   if(screen==='form') return (
