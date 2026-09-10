@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 590 · Fix: 'Send to Graphic Design' now also creates a linked ticket in the Graphic ticket queue (before, it only dropped a card on the Design board, so the work was missing from the Tickets pool). The board card and the ticket now stay in sync — matching the '+ New graphic ticket' flow.";
+const BUILD = "Live build 591 · Removed the 'Send to Graphic' button from the lead — graphics work now goes through 'Graphic ticket' only, which always creates a ticket in the Graphic ticket queue AND the linked Design-board card. One path, so nothing can land on the board without a ticket again.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3018,7 +3018,6 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             {canTicket && <button onClick={()=>setShowTicket(true)} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700" title="Raise a task on this lead into the shared Sales Ticket queue">🎫 New ticket</button>}
             {canTicket && <button onClick={()=>setShowGraphicTicket(true)} className="py-2 px-3 rounded-lg bg-fuchsia-600 text-white text-sm font-semibold hover:bg-fuchsia-700" title="Raise a design task into the shared Graphic Ticket queue">🎨 Graphic ticket</button>}
             <button onClick={onOpenTechpack} className="py-2 px-3 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 {lead.techpack?'Techpack':'Create techpack'}</button>
-            <button onClick={onSendGraphic} className="py-2 px-3 rounded-lg bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700">🎨 Send to Graphic</button>
             {lead.stage==='sampling' && <button onClick={onSendSampling} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">🧵 Send to Sampling</button>}
             {lead.stage==='sampling' && <button onClick={onSendPrinting} className="py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">🖨 Send to Printing</button>}
             {/* "Send to Production" and "Send to PR" removed — both the production
