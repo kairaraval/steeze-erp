@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 602 · Renamed 'Request from Purchasing' → 'Request for Purchasing'. Fixed: when a sales user was @mentioned in a purchasing request, opening it from the Inbox landed on the Sales Pipeline instead of the request — it now opens their Request for Purchasing item and its activity thread.";
+const BUILD = "Live build 603 · Inbox: opening a Marketing @mention now opens the exact content post and its team conversation (Content tab), instead of just the Marketing board — matching the same deep-link behavior as lead, sales-order, and purchasing-request mentions.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17570,7 +17570,7 @@ function MetricSnapshotModal({ profile, existing, onClose, onSaved }){
   );
 }
 
-function MarketingHub({ profile, profiles }){
+function MarketingHub({ profile, profiles, openContentId }){
   const canEdit = marketingCanEdit(profile);                 // campaigns + analytics (admin/manager)
   const canEditContent = marketingCanEditContent(profile);   // content planner (+ video editor)
   const canEditResources = marketingCanEditResources(profile);
@@ -17607,6 +17607,15 @@ function MarketingHub({ profile, profiles }){
   async function delMetric(m){ if(!confirm('Delete this metric snapshot?')) return; const { error }=await sb.from('marketing_metrics').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } load(); }
   async function delResource(r){ if(!confirm(`Delete "${r.title||'this resource'}"?`)) return; const { error }=await sb.from('marketing_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id); if(error){ alert(error.message); return; } load(); }
   useEffect(()=>{ load(); },[]);
+  // Deep-link from an Inbox @mention → open that content post (which contains
+  // the team conversation) on the Content tab.
+  const openedContentRef=useRef(null);
+  useEffect(()=>{
+    if(openContentId && openContentId!==openedContentRef.current && content.length){
+      const p=content.find(x=>x.id===openContentId);
+      if(p){ setTab('content'); setEditingPost(p); openedContentRef.current=openContentId; }
+    }
+  },[openContentId, content]);
   async function movePost(post, status){ if(!canEditContent) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delPost(post){ if(!confirm(`Delete "${post.title||'this post'}"?`)) return; const { error }=await sb.from('marketing_content').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delCampaign(c){ if(!confirm(`Delete campaign "${c.name}"? Its content stays but loses the campaign link.`)) return; const { error }=await sb.from('marketing_campaigns').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } load(); }
@@ -40656,6 +40665,7 @@ function App(){
   const [inboxOpenSO,setInboxOpenSO]=useState(null);
   const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
   const [inboxPRId,setInboxPRId]=useState(null);
+  const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
   const [jumpToPayments,setJumpToPayments]=useState(false);
@@ -41501,7 +41511,7 @@ function App(){
       if(so) setInboxOpenSO(so);
       return;
     }
-    if(m.source==='marketing'){ setView('marketing'); return; }
+    if(m.source==='marketing'){ setView('marketing'); setInboxMarketingId(m.content_id||null); return; }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
     const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
@@ -41522,6 +41532,7 @@ function App(){
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
+    if(m.source==='marketing'){ setView('marketing'); setInboxMarketingId(m.content_id||null); return; }
     if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
       const l=leads.find(x=>x.id===m.lead_id);
@@ -42027,7 +42038,7 @@ function App(){
         {view==='pricing' && <PricingView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
-        {view==='marketing' && <MarketingHub profile={profile} profiles={profiles} />}
+        {view==='marketing' && <MarketingHub profile={profile} profiles={profiles} openContentId={inboxMarketingId} />}
         {view==='training' && isTrainingParticipant && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} participants={trainingParticipants} reloadParticipants={reloadTrainingParticipants} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='embroidery' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Embroidery" icon="🪡" table="embroidery_jobs" jobType="embroidery" statuses={EMBROIDERY_STATUSES} doneStatuses={EMBROIDERY_DONE} jobs={embroideryJobs} leads={leads} canSendToPrinting={false} showReport={true} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
