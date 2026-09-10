@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 597 · Client Portal Phase 3: a Billing tab where clients see their own outstanding balance, their invoices (read-only, client-safe fields only — never internal costs/margins), and how to pay. Staff manage the payment channels shown to clients (💳 in Client Orders). Delivered via a security-definer view so the invoices table stays locked down. (Phase 2 reorders + status timeline already shipped in Phase 1.)";
+const BUILD = "Live build 598 · Client Portal: widened the Jersey shirt / short size columns on the order roster so full sizes (e.g. MENS 3XL) are fully visible.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40411,8 +40411,8 @@ function ClientPortal({ session, clientUser, onSignOut }){
           <div>
             <div className="flex items-center justify-between mb-1"><label className="text-xs font-semibold text-slate-500 uppercase">Players ({form.items.length})</label><button onClick={addItem} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add player</button></div>
             <div className="border rounded-lg overflow-x-auto">
-              <table className="w-full text-sm min-w-[640px]">
-                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5 w-16">No.</th><th className="text-left px-2 py-1.5 w-24">Jersey shirt</th><th className="text-left px-2 py-1.5 w-24">Jersey short</th><th className="text-left px-2 py-1.5 w-28">Color</th><th className="text-left px-2 py-1.5">Notes</th><th className="w-8"></th></tr></thead>
+              <table className="w-full text-sm min-w-[760px]">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5 w-16">No.</th><th className="text-left px-2 py-1.5 w-36">Jersey shirt</th><th className="text-left px-2 py-1.5 w-36">Jersey short</th><th className="text-left px-2 py-1.5 w-28">Color</th><th className="text-left px-2 py-1.5">Notes</th><th className="w-8"></th></tr></thead>
                 <tbody>
                   {form.items.map((it,i)=>(
                     <tr key={i} className="border-t">
