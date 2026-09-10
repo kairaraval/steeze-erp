@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 591 · Removed the 'Send to Graphic' button from the lead — graphics work now goes through 'Graphic ticket' only, which always creates a ticket in the Graphic ticket queue AND the linked Design-board card. One path, so nothing can land on the board without a ticket again.";
+const BUILD = "Live build 592 · RFP proof gate: a new Request for Payment is now held with Purchasing (status 'Needs Proof'). Purchasing must upload the proof of transaction, then click 'Send to Accounting for payment' — Accounting can't see/approve it until the proof is attached. Prevents payments being requested without proof.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6149,7 +6149,7 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
     return need.size;
   })();
   // 6. RFPs in finance pipeline (Purchasing wants to know which they sent)
-  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_finance' || r.status==='pending_admin' || r.status==='approved');
+  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_purchasing' || r.status==='pending_finance' || r.status==='pending_admin' || r.status==='approved');
   // 7. Active production jobs needing materials
   const activeProdJobs = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
   // 8. Stock issuances today (out movements, created_at = today)
@@ -18246,7 +18246,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
         const cash = (bankAccounts||[]).reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
         const liveSOs = (salesOrders||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at);
         const ar = liveSOs.reduce((s,o)=>s+Number(o.balance_due||0), 0);
-        const apOpen = (rfps||[]).filter(r=>!r.deleted_at && ['pending_finance','pending_admin','approved','partial'].includes(r.status));
+        const apOpen = (rfps||[]).filter(r=>!r.deleted_at && ['pending_purchasing','pending_finance','pending_admin','approved','partial'].includes(r.status));
         const ap = apOpen.reduce((s,r)=>s+rfpBalance(r), 0);
         const collectedMonth = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(mKey)).reduce((s,p)=>s+Number(p.amount||0),0);
         const collectedYear  = (soPayments||[]).filter(p=>p.status==='verified' && (p.date||'').startsWith(yKey)).reduce((s,p)=>s+Number(p.amount||0),0);
@@ -27406,7 +27406,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   async function requestPayment(){
     if(!isEdit) return;
     if(existing.rfp_id){ setMsg('This PO already has a Request for Payment. Check the RFP queue.'); return; }
-    if(!confirm(`Send this PO to Finance for payment processing?\n\nAmount: ${peso(netPayable)}\nSupplier: ${supplier?.company||'(none)'}\n\nFinance will review, then Admin (Kaira) approves, then Finance creates the Check/Cash Voucher.`)) return;
+    if(!confirm(`Create a Request for Payment for this PO?\n\nAmount: ${peso(netPayable)}\nSupplier: ${supplier?.company||'(none)'}\n\nThe RFP is created and held with Purchasing. Open it, upload the PROOF OF TRANSACTION, then click "Send to Accounting for payment". Accounting can't act on it until the proof is attached.`)) return;
     setBusy(true); setMsg('');
     try {
       const today = new Date().toISOString().slice(0,10);
@@ -27426,13 +27426,13 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
         bank_name: f.transfer_bank_name || supplier?.bank_name || null,
         bank_account_name: f.transfer_bank_account_name || supplier?.bank_account_name || null,
         bank_account_number: f.transfer_bank_account_number || supplier?.bank_account_number || null,
-        status: 'pending_finance', requested_by: profile.id,
+        status: 'pending_purchasing', requested_by: profile.id,
       }).select().single();
       if(rErr) throw rErr;
       // Stamp PO with rfp_id
       await sb.from('purchase_orders').update({ rfp_id: rfpData.id }).eq('id', existing.id);
       setBusy(false);
-      alert(`✅ ${number} created and sent to Finance. They'll process the Check/Cash Voucher after Admin approval.`);
+      alert(`✅ ${number} created and held with Purchasing.\n\nNext: open ${number} in the Request for Payment list, upload the PROOF OF TRANSACTION, then click "Send to Accounting for payment".`);
       onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -30093,6 +30093,7 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, p
 
 /* ─────────── RFP QUEUE + VOUCHERS ─────────── */
 const RFP_STATUSES = [
+  { key:'pending_purchasing', label:'Needs Proof',    color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'pending_finance', label:'Pending Finance',  color:'bg-amber-100 text-amber-700' },
   { key:'pending_admin',   label:'Pending Admin',    color:'bg-orange-100 text-orange-700' },
   { key:'approved',        label:'Approved (Pay)',   color:'bg-blue-100 text-blue-700' },
@@ -30146,11 +30147,11 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📝 Request for Payment</h1>
-            <p className="text-slate-500 text-sm">{rfps.length} RFP{rfps.length===1?'':'s'} · {counts.pending_finance||0} awaiting Finance · {counts.pending_admin||0} awaiting Admin · {counts.approved||0} approved to pay</p>
+            <p className="text-slate-500 text-sm">{rfps.length} RFP{rfps.length===1?'':'s'} · {counts.pending_purchasing||0} need proof · {counts.pending_finance||0} awaiting Finance · {counts.pending_admin||0} awaiting Admin · {counts.approved||0} approved to pay</p>
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">{RFP_STATUSES.map(s=>(
+      <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 mb-4">{RFP_STATUSES.map(s=>(
         <button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-3 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}>
           <div className={`text-[10px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div>
           <div className="text-xl font-bold">{counts[s.key]||0}</div>
@@ -30219,6 +30220,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:(code||'—'); };
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
+  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
   const po = orders.find(o=>o.id===rfp.po_id);
   const poAtts = po && Array.isArray(po.attachments) ? po.attachments : [];
   const poLines = po && Array.isArray(po.lines) ? po.lines : [];
@@ -30232,6 +30234,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   const adminBy = profiles.find(p=>p.id===rfp.admin_approved_by);
   const meta = rfpMeta(rfp.status);
 
+  // Purchasing gate: an RFP is held with Purchasing until the proof of
+  // transaction is attached. Only then can it be sent on to Accounting.
+  async function sendToAccounting(){
+    if(!isPurchasing && !isAdmin){ setMsg('Only Purchasing can send this to Accounting.'); return; }
+    if((atts||[]).length===0){ setMsg('⚠ Upload the proof of transaction below before sending to Accounting for payment.'); return; }
+    if(!confirm('Send this RFP to Accounting for payment?\n\nAccounting will review, then Admin approves, then the voucher is created.')) return;
+    setBusy(true);
+    const { error } = await sb.from('rfps').update({ status:'pending_finance' }).eq('id', rfp.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
   async function approveFinance(){
     if(!isAccounting && !isAdmin){ setMsg('Only Finance/Accounting can approve at this step.'); return; }
     if((atts||[]).length===0){ setMsg('⚠ Attach the proof of transaction (from Purchasing) below before approving — Accounting needs it to validate the amount and VAT status.'); return; }
@@ -30334,6 +30347,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           </div>
           <div className="text-[11px] text-slate-500 mb-2">Upload the supplier proof of transaction (to validate amount + VAT), plus receipts/invoices. You can add these anytime — even after the RFP is paid.</div>
           <AttachmentsEditor value={atts} onChange={saveAtts} scope={'rfp/'+rfp.id} inline />
+          {atts.length===0 && (rfp.status==='pending_purchasing') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: attach the proof of transaction before this can be sent to Accounting for payment.</div>}
           {atts.length===0 && (rfp.status==='pending_finance') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: attach the proof of transaction before Finance can approve.</div>}
         </div>
 
@@ -30411,6 +30425,12 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
 
         {/* Action buttons depend on status + role */}
         <div className="flex gap-2 flex-wrap">
+          {rfp.status==='pending_purchasing' && (isPurchasing||isAdmin) && (
+            <button onClick={sendToAccounting} disabled={busy||(atts||[]).length===0} className="flex-1 py-2 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50" title={(atts||[]).length===0?'Attach the proof of transaction first':''}>📤 Send to Accounting for payment</button>
+          )}
+          {rfp.status==='pending_purchasing' && !isPurchasing && !isAdmin && (
+            <div className="flex-1 text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Waiting for Purchasing to attach the proof of transaction and send this for payment.</div>
+          )}
           {rfp.status==='pending_finance' && (isAccounting||isAdmin) && (
             <>
               <button onClick={approveFinance} disabled={busy} className="flex-1 py-2 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">✓ Approve & route to Admin</button>
