@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 600 · Department boards: each status column now has a sort toggle (↓ Newest / ↑ Oldest by date added) — set per column, remembered per board on your device. Defaults to newest-first.";
+const BUILD = "Live build 601 · Performance: the app's auto-refresh is now visibility-aware and throttled — background tabs no longer re-run the full data load on every ping (they refresh when you return), bursts collapse into one refresh, and full reloads happen at most ~once per 15s. Cuts office-wide database load. Paired with the DB index + RLS fixes that removed the statement timeouts.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40744,14 +40744,32 @@ function App(){
   const loadAllAgain = useRef(false);
   const loadRetries = useRef(0);
   const reloadTimer = useRef(null);
-  // Debounced reload for realtime events. A burst of notifications (e.g. one
-  // Closed-Won deal fanning PRs out to the whole purchasing team) used to make
-  // every recipient run a full ~50-table reload at once — a thundering herd
-  // that hammered Disk IO/CPU. This collapses a burst into a single refresh
-  // per user, ~2.5s after the last event.
-  function scheduleReload(){ if(reloadTimer.current) clearTimeout(reloadTimer.current); reloadTimer.current = setTimeout(()=>{ reloadTimer.current = null; loadAll(); }, 2500); }
+  const reloadPending = useRef(false);
+  const lastLoadAt = useRef(0);
+  // Debounced, throttled, visibility-aware reload for realtime events. Three
+  // guards keep office-wide CPU low when many people use the OS at once:
+  //   1) BACKGROUND TABS DON'T RELOAD. If the tab is hidden we just mark a
+  //      reload pending and run it once when the person comes back — a tab left
+  //      open in the background no longer re-runs ~60 queries on every ping.
+  //   2) BURSTS COLLAPSE. A flurry of events collapses into one refresh (~5s).
+  //   3) MIN GAP. We never full-reload more than about once every 15s, so a
+  //      busy office can't cause back-to-back full reloads.
+  function scheduleReload(){
+    reloadPending.current = true;
+    if(typeof document !== 'undefined' && document.hidden) return; // defer until visible
+    if(reloadTimer.current) return;                                 // one already queued
+    const since = Date.now() - (lastLoadAt.current || 0);
+    const wait = Math.max(5000, 15000 - since);
+    reloadTimer.current = setTimeout(()=>{
+      reloadTimer.current = null;
+      if(reloadPending.current && !(typeof document!=='undefined' && document.hidden)){
+        reloadPending.current = false; loadAll();
+      }
+    }, wait);
+  }
   async function loadAll(){
     if(!session) return;
+    lastLoadAt.current = Date.now();
     // Coalesce: never run two full reloads concurrently. If one is already in
     // flight, just flag it to run once more when the current one finishes.
     if(loadAllBusy.current){ loadAllAgain.current = true; return; }
@@ -40986,6 +41004,14 @@ function App(){
     }
   }
   useEffect(()=>{ if(session && clientUser===null) loadAll(); },[session, clientUser]);
+  // When the person returns to a backgrounded tab, run any reload that was
+  // deferred while it was hidden (and refresh if it's been a while) — so they
+  // see current data without background tabs hammering the DB.
+  useEffect(()=>{
+    function onVisible(){ if(!document.hidden && session && clientUser===null){ if(reloadPending.current || (Date.now()-(lastLoadAt.current||0) > 60000)) scheduleReload(); } }
+    document.addEventListener('visibilitychange', onVisible);
+    return ()=>document.removeEventListener('visibilitychange', onVisible);
+  },[session, clientUser]);
   useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
   // Pending replacement-request count for the sidebar badge (refreshes on nav).
   useEffect(()=>{ (async()=>{ try{ const { count }=await sb.from('replacement_requests').select('id',{count:'exact',head:true}).eq('status','pending'); setReplacementPending(count||0); }catch(_){} })(); },[view]);
