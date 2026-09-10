@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 592 · RFP proof gate: a new Request for Payment is now held with Purchasing (status 'Needs Proof'). Purchasing must upload the proof of transaction, then click 'Send to Accounting for payment' — Accounting can't see/approve it until the proof is attached. Prevents payments being requested without proof.";
+const BUILD = "Live build 593 · Purchasing module: attachments now show as inline photo/PDF thumbnails (click to view in a lightbox) instead of filename rows — on the PO editor and the PO attachments shown on the RFP. Proof-of-transaction and APV views were already inline.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -743,10 +743,12 @@ function AttachmentsEditor({ value, onChange, scope='misc', label, inline }){
     </div>
   );
 }
-// Read-only openable list of attachments.
-function AttachmentList({ attachments, empty }){
+// Read-only openable list of attachments. `inline` renders click-to-view
+// thumbnails (image lightbox / PDF preview) instead of a filename row list.
+function AttachmentList({ attachments, empty, inline }){
   const list=Array.isArray(attachments)?attachments:[];
   if(!list.length) return empty?<div className="text-[11px] text-slate-400">{empty}</div>:null;
+  if(inline) return (<div className="flex flex-wrap gap-2">{list.map((a,i)=>(<AttachmentChip key={i} att={a} gallery={list} />))}</div>);
   return (<div className="space-y-1">{list.map((a,i)=>(<div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1.5"><span>{attGlyph(a)}</span><button type="button" onClick={()=>openSignedAttachment(a.path||a.url)} className="flex-1 truncate text-left text-indigo-600 hover:underline">{a.name||'file'}</button></div>))}</div>);
 }
 function AttachmentChip({ att, small, gallery }){
@@ -27627,7 +27629,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
 
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} disabled={locked} /></TpLbl>
         <div>
-          <AttachmentsEditor value={f.attachments} onChange={setAttachments} scope={'po/'+(existing?.id||'new')} label="Attachments · quotation, supplier invoice, photos (Accounting can view these on the RFP)" />
+          <AttachmentsEditor value={f.attachments} onChange={setAttachments} scope={'po/'+(existing?.id||'new')} label="Attachments · quotation, supplier invoice, photos (Accounting can view these on the RFP)" inline />
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
 
@@ -30330,7 +30332,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
                 ) : <div className="text-[11px] text-slate-400">No line items on the PO.</div>}
                 <div>
                   <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">PO attachments · quotation / invoice / photos</div>
-                  <AttachmentList attachments={poAtts} empty="No attachments on this PO." />
+                  <AttachmentList attachments={poAtts} inline empty="No attachments on this PO." />
                 </div>
               </div>
             )}
