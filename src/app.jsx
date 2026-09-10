@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 603 · Inbox: opening a Marketing @mention now opens the exact content post and its team conversation (Content tab), instead of just the Marketing board — matching the same deep-link behavior as lead, sales-order, and purchasing-request mentions.";
+const BUILD = "Live build 604 · Comments post reliably again: once a comment saves, the box clears and the Post button frees up immediately — the attachment-mirroring and thread refresh now run in the background instead of holding the button (which caused the 'press Post several times' issue under load).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1032,45 +1032,43 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   function removePending(idx){ setPending(p=>p.filter((_,i)=>i!==idx)); }
   async function post(){
     const t=text.trim(); if(!t && pending.length===0) return; setBusy(true); setErr('');
-    try{ const mentions=parseMentions(t, profiles);
-      // Keep `attachment` (legacy single) populated with the first item for backward read compatibility.
-      const first = pending[0] || null;
-      const { error } = await sb.from(table).insert({ ...match, actor_id:profile.id, type:'comment', text:t, mentions, attachment:first, attachments:pending });
+    const mentions=parseMentions(t, profiles);
+    const first = pending[0] || null;   // legacy single-attachment field
+    const atts = pending.slice();
+    try{
+      const { error } = await sb.from(table).insert({ ...match, actor_id:profile.id, type:'comment', text:t, mentions, attachment:first, attachments:atts });
       if(error) throw error;
-      // Mirror any uploaded attachments onto the parent lead's main attachments
-      // list so sales can find them next to the lead details without digging
-      // through the activity thread. Only applies to lead activity (not dept
-      // job activity, where attachments live on the dept job itself).
-      // Deduped by path (for storage uploads) or url (for links), so re-posting
-      // the same file doesn't create double entries on the lead.
-      if(table === 'lead_activity' && match?.lead_id && pending.length > 0){
+      // Success — free the box IMMEDIATELY so the button never gets stuck behind
+      // the follow-up work below. The mirroring + thread refresh then run in the
+      // background; if they're slow, the comment still posted.
+      setText(''); setPending([]); setBusy(false);
+      (async()=>{
+        // Mirror uploaded files onto the parent lead / dept job so they also show
+        // in that record's Attachments (deduped by path/url).
         try {
-          const { data: leadRow } = await sb.from('leads').select('attachments').eq('id', match.lead_id).single();
-          const existing = Array.isArray(leadRow?.attachments) ? leadRow.attachments : [];
-          const keyOf = (a) => a?.path || a?.url || (a?.name||'') + (a?.mime||'');
-          const seen = new Set(existing.map(keyOf));
-          const toAdd = pending.filter(a => { const k = keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; });
-          if(toAdd.length){
-            await sb.from('leads').update({ attachments: [...existing, ...toAdd] }).eq('id', match.lead_id);
+          if(table === 'lead_activity' && match?.lead_id && atts.length > 0){
+            const { data: leadRow } = await sb.from('leads').select('attachments').eq('id', match.lead_id).maybeSingle();
+            const existing = Array.isArray(leadRow?.attachments) ? leadRow.attachments : [];
+            const keyOf = (a) => a?.path || a?.url || (a?.name||'') + (a?.mime||'');
+            const seen = new Set(existing.map(keyOf));
+            const toAdd = atts.filter(a => { const k = keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; });
+            if(toAdd.length) await sb.from('leads').update({ attachments: [...existing, ...toAdd] }).eq('id', match.lead_id);
+          } else if(table === 'dept_job_activity' && match?.job_id && atts.length > 0){
+            const jt = DEPT_JOB_TABLE_BY_TYPE[match.job_type] || 'graphic_design_jobs';
+            const { data: jobRow } = await sb.from(jt).select('attachments').eq('id', match.job_id).maybeSingle();
+            const existing = Array.isArray(jobRow?.attachments) ? jobRow.attachments : [];
+            const keyOf = (a) => a?.path || a?.url || (a?.name||'') + (a?.mime||'');
+            const seen = new Set(existing.map(keyOf));
+            const toAdd = atts.filter(a => { const k = keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; });
+            if(toAdd.length) await sb.from(jt).update({ attachments: [...existing, ...toAdd] }).eq('id', match.job_id);
           }
-        } catch(mirrorErr){ console.warn('Mirror to lead.attachments failed:', mirrorErr?.message||mirrorErr); }
-      }
-      // Mirror onto the DEPT JOB's own attachments (Graphic/Printing/etc.), so a
-      // file posted in the team conversation also shows in the job's Attachments.
-      if(table === 'dept_job_activity' && match?.job_id && pending.length > 0){
-        const jt = DEPT_JOB_TABLE_BY_TYPE[match.job_type] || 'graphic_design_jobs';
-        try {
-          const { data: jobRow } = await sb.from(jt).select('attachments').eq('id', match.job_id).single();
-          const existing = Array.isArray(jobRow?.attachments) ? jobRow.attachments : [];
-          const keyOf = (a) => a?.path || a?.url || (a?.name||'') + (a?.mime||'');
-          const seen = new Set(existing.map(keyOf));
-          const toAdd = pending.filter(a => { const k = keyOf(a); if(seen.has(k)) return false; seen.add(k); return true; });
-          if(toAdd.length){ await sb.from(jt).update({ attachments: [...existing, ...toAdd] }).eq('id', match.job_id); }
-        } catch(mirrorErr){ console.warn('Mirror to dept job attachments failed:', mirrorErr?.message||mirrorErr); }
-      }
-      if(pending.length > 0 && onAttach){ try{ onAttach(pending); }catch(_){} }
-      setText(''); setPending([]); await load(); afterChange&&afterChange(); }
-    catch(er){ setErr(er.message||String(er)); } finally{ setBusy(false); } }
+        } catch(mirrorErr){ console.warn('Mirror attachments failed:', mirrorErr?.message||mirrorErr); }
+        if(atts.length > 0 && onAttach){ try{ onAttach(atts); }catch(_){} }
+        try { await load(); } catch(_){}
+        afterChange && afterChange();
+      })();
+    }
+    catch(er){ setErr(er.message||String(er)); setBusy(false); } }
   // Show who WILL be notified, and warn loudly when an @tag matches nobody —
   // that's how a teammate silently misses pings (no profile name set, typo, etc.)
   const mentionDetail = parseMentionsDetail(text, profiles);
