@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 604 · Comments post reliably again: once a comment saves, the box clears and the Post button frees up immediately — the attachment-mirroring and thread refresh now run in the background instead of holding the button (which caused the 'press Post several times' issue under load).";
+const BUILD = "Live build 605 · The lead form's '+ Add item' button now sits at the bottom of the Line items list (full-width) instead of the header, so it's easy to reach when adding several items in a row. The header shows a running item count.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1477,7 +1477,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           {clientMode!=='new' && contactPerson.trim() && !contactOptions.some(c=>c.name.toLowerCase()===contactPerson.trim().toLowerCase()) && <div className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">➕ "{contactPerson.trim()}" is a new contact — it'll be saved to this client's contact list.</div>}
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items</div><button onClick={addItem} className="text-xs text-indigo-600 hover:underline font-medium">+ Add item</button></div>
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Line items{items.length>0 && <span className="text-slate-400 font-normal"> · {items.length}</span>}</div></div>
           <div className="space-y-2">{items.map((it,idx)=>(
             <div key={it.id} className="bg-white border rounded p-2 grid grid-cols-12 gap-2 items-end">
               <div className="col-span-4"><label className="text-[10px] text-slate-500 uppercase">Item</label><input className="input mt-0.5" list="lead-item-catalog" value={it.itemType} onChange={e=>setItem(idx,'itemType',e.target.value)} placeholder="Pick or type a new item…" /><datalist id="lead-item-catalog">{itemOptions.map(n=><option key={n} value={n} />)}</datalist></div>
@@ -1492,6 +1492,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
               </div>
             </div>))}
           </div>
+          <div className="mt-2"><button onClick={addItem} className="w-full text-xs text-indigo-600 hover:bg-indigo-50 border border-dashed border-indigo-300 rounded py-2 font-medium">+ Add item</button></div>
           {hasItems && (<div className="mt-3 pt-2 border-t text-sm space-y-1"><div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{peso(subtotal)}</span></div><div className="flex justify-between text-slate-500"><span>VAT 12%</span><span>{peso(vat)}</span></div><div className="flex justify-between font-bold pt-1 border-t"><span>Total</span><span>{peso(total)}</span></div></div>)}
         </div>
         <div className={`rounded-lg border p-3 ${leadType==='sale'?'bg-slate-50 border-slate-200':'bg-pink-50/50 border-pink-200'}`}>
