@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 605 · The lead form's '+ Add item' button now sits at the bottom of the Line items list (full-width) instead of the header, so it's easy to reach when adding several items in a row. The header shows a running item count.";
+const BUILD = "Live build 606 · Resource & size-chart thumbnails load far faster: instead of downloading each full-resolution photo (0.7–2.3 MB) just to show a small tile, the grid now pulls resized ~20–30 KB thumbnails from Supabase's image CDN and lazy-loads them so only tiles near the screen fetch. Full-size photos still open at full quality when clicked, and techpack print pages are unchanged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -459,7 +459,7 @@ function renderCommentText(text, profiles){
   return parts;
 }
 
-async function signedUrl(path){ const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, 3600); if(error) throw error; return data.signedUrl; }
+async function signedUrl(path, transform){ const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, 3600, transform?{transform}:undefined); if(error) throw error; return data.signedUrl; }
 async function uploadFile(scope, file){
   const safe=file.name.replace(/[^\w.\-]/g,'_'); const path=`${scope}/${Date.now()}_${safe}`;
   const { error } = await sb.storage.from(BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
@@ -3377,7 +3377,7 @@ function DesignResourceCard({ r, canEdit, onOpen, onEdit, onDelete }){
       )}
       <button onClick={()=>onOpen(r)} className="block w-full text-left">
         <div className="w-full h-28 bg-slate-50 flex items-center justify-center overflow-hidden">
-          {isImg && r.file_path ? <TImg path={r.file_path} maxH="112px" />
+          {isImg && r.file_path ? <TImg path={r.file_path} maxH="112px" thumb={400} />
             : <div className="text-4xl text-slate-300">{isPdf?'📄':isLink?'🔗':'🗂'}</div>}
         </div>
         <div className="p-2">
@@ -8772,7 +8772,7 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
               {(sizeCharts||[]).map(c=>(
                 <div key={c.id} className="bg-white border rounded-xl overflow-hidden">
                   <div className="px-3 py-2 border-b"><div className="font-semibold text-sm truncate">{c.name}</div><div className="text-[11px] text-slate-500">{c.garment_type||'—'}</div></div>
-                  {c.chart_image ? <div className="bg-slate-50 flex items-center justify-center p-2" style={{maxHeight:'15rem', overflow:'hidden'}}><TImg path={c.chart_image} maxH="14rem" /></div> : <div className="p-6 text-center text-slate-300 text-xs">No chart image</div>}
+                  {c.chart_image ? <div className="bg-slate-50 flex items-center justify-center p-2" style={{maxHeight:'15rem', overflow:'hidden'}}><TImg path={c.chart_image} maxH="14rem" thumb={480} /></div> : <div className="p-6 text-center text-slate-300 text-xs">No chart image</div>}
                 </div>
               ))}
             </div>
@@ -20823,7 +20823,25 @@ function PreviewImg({ value, h }){
   return <div className={`border border-slate-400 bg-white flex items-center justify-center overflow-hidden ${h||'h-40'}`}>{url?<img src={url} className="w-full h-full object-contain p-1" />:<span className="text-slate-300 text-xs">&nbsp;</span>}</div>;
 }
 
-function TImg({ path, maxH }){ const [u,setU]=useState(''); useEffect(()=>{ let on=true; if(path) signedUrl(path).then(x=>{ if(on)setU(x); }).catch(()=>{}); else setU(''); return ()=>{on=false;}; },[path]); if(!u) return null; return <img src={u} style={{maxWidth:'100%', maxHeight:maxH||'100%', objectFit:'contain'}} />; }
+// TImg renders a Storage image from a signed URL.
+// When `thumb` (a target pixel size) is set, we ask Supabase's image CDN for a
+// resized copy instead of the full-resolution original — a grid of 60 design
+// cards then downloads ~20-30 KB each instead of the 0.7 MB+ originals, and the
+// browser lazy-loads them so only tiles near the viewport fetch. Full-res
+// techpack/print usages omit `thumb` and are unaffected. If transformation ever
+// fails (e.g. an unsupported format like SVG), we fall back to the original.
+function TImg({ path, maxH, thumb }){
+  const [u,setU]=useState('');
+  useEffect(()=>{ let on=true;
+    if(path){
+      signedUrl(path, thumb?{width:thumb,height:thumb,resize:'contain',quality:75}:undefined)
+        .then(x=>{ if(on)setU(x); })
+        .catch(()=>{ if(thumb) signedUrl(path).then(x=>{ if(on)setU(x); }).catch(()=>{}); });
+    } else setU('');
+    return ()=>{on=false;}; },[path,thumb]);
+  if(!u) return null;
+  return <img src={u} loading={thumb?'lazy':undefined} decoding="async" style={{maxWidth:'100%', maxHeight:maxH||'100%', objectFit:'contain'}} />;
+}
 function TpHdrCell({ label, value, red }){ return <div className="border-r border-b border-slate-400 px-2 py-0.5 leading-tight"><span className="text-[8px] font-bold text-slate-500 uppercase">{label} </span><span className={`text-[10px] ${red?'text-red-600 font-bold':'text-slate-800'}`}>{value||''}</span></div>; }
 // Opens a proof-of-payment attachment INLINE in a lightbox overlay (no new tab).
 // Stored attachment_url is a signed url that expires after 1h, so we regenerate
@@ -24008,7 +24026,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
               <button onClick={()=>applyChart(c)} className="w-full text-left">
                 <div className="font-semibold text-sm">{c.name}</div>
                 {c.garment_type && <div className="text-[10px] text-slate-500 uppercase mb-1">{c.garment_type}</div>}
-                <div className="h-28 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mt-1">{c.chart_image ? <TImg path={c.chart_image} maxH="6.5rem" /> : <span className="text-slate-300 text-xs">no image</span>}</div>
+                <div className="h-28 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mt-1">{c.chart_image ? <TImg path={c.chart_image} maxH="6.5rem" thumb={320} /> : <span className="text-slate-300 text-xs">no image</span>}</div>
               </button>
               <div className="mt-2"><button onClick={()=>applyChart(c)} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Use this</button></div>
             </div>
@@ -24023,7 +24041,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-[60vh] overflow-auto">
             {invItems.filter(it=> !invSearch || `${it.name||''} ${it.category||''} ${it.color||''}`.toLowerCase().includes(invSearch.toLowerCase())).slice(0,120).map(it=>(
               <button key={it.id} onClick={()=>{ const {section,index}=pickInv; const cols=(tp[section]?.columns||[]); setSec(section,{ columns: cols.map((x,j)=> j===index ? { ...x, name: it.name||x.name, title: x.title||it.category||'', image: it.image_path||x.image } : x) }); setPickInv(null); }} className="border rounded-lg p-2 bg-white hover:border-teal-500 text-left">
-                <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mb-1">{it.image_path ? <TImg path={it.image_path} maxH="5.5rem" /> : <span className="text-slate-300 text-xs">no photo</span>}</div>
+                <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden mb-1">{it.image_path ? <TImg path={it.image_path} maxH="5.5rem" thumb={320} /> : <span className="text-slate-300 text-xs">no photo</span>}</div>
                 <div className="text-xs font-semibold truncate">{it.name}</div>
                 <div className="text-[10px] text-slate-500 truncate">{[it.category,it.color].filter(Boolean).join(' · ')||'—'}</div>
               </button>
@@ -24042,8 +24060,8 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
                 <div className="font-semibold text-sm">{m.name}</div>
                 {m.garment_type && <div className="text-[10px] text-slate-500 uppercase mb-1">{m.garment_type}</div>}
                 <div className="grid grid-cols-2 gap-1 mt-1">
-                  <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden">{m.front_image?<TImg path={m.front_image} maxH="5.5rem" />:<span className="text-slate-300 text-[10px]">front</span>}</div>
-                  <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden">{m.back_image?<TImg path={m.back_image} maxH="5.5rem" />:<span className="text-slate-300 text-[10px]">back</span>}</div>
+                  <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden">{m.front_image?<TImg path={m.front_image} maxH="5.5rem" thumb={320} />:<span className="text-slate-300 text-[10px]">front</span>}</div>
+                  <div className="h-24 bg-slate-50 border rounded flex items-center justify-center overflow-hidden">{m.back_image?<TImg path={m.back_image} maxH="5.5rem" thumb={320} />:<span className="text-slate-300 text-[10px]">back</span>}</div>
                 </div>
               </button>
               <div className="flex justify-between mt-2"><button onClick={()=>applyMockup(m)} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Use this</button><button onClick={async()=>{ if(!confirm('Delete "'+m.name+'" from library?')) return; const {error}=await sb.from('garment_mockups').delete().eq('id',m.id); if(error){ alert(error.message); return; } reloadMockups&&reloadMockups(); }} className="text-xs text-rose-500 hover:underline">Delete</button></div>
