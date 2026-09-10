@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 599 · Department boards (Packing, Production, Graphic, Printing, Embroidery, Knitting, Sampling): cards in each column are now ordered newest-first — the most recently added card sits on top.";
+const BUILD = "Live build 600 · Department boards: each status column now has a sort toggle (↓ Newest / ↑ Oldest by date added) — set per column, remembered per board on your device. Defaults to newest-first.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5044,6 +5044,11 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
     reload();
   }
   const liveDetail = detail ? (jobs.find(x=>x.id===detail.id)||detail) : null;
+  // Per-column sort direction (by date added). Defaults to newest-first; each
+  // column can be flipped and the choice is remembered per board on this device.
+  const colSortKey='deptColSort_'+(title||'board');
+  const [colSort,setColSort]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(colSortKey)||'{}')||{}; }catch(_){ return {}; } });
+  function toggleColSort(k){ setColSort(prev=>{ const next={...prev, [k]:(prev[k]==='asc'?'desc':'asc')}; try{ localStorage.setItem(colSortKey, JSON.stringify(next)); }catch(_){}; return next; }); }
   // ── Artists' priority checklist (Graphic board only) ─────────────────────
   // Mirrors the TO-DO column only. An item leaves the checklist when it's moved
   // out of To Do OR ticked off, and re-appears if the job is moved back to To Do.
@@ -5135,7 +5140,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
               </div>
             </div>
           )}
-          {statuses.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort((a,b)=> (new Date(b.created_at||0)) - (new Date(a.created_at||0)));
+          {statuses.map(st=>{ const dir=colSort[st.key]||'desc'; const col=filtered.filter(j=>j.status===st.key).slice().sort((a,b)=>{ const d=(new Date(b.created_at||0))-(new Date(a.created_at||0)); return dir==='asc'? -d : d; });
             const isDragTarget = dragOverStatus === st.key;
             const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStatus!==st.key) setDragOverStatus(st.key); };
             const onColumnDragLeave = ()=>{ if(dragOverStatus===st.key) setDragOverStatus(null); };
@@ -5156,7 +5161,10 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
                  onDragLeave={onColumnDragLeave}
                  onDrop={onColumnDrop}>
               {/* Frozen column header */}
-              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
+              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}>
+                <span>{st.label} <span className="opacity-70">({col.length})</span></span>
+                <button onClick={()=>toggleColSort(st.key)} title={dir==='desc'?'Newest added on top — click for oldest first':'Oldest added on top — click for newest first'} className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/50 hover:bg-white/80 whitespace-nowrap">{dir==='desc'?'↓ Newest':'↑ Oldest'}</button>
+              </div>
               {/* Scrollable column body */}
               <div className={`flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] transition ${isDragTarget?'bg-indigo-50/80':'bg-slate-200/60'}`}>
                 {col.map(j=>{ const img=pickCover(j.attachments); const di=deadlineInfo(j.due_date, doneStatuses.includes(j.status)); const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null;
