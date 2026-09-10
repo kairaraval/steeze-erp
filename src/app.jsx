@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 593 · Purchasing module: attachments now show as inline photo/PDF thumbnails (click to view in a lightbox) instead of filename rows — on the PO editor and the PO attachments shown on the RFP. Proof-of-transaction and APV views were already inline.";
+const BUILD = "Live build 594 · Client Order Portal (Phase 1): clients can log into a separate, walled-off portal to submit orders & reorders, upload artwork, and track status — completely isolated from the internal OS by the Phase 0 security lockdown. Staff get a new 'Client Orders' inbox (Sales) to review submissions, update status, convert to a Lead, and invite/manage client accounts.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -465,6 +465,15 @@ async function uploadFile(scope, file){
   const { error } = await sb.storage.from(BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
   return { type: file.type==='application/pdf'?'pdf':(file.type.startsWith('image/')?'image':'file'), name:file.name, path, mime:file.type };
 }
+// Client-portal uploads live in a SEPARATE private bucket, scoped so each client
+// can only touch files under their own <client_id>/ folder (see storage RLS).
+const CLIENT_BUCKET='client-uploads';
+async function clientSignedUrl(path){ const { data, error } = await sb.storage.from(CLIENT_BUCKET).createSignedUrl(path, 3600); if(error) throw error; return data.signedUrl; }
+async function clientUploadFile(clientId, file){
+  const safe=file.name.replace(/[^\w.\-]/g,'_'); const path=`${clientId}/${Date.now()}_${Math.random().toString(36).slice(2,7)}_${safe}`;
+  const { error } = await sb.storage.from(CLIENT_BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
+  return { type: file.type==='application/pdf'?'pdf':(file.type.startsWith('image/')?'image':'file'), name:file.name, path, mime:file.type };
+}
 
 // Extract a pasted image (screenshot / Cmd+V) from a clipboard event.
 // Returns a File ready to feed into uploadFile, or null if no image was pasted.
@@ -882,11 +891,14 @@ function LoginScreen(){
   async function submit(e){ e.preventDefault(); setBusy(true); setMsg('');
     try{
       if(mode==='signup'){
-        // Invite-only signup — refuse unless the email is in pending_invites.
+        // Invite-only signup — refuse unless the email is invited as staff
+        // (pending_invites) OR as a client account (pending_client_invites).
         const cleanEmail = (email||'').trim().toLowerCase();
         const { data: invited, error: chkErr } = await sb.rpc('is_email_invited', { p_email: cleanEmail });
         if(chkErr){ throw new Error('Could not verify invite: '+chkErr.message); }
-        if(!invited){
+        let clientInvited = false;
+        if(!invited){ try{ const r = await sb.rpc('is_client_invited', { p_email: cleanEmail }); clientInvited = !!(r && r.data); }catch(_){} }
+        if(!invited && !clientInvited){
           throw new Error("Steeze OS is invite-only. Ask Kaira to send you an invite for this email, then try again.");
         }
         const {error}=await sb.auth.signUp({ email, password, options:{ data:{ full_name:name } } });
@@ -39969,9 +39981,367 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   );
 }
 
+/* ═══════════════════ STAFF: CLIENT ORDERS INBOX ═══════════════════ */
+function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
+  const [orders,setOrders]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filter,setFilter]=useState('');
+  const [active,setActive]=useState(null);
+  const [showInvite,setShowInvite]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const clientName=(id)=>{ const c=(clients||[]).find(x=>x.id===id); return c?(c.company||c.name||'—'):'—'; };
+  async function load(){ setLoading(true); const { data }=await sb.from('client_orders').select('*').order('created_at',{ascending:false}); setOrders(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  const STAT=['submitted','received','in_production','ready','delivered','cancelled'];
+  const counts=STAT.reduce((a,s)=>{ a[s]=orders.filter(o=>o.status===s).length; return a; },{});
+  const rows=orders.filter(o=>!filter||o.status===filter);
+
+  async function setStatus(o, status){ setBusy(true); const { error }=await sb.from('client_orders').update({ status, reviewed_by:profile.id, reviewed_at:new Date().toISOString(), updated_at:new Date().toISOString() }).eq('id', o.id); setBusy(false); if(error){ alert(error.message); return; } const n={...o,status}; setActive(n); load(); }
+  async function convertToLead(o){
+    if(o.lead_id){ alert('This order was already converted to a lead.'); return; }
+    if(!confirm(`Create a Sales Pipeline lead from ${o.number}?\n\nYou can refine details in the pipeline afterward.`)) return;
+    setBusy(true);
+    const items=(Array.isArray(o.items)?o.items:[]).map(it=>({ name:[it.design,it.garment,it.color].filter(Boolean).join(' — ')||'Item', quantity:Number(it.qty)||0 }));
+    const notes=`From client order ${o.number}.`+(o.notes?`\n${o.notes}`:'');
+    const { data:lead, error }=await sb.from('leads').insert({ title:o.title||('Client order '+o.number), client_id:o.client_id, manager_id:profile.id, stage:'new', items, notes }).select().single();
+    if(error){ setBusy(false); alert('Convert failed: '+error.message); return; }
+    await sb.from('client_orders').update({ lead_id:lead.id, status:(o.status==='submitted'?'received':o.status), reviewed_by:profile.id, reviewed_at:new Date().toISOString() }).eq('id', o.id);
+    setBusy(false); setActive(null); load(); reloadApp && reloadApp();
+    alert(`✅ Lead created from ${o.number}. Open it in the Sales Pipeline to continue.`);
+  }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📦 Client Orders</h1><p className="text-slate-500 text-sm">Orders submitted by clients through the portal · {counts.submitted||0} new</p></div>
+          <button onClick={()=>setShowInvite(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">👤 Manage client accounts</button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button onClick={()=>setFilter('')} className={`text-xs px-3 py-1.5 rounded-full border ${!filter?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>All · {orders.length}</button>
+        {STAT.map(s=>(<button key={s} onClick={()=>setFilter(filter===s?'':s)} className={`text-xs px-3 py-1.5 rounded-full border ${filter===s?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>{coStatusMeta(s).label} · {counts[s]||0}</button>))}
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Order</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Title</th><th className="text-right px-3 py-2">Items</th><th className="text-left px-3 py-2">Submitted</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+        <tbody>
+          {loading && <tr><td colSpan="7" className="text-center text-slate-400 py-8">Loading…</td></tr>}
+          {!loading && rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No client orders{filter?' in this status':''} yet.</td></tr>}
+          {rows.map(o=>{ const meta=coStatusMeta(o.status); const n=(Array.isArray(o.items)?o.items:[]).length; return (
+            <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setActive(o)}>
+              <td className="px-3 py-2 font-mono text-xs">{o.number}</td>
+              <td className="px-3 py-2 font-semibold">{clientName(o.client_id)}</td>
+              <td className="px-3 py-2 max-w-xs truncate">{o.title||'—'}{o.lead_id && <span className="ml-1 text-[10px] text-emerald-600" title="Converted to a lead">✓ lead</span>}</td>
+              <td className="px-3 py-2 text-right">{n}</td>
+              <td className="px-3 py-2 text-xs">{fmtDate(String(o.created_at).slice(0,10))}</td>
+              <td className="px-3 py-2"><span className={`text-[11px] px-2 py-1 rounded font-semibold ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2 text-right"><button onClick={(e)=>{e.stopPropagation(); setActive(o);}} className="text-xs text-indigo-600 hover:underline">Open</button></td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+
+      {active && (()=>{ const meta=coStatusMeta(active.status); const items=Array.isArray(active.items)?active.items:[]; return (
+        <Modal title={`${active.number} · ${clientName(active.client_id)}`} onClose={()=>setActive(null)} wide>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div><div className="font-bold text-lg">{active.title||'Order'}</div><div className="text-xs text-slate-400">submitted {fmtDate(String(active.created_at).slice(0,10))}</div></div>
+              <span className={`text-xs px-2.5 py-1 rounded font-semibold ${meta.color}`}>{meta.label}</span>
+            </div>
+            <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Design</th><th className="text-left px-2 py-1.5">Garment</th><th className="text-left px-2 py-1.5">Color</th><th className="text-right px-2 py-1.5">Qty</th><th className="text-left px-2 py-1.5">Sizes</th><th className="text-left px-2 py-1.5">Names/Numbers</th><th className="text-left px-2 py-1.5">Delivery</th></tr></thead>
+              <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1.5">{it.design||'—'}</td><td className="px-2 py-1.5">{it.garment||'—'}</td><td className="px-2 py-1.5">{it.color||'—'}</td><td className="px-2 py-1.5 text-right">{it.qty||'—'}</td><td className="px-2 py-1.5">{it.sizes||'—'}</td><td className="px-2 py-1.5 text-[11px] text-slate-500">{[it.names,it.numbers].filter(Boolean).join(' / ')||'—'}</td><td className="px-2 py-1.5">{it.delivery_date?fmtDate(it.delivery_date):'—'}</td></tr>))}</tbody>
+            </table></div>
+            {active.notes && <div className="bg-slate-50 border rounded p-2 text-sm"><span className="text-[10px] uppercase text-slate-400 font-semibold">Notes </span>{active.notes}</div>}
+            {(active.attachments||[]).length>0 && <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Artwork & files</div><div className="flex flex-wrap gap-2">{active.attachments.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div></div>}
+            <div className="flex items-center gap-2 flex-wrap border-t pt-3">
+              <label className="text-xs text-slate-500">Status</label>
+              <select value={active.status} onChange={e=>setStatus(active, e.target.value)} disabled={busy} className="text-sm border rounded-lg px-2 py-1.5 bg-white">{STAT.map(s=><option key={s} value={s}>{coStatusMeta(s).label}</option>)}</select>
+              <div className="flex-1"></div>
+              {active.lead_id
+                ? <button onClick={()=>{ const l={id:active.lead_id}; setActive(null); onOpenLead && onOpenLead(l); }} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold">Open linked lead →</button>
+                : <button onClick={()=>convertToLead(active)} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">➜ Convert to Lead</button>}
+            </div>
+          </div>
+        </Modal>
+      ); })()}
+
+      {showInvite && <ClientInviteModal profile={profile} clients={clients} onClose={()=>setShowInvite(false)} />}
+    </div>
+  );
+}
+function ClientInviteModal({ profile, clients, onClose }){
+  const [clientUsers,setClientUsers]=useState([]);
+  const [invites,setInvites]=useState([]);
+  const [clientId,setClientId]=useState('');
+  const [email,setEmail]=useState(''); const [name,setName]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const appUrl = (typeof window!=='undefined' && window.location ? window.location.origin : '');
+  const clientName=(id)=>{ const c=(clients||[]).find(x=>x.id===id); return c?(c.company||c.name||'—'):'—'; };
+  async function load(){
+    const [cu,pi]=await Promise.all([
+      sb.from('client_users').select('*').order('created_at',{ascending:false}),
+      sb.from('pending_client_invites').select('*').order('created_at',{ascending:false}),
+    ]);
+    setClientUsers(cu.data||[]); setInvites(pi.data||[]);
+  }
+  useEffect(()=>{ load(); },[]);
+  async function invite(){
+    if(!clientId){ setMsg('Pick the client company.'); return; }
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())){ setMsg('Enter a valid email.'); return; }
+    setBusy(true); setMsg('');
+    const { error }=await sb.from('pending_client_invites').upsert({ email:email.trim().toLowerCase(), client_id:clientId, name:name.trim()||null, invited_by:profile.id }, { onConflict:'email' });
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    setEmail(''); setName(''); setMsg('Invite ready — share the instructions below.'); load();
+  }
+  async function cancelInvite(em){ if(!confirm(`Cancel invite for ${em}?`)) return; await sb.from('pending_client_invites').delete().eq('email', em); load(); }
+  const sortedClients=(clients||[]).slice().sort((a,b)=>String(a.company||a.name||'').localeCompare(String(b.company||b.name||'')));
+  return (
+    <Modal title="Client portal accounts" onClose={onClose} wide>
+      <div className="space-y-4 text-sm">
+        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+          <div className="font-semibold text-indigo-800 mb-2">Invite a client</div>
+          <div className="grid sm:grid-cols-3 gap-2">
+            <select value={clientId} onChange={e=>setClientId(e.target.value)} className="border rounded-lg px-2 py-2 bg-white"><option value="">— client company —</option>{sortedClients.map(c=><option key={c.id} value={c.id}>{c.company||c.name}</option>)}</select>
+            <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="their@email.com" className="border rounded-lg px-2 py-2" />
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Contact name (optional)" className="border rounded-lg px-2 py-2" />
+          </div>
+          <div className="flex items-center gap-2 mt-2">
+            <button onClick={invite} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Send invite'}</button>
+            {msg && <span className="text-xs text-slate-600">{msg}</span>}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2">Tell them: open <strong>{appUrl||'the Steeze OS link'}</strong> → “Create account” → register with the invited email. They'll land straight in their order portal.</div>
+        </div>
+        {invites.length>0 && (
+          <div>
+            <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Pending invites · {invites.length}</div>
+            <div className="border rounded-lg divide-y">{invites.map(iv=>(<div key={iv.email} className="flex items-center justify-between gap-2 px-3 py-2"><div><div className="font-medium">{iv.email}</div><div className="text-[11px] text-slate-400">{clientName(iv.client_id)}{iv.name?` · ${iv.name}`:''}</div></div><button onClick={()=>cancelInvite(iv.email)} className="text-xs text-rose-500 hover:underline">Cancel</button></div>))}</div>
+          </div>
+        )}
+        <div>
+          <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Active client logins · {clientUsers.length}</div>
+          {clientUsers.length===0 ? <div className="text-slate-400 text-sm py-3">No client accounts yet.</div> : (
+            <div className="border rounded-lg divide-y">{clientUsers.map(u=>(<div key={u.id} className="flex items-center justify-between gap-2 px-3 py-2"><div><div className="font-medium">{u.name||u.email}</div><div className="text-[11px] text-slate-400">{u.email} · {clientName(u.client_id)}</div></div><span className={`text-[10px] px-1.5 py-0.5 rounded ${u.active!==false?'bg-emerald-100 text-emerald-700':'bg-slate-200 text-slate-500'}`}>{u.active!==false?'Active':'Disabled'}</span></div>))}</div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ═══════════════════ CLIENT ORDER PORTAL ═══════════════════ */
+// A completely separate, walled-off surface for external client accounts.
+// It ONLY ever touches client_orders (scoped to the signed-in client by RLS)
+// and the client-uploads storage bucket — never any internal OS data.
+const CLIENT_ORDER_STATUS = {
+  submitted:     { label:'Submitted',          color:'bg-amber-100 text-amber-700',   step:0 },
+  received:      { label:'Received by Steeze',  color:'bg-blue-100 text-blue-700',     step:1 },
+  in_production: { label:'In production',       color:'bg-indigo-100 text-indigo-700', step:2 },
+  ready:         { label:'Ready',               color:'bg-teal-100 text-teal-700',     step:3 },
+  delivered:     { label:'Delivered',           color:'bg-emerald-100 text-emerald-700', step:4 },
+  cancelled:     { label:'Cancelled',           color:'bg-slate-200 text-slate-600',   step:-1 },
+};
+function coStatusMeta(s){ return CLIENT_ORDER_STATUS[s] || CLIENT_ORDER_STATUS.submitted; }
+function ClientAttThumb({ att }){
+  const [url,setUrl]=useState('');
+  useEffect(()=>{ let on=true; if(att.path){ clientSignedUrl(att.path).then(u=>{ if(on) setUrl(u); }).catch(()=>{}); } return ()=>{on=false;}; },[att.path]);
+  const isImg = att.type==='image' || /\.(png|jpe?g|webp|gif)$/i.test(att.name||'');
+  if(isImg) return url
+    ? <a href={url} target="_blank" rel="noopener noreferrer"><img src={url} alt={att.name} className="w-16 h-16 object-cover rounded border" /></a>
+    : <div className="w-16 h-16 bg-slate-100 rounded border flex items-center justify-center text-slate-300 text-xs">…</div>;
+  return <a href={url||'#'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 text-slate-600">{att.type==='pdf'?'📄':'📎'} {att.name||'file'}</a>;
+}
+function ClientPortal({ session, clientUser, onSignOut }){
+  const clientId = clientUser.client_id;
+  const [company,setCompany]=useState('');
+  const [orders,setOrders]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [screen,setScreen]=useState('list');   // list | form | detail
+  const [active,setActive]=useState(null);      // order being viewed/edited
+  const emptyItem=()=>({ design:'', garment:'', color:'', qty:'', sizes:'', names:'', numbers:'', delivery_date:'', notes:'' });
+  const [form,setForm]=useState({ title:'', notes:'', items:[emptyItem()], attachments:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(''); const [uploading,setUploading]=useState(false);
+
+  async function loadOrders(){ setLoading(true);
+    const { data }=await sb.from('client_orders').select('*').eq('client_id', clientId).order('created_at',{ascending:false});
+    setOrders(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ loadOrders(); sb.rpc('my_client_name').then(r=>{ if(r && r.data) setCompany(r.data); }).catch(()=>{}); },[]);
+
+  function startNew(){ setForm({ title:'', notes:'', items:[emptyItem()], attachments:[] }); setActive(null); setScreen('form'); setMsg(''); }
+  function startDuplicate(o){ setForm({ title:(o.title||'')+' (reorder)', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:[] }); setActive(null); setScreen('form'); setMsg(''); }
+  function startEdit(o){ setForm({ title:o.title||'', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:Array.isArray(o.attachments)?o.attachments:[] }); setActive(o); setScreen('form'); setMsg(''); }
+  function setItem(i,k,v){ setForm(f=>({...f, items:f.items.map((it,j)=>j===i?{...it,[k]:v}:it)})); }
+  function addItem(){ setForm(f=>({...f, items:[...f.items, emptyItem()]})); }
+  function removeItem(i){ setForm(f=>({...f, items:f.items.filter((_,j)=>j!==i)})); }
+  async function addFiles(fileList){ const files=Array.from(fileList||[]); if(!files.length) return; setUploading(true); setMsg('');
+    try{ const up=[]; for(const file of files){ up.push(await clientUploadFile(clientId, file)); } setForm(f=>({...f, attachments:[...(f.attachments||[]), ...up]})); }
+    catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
+  function removeFile(i){ setForm(f=>({...f, attachments:f.attachments.filter((_,j)=>j!==i)})); }
+
+  async function submit(){
+    const cleanItems=form.items.filter(it=> (it.design||it.garment||it.qty||it.sizes||'').toString().trim());
+    if(!form.title.trim()){ setMsg('Give this order a title (e.g. "October Reorder").'); return; }
+    if(cleanItems.length===0){ setMsg('Add at least one item to the order.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      if(active && active.id){
+        const { error }=await sb.from('client_orders').update({ title:form.title.trim(), notes:form.notes||null, items:cleanItems, attachments:form.attachments||[], updated_at:new Date().toISOString() }).eq('id', active.id);
+        if(error) throw error;
+      } else {
+        const monthKey=new Date().toISOString().slice(0,7).replace('-','');
+        const number=`CO-${monthKey}-${Date.now().toString().slice(-6)}`;
+        const { error }=await sb.from('client_orders').insert({ number, client_id:clientId, submitted_by:session.user.id, title:form.title.trim(), notes:form.notes||null, items:cleanItems, attachments:form.attachments||[], status:'submitted' });
+        if(error) throw error;
+      }
+      setBusy(false); setScreen('list'); loadOrders();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function cancelOrder(o){ if(!confirm('Cancel this order? Steeze will no longer process it.')) return;
+    const { error }=await sb.from('client_orders').update({ status:'cancelled', updated_at:new Date().toISOString() }).eq('id', o.id);
+    if(error){ alert(error.message); return; } setScreen('list'); loadOrders();
+  }
+
+  const Header=()=>(
+    <div className="bg-slate-900 text-white">
+      <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center font-black text-lg">S</div>
+          <div><div className="font-bold leading-tight">Steeze <span className="text-indigo-300">Orders</span></div><div className="text-[11px] text-slate-300 leading-tight">{company||'Client Portal'}</div></div>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <span className="text-slate-300 hidden sm:inline">{clientUser.name||session.user.email}</span>
+          <button onClick={onSignOut} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm">Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ---------- ORDER FORM ----------
+  if(screen==='form') return (
+    <div className="min-h-screen bg-slate-100">
+      <Header />
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <button onClick={()=>setScreen('list')} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← Back to my orders</button>
+        <h1 className="text-2xl font-bold mb-1">{active?'Edit order':'New order'}</h1>
+        <p className="text-slate-500 text-sm mb-4">Fill in what you need. Our team reviews every submission before production.</p>
+        <div className="bg-white border rounded-xl p-4 space-y-4">
+          <div><label className="text-xs font-semibold text-slate-500 uppercase">Order title</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="e.g. October Reorder — Batch 2" /></div>
+          <div>
+            <div className="flex items-center justify-between mb-1"><label className="text-xs font-semibold text-slate-500 uppercase">Items</label><button onClick={addItem} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add item</button></div>
+            <div className="space-y-3">
+              {form.items.map((it,i)=>(
+                <div key={i} className="border rounded-lg p-3 bg-slate-50/60">
+                  <div className="flex items-center justify-between mb-2"><span className="text-[11px] font-semibold text-slate-400">Item {i+1}</span>{form.items.length>1 && <button onClick={()=>removeItem(i)} className="text-xs text-rose-500 hover:underline">Remove</button>}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    <label className="text-xs">Design / colorway<input value={it.design} onChange={e=>setItem(i,'design',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs">Garment<input value={it.garment} onChange={e=>setItem(i,'garment',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" placeholder="Jersey / short set…" /></label>
+                    <label className="text-xs">Color<input value={it.color} onChange={e=>setItem(i,'color',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs">Total qty<input type="number" value={it.qty} onChange={e=>setItem(i,'qty',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs">Delivery date<input type="date" value={it.delivery_date} onChange={e=>setItem(i,'delivery_date',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs">Size breakdown<input value={it.sizes} onChange={e=>setItem(i,'sizes',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" placeholder="e.g. S-5, M-10, L-8" /></label>
+                    <label className="text-xs">Names<input value={it.names} onChange={e=>setItem(i,'names',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs">Numbers<input value={it.numbers} onChange={e=>setItem(i,'numbers',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                    <label className="text-xs sm:col-span-1 col-span-2">Notes<input value={it.notes} onChange={e=>setItem(i,'notes',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div><label className="text-xs font-semibold text-slate-500 uppercase">General notes</label><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="Anything else we should know" /></div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase">Artwork & files</label>
+            <div className="mt-1"><label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-dashed bg-slate-50 hover:border-slate-400 cursor-pointer">📎 {uploading?'Uploading…':'Attach logos / layouts / files'}<input type="file" multiple className="hidden" disabled={uploading} onChange={e=>{ addFiles(e.target.files); e.target.value=''; }} /></label></div>
+            {(form.attachments||[]).length>0 && <div className="mt-2 flex flex-wrap gap-2">{form.attachments.map((a,i)=>(<div key={i} className="relative group"><ClientAttThumb att={a} /><button onClick={()=>removeFile(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white border text-slate-400 hover:text-rose-500 text-[11px]">✕</button></div>))}</div>}
+          </div>
+          {msg && <div className="text-sm text-rose-600">{msg}</div>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={submit} disabled={busy||uploading} className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(active?'Save changes':'Submit order')}</button>
+            <button onClick={()=>setScreen('list')} className="py-2.5 px-4 rounded-lg border font-semibold text-slate-600">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ---------- ORDER DETAIL ----------
+  if(screen==='detail' && active){ const meta=coStatusMeta(active.status); const canEdit=active.status==='submitted'; const items=Array.isArray(active.items)?active.items:[]; const steps=['submitted','received','in_production','ready','delivered']; const curStep=coStatusMeta(active.status).step;
+    return (
+      <div className="min-h-screen bg-slate-100">
+        <Header />
+        <div className="max-w-4xl mx-auto px-4 py-6">
+          <button onClick={()=>setScreen('list')} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← Back to my orders</button>
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+            <div><h1 className="text-2xl font-bold">{active.title||'Order'}</h1><div className="text-xs text-slate-400 font-mono">{active.number} · submitted {fmtDate(String(active.created_at).slice(0,10))}</div></div>
+            <span className={`text-xs px-2.5 py-1 rounded font-semibold ${meta.color}`}>{meta.label}</span>
+          </div>
+          {active.status!=='cancelled' && (
+            <div className="bg-white border rounded-xl p-3 mb-3 flex items-center gap-1 overflow-x-auto">
+              {steps.map((s,i)=>{ const done=i<=curStep; return (<React.Fragment key={s}><div className="flex flex-col items-center gap-1 min-w-[64px]"><div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${done?'bg-emerald-500 text-white':'bg-slate-200 text-slate-400'}`}>{done?'✓':i+1}</div><span className={`text-[10px] text-center ${done?'text-slate-700':'text-slate-400'}`}>{coStatusMeta(s).label}</span></div>{i<steps.length-1 && <div className={`flex-1 h-0.5 ${i<curStep?'bg-emerald-500':'bg-slate-200'}`}></div>}</React.Fragment>); })}
+            </div>
+          )}
+          <div className="bg-white border rounded-xl overflow-hidden mb-3">
+            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Design</th><th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Color</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Sizes</th><th className="text-left px-3 py-2">Delivery</th></tr></thead>
+            <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2">{it.design||'—'}</td><td className="px-3 py-2">{it.garment||'—'}</td><td className="px-3 py-2">{it.color||'—'}</td><td className="px-3 py-2 text-right">{it.qty||'—'}</td><td className="px-3 py-2">{it.sizes||'—'}</td><td className="px-3 py-2">{it.delivery_date?fmtDate(it.delivery_date):'—'}</td></tr>))}</tbody></table>
+          </div>
+          {active.notes && <div className="bg-white border rounded-xl p-3 mb-3 text-sm"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes</div>{active.notes}</div>}
+          {(active.attachments||[]).length>0 && <div className="bg-white border rounded-xl p-3 mb-3"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Artwork & files</div><div className="flex flex-wrap gap-2">{active.attachments.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div></div>}
+          <div className="flex gap-2">
+            <button onClick={()=>startDuplicate(active)} className="py-2 px-4 rounded-lg bg-slate-800 text-white text-sm font-semibold">⧉ Reorder</button>
+            {canEdit && <button onClick={()=>startEdit(active)} className="py-2 px-4 rounded-lg border text-sm font-semibold text-slate-600">Edit</button>}
+            {canEdit && <button onClick={()=>cancelOrder(active)} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold">Cancel order</button>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- LIST ----------
+  return (
+    <div className="min-h-screen bg-slate-100">
+      <Header />
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div><h1 className="text-2xl font-bold">My orders</h1><p className="text-slate-500 text-sm">Submit a new order or reorder, and track its status.</p></div>
+          <button onClick={startNew} className="px-4 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New order</button>
+        </div>
+        {loading ? <div className="text-slate-400 text-sm py-12 text-center">Loading…</div>
+          : orders.length===0 ? (
+            <div className="bg-white border rounded-xl p-10 text-center">
+              <div className="text-4xl mb-2">📦</div>
+              <div className="font-semibold text-slate-700">No orders yet</div>
+              <div className="text-sm text-slate-500 mb-4">Submit your first order and we'll take it from there.</div>
+              <button onClick={startNew} className="px-5 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold">+ New order</button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {orders.map(o=>{ const meta=coStatusMeta(o.status); const n=(Array.isArray(o.items)?o.items:[]).length; return (
+                <div key={o.id} className="bg-white border rounded-xl p-3 flex items-center gap-3 hover:border-indigo-300 cursor-pointer" onClick={()=>{ setActive(o); setScreen('detail'); }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-slate-800 truncate">{o.title||'Order'}</div>
+                    <div className="text-xs text-slate-400">{o.number} · {n} item{n===1?'':'s'} · {fmtDate(String(o.created_at).slice(0,10))}</div>
+                  </div>
+                  <span className={`text-[11px] px-2 py-1 rounded font-semibold shrink-0 ${meta.color}`}>{meta.label}</span>
+                  <button onClick={(e)=>{ e.stopPropagation(); startDuplicate(o); }} className="text-xs text-slate-500 hover:text-indigo-600 shrink-0" title="Reorder">⧉</button>
+                </div>
+              ); })}
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------- App ----------------------- */
 function App(){
   const [session,setSession]=useState(undefined); const [profile,setProfile]=useState(null); const [profiles,setProfiles]=useState([]);
+  // Client-portal accounts: an external client login is linked to a client
+  // company via client_users (and has NO staff profile). undefined = still
+  // checking, null = staff (not a client), object = a client account → we render
+  // ONLY the walled-off Client Portal for them, never the internal OS.
+  const [clientUser,setClientUser]=useState(undefined);
   const [clients,setClients]=useState([]); const [leads,setLeads]=useState([]); const [mentions,setMentions]=useState([]);
   const [activityCounts,setActivityCounts]=useState({});
   // Per-job comment counts for production / graphic / printing / sampling
@@ -40165,6 +40535,16 @@ function App(){
   useEffect(()=>{ if(!wonCelebration) return; const t=setTimeout(()=>setWonCelebration(null),5500); return ()=>clearTimeout(t); },[wonCelebration]);
 
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session)); const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
+  // Decide staff vs client as soon as we have a session, before any staff data
+  // loads. A client account has a client_users row (RLS lets them read their own).
+  useEffect(()=>{ let on=true;
+    if(!session){ setClientUser(undefined); return; }
+    setClientUser(undefined);
+    sb.from('client_users').select('*').eq('id', session.user.id).maybeSingle()
+      .then(r=>{ if(on) setClientUser(r && r.data ? r.data : null); })
+      .catch(()=>{ if(on) setClientUser(null); });
+    return ()=>{ on=false; };
+  },[session]);
 
   const loadAllBusy = useRef(false);
   const loadAllAgain = useRef(false);
@@ -40411,7 +40791,7 @@ function App(){
       if(loadAllAgain.current){ loadAllAgain.current = false; setTimeout(()=>loadAll(), 250); }
     }
   }
-  useEffect(()=>{ if(session) loadAll(); },[session]);
+  useEffect(()=>{ if(session && clientUser===null) loadAll(); },[session, clientUser]);
   useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
   // Pending replacement-request count for the sidebar badge (refreshes on nav).
   useEffect(()=>{ (async()=>{ try{ const { count }=await sb.from('replacement_requests').select('id',{count:'exact',head:true}).eq('status','pending'); setReplacementPending(count||0); }catch(_){} })(); },[view]);
@@ -40425,11 +40805,11 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
       fallback = 'pipeline';
     } else if(isManagerRole(profile.role)){
       // Sales Manager (and Sales Representative — identical access).
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern']);
@@ -40850,6 +41230,9 @@ function App(){
 
   if(session===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Connecting…</div>;
   if(!session) return <LoginScreen />;
+  if(clientUser===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Signing you in…</div>;
+  // Client accounts get ONLY the walled-off Client Portal — never the internal OS.
+  if(clientUser) return <ClientPortal session={session} clientUser={clientUser} onSignOut={()=>sb.auth.signOut()} />;
   if(!profile) return <div className="min-h-screen flex items-center justify-center text-slate-400 flex-col gap-3">
     <div>Loading your workspace…</div>
     {loadErr && <>
@@ -41197,7 +41580,7 @@ function App(){
     // Sales Assistants — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -41214,7 +41597,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -41228,7 +41611,7 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request from Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -41462,6 +41845,7 @@ function App(){
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='estimates' && <EstimatesListView profile={profile} profiles={profiles} estimates={estimates} leads={leads} clients={clients} reload={loadAll} />}
         {view==='invoices' && <InvoicesListView profile={profile} profiles={profiles} invoices={invoices} salesOrders={salesOrders} leads={leads} clients={clients} reload={loadAll} />}
+        {view==='client-orders' && <ClientOrdersInbox profile={profile} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reloadApp={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} onOpenSO={(so)=>setInboxOpenSO(so)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
