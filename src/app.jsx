@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 589 · Sewing Payroll: new Summary tab — every sewer's payroll totals for a period, toggle Per week (a per-day matrix across the Wed→Tue week) or Per day, with Prev/Next navigation, pieces, regular/overtime split, and pending vs done. Also fixed Sales Representative write access to transmittals, delivery receipts & design resources.";
+const BUILD = "Live build 590 · Fix: 'Send to Graphic Design' now also creates a linked ticket in the Graphic ticket queue (before, it only dropped a card on the Design board, so the work was missing from the Tickets pool). The board card and the ticket now stay in sync — matching the '+ New graphic ticket' flow.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1576,7 +1576,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
 }
 
 /* ----------------------- Send-to-Graphic chooser ----------------------- */
-function SendToGraphicModal({ profile, lead, clients, onClose, onSent }){
+function SendToGraphicModal({ profile, profiles, lead, clients, onClose, onSent }){
   const [chosen,setChosen]=useState({}); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Pre-fill with the lead's existing notes — sales can edit before sending.
   const [includeNotes,setIncludeNotes]=useState(!!(lead.notes||'').trim());
@@ -1586,7 +1586,25 @@ function SendToGraphicModal({ profile, lead, clients, onClose, onSent }){
     try{ const chosenAtts=atts.filter((_,i)=>chosen[i]);
       const finalNote = includeNotes ? (noteForGraphic||'').trim() : '';
       const job={ number:'GD-'+Date.now().toString().slice(-5), source_lead_id:lead.id, lead_id:lead.id, client_name:client?.company||'', item:lead.title, items:lead.items||[], quantity:(lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0), graphic_type:'', attachments:chosenAtts, status:'to do', due_date:lead.delivery_date||lead.expected_close||null, notes:finalNote };
-      const {error}=await sb.from('graphic_design_jobs').insert(job); if(error) throw error; onSent(chosenAtts.length); }
+      const { data:newJob, error }=await sb.from('graphic_design_jobs').insert(job).select('id').single(); if(error) throw error;
+      // Also drop a linked ticket in the Graphic ticket queue so the work shows
+      // in BOTH the Design board and the Tickets pool (they stay in sync via
+      // board_job_id) — matching how the "+ New graphic ticket" flow behaves.
+      try{
+        const { data:newT } = await sb.from('sales_tickets').insert({
+          title: lead.title || 'Design request', task_type:'design_2d', priority:'normal',
+          department:'graphic', number:'GTK-'+Date.now().toString().slice(-6), status:'open',
+          lead_id: lead.id, client_id: lead.client_id||null,
+          requested_by: lead.manager_id || profile.id, created_by: profile.id,
+          board_job_id: newJob?.id || null,
+          due_date: lead.delivery_date||lead.expected_close||null, notes: finalNote||null,
+        }).select('id').single();
+        if(newT){
+          const artists=graphicArtists(profiles||[]).filter(p=>p.id!==profile.id).map(p=>p.id);
+          if(artists.length) await sb.from('notifications').insert(artists.map(id=>({ recipient_id:id, actor_id:profile.id, text:`🎨 New graphic ticket: "${lead.title||'Design request'}"`, link_view:'graphic', ref_type:'graphic_ticket', ref_id:newT.id, type:'system' })));
+        }
+      }catch(_){}
+      onSent(chosenAtts.length); }
     catch(err){ setMsg(err.message||String(err)); setBusy(false); } }
   return (
     <Modal title="Send to Graphic Design" onClose={onClose} wide>
@@ -41516,7 +41534,7 @@ function App(){
       {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onOpenSnapshot={(snap)=>setTechpackSnapView({ lead:(leads.find(l=>l.id===techpackLead.id)||techpackLead), snap })} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
       {techpackSnapView && <TechpackEditor key={'snap-'+techpackSnapView.snap.id} profile={profile} profiles={profiles} lead={techpackSnapView.lead} client={clients.find(c=>c.id===techpackSnapView.lead.client_id)} reload={loadAll} readOnly overrideTechpack={techpackSnapView.snap.data} snapshotMeta={techpackSnapView.snap} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>setTechpackSnapView(null)} />}
       {editLead && <LeadForm key={editLead.id || 'new'} profile={profile} profiles={profiles} clients={clients} leads={leads} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
-      {sendGraphicLead && <SendToGraphicModal profile={profile} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
+      {sendGraphicLead && <SendToGraphicModal profile={profile} profiles={profiles} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
       {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
