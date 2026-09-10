@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 594 · Client Order Portal (Phase 1): clients can log into a separate, walled-off portal to submit orders & reorders, upload artwork, and track status — completely isolated from the internal OS by the Phase 0 security lockdown. Staff get a new 'Client Orders' inbox (Sales) to review submissions, update status, convert to a Lead, and invite/manage client accounts.";
+const BUILD = "Live build 595 · Client Portal: the order form is now a player ROSTER (name, jersey no., shirt size, short size, color, notes) with add-a-line — matching how sports kit sheets look. Plus a per-client DESIGN LIBRARY: clients pick a saved design when ordering/reordering, and staff can manage each client's designs (🎨 Design library in the Client Orders inbox).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39988,9 +39988,12 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
   const [filter,setFilter]=useState('');
   const [active,setActive]=useState(null);
   const [showInvite,setShowInvite]=useState(false);
+  const [showDesigns,setShowDesigns]=useState(false);
+  const [designs,setDesigns]=useState([]);
   const [busy,setBusy]=useState(false);
   const clientName=(id)=>{ const c=(clients||[]).find(x=>x.id===id); return c?(c.company||c.name||'—'):'—'; };
-  async function load(){ setLoading(true); const { data }=await sb.from('client_orders').select('*').order('created_at',{ascending:false}); setOrders(data||[]); setLoading(false); }
+  const designName=(id)=>{ const d=designs.find(x=>x.id===id); return d?d.name:''; };
+  async function load(){ setLoading(true); const [oRes,dRes]=await Promise.all([ sb.from('client_orders').select('*').order('created_at',{ascending:false}), sb.from('client_designs').select('id,name,client_id').order('created_at',{ascending:false}) ]); setOrders(oRes.data||[]); setDesigns(dRes.data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
   const STAT=['submitted','received','in_production','ready','delivered','cancelled'];
   const counts=STAT.reduce((a,s)=>{ a[s]=orders.filter(o=>o.status===s).length; return a; },{});
@@ -40001,8 +40004,11 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
     if(o.lead_id){ alert('This order was already converted to a lead.'); return; }
     if(!confirm(`Create a Sales Pipeline lead from ${o.number}?\n\nYou can refine details in the pipeline afterward.`)) return;
     setBusy(true);
-    const items=(Array.isArray(o.items)?o.items:[]).map(it=>({ name:[it.design,it.garment,it.color].filter(Boolean).join(' — ')||'Item', quantity:Number(it.qty)||0 }));
-    const notes=`From client order ${o.number}.`+(o.notes?`\n${o.notes}`:'');
+    const roster=(Array.isArray(o.items)?o.items:[]);
+    const dz=designName(o.design_id);
+    const items=[{ name:`Jersey set${dz?` — ${dz}`:''}`, quantity:roster.length }];
+    const rosterLines=roster.map(p=>`• ${p.name||''} #${p.number||''} — shirt ${p.shirt||'?'} / short ${p.short||'?'}${p.color?` · ${p.color}`:''}${p.notes?` (${p.notes})`:''}`).join('\n');
+    const notes=`From client order ${o.number}.${dz?`\nDesign: ${dz}`:''}${o.delivery_date?`\nTarget delivery: ${o.delivery_date}`:''}\n\nRoster (${roster.length}):\n${rosterLines}`+(o.notes?`\n\nClient notes: ${o.notes}`:'');
     const { data:lead, error }=await sb.from('leads').insert({ title:o.title||('Client order '+o.number), client_id:o.client_id, manager_id:profile.id, stage:'new', items, notes }).select().single();
     if(error){ setBusy(false); alert('Convert failed: '+error.message); return; }
     await sb.from('client_orders').update({ lead_id:lead.id, status:(o.status==='submitted'?'received':o.status), reviewed_by:profile.id, reviewed_at:new Date().toISOString() }).eq('id', o.id);
@@ -40015,7 +40021,10 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📦 Client Orders</h1><p className="text-slate-500 text-sm">Orders submitted by clients through the portal · {counts.submitted||0} new</p></div>
-          <button onClick={()=>setShowInvite(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">👤 Manage client accounts</button>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>setShowDesigns(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">🎨 Design library</button>
+            <button onClick={()=>setShowInvite(true)} className="px-4 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">👤 Manage client accounts</button>
+          </div>
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mb-4">
@@ -40048,10 +40057,12 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
               <div><div className="font-bold text-lg">{active.title||'Order'}</div><div className="text-xs text-slate-400">submitted {fmtDate(String(active.created_at).slice(0,10))}</div></div>
               <span className={`text-xs px-2.5 py-1 rounded font-semibold ${meta.color}`}>{meta.label}</span>
             </div>
-            <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Design</th><th className="text-left px-2 py-1.5">Garment</th><th className="text-left px-2 py-1.5">Color</th><th className="text-right px-2 py-1.5">Qty</th><th className="text-left px-2 py-1.5">Sizes</th><th className="text-left px-2 py-1.5">Names/Numbers</th><th className="text-left px-2 py-1.5">Delivery</th></tr></thead>
-              <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1.5">{it.design||'—'}</td><td className="px-2 py-1.5">{it.garment||'—'}</td><td className="px-2 py-1.5">{it.color||'—'}</td><td className="px-2 py-1.5 text-right">{it.qty||'—'}</td><td className="px-2 py-1.5">{it.sizes||'—'}</td><td className="px-2 py-1.5 text-[11px] text-slate-500">{[it.names,it.numbers].filter(Boolean).join(' / ')||'—'}</td><td className="px-2 py-1.5">{it.delivery_date?fmtDate(it.delivery_date):'—'}</td></tr>))}</tbody>
-            </table></div>
+            {(active.design_id || active.delivery_date) && <div className="flex flex-wrap gap-6 text-sm">{active.design_id && <div><span className="text-[10px] uppercase text-slate-400 font-semibold">Design </span>{designName(active.design_id)||'—'}</div>}{active.delivery_date && <div><span className="text-[10px] uppercase text-slate-400 font-semibold">Target delivery </span>{fmtDate(active.delivery_date)}</div>}</div>}
+            <div className="border rounded-lg overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[560px]">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5">No.</th><th className="text-left px-2 py-1.5">Jersey shirt</th><th className="text-left px-2 py-1.5">Jersey short</th><th className="text-left px-2 py-1.5">Color</th><th className="text-left px-2 py-1.5">Notes</th></tr></thead>
+              <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1.5 font-medium">{it.name||'—'}</td><td className="px-2 py-1.5">{it.number||'—'}</td><td className="px-2 py-1.5">{it.shirt||'—'}</td><td className="px-2 py-1.5">{it.short||'—'}</td><td className="px-2 py-1.5">{it.color||'—'}</td><td className="px-2 py-1.5 text-[11px] text-slate-500">{it.notes||''}</td></tr>))}</tbody>
+              <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-2 py-1.5" colSpan="6">{items.length} player{items.length===1?'':'s'}</td></tr></tfoot>
+            </table></div></div>
             {active.notes && <div className="bg-slate-50 border rounded p-2 text-sm"><span className="text-[10px] uppercase text-slate-400 font-semibold">Notes </span>{active.notes}</div>}
             {(active.attachments||[]).length>0 && <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Artwork & files</div><div className="flex flex-wrap gap-2">{active.attachments.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div></div>}
             <div className="flex items-center gap-2 flex-wrap border-t pt-3">
@@ -40067,7 +40078,51 @@ function ClientOrdersInbox({ profile, clients, onOpenLead, reloadApp }){
       ); })()}
 
       {showInvite && <ClientInviteModal profile={profile} clients={clients} onClose={()=>setShowInvite(false)} />}
+      {showDesigns && <ClientDesignsModal profile={profile} clients={clients} onClose={()=>{ setShowDesigns(false); load(); }} />}
     </div>
+  );
+}
+function ClientDesignsModal({ profile, clients, onClose }){
+  const [clientId,setClientId]=useState('');
+  const [designs,setDesigns]=useState([]);
+  const [adding,setAdding]=useState(null); // {name, atts}
+  const [busy,setBusy]=useState(false); const [uploading,setUploading]=useState(false); const [msg,setMsg]=useState('');
+  const sortedClients=(clients||[]).slice().sort((a,b)=>String(a.company||a.name||'').localeCompare(String(b.company||b.name||'')));
+  async function load(){ if(!clientId){ setDesigns([]); return; } const { data }=await sb.from('client_designs').select('*').eq('client_id', clientId).order('created_at',{ascending:false}); setDesigns(data||[]); }
+  useEffect(()=>{ load(); },[clientId]);
+  async function addFiles(fileList){ const files=Array.from(fileList||[]); if(!files.length) return; setUploading(true);
+    try{ const up=[]; for(const file of files){ up.push(await clientUploadFile(clientId, file)); } setAdding(a=>({...(a||{name:''}), atts:[...((a&&a.atts)||[]), ...up]})); }catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
+  async function saveDesign(){ if(!(adding.name||'').trim()){ setMsg('Name the design.'); return; } setBusy(true); setMsg('');
+    const { error }=await sb.from('client_designs').insert({ client_id:clientId, name:adding.name.trim(), attachments:adding.atts||[], created_by:profile.id });
+    setBusy(false); if(error){ setMsg(error.message); return; } setAdding(null); load();
+  }
+  async function toggleActive(d){ await sb.from('client_designs').update({ active: !d.active }).eq('id', d.id); load(); }
+  return (
+    <Modal title="🎨 Client design library" onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <select value={clientId} onChange={e=>setClientId(e.target.value)} className="w-full border rounded-lg px-3 py-2"><option value="">— choose a client —</option>{sortedClients.map(c=><option key={c.id} value={c.id}>{c.company||c.name}</option>)}</select>
+        {clientId && (
+          <>
+            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500 uppercase">Designs · {designs.length}</div>{!adding && <button onClick={()=>setAdding({name:'',atts:[]})} className="text-xs px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold">＋ Add design</button>}</div>
+            {adding && (
+              <div className="border rounded-lg p-3 bg-slate-50">
+                <input value={adding.name} onChange={e=>setAdding(a=>({...a,name:e.target.value}))} placeholder="Design name (e.g. 2026 Local Kit)" className="w-full border rounded px-2 py-1.5" />
+                <div className="mt-2"><label className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border border-dashed bg-white cursor-pointer">📎 {uploading?'Uploading…':'Attach design images'}<input type="file" multiple accept="image/*,.pdf" className="hidden" disabled={uploading} onChange={e=>{ addFiles(e.target.files); e.target.value=''; }} /></label></div>
+                {(adding.atts||[]).length>0 && <div className="mt-2 flex flex-wrap gap-2">{adding.atts.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div>}
+                {msg && <div className="text-xs text-rose-600 mt-1">{msg}</div>}
+                <div className="flex gap-2 mt-2"><button onClick={saveDesign} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">Save</button><button onClick={()=>{ setAdding(null); setMsg(''); }} className="text-xs px-3 py-1.5 rounded-lg border">Cancel</button></div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {designs.map(d=>(<div key={d.id} className={`border rounded-lg p-2 ${d.active?'':'opacity-50'}`}>{(d.attachments||[])[0]?<ClientAttThumb att={d.attachments[0]} />:<div className="w-16 h-16 bg-slate-100 rounded border flex items-center justify-center text-slate-300">🎨</div>}<div className="font-medium mt-1 truncate">{d.name}</div><button onClick={()=>toggleActive(d)} className="text-[11px] text-slate-500 hover:underline">{d.active?'Hide':'Show'}</button></div>))}
+              {designs.length===0 && !adding && <div className="text-slate-400 col-span-full py-4 text-center">No designs yet for this client.</div>}
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 function ClientInviteModal({ profile, clients, onClose }){
@@ -40158,22 +40213,38 @@ function ClientPortal({ session, clientUser, onSignOut }){
   const [loading,setLoading]=useState(true);
   const [screen,setScreen]=useState('list');   // list | form | detail
   const [active,setActive]=useState(null);      // order being viewed/edited
-  const emptyItem=()=>({ design:'', garment:'', color:'', qty:'', sizes:'', names:'', numbers:'', delivery_date:'', notes:'' });
-  const [form,setForm]=useState({ title:'', notes:'', items:[emptyItem()], attachments:[] });
+  // A line is ONE player: matches how the client's roster sheets look.
+  const emptyItem=()=>({ name:'', number:'', shirt:'', short:'', color:'', notes:'' });
+  const [form,setForm]=useState({ title:'', design_id:'', delivery_date:'', notes:'', items:[emptyItem()], attachments:[] });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(''); const [uploading,setUploading]=useState(false);
+  const [designs,setDesigns]=useState([]);
+  const [newDesign,setNewDesign]=useState(null); // {name, atts} when adding a design inline
 
   async function loadOrders(){ setLoading(true);
     const { data }=await sb.from('client_orders').select('*').eq('client_id', clientId).order('created_at',{ascending:false});
     setOrders(data||[]); setLoading(false);
   }
-  useEffect(()=>{ loadOrders(); sb.rpc('my_client_name').then(r=>{ if(r && r.data) setCompany(r.data); }).catch(()=>{}); },[]);
+  async function loadDesigns(){ const { data }=await sb.from('client_designs').select('*').eq('client_id', clientId).eq('active', true).order('created_at',{ascending:false}); setDesigns(data||[]); }
+  const designName=(id)=>{ const d=designs.find(x=>x.id===id); return d?d.name:''; };
+  useEffect(()=>{ loadOrders(); loadDesigns(); sb.rpc('my_client_name').then(r=>{ if(r && r.data) setCompany(r.data); }).catch(()=>{}); },[]);
 
-  function startNew(){ setForm({ title:'', notes:'', items:[emptyItem()], attachments:[] }); setActive(null); setScreen('form'); setMsg(''); }
-  function startDuplicate(o){ setForm({ title:(o.title||'')+' (reorder)', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:[] }); setActive(null); setScreen('form'); setMsg(''); }
-  function startEdit(o){ setForm({ title:o.title||'', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:Array.isArray(o.attachments)?o.attachments:[] }); setActive(o); setScreen('form'); setMsg(''); }
+  function startNew(){ setForm({ title:'', design_id:'', delivery_date:'', notes:'', items:[emptyItem()], attachments:[] }); setActive(null); setScreen('form'); setMsg(''); setNewDesign(null); }
+  function startDuplicate(o){ setForm({ title:(o.title||'')+' (reorder)', design_id:o.design_id||'', delivery_date:'', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:[] }); setActive(null); setScreen('form'); setMsg(''); setNewDesign(null); }
+  function startEdit(o){ setForm({ title:o.title||'', design_id:o.design_id||'', delivery_date:o.delivery_date||'', notes:o.notes||'', items:(Array.isArray(o.items)&&o.items.length?o.items.map(it=>({...emptyItem(),...it})):[emptyItem()]), attachments:Array.isArray(o.attachments)?o.attachments:[] }); setActive(o); setScreen('form'); setMsg(''); setNewDesign(null); }
   function setItem(i,k,v){ setForm(f=>({...f, items:f.items.map((it,j)=>j===i?{...it,[k]:v}:it)})); }
   function addItem(){ setForm(f=>({...f, items:[...f.items, emptyItem()]})); }
   function removeItem(i){ setForm(f=>({...f, items:f.items.filter((_,j)=>j!==i)})); }
+  async function saveNewDesign(){
+    if(!newDesign || !(newDesign.name||'').trim()){ setMsg('Give the design a name.'); return; }
+    setBusy(true); setMsg('');
+    const { data, error }=await sb.from('client_designs').insert({ client_id:clientId, name:newDesign.name.trim(), attachments:newDesign.atts||[], created_by:session.user.id }).select('id').single();
+    setBusy(false); if(error){ setMsg('Save design failed: '+error.message); return; }
+    await loadDesigns(); setForm(f=>({...f, design_id:data.id})); setNewDesign(null);
+  }
+  async function addDesignFiles(fileList){ const files=Array.from(fileList||[]); if(!files.length) return; setUploading(true);
+    try{ const up=[]; for(const file of files){ up.push(await clientUploadFile(clientId, file)); } setNewDesign(nd=>({...(nd||{name:''}), atts:[...((nd&&nd.atts)||[]), ...up]})); }catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
   async function addFiles(fileList){ const files=Array.from(fileList||[]); if(!files.length) return; setUploading(true); setMsg('');
     try{ const up=[]; for(const file of files){ up.push(await clientUploadFile(clientId, file)); } setForm(f=>({...f, attachments:[...(f.attachments||[]), ...up]})); }
     catch(e){ setMsg('Upload failed: '+(e.message||e)); }
@@ -40182,18 +40253,19 @@ function ClientPortal({ session, clientUser, onSignOut }){
   function removeFile(i){ setForm(f=>({...f, attachments:f.attachments.filter((_,j)=>j!==i)})); }
 
   async function submit(){
-    const cleanItems=form.items.filter(it=> (it.design||it.garment||it.qty||it.sizes||'').toString().trim());
-    if(!form.title.trim()){ setMsg('Give this order a title (e.g. "October Reorder").'); return; }
-    if(cleanItems.length===0){ setMsg('Add at least one item to the order.'); return; }
+    const cleanItems=form.items.filter(it=> (it.name||it.number||it.shirt||it.short||'').toString().trim());
+    if(!form.title.trim()){ setMsg('Give this order a title (e.g. "2026 Local Kit").'); return; }
+    if(cleanItems.length===0){ setMsg('Add at least one player to the order.'); return; }
     setBusy(true); setMsg('');
     try{
+      const base={ title:form.title.trim(), design_id:form.design_id||null, delivery_date:form.delivery_date||null, notes:form.notes||null, items:cleanItems, attachments:form.attachments||[] };
       if(active && active.id){
-        const { error }=await sb.from('client_orders').update({ title:form.title.trim(), notes:form.notes||null, items:cleanItems, attachments:form.attachments||[], updated_at:new Date().toISOString() }).eq('id', active.id);
+        const { error }=await sb.from('client_orders').update({ ...base, updated_at:new Date().toISOString() }).eq('id', active.id);
         if(error) throw error;
       } else {
         const monthKey=new Date().toISOString().slice(0,7).replace('-','');
         const number=`CO-${monthKey}-${Date.now().toString().slice(-6)}`;
-        const { error }=await sb.from('client_orders').insert({ number, client_id:clientId, submitted_by:session.user.id, title:form.title.trim(), notes:form.notes||null, items:cleanItems, attachments:form.attachments||[], status:'submitted' });
+        const { error }=await sb.from('client_orders').insert({ ...base, number, client_id:clientId, submitted_by:session.user.id, status:'submitted' });
         if(error) throw error;
       }
       setBusy(false); setScreen('list'); loadOrders();
@@ -40228,27 +40300,54 @@ function ClientPortal({ session, clientUser, onSignOut }){
         <h1 className="text-2xl font-bold mb-1">{active?'Edit order':'New order'}</h1>
         <p className="text-slate-500 text-sm mb-4">Fill in what you need. Our team reviews every submission before production.</p>
         <div className="bg-white border rounded-xl p-4 space-y-4">
-          <div><label className="text-xs font-semibold text-slate-500 uppercase">Order title</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="e.g. October Reorder — Batch 2" /></div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div><label className="text-xs font-semibold text-slate-500 uppercase">Order / kit name</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="e.g. 2026 Local Kit — Second Batch" /></div>
+            <div><label className="text-xs font-semibold text-slate-500 uppercase">Target delivery</label><input type="date" value={form.delivery_date} onChange={e=>setForm(f=>({...f,delivery_date:e.target.value}))} className="w-full border rounded-lg px-3 py-2 mt-1" /></div>
+          </div>
+          {/* DESIGN PICKER */}
           <div>
-            <div className="flex items-center justify-between mb-1"><label className="text-xs font-semibold text-slate-500 uppercase">Items</label><button onClick={addItem} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add item</button></div>
-            <div className="space-y-3">
-              {form.items.map((it,i)=>(
-                <div key={i} className="border rounded-lg p-3 bg-slate-50/60">
-                  <div className="flex items-center justify-between mb-2"><span className="text-[11px] font-semibold text-slate-400">Item {i+1}</span>{form.items.length>1 && <button onClick={()=>removeItem(i)} className="text-xs text-rose-500 hover:underline">Remove</button>}</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    <label className="text-xs">Design / colorway<input value={it.design} onChange={e=>setItem(i,'design',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs">Garment<input value={it.garment} onChange={e=>setItem(i,'garment',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" placeholder="Jersey / short set…" /></label>
-                    <label className="text-xs">Color<input value={it.color} onChange={e=>setItem(i,'color',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs">Total qty<input type="number" value={it.qty} onChange={e=>setItem(i,'qty',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs">Delivery date<input type="date" value={it.delivery_date} onChange={e=>setItem(i,'delivery_date',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs">Size breakdown<input value={it.sizes} onChange={e=>setItem(i,'sizes',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" placeholder="e.g. S-5, M-10, L-8" /></label>
-                    <label className="text-xs">Names<input value={it.names} onChange={e=>setItem(i,'names',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs">Numbers<input value={it.numbers} onChange={e=>setItem(i,'numbers',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                    <label className="text-xs sm:col-span-1 col-span-2">Notes<input value={it.notes} onChange={e=>setItem(i,'notes',e.target.value)} className="w-full border rounded px-2 py-1.5 mt-0.5" /></label>
-                  </div>
-                </div>
-              ))}
+            <label className="text-xs font-semibold text-slate-500 uppercase">Design</label>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <select value={form.design_id} onChange={e=>setForm(f=>({...f,design_id:e.target.value}))} className="border rounded-lg px-3 py-2 flex-1 min-w-[180px]">
+                <option value="">— choose a saved design (or none) —</option>
+                {designs.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              {!newDesign && <button onClick={()=>setNewDesign({name:'',atts:[]})} className="text-xs px-3 py-2 rounded-lg border font-semibold text-indigo-600 whitespace-nowrap">＋ New design</button>}
             </div>
+            {form.design_id && (()=>{ const d=designs.find(x=>x.id===form.design_id); const a=d&&(d.attachments||[])[0]; return a?<div className="mt-2"><ClientAttThumb att={a} /></div>:null; })()}
+            {newDesign && (
+              <div className="mt-2 border rounded-lg p-3 bg-slate-50">
+                <div className="flex items-center justify-between mb-2"><span className="text-xs font-semibold text-slate-600">New design</span><button onClick={()=>setNewDesign(null)} className="text-xs text-slate-400 hover:text-rose-500">Cancel</button></div>
+                <input value={newDesign.name} onChange={e=>setNewDesign(nd=>({...nd,name:e.target.value}))} placeholder="Design name (e.g. 2026 Local Kit)" className="w-full border rounded px-2 py-1.5 text-sm" />
+                <div className="mt-2"><label className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border border-dashed bg-white cursor-pointer">📎 {uploading?'Uploading…':'Attach design images'}<input type="file" multiple accept="image/*,.pdf" className="hidden" disabled={uploading} onChange={e=>{ addDesignFiles(e.target.files); e.target.value=''; }} /></label></div>
+                {(newDesign.atts||[]).length>0 && <div className="mt-2 flex flex-wrap gap-2">{newDesign.atts.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div>}
+                <button onClick={saveNewDesign} disabled={busy} className="mt-2 text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">Save design</button>
+              </div>
+            )}
+          </div>
+          {/* ROSTER */}
+          <div>
+            <div className="flex items-center justify-between mb-1"><label className="text-xs font-semibold text-slate-500 uppercase">Players ({form.items.length})</label><button onClick={addItem} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add player</button></div>
+            <div className="border rounded-lg overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Name</th><th className="text-left px-2 py-1.5 w-16">No.</th><th className="text-left px-2 py-1.5 w-24">Jersey shirt</th><th className="text-left px-2 py-1.5 w-24">Jersey short</th><th className="text-left px-2 py-1.5 w-28">Color</th><th className="text-left px-2 py-1.5">Notes</th><th className="w-8"></th></tr></thead>
+                <tbody>
+                  {form.items.map((it,i)=>(
+                    <tr key={i} className="border-t">
+                      <td className="px-1 py-1"><input value={it.name} onChange={e=>setItem(i,'name',e.target.value)} className="w-full border rounded px-2 py-1" placeholder="Player name" /></td>
+                      <td className="px-1 py-1"><input value={it.number} onChange={e=>setItem(i,'number',e.target.value)} className="w-full border rounded px-2 py-1" /></td>
+                      <td className="px-1 py-1"><input value={it.shirt} onChange={e=>setItem(i,'shirt',e.target.value)} list="co-sizes" className="w-full border rounded px-2 py-1" placeholder="MENS S / YL" /></td>
+                      <td className="px-1 py-1"><input value={it.short} onChange={e=>setItem(i,'short',e.target.value)} list="co-sizes" className="w-full border rounded px-2 py-1" placeholder="MENS S / YL" /></td>
+                      <td className="px-1 py-1"><input value={it.color} onChange={e=>setItem(i,'color',e.target.value)} className="w-full border rounded px-2 py-1" /></td>
+                      <td className="px-1 py-1"><input value={it.notes} onChange={e=>setItem(i,'notes',e.target.value)} className="w-full border rounded px-2 py-1" /></td>
+                      <td className="px-1 py-1 text-center">{form.items.length>1 && <button onClick={()=>removeItem(i)} className="text-slate-400 hover:text-rose-600">✕</button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <datalist id="co-sizes"><option value="MENS XS" /><option value="MENS S" /><option value="MENS M" /><option value="MENS L" /><option value="MENS XL" /><option value="MENS 2XL" /><option value="MENS 3XL" /><option value="Y2XS" /><option value="YXS" /><option value="YS" /><option value="YM" /><option value="YL" /></datalist>
+            </div>
+            <button onClick={addItem} className="mt-2 text-xs text-indigo-600 font-semibold hover:underline">+ Add player</button>
           </div>
           <div><label className="text-xs font-semibold text-slate-500 uppercase">General notes</label><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="Anything else we should know" /></div>
           <div>
@@ -40282,10 +40381,12 @@ function ClientPortal({ session, clientUser, onSignOut }){
               {steps.map((s,i)=>{ const done=i<=curStep; return (<React.Fragment key={s}><div className="flex flex-col items-center gap-1 min-w-[64px]"><div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${done?'bg-emerald-500 text-white':'bg-slate-200 text-slate-400'}`}>{done?'✓':i+1}</div><span className={`text-[10px] text-center ${done?'text-slate-700':'text-slate-400'}`}>{coStatusMeta(s).label}</span></div>{i<steps.length-1 && <div className={`flex-1 h-0.5 ${i<curStep?'bg-emerald-500':'bg-slate-200'}`}></div>}</React.Fragment>); })}
             </div>
           )}
-          <div className="bg-white border rounded-xl overflow-hidden mb-3">
-            <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Design</th><th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Color</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Sizes</th><th className="text-left px-3 py-2">Delivery</th></tr></thead>
-            <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2">{it.design||'—'}</td><td className="px-3 py-2">{it.garment||'—'}</td><td className="px-3 py-2">{it.color||'—'}</td><td className="px-3 py-2 text-right">{it.qty||'—'}</td><td className="px-3 py-2">{it.sizes||'—'}</td><td className="px-3 py-2">{it.delivery_date?fmtDate(it.delivery_date):'—'}</td></tr>))}</tbody></table>
-          </div>
+          {(active.design_id || active.delivery_date) && <div className="bg-white border rounded-xl p-3 mb-3 text-sm flex flex-wrap gap-6">{active.design_id && <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Design</div>{designName(active.design_id)||'—'}</div>}{active.delivery_date && <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Target delivery</div>{fmtDate(active.delivery_date)}</div>}</div>}
+          <div className="bg-white border rounded-xl overflow-hidden mb-3"><div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">No.</th><th className="text-left px-3 py-2">Shirt</th><th className="text-left px-3 py-2">Short</th><th className="text-left px-3 py-2">Color</th><th className="text-left px-3 py-2">Notes</th></tr></thead>
+            <tbody>{items.map((it,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2 font-medium">{it.name||'—'}</td><td className="px-3 py-2">{it.number||'—'}</td><td className="px-3 py-2">{it.shirt||'—'}</td><td className="px-3 py-2">{it.short||'—'}</td><td className="px-3 py-2">{it.color||'—'}</td><td className="px-3 py-2 text-slate-500">{it.notes||''}</td></tr>))}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-semibold"><td className="px-3 py-2" colSpan="6">{items.length} player{items.length===1?'':'s'}</td></tr></tfoot></table>
+          </div></div>
           {active.notes && <div className="bg-white border rounded-xl p-3 mb-3 text-sm"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Notes</div>{active.notes}</div>}
           {(active.attachments||[]).length>0 && <div className="bg-white border rounded-xl p-3 mb-3"><div className="text-[10px] uppercase text-slate-400 font-semibold mb-2">Artwork & files</div><div className="flex flex-wrap gap-2">{active.attachments.map((a,i)=><ClientAttThumb key={i} att={a} />)}</div></div>}
           <div className="flex gap-2">
