@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 606 · Resource & size-chart thumbnails load far faster: instead of downloading each full-resolution photo (0.7–2.3 MB) just to show a small tile, the grid now pulls resized ~20–30 KB thumbnails from Supabase's image CDN and lazy-loads them so only tiles near the screen fetch. Full-size photos still open at full quality when clicked, and techpack print pages are unchanged.";
+const BUILD = "Live build 607 · Inventory on-hand is now locked to the stock ledger: every stock-in/out (production issue, manual out, convert, PO receive, returns, reversals, item-qty edits and imports) posts a movement and the database automatically keeps the item's on-hand in step — so the count can no longer drift the way it had for ~80% of items. A one-time reconciliation posted opening-balance entries so today's numbers stayed exactly as they were but the ledger is now complete and auditable.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5418,12 +5418,9 @@ function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved })
         const { error: retry } = await sb.from('stock_movements').insert(stripped);
         if(retry) throw retry;
       }
-      // 2. Decrement items.qty for each issued material.
-      for(const r of valid){
-        const it = (items||[]).find(x=>x.id===r.item_id);
-        const newQty = Number(it?.qty||0) - Number(r.qty);
-        await sb.from('items').update({ qty: newQty }).eq('id', r.item_id);
-      }
+      // 2. On-hand is updated automatically by the stock_movements DB trigger
+      //    (trg_sm_apply) — no manual items.qty write here, which is what used
+      //    to let on-hand drift from the ledger.
       // 3. If the rows came from a PR, clear (or reduce) the matching stock_allocated
       //    so the reservation releases. We map by item_id — the closest active PR
       //    line for the same item gets reduced.
@@ -6496,7 +6493,7 @@ function ManualStockOutModal({ profile, items, prodJobs, onClose, onSaved }){
       const movements=valid.map(r=>({ item_id:r.item_id, type:'out', qty:Number(r.qty), reason:reasonText, ref_type: job?'production_job':'manual', ref_id: job?job.id:null, actor_id:profile.id, date }));
       const { error } = await sb.from('stock_movements').insert(movements);
       if(error){ const stripped=movements.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
-      for(const r of valid){ const it=itemOf(r.item_id); await sb.from('items').update({ qty: Number(it?.qty||0) - Number(r.qty) }).eq('id', r.item_id); }
+      // On-hand updates automatically via the stock_movements trigger.
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
@@ -7299,8 +7296,7 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
       ];
       const { error }=await sb.from('stock_movements').insert(movs);
       if(error){ const stripped=movs.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
-      await sb.from('items').update({ qty: Number(src?.qty||0) - Number(srcQty) }).eq('id', srcId);
-      await sb.from('items').update({ qty: Number(dst?.qty||0) + Number(dstQty) }).eq('id', dstId);
+      // Both on-hand quantities update automatically via the stock_movements trigger.
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
@@ -7342,8 +7338,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
       const mv={ item_id:s.item_id, type:oppType, qty:Number(s.qty||0), reason:`↩ reversal of ${s._ref||s.reason||'entry'}`.slice(0,120), ref_type:'reversal', ref_id:s.id, actor_id:profile.id, date:new Date().toISOString().slice(0,10) };
       let { error }=await sb.from('stock_movements').insert(mv);
       if(error){ const { date, ...rest }=mv; const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
-      const it=(items||[]).find(x=>x.id===s.item_id);
-      if(it){ const delta = s.type==='in' ? -Number(s.qty||0) : Number(s.qty||0); await sb.from('items').update({ qty: Number(it.qty||0)+delta }).eq('id', s.item_id); }
+      // The counter-entry corrects on-hand automatically via the stock_movements trigger.
       reload && reload();
     }catch(e){ alert(e.message||String(e)); }
   }
@@ -24239,7 +24234,7 @@ function StockInModal({ profile, items, onClose, onSaved }){
       const movements = valid.map(l=>({ item_id:l.item_id, type:'in', qty:Number(l.qty), reason:'production return', ref_type:'manual', actor_id:profile?.id||null, notes:l.notes||'Excess from production', date }));
       const { error: smErr } = await sb.from('stock_movements').insert(movements);
       if(smErr){ const stripped=movements.map(({date,notes,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
-      for(const l of valid){ const it=(items||[]).find(x=>x.id===l.item_id); const newQty=Number(it?.qty||0)+Number(l.qty); await sb.from('items').update({ qty:newQty }).eq('id', l.item_id); }
+      // On-hand updates automatically via the stock_movements trigger.
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg('Could not save: '+(e.message||e)); }
   }
@@ -24512,7 +24507,8 @@ function BulkColorItemForm({ defaultBucket, suppliers, departments, onClose, onS
       color: c.color.trim(),
       size:'',
       unit: shared.unit||'pc',
-      qty: Number(c.qty)||0,
+      qty: 0, // opening qty posted as a ledger movement below (trigger sets on-hand)
+      _openingQty: Number(c.qty)||0,
       cost: Number(shared.cost)||0,
       price: Number(shared.price)||0,
       reorder: Number(shared.reorder)||0,
@@ -24521,9 +24517,14 @@ function BulkColorItemForm({ defaultBucket, suppliers, departments, onClose, onS
       location: shared.location||'',
       notes: shared.notes||''
     }));
-    const { error } = await sb.from('items').insert(payloads);
+    const openings = payloads.map(p=>p._openingQty);
+    const clean = payloads.map(({_openingQty, ...rest})=>rest);
+    const { data:created, error } = await sb.from('items').insert(clean).select('id');
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    // Post opening-balance movements so on-hand (set by the trigger) matches the ledger.
+    const mvs=(created||[]).map((row,i)=> openings[i]>0 ? { item_id:row.id, type:'in', qty:openings[i], reason:'Opening balance (new item)', ref_type:'opening', ref_id:null, actor_id:null, date:new Date().toISOString().slice(0,10) } : null).filter(Boolean);
+    if(mvs.length){ const { error:mErr }=await sb.from('stock_movements').insert(mvs); if(mErr){ const stripped=mvs.map(({date,...rest})=>rest); await sb.from('stock_movements').insert(stripped); } }
     setBusy(false);
-    if(error){ setMsg(error.message); return; }
     onSaved();
   }
   return (
@@ -24628,14 +24629,22 @@ function ItemImportModal({ suppliers, departments, onClose, onDone }){
         else if(/print|ink|dtf|subli|vinyl|toner|powder|transfer|embro/.test(c)) bucket='printing';
         else if(/office|paper|pen|pencil|folder|stationery|staple|clip/.test(c)) bucket='office';
       }
-      payloads.push({ name, sku:getVal(r,headers,'sku'), bucket, category:cat, brand:getVal(r,headers,'brand'), model:getVal(r,headers,'model'), color:getVal(r,headers,'color'), size:getVal(r,headers,'size'), unit:getVal(r,headers,'unit')||'pc', qty:Number(getVal(r,headers,'qty'))||0, cost:Number(getVal(r,headers,'cost'))||0, price:Number(getVal(r,headers,'price'))||0, reorder:Number(getVal(r,headers,'reorder'))||0, dept_id, supplier_id, location:getVal(r,headers,'location'), notes:getVal(r,headers,'notes') });
+      payloads.push({ name, sku:getVal(r,headers,'sku'), bucket, category:cat, brand:getVal(r,headers,'brand'), model:getVal(r,headers,'model'), color:getVal(r,headers,'color'), size:getVal(r,headers,'size'), unit:getVal(r,headers,'unit')||'pc', qty:0, _openingQty:Number(getVal(r,headers,'qty'))||0, cost:Number(getVal(r,headers,'cost'))||0, price:Number(getVal(r,headers,'price'))||0, reorder:Number(getVal(r,headers,'reorder'))||0, dept_id, supplier_id, location:getVal(r,headers,'location'), notes:getVal(r,headers,'notes') });
     }
     const chunkSize=100;
+    const today=new Date().toISOString().slice(0,10);
     for(let i=0;i<payloads.length;i+=chunkSize){
       const chunk=payloads.slice(i,i+chunkSize);
-      const { error }=await sb.from('items').insert(chunk);
+      const openings=chunk.map(p=>p._openingQty);
+      const clean=chunk.map(({_openingQty,...rest})=>rest);
+      const { data:created, error }=await sb.from('items').insert(clean).select('id');
       if(error){ errors.push(`Batch ${Math.floor(i/chunkSize)+1}: ${error.message}`); }
-      else inserted+=chunk.length;
+      else {
+        inserted+=chunk.length;
+        // Opening-balance movements so on-hand (set by the trigger) matches the ledger.
+        const mvs=(created||[]).map((row,j)=> openings[j]>0 ? { item_id:row.id, type:'in', qty:openings[j], reason:'Opening balance (import)', ref_type:'opening', ref_id:null, actor_id:null, date:today } : null).filter(Boolean);
+        if(mvs.length){ const { error:mErr }=await sb.from('stock_movements').insert(mvs); if(mErr){ const stripped=mvs.map(({date,...rest})=>rest); await sb.from('stock_movements').insert(stripped); } }
+      }
       setProgress({ done:Math.min(i+chunkSize, payloads.length), total:payloads.length });
     }
     setResults({ inserted, total:payloads.length, deptCreated, suppCreated, errors });
@@ -24777,9 +24786,36 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
     setUploadingImg(false);
   }
   async function save(){ if(!f.name.trim()){ setMsg('Name is required.'); return; } setBusy(true); setMsg('');
-    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', qty:Number(f.qty)||0, cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null };
-    const { data, error } = existing ? await sb.from('items').update(payload).eq('id',existing.id).select().single() : await sb.from('items').insert(payload).select().single();
-    setBusy(false); if(error){ setMsg(error.message); return; } onSaved(data); }
+    const newQty=Number(f.qty)||0;
+    // On-hand qty is NEVER written directly — it is owned by the stock_movements
+    // ledger + trigger. A new item's opening qty and any change to the qty field
+    // are posted as movements so the ledger and on-hand can never disagree.
+    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null };
+    const today=new Date().toISOString().slice(0,10);
+    try{
+      let data;
+      if(existing){
+        const upd=await sb.from('items').update(payload).eq('id',existing.id).select().single();
+        if(upd.error) throw upd.error; data=upd.data;
+        const oldQty=Number(existing.qty)||0; const delta=newQty-oldQty;
+        if(Math.abs(delta)>0.0001){
+          const { error:mErr }=await sb.from('stock_movements').insert({ item_id:existing.id, type: delta>0?'in':'out', qty:Math.abs(delta), reason:'Manual qty adjustment (item edit)', ref_type:'adjustment', ref_id:null, actor_id:null, date:today });
+          if(mErr){ const { date, ...rest }=({ item_id:existing.id, type: delta>0?'in':'out', qty:Math.abs(delta), reason:'Manual qty adjustment (item edit)', ref_type:'adjustment', ref_id:null, actor_id:null, date:today }); const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
+        }
+        data={...data, qty:newQty};
+      } else {
+        const ins=await sb.from('items').insert({ ...payload, qty:0 }).select().single();
+        if(ins.error) throw ins.error; data=ins.data;
+        if(newQty>0){
+          const mv={ item_id:data.id, type:'in', qty:newQty, reason:'Opening balance (new item)', ref_type:'opening', ref_id:null, actor_id:null, date:today };
+          const { error:mErr }=await sb.from('stock_movements').insert(mv);
+          if(mErr){ const { date, ...rest }=mv; const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
+        }
+        data={...data, qty:newQty};
+      }
+      setBusy(false); onSaved(data);
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
   return (
     <Modal title={existing?'Edit item':'New item'} onClose={onClose} wide>
       <div className="space-y-3">
@@ -26249,11 +26285,7 @@ async function issuePRFromStock(pr, items, profile){
       const { error: retry } = await sb.from('stock_movements').insert(stripped);
       if(retry) throw retry;
     }
-    // Decrement on-hand for each consumed item.
-    for(const c of consume){
-      const it = (items||[]).find(x=>x.id===c.item_id);
-      await sb.from('items').update({ qty: Number(it?.qty||0) - c.qty }).eq('id', c.item_id);
-    }
+    // On-hand is decremented automatically by the stock_movements trigger.
   }
   const newLines = (pr.lines||[]).map(l=> l.item_id ? { ...l, qty:0, stock_allocated:0 } : l);
   const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
@@ -27724,13 +27756,10 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
   async function save(){ const toPost=rec.filter(r=>Number(r.receive_now)>0); if(!toPost.length){ setMsg('Enter at least one quantity to receive.'); return; } setBusy(true); setMsg('');
     try{
       for(const r of toPost){
-        // Update inventory qty (if linked)
-        if(r.item_id){
-          const it=items.find(x=>x.id===r.item_id); const newQty=Number(it?.qty||0)+Number(r.receive_now);
-          const {error}=await sb.from('items').update({ qty:newQty }).eq('id',r.item_id); if(error) throw error;
-        }
-        // Stock movement
-        await sb.from('stock_movements').insert({ item_id:r.item_id||null, type:'in', qty:Number(r.receive_now), reason:'PO receive', ref_type:'po', ref_id:po.id, actor_id:profile.id });
+        // Post the stock-in movement; on-hand (items.qty) is updated automatically
+        // by the stock_movements trigger for linked items.
+        const { error:smErr }=await sb.from('stock_movements').insert({ item_id:r.item_id||null, type:'in', qty:Number(r.receive_now), reason:'PO receive', ref_type:'po', ref_id:po.id, actor_id:profile.id });
+        if(smErr) throw smErr;
       }
       // Update PO lines + status
       const newLines=rec.map(r=>({ ...r, qty_received:(Number(r.qty_received)||0)+Number(r.receive_now||0), receive_now:undefined }));
