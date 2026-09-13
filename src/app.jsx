@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 607 · Inventory on-hand is now locked to the stock ledger: every stock-in/out (production issue, manual out, convert, PO receive, returns, reversals, item-qty edits and imports) posts a movement and the database automatically keeps the item's on-hand in step — so the count can no longer drift the way it had for ~80% of items. A one-time reconciliation posted opening-balance entries so today's numbers stayed exactly as they were but the ledger is now complete and auditable.";
+const BUILD = "Live build 608 · New Fabric Calculator (Purchasing + Cutting/Pattern). Lay a real marker for a known number of pieces at the fabric width, enter its length, and the system gives consumption per garment; enter an order quantity to get total yards, meters and kilos to buy plus the cutting plan (plies and rolls). Save each garment once and reuse it on every future order.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4511,6 +4511,142 @@ function PurchasingResourcesView({ profile }){
 }
 
 // ─────────── COSTING CALCULATOR (admin only) ───────────
+/* ─────────── FABRIC CALCULATOR (marker-based consumption) ───────────
+   The cutting team lays a REAL marker for a known number of pieces at the
+   fabric width and measures its total length (inches). From that we derive
+   consumption per garment, then multiply by the order quantity to get total
+   yards / meters / kilos to BUY (Purchasing) and PLIES to spread (Cutting).
+   Each garment can be saved once and reused on every future order.
+*/
+function fabricCalc(f){
+  const w      = Number(f.fabric_width_in)||0;
+  const mLen   = Number(f.marker_length_in)||0;
+  const pcs    = Math.max(Number(f.pieces_in_marker)||1, 1);
+  const waste  = Number(f.wastage_pct)||0;
+  const ypk    = Number(f.yards_per_kilo)||0;
+  const perPcIn    = mLen/pcs;                    // running inches per garment (pre-allowance)
+  const perPcInAdj = perPcIn*(1+waste/100);       // with end/shrinkage allowance
+  const perPcYd    = perPcInAdj/36;
+  return { w, mLen, pcs, waste, ypk, perPcIn, perPcInAdj, perPcYd };
+}
+function FabricCalculatorView({ profile }){
+  const blank={ name:'', fabric_name:'', fabric_width_in:'', marker_length_in:'', pieces_in_marker:1, wastage_pct:'', yards_per_kilo:'', notes:'' };
+  const [f,setF]=useState(blank);
+  const [editingId,setEditingId]=useState(null);
+  const [saved,setSaved]=useState([]);
+  const [fabrics,setFabrics]=useState([]);
+  const [orderQty,setOrderQty]=useState('');
+  const [rollYards,setRollYards]=useState('');
+  const [search,setSearch]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const canEdit = ['admin','purchasing','purchasing_admin','production','production_supervisor','production_assistant','pattern_maker','cutting_dept'].includes(profile?.role);
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  async function load(){ const { data }=await sb.from('fabric_specs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
+  async function loadFabrics(){ try{ const { data }=await sb.from('items').select('name').eq('bucket','fabrics').limit(1000); setFabrics([...new Set((data||[]).map(x=>x.name).filter(Boolean))]); }catch(_){} }
+  useEffect(()=>{ load(); loadFabrics(); },[]);
+  const c=fabricCalc(f);
+  const qty=Number(orderQty)||0;
+  const totIn=c.perPcInAdj*qty;
+  const totYd=totIn/36;
+  const totM=totIn/39.37;
+  const totKg=c.ypk>0 ? totYd/c.ypk : null;
+  const plies=(c.pcs>0 && qty>0) ? Math.ceil(qty/c.pcs) : 0;
+  const rollYd=Number(rollYards)||0;
+  const rolls=(rollYd>0 && totYd>0) ? Math.ceil(totYd/rollYd) : null;
+  const fmt=(n,d=2)=> (isFinite(n)?Number(n):0).toLocaleString('en-PH',{minimumFractionDigits:d,maximumFractionDigits:d});
+  function edit(s){ setEditingId(s.id); setF({ name:s.name||'', fabric_name:s.fabric_name||'', fabric_width_in:s.fabric_width_in??'', marker_length_in:s.marker_length_in??'', pieces_in_marker:s.pieces_in_marker??1, wastage_pct:s.wastage_pct??'', yards_per_kilo:s.yards_per_kilo??'', notes:s.notes||'' }); setMsg(''); window.scrollTo({top:0,behavior:'smooth'}); }
+  function resetForm(){ setEditingId(null); setF(blank); setMsg(''); }
+  async function save(){
+    if(!f.name.trim()){ setMsg('Give the garment a name.'); return; }
+    if(!(Number(f.marker_length_in)>0) || !(Number(f.pieces_in_marker)>0)){ setMsg('Enter the marker length and how many pieces it covers.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ name:f.name.trim(), fabric_name:f.fabric_name||null, fabric_width_in:Number(f.fabric_width_in)||null, marker_length_in:Number(f.marker_length_in)||null, pieces_in_marker:Number(f.pieces_in_marker)||1, wastage_pct:Number(f.wastage_pct)||0, yards_per_kilo:Number(f.yards_per_kilo)||null, notes:f.notes||null };
+    try{
+      if(editingId){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('fabric_specs').update(payload).eq('id',editingId); if(error) throw error; }
+      else { const { error }=await sb.from('fabric_specs').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); resetForm(); load();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function del(s){ if(!confirm(`Delete garment "${s.name||''}"?`)) return; const { error }=await sb.from('fabric_specs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',s.id); if(error){ alert(error.message); return; } if(editingId===s.id) resetForm(); load(); }
+  const q=search.toLowerCase();
+  const list=saved.filter(s=> !q || `${s.name||''} ${s.fabric_name||''}`.toLowerCase().includes(q));
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div><h1 className="text-2xl font-bold">📐 Fabric Calculator</h1><p className="text-slate-500 text-sm">Marker-based fabric consumption — save a garment once, get yards / meters / kilos and plies for any order quantity.</p></div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* ── Calculator / editor ── */}
+        <div className="bg-white rounded-xl border p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="font-semibold text-slate-700">{editingId?'Edit garment':'New garment'}</div>
+            {editingId && <button onClick={resetForm} className="text-xs text-slate-500 hover:underline">+ New instead</button>}
+          </div>
+          <div><label className="text-[11px] uppercase font-semibold text-slate-400">Garment / style *</label><input className="input mt-0.5" value={f.name} onChange={e=>up('name',e.target.value)} placeholder='e.g. "Aspire Full-Sub Jersey Set"' /></div>
+          <div><label className="text-[11px] uppercase font-semibold text-slate-400">Fabric</label><input className="input mt-0.5" list="fabric-name-list" value={f.fabric_name} onChange={e=>up('fabric_name',e.target.value)} placeholder='e.g. "150gsm Dri-fit"' /><datalist id="fabric-name-list">{fabrics.map(n=><option key={n} value={n} />)}</datalist></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="text-[11px] uppercase font-semibold text-slate-400">Fabric width (in)</label><input type="number" step="0.1" className="input mt-0.5" value={f.fabric_width_in} onChange={e=>up('fabric_width_in',e.target.value)} placeholder="e.g. 60" /></div>
+            <div><label className="text-[11px] uppercase font-semibold text-slate-400">Pieces in marker *</label><input type="number" min="1" className="input mt-0.5" value={f.pieces_in_marker} onChange={e=>up('pieces_in_marker',e.target.value)} placeholder="e.g. 6" /></div>
+            <div><label className="text-[11px] uppercase font-semibold text-slate-400">Marker length (in) *</label><input type="number" step="0.1" className="input mt-0.5" value={f.marker_length_in} onChange={e=>up('marker_length_in',e.target.value)} placeholder="measured length" /></div>
+            <div><label className="text-[11px] uppercase font-semibold text-slate-400">Allowance / waste %</label><input type="number" step="0.1" className="input mt-0.5" value={f.wastage_pct} onChange={e=>up('wastage_pct',e.target.value)} placeholder="e.g. 3" /></div>
+            <div className="col-span-2"><label className="text-[11px] uppercase font-semibold text-slate-400">Yards per kilo <span className="text-slate-300 normal-case">· optional, for kilo conversion</span></label><input type="number" step="0.01" className="input mt-0.5" value={f.yards_per_kilo} onChange={e=>up('yards_per_kilo',e.target.value)} placeholder="e.g. 4.5 yards = 1 kilo → enter 4.5" /></div>
+          </div>
+          <div><label className="text-[11px] uppercase font-semibold text-slate-400">Notes</label><textarea className="input mt-0.5 min-h-[44px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Sizes in the marker, fabric supplier, anything to remember…" /></div>
+          <div className="rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-2 text-sm">
+            <div className="flex justify-between"><span className="text-slate-600">Consumption per piece</span><span className="font-bold text-indigo-700">{fmt(c.perPcYd)} yd <span className="font-normal text-slate-400">({fmt(c.perPcInAdj,1)} in)</span></span></div>
+            <div className="text-[11px] text-slate-500 mt-0.5">= marker {fmt(c.mLen,1)} in ÷ {c.pcs} pcs{c.waste>0?` + ${fmt(c.waste,1)}% allowance`:''}</div>
+          </div>
+          {msg && <div className="text-xs text-rose-600">{msg}</div>}
+          {canEdit && <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':(editingId?'Update garment':'💾 Save garment')}</button>}
+        </div>
+        {/* ── Order calculation ── */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border p-4 space-y-3">
+            <div className="font-semibold text-slate-700">Order calculation</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className="text-[11px] uppercase font-semibold text-slate-400">Order quantity (pcs)</label><input type="number" min="0" className="input mt-0.5" value={orderQty} onChange={e=>setOrderQty(e.target.value)} placeholder="e.g. 120" /></div>
+              <div><label className="text-[11px] uppercase font-semibold text-slate-400">Roll length (yd) <span className="text-slate-300 normal-case">· optional</span></label><input type="number" step="0.1" className="input mt-0.5" value={rollYards} onChange={e=>setRollYards(e.target.value)} placeholder="e.g. 50" /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-slate-50 border p-2"><div className="text-[10px] uppercase text-slate-400 font-semibold">Total yards</div><div className="text-xl font-bold text-slate-800">{fmt(totYd)}</div></div>
+              <div className="rounded-lg bg-slate-50 border p-2"><div className="text-[10px] uppercase text-slate-400 font-semibold">Total meters</div><div className="text-xl font-bold text-slate-800">{fmt(totM)}</div></div>
+              <div className="rounded-lg bg-slate-50 border p-2"><div className="text-[10px] uppercase text-slate-400 font-semibold">Total kilos</div><div className="text-xl font-bold text-slate-800">{totKg==null?'—':fmt(totKg)}</div></div>
+            </div>
+            {totKg==null && c.ypk<=0 && qty>0 && <div className="text-[11px] text-amber-600">Add a “yards per kilo” value on the garment to see kilos.</div>}
+            <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-sm">
+              <div className="font-semibold text-amber-800 mb-1">Cutting plan</div>
+              <div className="flex justify-between"><span className="text-slate-600">Plies (layers to spread)</span><span className="font-bold">{plies||'—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-600">Marker length per spread</span><span className="font-bold">{fmt(c.mLen/36)} yd</span></div>
+              <div className="flex justify-between"><span className="text-slate-600">Rolls needed{rollYd>0?` (@ ${fmt(rollYd,0)} yd)`:''}</span><span className="font-bold">{rolls==null?'—':rolls}</span></div>
+              <div className="text-[11px] text-slate-500 mt-1">Spread {c.pcs} pcs per marker across {plies||'—'} layers to cut {qty||'—'} pcs.</div>
+            </div>
+          </div>
+          {/* ── Saved garments ── */}
+          <div className="bg-white rounded-xl border overflow-hidden">
+            <div className="flex items-center justify-between p-3 border-b">
+              <div className="font-semibold text-slate-700">Saved garments <span className="text-slate-400 font-normal">({saved.length})</span></div>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-2 py-1 text-sm rounded-lg border border-slate-300 w-36" />
+            </div>
+            <div className="max-h-[360px] overflow-y-auto divide-y">
+              {list.map(s=>{ const sc=fabricCalc(s); return (
+                <div key={s.id} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50">
+                  <button onClick={()=>edit(s)} className="flex-1 text-left">
+                    <div className="font-medium text-sm text-slate-800">{s.name}</div>
+                    <div className="text-[11px] text-slate-500">{s.fabric_name||'—'} · {fmt(sc.perPcYd)} yd/pc{s.fabric_width_in?` · ${fmt(s.fabric_width_in,0)}″`:''}</div>
+                  </button>
+                  <button onClick={()=>{ edit(s); }} className="text-[11px] text-indigo-600 hover:underline">Use</button>
+                  {canEdit && <button onClick={()=>del(s)} className="text-[11px] text-rose-500 hover:underline">Delete</button>}
+                </div>
+              ); })}
+              {list.length===0 && <div className="text-center text-slate-400 py-8 text-sm">{saved.length===0?'No garments saved yet. Fill the form and click Save.':'No matches.'}</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Build up an item's unit cost from fabric / trims / labor / etc., get an SRP
 // recommendation at the target 50–70% margin, enter a quantity to see project
 // profit, and save the costing for later.
@@ -41096,10 +41232,10 @@ function App(){
       allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
-      allowed = new Set(['pattern']);
+      allowed = new Set(['pattern','fabric-calc']);
       fallback = 'pattern';
     } else if(profile.role==='cutting_dept'){
-      allowed = new Set(['cutting']);
+      allowed = new Set(['cutting','fabric-calc']);
       fallback = 'cutting';
     } else if(profile.role==='qc'){
       // Quality Control team — QC List + techpacks (for reference) + inbox + profile.
@@ -41128,32 +41264,32 @@ function App(){
     } else if(profile.role==='packing_head'){
       allowed = new Set(['inbox','my-tasks','packing','prod','profile']); fallback = 'packing';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
       fallback = 'prod';
       // (QC list is visible to production floor for reference; QC role owns edits.)
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
     } else if(profile.role==='production_assistant'){
       // Production Assistant — production boards + the Replacement Requests queue (view).
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile']);
+      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','pattern','cutting','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -41710,14 +41846,14 @@ function App(){
       { items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'] ] },
     ];
   } else if(isPatternMaker){
-    // Pattern Maker — only the Pattern board.
+    // Pattern Maker — the Pattern board + the Fabric Calculator.
     NAV = [
-      { items:[ ['pattern','Pattern','✂'] ] },
+      { items:[ ['pattern','Pattern','✂'], ['fabric-calc','Fabric Calculator','📐'] ] },
     ];
   } else if(isCuttingDept){
-    // Cutting Department — only the In House Cutting board.
+    // Cutting Department — the In House Cutting board + the Fabric Calculator.
     NAV = [
-      { items:[ ['cutting','In House Cutting','🔪'] ] },
+      { items:[ ['cutting','In House Cutting','🔪'], ['fabric-calc','Fabric Calculator','📐'] ] },
     ];
   } else if(isQc){
     // Quality Control team — the QC List + techpacks for reference + inbox.
@@ -41779,7 +41915,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -41790,7 +41926,7 @@ function App(){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction || isGraphicTeam || isPrintingTeam){
@@ -41798,7 +41934,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -41809,7 +41945,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['subcon','Subcon Payroll','🧶'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -41821,7 +41957,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -41846,7 +41982,7 @@ function App(){
     // coming down to the floor.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -41858,7 +41994,7 @@ function App(){
     // (for setting up their signature on techpack rows and other docs).
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isAssistant){
@@ -41866,7 +42002,7 @@ function App(){
     NAV = [
       { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -41884,7 +42020,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -41898,9 +42034,9 @@ function App(){
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -42084,6 +42220,7 @@ function App(){
         {view==='pricing' && <PricingView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
+        {view==='fabric-calc' && <FabricCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} profiles={profiles} openContentId={inboxMarketingId} />}
         {view==='training' && isTrainingParticipant && <TrainingView profile={profile} profiles={profiles} leads={leads} onOpenTechpack={openTechpackView} participants={trainingParticipants} reloadParticipants={reloadTrainingParticipants} />}
         {view==='printing' && <DeptBoard profile={profile} profiles={profiles} employees={employees} title="Printing" icon="🖨" table="printing_jobs" jobType="printing" statuses={PRINTING_STATUSES} doneStatuses={PRINTING_DONE} jobs={printingJobs} leads={leads} canSendToPrinting={false} showReport={true} replacementDept="Printing" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
