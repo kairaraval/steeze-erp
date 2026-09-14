@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 608 · New Fabric Calculator (Purchasing + Cutting/Pattern). Lay a real marker for a known number of pieces at the fabric width, enter its length, and the system gives consumption per garment; enter an order quantity to get total yards, meters and kilos to buy plus the cutting plan (plies and rolls). Save each garment once and reuse it on every future order.";
+const BUILD = "Live build 609 · Fix: HR could not open Quality Escalation reports from Production — the reports were saved but never shown anywhere. HR → Employee Relations now has a Quality Escalations tab listing every report (subject, reject qty, person involved, reason, details) with Mark-resolved / Reopen, and the Inbox notification now opens straight to the specific report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11034,13 +11034,13 @@ function HrEscalationModal({ init, profile, profiles, employees, onClose, onSave
     if(!subject.trim()){ setMsg('Add a subject.'); return; }
     setBusy(true); setMsg('');
     const payload={ subject:subject.trim(), item:r?.item||null, client_name:r?.client_name||null, lead_id:r?.lead_id||null, reject_qty:rejectQty===''?null:Number(rejectQty), process:r?.process||null, department:r?.department||null, person_employee_id:personId||null, reason:reason.trim()||null, details:details.trim()||null, created_by:profile.id };
-    const { error }=await sb.from('hr_escalations').insert(payload);
+    const { data:escRow, error }=await sb.from('hr_escalations').insert(payload).select('id').single();
     if(error){ setBusy(false); setMsg(error.message); return; }
     try {
       const hrIds=(profiles||[]).filter(p=>p.role==='hr').map(p=>p.id);
       const person = personId ? (employees||[]).find(e=>e.id===personId) : null;
       const txt = `⚠ Quality escalation from Production: ${subject.trim()}${rejectQty?` — ${rejectQty} rejects`:''}${person?` · re: ${fullName(person)}`:''}${reason?` — ${reason.trim()}`:''}. Please investigate.`;
-      if(hrIds.length) await sb.from('notifications').insert(hrIds.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'hr-relations', ref_type:'hr_escalation', type:'system' })));
+      if(hrIds.length) await sb.from('notifications').insert(hrIds.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'hr-relations', ref_type:'hr_escalation', ref_id:escRow?.id||null, type:'system' })));
     } catch(e){ console.warn('HR notify failed', e?.message||e); }
     setBusy(false); onSaved && onSaved();
   }
@@ -15721,8 +15721,24 @@ function caseSeverityMeta(k){ return CASE_SEVERITIES.find(s=>s.key===k); }
 // Disciplinary sanctions (stored as the label string)
 const SANCTION_TYPES = ['Verbal Warning','Written Reprimand','Final Warning','1-Day Suspension','2–3 Days Suspension','4–5 Days Suspension','6–10 Days Suspension','Preventive Suspension','Dismissal'];
 
-function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
-  const [section,setSection]=useState('disciplinary'); // 'disciplinary' | 'movement'
+function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalations, openEscalationId, onEscalationOpened, reload }){
+  const [section,setSection]=useState('disciplinary'); // 'disciplinary' | 'movement' | 'escalation'
+  const [escSearch,setEscSearch]=useState('');
+  const [highlightEsc,setHighlightEsc]=useState(null);
+  // Deep-link from an Inbox quality-escalation notification: jump to the
+  // Escalations section (and highlight the specific report when we have its id).
+  useEffect(()=>{
+    if(openEscalationId){
+      setSection('escalation');
+      if(openEscalationId!=='__any__') setHighlightEsc(openEscalationId);
+      onEscalationOpened && onEscalationOpened();
+    }
+  },[openEscalationId]);
+  const escList=(hrEscalations||[]).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const escOpen=escList.filter(e=>(e.status||'open')!=='resolved');
+  const escShown=escList.filter(e=>{ if(!escSearch) return true; const q=escSearch.toLowerCase(); const emp=(employees||[]).find(x=>x.id===e.person_employee_id); return `${e.subject||''} ${e.item||''} ${e.client_name||''} ${e.reason||''} ${e.details||''} ${emp?fullName(emp):''}`.toLowerCase().includes(q); });
+  async function setEscStatus(e, status){ const { error }=await sb.from('hr_escalations').update({ status }).eq('id',e.id); if(error){ alert(error.message); return; } reload(); }
+  async function delEsc(e){ if(!confirm('Delete this escalation report?')) return; const { error }=await sb.from('hr_escalations').delete().eq('id',e.id); if(error){ alert(error.message); return; } reload(); }
   const [tab,setTab]=useState('active');
   const [search,setSearch]=useState('');
   const [creating,setCreating]=useState(false);
@@ -15755,16 +15771,19 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">⚖️ Employee Relations</h1>
-            <p className="text-slate-500 text-sm">{section==='disciplinary' ? `Disciplinary case log — ${active.length} active · ${closed.length} closed.` : `Employee movement log — ${movements.length} record${movements.length===1?'':'s'} (promotions, salary changes, transfers).`}</p>
+            <p className="text-slate-500 text-sm">{section==='disciplinary' ? `Disciplinary case log — ${active.length} active · ${closed.length} closed.` : section==='movement' ? `Employee movement log — ${movements.length} record${movements.length===1?'':'s'} (promotions, salary changes, transfers).` : `Quality escalations from Production — ${escOpen.length} open · ${escList.length} total.`}</p>
           </div>
           {section==='disciplinary'
             ? <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New case</button>
-            : <button onClick={()=>setMovCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New movement</button>}
+            : section==='movement'
+            ? <button onClick={()=>setMovCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New movement</button>
+            : null}
         </div>
         {/* Section switch: Disciplinary vs Employee Movement */}
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3">
           <button onClick={()=>setSection('disciplinary')} className={`px-3 py-1.5 rounded-md ${section==='disciplinary'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>⚖️ Disciplinary</button>
           <button onClick={()=>setSection('movement')} className={`px-3 py-1.5 rounded-md ${section==='movement'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🔀 Employee Movement</button>
+          <button onClick={()=>setSection('escalation')} className={`px-3 py-1.5 rounded-md ${section==='escalation'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>⚠️ Quality Escalations{escOpen.length>0 && <span className="ml-1 text-[10px] bg-rose-500 text-white rounded-full px-1.5 py-0.5">{escOpen.length}</span>}</button>
         </div>
         {section==='disciplinary' && <div className="flex items-center gap-2 flex-wrap mt-3">
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
@@ -15775,9 +15794,46 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, reload }){
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee / case…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white" />
         </div>}
         {section==='movement' && <div className="mt-3"><input value={movSearch} onChange={e=>setMovSearch(e.target.value)} placeholder="Search employee / type / position…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white w-full max-w-md" /></div>}
+        {section==='escalation' && <div className="mt-3"><input value={escSearch} onChange={e=>setEscSearch(e.target.value)} placeholder="Search subject / item / person / reason…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white w-full max-w-md" /></div>}
       </div>
 
-      {section==='movement' ? (
+      {section==='escalation' ? (
+        escShown.length===0 ? (
+          <div className="bg-white border rounded-xl p-10 text-center text-slate-400">{escList.length===0?'No quality escalations. When Production reports excessive rejects to HR, they appear here.':'No escalations match your search.'}</div>
+        ) : (
+          <div className="space-y-3">{escShown.map(e=>{ const emp=(employees||[]).find(x=>x.id===e.person_employee_id); const resolved=(e.status||'open')==='resolved'; const hot=highlightEsc===e.id; return (
+            <div key={e.id} className={`bg-white border rounded-xl p-4 ${hot?'ring-2 ring-rose-400':''} ${resolved?'opacity-70':''}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-lg">⚠️</span>
+                    <span className="font-bold text-slate-800">{e.subject||'Quality escalation'}</span>
+                    {resolved
+                      ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Resolved</span>
+                      : <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Open</span>}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {e.created_at ? new Date(e.created_at).toLocaleString() : ''}
+                    {e.item?` · ${e.item}`:''}{e.client_name?` · ${e.client_name}`:''}{e.department?` → ${e.department}`:''}{e.process?` · ${e.process}`:''}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {resolved
+                    ? <button onClick={()=>setEscStatus(e,'open')} className="text-xs px-2.5 py-1 rounded-lg border font-semibold text-slate-600 hover:bg-slate-50">Reopen</button>
+                    : <button onClick={()=>setEscStatus(e,'resolved')} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">Mark resolved</button>}
+                  <button onClick={()=>delEsc(e)} className="text-xs text-rose-500 hover:underline">Delete</button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-3 text-sm">
+                <div><span className="text-slate-400 text-xs uppercase font-semibold">Reject qty</span><div className="font-medium">{e.reject_qty!=null?e.reject_qty:'—'}</div></div>
+                <div><span className="text-slate-400 text-xs uppercase font-semibold">Person involved</span><div className="font-medium">{emp?fullName(emp):'—'}</div></div>
+              </div>
+              {e.reason && <div className="mt-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold">Reason / issue</span><div>{e.reason}</div></div>}
+              {e.details && <div className="mt-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold">Details</span><div className="whitespace-pre-line text-slate-700">{e.details}</div></div>}
+            </div>
+          ); })}</div>
+        )
+      ) : section==='movement' ? (
         movShown.length===0 ? (
           <div className="bg-white border rounded-xl p-10 text-center text-slate-400">No movement records yet. Click "+ New movement" to log a promotion, salary increase, transfer, or regularization.</div>
         ) : (
@@ -40824,6 +40880,7 @@ function App(){
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrMovements,setHrMovements]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
+  const [hrEscalations,setHrEscalations]=useState([]); const [inboxEscalationId,setInboxEscalationId]=useState(null);
   const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]); const [hrLoanInstallments,setHrLoanInstallments]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
@@ -41127,6 +41184,7 @@ function App(){
     try { const hl = await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setHrLeaves(hl && !hl.error ? (hl.data||[]) : []); } catch(_){ setHrLeaves([]); }
     try { const hcs = await sb.from('hr_cases').select('*').order('opened_date',{ascending:false}); setHrCases(hcs && !hcs.error ? (hcs.data||[]) : []); } catch(_){ setHrCases([]); }
     try { const hmv = await sb.from('hr_movements').select('*').is('deleted_at',null).order('effective_date',{ascending:false}); setHrMovements(hmv && !hmv.error ? (hmv.data||[]) : []); } catch(_){ setHrMovements([]); }
+    try { const hes = await sb.from('hr_escalations').select('*').order('created_at',{ascending:false}); setHrEscalations(hes && !hes.error ? (hes.data||[]) : []); } catch(_){ setHrEscalations([]); }
     try { const hcr = await sb.from('hr_review_criteria').select('*').order('sort_order',{ascending:true}); setHrReviewCriteria(hcr && !hcr.error ? (hcr.data||[]) : []); } catch(_){ setHrReviewCriteria([]); }
     try { const et = await sb.from('eval_templates').select('*').order('created_at',{ascending:false}); setEvalTemplates(et && !et.error ? (et.data||[]) : []); } catch(_){ setEvalTemplates([]); }
     try { const er = await sb.from('eval_reviews').select('*').order('created_at',{ascending:false}); setEvalReviews(er && !er.error ? (er.data||[]) : []); } catch(_){ setEvalReviews([]); }
@@ -41683,6 +41741,7 @@ function App(){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setActivityLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
@@ -41711,6 +41770,7 @@ function App(){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setDetailLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
@@ -42191,7 +42251,7 @@ function App(){
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} reload={loadAll} />}
-        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} reload={loadAll} />}
+        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
