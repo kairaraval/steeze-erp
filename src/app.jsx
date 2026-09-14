@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 611 · Techpack save is now resilient on mobile: a flaky signal that used to fail the save with a scary 'TypeError: Load failed' message now auto-retries, and if it still can't reach the server you get a clear note that your signatures are safe on the page — just reconnect and tap Save again. (This was a network hiccup, never a permissions problem.)";
+const BUILD = "Live build 612 · Request for Payment: the proof-of-transaction requirement is now a gate on PURCHASING only — an RFP still can't be sent to Accounting without proof attached, but Accounting is no longer blocked from approving. This unblocks RFPs whose proof lives on the PO. Accounting sees a gentle note (not a hard block) when Purchasing didn't attach a separate proof.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30538,7 +30538,9 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   }
   async function approveFinance(){
     if(!isAccounting && !isAdmin){ setMsg('Only Finance/Accounting can approve at this step.'); return; }
-    if((atts||[]).length===0){ setMsg('⚠ Attach the proof of transaction (from Purchasing) below before approving — Accounting needs it to validate the amount and VAT status.'); return; }
+    // NOTE: proof of transaction is enforced upstream at the Purchasing step
+    // (an RFP cannot be sent to Accounting without it). Accounting is NOT gated
+    // on attachments here — the proof requirement belongs to Purchasing only.
     setBusy(true);
     const { error } = await sb.from('rfps').update({ status:'pending_admin', finance_approved_by:profile.id, finance_approved_at:new Date().toISOString(), finance_notes:notes||null }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -30638,8 +30640,8 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           </div>
           <div className="text-[11px] text-slate-500 mb-2">Upload the supplier proof of transaction (to validate amount + VAT), plus receipts/invoices. You can add these anytime — even after the RFP is paid.</div>
           <AttachmentsEditor value={atts} onChange={saveAtts} scope={'rfp/'+rfp.id} inline />
-          {atts.length===0 && (rfp.status==='pending_purchasing') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: attach the proof of transaction before this can be sent to Accounting for payment.</div>}
-          {atts.length===0 && (rfp.status==='pending_finance') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: attach the proof of transaction before Finance can approve.</div>}
+          {atts.length===0 && (rfp.status==='pending_purchasing') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: Purchasing must attach the proof of transaction before this can be sent to Accounting for payment.</div>}
+          {atts.length===0 && (rfp.status==='pending_finance') && <div className="text-[11px] text-slate-500 mt-1.5">No proof of transaction was attached by Purchasing. Accounting can still approve, but you may want to ask Purchasing to add it.</div>}
         </div>
 
         {/* Accounting entries — expense classifications booked when this RFP was
