@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 610 · Sales ticket queue's top workload strip now includes Sales Representatives (like Eunice), not just Sales Associates — so you can see what everyone pulling from the shared pool is working on and who's next up.";
+const BUILD = "Live build 611 · Techpack save is now resilient on mobile: a flaky signal that used to fail the save with a scary 'TypeError: Load failed' message now auto-retries, and if it still can't reach the server you get a clear note that your signatures are safe on the page — just reconnect and tap Save again. (This was a network hiccup, never a permissions problem.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23584,11 +23584,23 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
     const payload={...tp,updatedAt:todayISO()};
     // Save and also read back the updated row, so we can detect silent RLS failures
     // (when an update matches 0 rows because the policy filtered them out, Supabase returns no error).
-    const { data:updated, error } = await sb.from('leads')
-      .update({ techpack: payload })
-      .eq('id', lead.id)
-      .select('id');
+    // Mobile users sign in the field on flaky connections, where a single request
+    // can fail at the network layer (Safari reports this as "TypeError: Load
+    // failed"). That is NOT a permissions problem and the data is still on the
+    // page — so we auto-retry a couple of times before giving up.
+    const isNetFail = (e)=> e && !e.code && /load failed|failed to fetch|networkerror|network error|the network connection was lost/i.test(String(e.message||e));
+    let updated, error;
+    for(let attempt=1; attempt<=3; attempt++){
+      const res = await sb.from('leads').update({ techpack: payload }).eq('id', lead.id).select('id');
+      updated = res.data; error = res.error;
+      if(!error || !isNetFail(error)) break;   // success, or a real error we shouldn't retry
+      if(attempt<3) await new Promise(r=>setTimeout(r, 800*attempt));
+    }
     setSaving(false);
+    if(error && isNetFail(error)){
+      alert("Couldn't reach the server — looks like a network hiccup (weak signal or Wi‑Fi drop). Your signatures and edits are still here on this page. Check your connection and tap Save again.");
+      return;
+    }
     if(error){
       console.error('Techpack save error:', error, 'lead.id=', lead.id, 'profile.role=', profile?.role, 'manager_id=', lead.manager_id);
       const code = error.code || '—';
