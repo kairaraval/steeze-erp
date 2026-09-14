@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 612 · Request for Payment: the proof-of-transaction requirement is now a gate on PURCHASING only — an RFP still can't be sent to Accounting without proof attached, but Accounting is no longer blocked from approving. This unblocks RFPs whose proof lives on the PO. Accounting sees a gentle note (not a hard block) when Purchasing didn't attach a separate proof.";
+const BUILD = "Live build 613 · Sales Pipeline edit-lead attachments now show thumbnail previews (photos preview inline, PDF/Excel/link show an icon) and you can click any one to open it. You can also now upload Excel files (.xlsx/.xls/.csv) as lead attachments, not just photos and PDFs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1310,6 +1310,12 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   }
   function addLink(){ const url=(prompt('Link URL (https://…):')||'').trim(); if(!url) return; const name=(prompt('Link title (optional):')||url).trim(); setAttachments(a=>[...a,{ type:'link', name, url }]); }
   function removeAtt(idx){ setAttachments(a=>a.filter((_,i)=>i!==idx)); }
+  // Open an attachment (image / PDF / Excel / link) in a new tab. Storage files
+  // need a signed URL; plain links open directly.
+  async function openAtt(a){
+    if(a.path){ try{ const u=await signedUrl(a.path); window.open(u,'_blank','noopener'); }catch(_){} return; }
+    if(a.url){ window.open(a.url,'_blank','noopener'); }
+  }
   async function save(){ if(!title.trim()){ setMsg('Lead title is required.'); return; }
     // Gate: contact person + delivery address required to move to Sampling / Closed Won.
     if(['sampling','won'].includes(stage) && (!contactPerson.trim() || !address.trim())){
@@ -1578,8 +1584,20 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
           <textarea className="input mt-0.5 min-h-[80px]" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Quick context — call summary, follow-up plan, special pricing, etc." />
         </div>
         <div className="border rounded-lg p-3 bg-slate-50">
-          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments <span className="text-slate-400 font-normal">· paste screenshots with ⌘V</span></div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photos / PDFs'}<input type="file" multiple accept="image/*,.pdf,application/pdf" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
-          {attachments.length===0?<div className="text-xs text-slate-400">No attachments yet — drop or paste an image here.</div>:(<div className="grid grid-cols-3 gap-2">{attachments.map((a,i)=>(<div key={i} className="bg-white border rounded p-1.5 flex items-center gap-2"><span className="text-lg">{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 min-w-0 text-xs truncate" title={a.name}>{a.name}</span><button onClick={()=>removeAtt(i)} className="text-rose-400 text-xs">✕</button></div>))}</div>)}
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">Attachments <span className="text-slate-400 font-normal">· photos, PDFs &amp; Excel · paste screenshots with ⌘V</span></div><div className="flex gap-1"><label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'Uploading…':'Photos / PDF / Excel'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={addPhoto} disabled={reading} /></label><button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button></div></div>
+          {attachments.length===0?<div className="text-xs text-slate-400">No attachments yet — add a photo, PDF or Excel file, or drop/paste an image here.</div>:(<div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{attachments.map((a,i)=>{ const nm=String(a.name||a.url||'').toLowerCase(); const isImg=(a.type==='image')||/\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)(?:$|\?)/i.test(nm); const isPdf=!isImg&&((a.type==='pdf')||/\.pdf(?:$|\?)/i.test(nm)); const isXls=/\.(xlsx|xls|csv)(?:$|\?)/i.test(nm); const isLink=(a.type==='link')||(!a.path&&!!a.url); const icon=isPdf?'📄':isXls?'📊':isLink?'🔗':'📎'; return (
+            <div key={i} className="relative group bg-white border rounded-lg overflow-hidden">
+              <button type="button" onClick={()=>openAtt(a)} className="block w-full text-left" title={a.name||a.url}>
+                <div className="h-24 bg-slate-50 flex items-center justify-center overflow-hidden">
+                  {isImg && a.path ? <TImg path={a.path} maxH="96px" thumb={300} />
+                    : isImg && a.url ? <img src={a.url} alt={a.name} loading="lazy" style={{maxHeight:'96px',maxWidth:'100%',objectFit:'contain'}} />
+                    : <span className="text-3xl text-slate-300">{icon}</span>}
+                </div>
+                <div className="px-2 py-1 text-[10px] text-slate-500 truncate border-t" title={a.name||a.url}>{a.name||a.url}</div>
+              </button>
+              <button onClick={()=>removeAtt(i)} title="Remove" className="absolute top-1 right-1 w-5 h-5 rounded-full bg-white/90 border text-rose-500 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition">✕</button>
+            </div>
+          ); })}</div>)}
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create lead')}</button>
