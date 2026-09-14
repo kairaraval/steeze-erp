@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 609 · Fix: HR could not open Quality Escalation reports from Production — the reports were saved but never shown anywhere. HR → Employee Relations now has a Quality Escalations tab listing every report (subject, reject qty, person involved, reason, details) with Mark-resolved / Reopen, and the Inbox notification now opens straight to the specific report.";
+const BUILD = "Live build 610 · Sales ticket queue's top workload strip now includes Sales Representatives (like Eunice), not just Sales Associates — so you can see what everyone pulling from the shared pool is working on and who's next up.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12056,8 +12056,10 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   const done = live.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
   const archived = visible.filter(t=>t.archived_at).sort((a,b)=>String(b.archived_at||'').localeCompare(String(a.archived_at||''))).slice(0,50);
 
-  // Workload counters — assistants (people who pull from the pool).
-  const assistants=(profiles||[]).filter(p=>p.role==='assistant');
+  // Workload counters — everyone who pulls from the shared pool: sales
+  // assistants AND sales representatives (reps share assistant access and work
+  // the same ticket queue), so they show in the top strip too.
+  const assistants=(profiles||[]).filter(p=>isAssistantRole(p.role));
   const activeCount=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='in_progress' && !t.archived_at).length;
   const doneToday=(pid)=>tickets.filter(t=>t.assignee_id===pid && t.status==='done' && String(t.done_at||'').slice(0,10)===today).length;
   const minActive = assistants.length ? Math.min(...assistants.map(a=>activeCount(a.id))) : 0;
