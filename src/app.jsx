@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 614 · No more lost typing: the OS no longer auto-refreshes data while you have a form open or a field focused — so switching to another tab and coming back won't wipe what you were typing. The refresh simply waits until you close the form / finish, then quietly updates.";
+const BUILD = "Live build 615 · Arrange your boards: each status column on the Packing, Sewing and Graphic/Printing/Embroidery/Knitting boards now has a small order button — tap to switch between Due date, Newest added, or Oldest added. Your choice is remembered per column. (Cutting, Pattern, QC and Pressing already let you drag cards up/down manually.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4964,6 +4964,26 @@ function rowWorkedMs(row){
 // Sort comparator: earliest deadline first, undated items last.
 function byDueAsc(getDue){ return (a,b)=>{ const da=getDue(a), db=getDue(b); const ta=da?new Date(da).getTime():Infinity; const tb=db?new Date(db).getTime():Infinity; return ta-tb; }; }
 
+// ── Per-column card ordering for the kanban process boards ──
+// A small, reusable control so each status column can be ordered by Due date
+// (default), Newest added, or Oldest added. The choice is remembered per board
+// + column in localStorage, so the team's arrangement sticks between visits.
+const BOARD_SORT_MODES = ['due','newest','oldest'];
+const BOARD_SORT_LABEL = { due:'⏱ Due', newest:'↓ Newest', oldest:'↑ Oldest' };
+function nextBoardSort(m){ const i=BOARD_SORT_MODES.indexOf(m); return BOARD_SORT_MODES[(i+1)%BOARD_SORT_MODES.length]; }
+function sortByBoardMode(list, mode, getDue){
+  const arr=(list||[]).slice();
+  if(mode==='newest') return arr.sort((a,b)=> (new Date(b.created_at||0))-(new Date(a.created_at||0)));
+  if(mode==='oldest') return arr.sort((a,b)=> (new Date(a.created_at||0))-(new Date(b.created_at||0)));
+  return arr.sort(byDueAsc(getDue||(()=>null)));
+}
+function useBoardSort(storageKey){
+  const [map,setMap]=React.useState(()=>{ try{ return JSON.parse(localStorage.getItem(storageKey)||'{}')||{}; }catch(_){ return {}; } });
+  const cycle=(k)=> setMap(prev=>{ const next={...prev,[k]:nextBoardSort(prev[k]||'due')}; try{ localStorage.setItem(storageKey, JSON.stringify(next)); }catch(_){}; return next; });
+  return [map, cycle];
+}
+function BoardSortBtn({ mode, onClick }){ return <button onClick={onClick} title="Change card order — Due date / Newest added / Oldest added" className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/60 hover:bg-white/90 whitespace-nowrap">{BOARD_SORT_LABEL[mode]||BOARD_SORT_LABEL.due}</button>; }
+
 // Reusable Start / Pause / Resume / Finish time tracker for any board card.
 // Time only accrues during working hours (Mon–Sat 8am–6pm); leaving a card
 // running overnight or on a Sunday adds nothing. Manual Pause stops it early.
@@ -5199,9 +5219,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   const liveDetail = detail ? (jobs.find(x=>x.id===detail.id)||detail) : null;
   // Per-column sort direction (by date added). Defaults to newest-first; each
   // column can be flipped and the choice is remembered per board on this device.
-  const colSortKey='deptColSort_'+(title||'board');
-  const [colSort,setColSort]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(colSortKey)||'{}')||{}; }catch(_){ return {}; } });
-  function toggleColSort(k){ setColSort(prev=>{ const next={...prev, [k]:(prev[k]==='asc'?'desc':'asc')}; try{ localStorage.setItem(colSortKey, JSON.stringify(next)); }catch(_){}; return next; }); }
+  const [colSort, cycleColSort]=useBoardSort('deptColSort_'+(title||'board'));
   // ── Artists' priority checklist (Graphic board only) ─────────────────────
   // Mirrors the TO-DO column only. An item leaves the checklist when it's moved
   // out of To Do OR ticked off, and re-appears if the job is moved back to To Do.
@@ -5293,7 +5311,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
               </div>
             </div>
           )}
-          {statuses.map(st=>{ const dir=colSort[st.key]||'desc'; const col=filtered.filter(j=>j.status===st.key).slice().sort((a,b)=>{ const d=(new Date(b.created_at||0))-(new Date(a.created_at||0)); return dir==='asc'? -d : d; });
+          {statuses.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; });
             const isDragTarget = dragOverStatus === st.key;
             const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStatus!==st.key) setDragOverStatus(st.key); };
             const onColumnDragLeave = ()=>{ if(dragOverStatus===st.key) setDragOverStatus(null); };
@@ -5316,7 +5334,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
               {/* Frozen column header */}
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}>
                 <span>{st.label} <span className="opacity-70">({col.length})</span></span>
-                <button onClick={()=>toggleColSort(st.key)} title={dir==='desc'?'Newest added on top — click for oldest first':'Oldest added on top — click for newest first'} className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/50 hover:bg-white/80 whitespace-nowrap">{dir==='desc'?'↓ Newest':'↑ Oldest'}</button>
+                <BoardSortBtn mode={mode} onClick={()=>cycleColSort(st.key)} />
               </div>
               {/* Scrollable column body */}
               <div className={`flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] transition ${isDragTarget?'bg-indigo-50/80':'bg-slate-200/60'}`}>
@@ -6752,6 +6770,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   const [reportFor,setReportFor]=useState(null); // job we're viewing the report for
   const [replacements,setReplacements]=useState([]);
   const [bump,setBump]=useState(0);
+  const [colSort, cycleColSort]=useBoardSort('sewColSort');
   const isAdmin=profile.role==='admin'; const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant;
   // Load all replacements (for card badges + the Report tab). Refresh on bump.
@@ -6797,9 +6816,9 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
 
       {tab==='board' && (
         <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {SEWING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort(byDueAsc(j=>j.due_date)); return (
+          {SEWING_STATUSES.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>j.due_date); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
-              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
+              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}><span>{st.label} <span className="opacity-70">({col.length})</span></span><BoardSortBtn mode={mode} onClick={()=>cycleColSort(st.key)} /></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
                 {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const hrs=(j.start_at&&j.end_at)?(new Date(j.end_at)-new Date(j.start_at)):0; const di=deadlineInfo(j.due_date, SEWING_DONE.includes(j.status));
                   return (
@@ -7267,6 +7286,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   const [bump,setBump]=useState(0);
   const isAdmin=profile.role==='admin'; const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant;
+  const [colSort, cycleColSort]=useBoardSort('packColSort');
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('packing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.packing_job_id]=replByJob[r.packing_job_id]||[]).push(r); });
   const packers=(employees||[]).filter(e=> e.is_active!==false && /pack/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
@@ -7296,9 +7316,9 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
 
       {tab==='board' && (
         <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {PACKING_STATUSES.map(st=>{ const col=filtered.filter(j=>j.status===st.key).slice().sort(byDueAsc(j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; })); return (
+          {PACKING_STATUSES.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; }); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
-              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color}`}>{st.label} <span className="opacity-70">({col.length})</span></div>
+              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}><span>{st.label} <span className="opacity-70">({col.length})</span></span><BoardSortBtn mode={mode} onClick={()=>cycleColSort(st.key)} /></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
                 {col.map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; const repls=replByJob[j.id]||[]; const bags=jobPolybags(j); const bagsTotal=bags.reduce((s,b)=>s+polybagTotal(b),0); const due=j.due_date||lead?.delivery_date||lead?.expected_close||null; const di=deadlineInfo(due, PACKING_DONE.includes(j.status));
                   return (
