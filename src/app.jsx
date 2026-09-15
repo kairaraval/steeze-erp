@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 613 · Sales Pipeline edit-lead attachments now show thumbnail previews (photos preview inline, PDF/Excel/link show an icon) and you can click any one to open it. You can also now upload Excel files (.xlsx/.xls/.csv) as lead attachments, not just photos and PDFs.";
+const BUILD = "Live build 614 · No more lost typing: the OS no longer auto-refreshes data while you have a form open or a field focused — so switching to another tab and coming back won't wipe what you were typing. The refresh simply waits until you close the form / finish, then quietly updates.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41045,16 +41045,34 @@ function App(){
   //   2) BURSTS COLLAPSE. A flurry of events collapses into one refresh (~5s).
   //   3) MIN GAP. We never full-reload more than about once every 15s, so a
   //      busy office can't cause back-to-back full reloads.
+  // Is the user mid-edit? A background data refresh would re-initialise open
+  // forms and wipe unsaved typing, so we hold off while ANY modal is open or a
+  // text field is focused (this is what caused "it refreshes when I come back
+  // to the tab and everything I typed is gone").
+  function isEditingNow(){
+    if(typeof document==='undefined') return false;
+    if(document.querySelector('.steeze-modal-backdrop')) return true; // a form/dialog is open
+    const ae=document.activeElement;
+    return !!(ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA' || ae.tagName==='SELECT' || ae.isContentEditable));
+  }
   function scheduleReload(){
     reloadPending.current = true;
     if(typeof document !== 'undefined' && document.hidden) return; // defer until visible
     if(reloadTimer.current) return;                                 // one already queued
+    // Never reload out from under someone who is typing or has a form open —
+    // keep the request pending and re-check shortly after they finish.
+    if(isEditingNow()){
+      reloadTimer.current = setTimeout(()=>{ reloadTimer.current=null; scheduleReload(); }, 6000);
+      return;
+    }
     const since = Date.now() - (lastLoadAt.current || 0);
     const wait = Math.max(5000, 15000 - since);
     reloadTimer.current = setTimeout(()=>{
       reloadTimer.current = null;
-      if(reloadPending.current && !(typeof document!=='undefined' && document.hidden)){
+      if(reloadPending.current && !(typeof document!=='undefined' && document.hidden) && !isEditingNow()){
         reloadPending.current = false; loadAll();
+      } else if(reloadPending.current){
+        scheduleReload(); // still editing/hidden — try again later
       }
     }, wait);
   }
@@ -42518,7 +42536,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   let reloading = false;
   try { sessionStorage.removeItem('sw-just-reloaded'); } catch(_) {}
-  function isTyping(){ const ae = document.activeElement; return !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)); }
+  function isTyping(){ const ae = document.activeElement; if(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true; return !!document.querySelector('.steeze-modal-backdrop'); }
   function safeReload(){
     if (reloading) return;
     // LOOP BREAKER: never reload more than once per 20s. If controllerchange
