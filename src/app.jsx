@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 615 · Arrange your boards: each status column on the Packing, Sewing and Graphic/Printing/Embroidery/Knitting boards now has a small order button — tap to switch between Due date, Newest added, or Oldest added. Your choice is remembered per column. (Cutting, Pattern, QC and Pressing already let you drag cards up/down manually.)";
+const BUILD = "Live build 616 · Switching browser tabs is now completely safe — the OS no longer refreshes when you return to it, so half-typed edits survive even if the field lost focus. New app versions also wait until you're fully idle (no typing for a while, no form open, tab in focus) before applying, so a deploy can't wipe your work either. Live updates still arrive while you're on the page, and every view keeps its manual ↻ refresh.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -474,6 +474,19 @@ async function clientUploadFile(clientId, file){
   const { error } = await sb.storage.from(CLIENT_BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
   return { type: file.type==='application/pdf'?'pdf':(file.type.startsWith('image/')?'image':'file'), name:file.name, path, mime:file.type };
 }
+
+// ── "Recently typed" tracker ──────────────────────────────────────────────
+// Switching browser tabs blurs the focused field, so by the time the person
+// comes back the app can no longer tell they were mid-edit just by looking at
+// document.activeElement. We stamp the time of every keystroke/paste so any
+// auto-refresh can hold off if the user typed anything in the last few seconds
+// — this is what makes inline edits (not just modals) safe across a tab switch.
+let __lastTypeAt = 0;
+if(typeof document !== 'undefined'){
+  const stamp = ()=>{ __lastTypeAt = Date.now(); };
+  ['keydown','input','paste','compositionstart'].forEach(ev=> document.addEventListener(ev, stamp, true));
+}
+function recentlyTyped(ms=25000){ return (Date.now() - __lastTypeAt) < ms; }
 
 // Extract a pasted image (screenshot / Cmd+V) from a clipboard event.
 // Returns a File ready to feed into uploadFile, or null if no image was pasted.
@@ -41071,7 +41084,8 @@ function App(){
   // to the tab and everything I typed is gone").
   function isEditingNow(){
     if(typeof document==='undefined') return false;
-    if(document.querySelector('.steeze-modal-backdrop')) return true; // a form/dialog is open
+    if(recentlyTyped()) return true;                                   // typed in the last few seconds (survives a tab-switch blur)
+    if(document.querySelector('.steeze-modal-backdrop')) return true;  // a form/dialog is open
     const ae=document.activeElement;
     return !!(ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA' || ae.tagName==='SELECT' || ae.isContentEditable));
   }
@@ -41334,14 +41348,12 @@ function App(){
     }
   }
   useEffect(()=>{ if(session && clientUser===null) loadAll(); },[session, clientUser]);
-  // When the person returns to a backgrounded tab, run any reload that was
-  // deferred while it was hidden (and refresh if it's been a while) — so they
-  // see current data without background tabs hammering the DB.
-  useEffect(()=>{
-    function onVisible(){ if(!document.hidden && session && clientUser===null){ if(reloadPending.current || (Date.now()-(lastLoadAt.current||0) > 60000)) scheduleReload(); } }
-    document.addEventListener('visibilitychange', onVisible);
-    return ()=>document.removeEventListener('visibilitychange', onVisible);
-  },[session, clientUser]);
+  // Returning to a backgrounded tab does NOT auto-refresh anymore. Users kept
+  // losing half-finished edits when coming back from another tab, so switching
+  // tabs is now completely safe. Live updates still arrive via realtime while
+  // the tab is open (and are held whenever someone is typing — see
+  // isEditingNow), and every view has a manual refresh (↻) for an on-demand
+  // pull. We intentionally do nothing on visibilitychange.
   useEffect(()=>{ setSelectedClient(null); setSelectedSupplier(null); },[view]);
   // Pending replacement-request count for the sidebar badge (refreshes on nav).
   useEffect(()=>{ (async()=>{ try{ const { count }=await sb.from('replacement_requests').select('id',{count:'exact',head:true}).eq('status','pending'); setReplacementPending(count||0); }catch(_){} })(); },[view]);
@@ -42556,7 +42568,16 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   let reloading = false;
   try { sessionStorage.removeItem('sw-just-reloaded'); } catch(_) {}
-  function isTyping(){ const ae = document.activeElement; if(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true; return !!document.querySelector('.steeze-modal-backdrop'); }
+  // "Busy" = anything we must not interrupt with a version reload: a focused
+  // field, an open modal, OR a keystroke in the last ~25s (survives the blur
+  // that happens when you switch tabs), OR the tab being in the background.
+  function isBusy(){
+    if (document.hidden) return true;                                 // never reload a backgrounded tab
+    if (typeof recentlyTyped === 'function' && recentlyTyped()) return true;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true;
+    return !!document.querySelector('.steeze-modal-backdrop');
+  }
   function safeReload(){
     if (reloading) return;
     // LOOP BREAKER: never reload more than once per 20s. If controllerchange
@@ -42567,9 +42588,12 @@ if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
       const now = Date.now();
       const last = Number(sessionStorage.getItem('sw-last-reload') || 0);
       if (now - last < 20000) { console.warn('SW reload suppressed (loop guard)'); return; }
-      sessionStorage.setItem('sw-last-reload', String(now));
     } catch(_) {}
-    if (isTyping()) { setTimeout(safeReload, 8000); return; }  // wait until they stop typing
+    // Wait until the user is completely idle before applying a new version, so a
+    // deploy can never yank the page out from under someone who is typing or has
+    // a form open (including right after they switch back to the tab).
+    if (isBusy()) { setTimeout(safeReload, 8000); return; }
+    try { sessionStorage.setItem('sw-last-reload', String(Date.now())); } catch(_) {}
     reloading = true;
     window.location.reload();
   }
