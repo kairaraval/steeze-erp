@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 616 · Switching browser tabs is now completely safe — the OS no longer refreshes when you return to it, so half-typed edits survive even if the field lost focus. New app versions also wait until you're fully idle (no typing for a while, no form open, tab in focus) before applying, so a deploy can't wipe your work either. Live updates still arrive while you're on the page, and every view keeps its manual ↻ refresh.";
+const BUILD = "Live build 617 · Request for Payment: attaching the proof of transaction now automatically moves an RFP out of 'Needs Proof' into 'Pending Finance' — so it no longer stays stuck, and Accounting/Admin immediately get Approve & Reject. (Also fixed the one RFP that was already stuck with proof attached.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30558,7 +30558,20 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   // expense can always be attached. Persisted immediately, without closing.
   const [atts,setAtts]=useState(Array.isArray(rfp.attachments)?rfp.attachments:[]);
   const [attSaving,setAttSaving]=useState(false);
-  async function saveAtts(next){ setAtts(next); setAttSaving(true); try{ await sb.from('rfps').update({ attachments: next }).eq('id', rfp.id); }catch(e){ setMsg('Save attachment failed: '+(e.message||e)); } setAttSaving(false); }
+  async function saveAtts(next){
+    setAtts(next); setAttSaving(true);
+    try{
+      // When Purchasing attaches the proof while the RFP is still "Needs Proof",
+      // move it straight to "Pending Finance" — the proof is the only thing the
+      // Purchasing step was waiting for, so it no longer sits stuck and it lands
+      // in Accounting's queue with Approve / Reject available.
+      const advance = ((statusOverride||rfp.status)==='pending_purchasing') && (next||[]).length>0;
+      const { error } = await sb.from('rfps').update(advance ? { attachments: next, status:'pending_finance' } : { attachments: next }).eq('id', rfp.id);
+      if(error) throw error;
+      if(advance) setStatusOverride('pending_finance');
+    }catch(e){ setMsg('Save attachment failed: '+(e.message||e)); }
+    setAttSaving(false);
+  }
   const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:(code||'—'); };
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
@@ -30574,7 +30587,12 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   const requestedBy = profiles.find(p=>p.id===rfp.requested_by);
   const financeBy = profiles.find(p=>p.id===rfp.finance_approved_by);
   const adminBy = profiles.find(p=>p.id===rfp.admin_approved_by);
-  const meta = rfpMeta(rfp.status);
+  // Attaching the proof of transaction auto-advances a "Needs Proof" RFP to
+  // "Pending Finance" (see saveAtts). We keep a local override so the modal's
+  // status pill + action buttons update immediately, without closing.
+  const [statusOverride,setStatusOverride]=useState(null);
+  const status = statusOverride || rfp.status;
+  const meta = rfpMeta(status);
 
   // Purchasing gate: an RFP is held with Purchasing until the proof of
   // transaction is attached. Only then can it be sent on to Accounting.
@@ -30691,8 +30709,9 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           </div>
           <div className="text-[11px] text-slate-500 mb-2">Upload the supplier proof of transaction (to validate amount + VAT), plus receipts/invoices. You can add these anytime — even after the RFP is paid.</div>
           <AttachmentsEditor value={atts} onChange={saveAtts} scope={'rfp/'+rfp.id} inline />
-          {atts.length===0 && (rfp.status==='pending_purchasing') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: Purchasing must attach the proof of transaction before this can be sent to Accounting for payment.</div>}
-          {atts.length===0 && (rfp.status==='pending_finance') && <div className="text-[11px] text-slate-500 mt-1.5">No proof of transaction was attached by Purchasing. Accounting can still approve, but you may want to ask Purchasing to add it.</div>}
+          {atts.length===0 && (status==='pending_purchasing') && <div className="text-[11px] text-rose-600 mt-1.5">⚠ Required: Purchasing must attach the proof of transaction — once attached, this automatically moves to Accounting for payment.</div>}
+          {atts.length===0 && (status==='pending_finance') && <div className="text-[11px] text-slate-500 mt-1.5">No proof of transaction was attached by Purchasing. Accounting can still approve, but you may want to ask Purchasing to add it.</div>}
+          {atts.length>0 && (status==='pending_finance') && statusOverride && <div className="text-[11px] text-emerald-600 mt-1.5">✓ Proof attached — moved to Accounting (Pending Finance). Approve or reject below.</div>}
         </div>
 
         {/* Accounting entries — expense classifications booked when this RFP was
@@ -30769,25 +30788,25 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
 
         {/* Action buttons depend on status + role */}
         <div className="flex gap-2 flex-wrap">
-          {rfp.status==='pending_purchasing' && (isPurchasing||isAdmin) && (
+          {status==='pending_purchasing' && (isPurchasing||isAdmin) && (
             <button onClick={sendToAccounting} disabled={busy||(atts||[]).length===0} className="flex-1 py-2 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50" title={(atts||[]).length===0?'Attach the proof of transaction first':''}>📤 Send to Accounting for payment</button>
           )}
-          {rfp.status==='pending_purchasing' && !isPurchasing && !isAdmin && (
-            <div className="flex-1 text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Waiting for Purchasing to attach the proof of transaction and send this for payment.</div>
+          {status==='pending_purchasing' && !isPurchasing && !isAdmin && (
+            <div className="flex-1 text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Waiting for Purchasing to attach the proof of transaction — it moves here automatically once they do.</div>
           )}
-          {rfp.status==='pending_finance' && (isAccounting||isAdmin) && (
+          {status==='pending_finance' && (isAccounting||isAdmin) && (
             <>
               <button onClick={approveFinance} disabled={busy} className="flex-1 py-2 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">✓ Approve & route to Admin</button>
               <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
             </>
           )}
-          {rfp.status==='pending_admin' && isAdmin && (
+          {status==='pending_admin' && isAdmin && (
             <>
               <button onClick={approveAdmin} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">✓ Admin approve</button>
               <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
             </>
           )}
-          {(rfp.status==='approved'||rfp.status==='partial') && (isAccounting||isAdmin) && (
+          {(status==='approved'||status==='partial') && (isAccounting||isAdmin) && (
             <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 {rfp.status==='partial'?`Pay balance (${peso(rfpBalance(rfp))})`:'Create Voucher & Pay'}</button>
           )}
         </div>
