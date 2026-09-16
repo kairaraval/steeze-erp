@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 617 · Request for Payment: attaching the proof of transaction now automatically moves an RFP out of 'Needs Proof' into 'Pending Finance' — so it no longer stays stuck, and Accounting/Admin immediately get Approve & Reject. (Also fixed the one RFP that was already stuck with proof attached.)";
+const BUILD = "Live build 618 · Fixed the real cause of stuck 'Needs Proof' RFPs: proof attached to the PO wasn't carried onto the RFP. Now you can't request payment on a PO without a proof of transaction attached, that proof travels onto the RFP automatically, and the RFP goes straight to Pending Finance. Cleared all RFPs that were stuck this way (their PO proof is now on the RFP).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27751,7 +27751,12 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   async function requestPayment(){
     if(!isEdit) return;
     if(existing.rfp_id){ setMsg('This PO already has a Request for Payment. Check the RFP queue.'); return; }
-    if(!confirm(`Create a Request for Payment for this PO?\n\nAmount: ${peso(netPayable)}\nSupplier: ${supplier?.company||'(none)'}\n\nThe RFP is created and held with Purchasing. Open it, upload the PROOF OF TRANSACTION, then click "Send to Accounting for payment". Accounting can't act on it until the proof is attached.`)) return;
+    // GATE: proof of transaction must be attached to the PO before it can be
+    // submitted for payment. This is the single Purchasing gate — it guarantees
+    // the RFP is never created "empty" and stuck at Needs Proof.
+    const poAtts = f.attachments||[];
+    if(poAtts.length===0){ setMsg('⚠ Attach the proof of transaction (supplier invoice / receipt) to this PO below before requesting payment.'); return; }
+    if(!confirm(`Create a Request for Payment for this PO?\n\nAmount: ${peso(netPayable)}\nSupplier: ${supplier?.company||'(none)'}\n\nThe proof of transaction attached here goes with it, so the RFP goes straight to Accounting for approval.`)) return;
     setBusy(true); setMsg('');
     try {
       const today = new Date().toISOString().slice(0,10);
@@ -27771,13 +27776,16 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
         bank_name: f.transfer_bank_name || supplier?.bank_name || null,
         bank_account_name: f.transfer_bank_account_name || supplier?.bank_account_name || null,
         bank_account_number: f.transfer_bank_account_number || supplier?.bank_account_number || null,
-        status: 'pending_purchasing', requested_by: profile.id,
+        // Carry the PO's proof of transaction onto the RFP so Accounting sees it,
+        // and — because the proof is present — send it straight to Finance.
+        attachments: poAtts,
+        status: 'pending_finance', requested_by: profile.id,
       }).select().single();
       if(rErr) throw rErr;
       // Stamp PO with rfp_id
       await sb.from('purchase_orders').update({ rfp_id: rfpData.id }).eq('id', existing.id);
       setBusy(false);
-      alert(`✅ ${number} created and held with Purchasing.\n\nNext: open ${number} in the Request for Payment list, upload the PROOF OF TRANSACTION, then click "Send to Accounting for payment".`);
+      alert(`✅ ${number} created and sent to Accounting for payment (proof of transaction attached).`);
       onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -27960,7 +27968,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
             </div>
             <div className="flex gap-2">
               {existing.payment_status!=='paid' && !existing.rfp_id && (
-                <button onClick={requestPayment} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-50">📝 Request for Payment</button>
+                <button onClick={requestPayment} disabled={busy||(f.attachments||[]).length===0} title={(f.attachments||[]).length===0?'Attach the proof of transaction below first':''} className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-50">📝 Request for Payment</button>
               )}
               {existing.payment_status==='paid'
                 ? <button onClick={markUnpaid} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">↺ Mark unpaid</button>
