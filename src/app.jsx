@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 619 · Deploy refresh — if you can see this build number, Vercel is deploying the latest code again. This release rolls up everything since 607: the egress/auto-refresh fixes (the OS no longer constantly reloads the whole dataset, which was driving the data-usage blowout), the tab-switch 'lost typing' fix, the Fabric Calculator, HR quality-escalation reports, lead attachment previews + Excel upload, board sort toggles, and the RFP proof-of-transaction fixes.";
+const BUILD = "Live build 620 · Egress trim (data-usage): the app was downloading Leads, Clients, Sales Orders and Bank Accounts twice on every refresh (a fast preview fetch plus a duplicate in the main load). The duplicate download is removed — same data, same speed, but ~1.6 MB less per refresh per person. No behaviour change.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41174,8 +41174,8 @@ function App(){
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null)),
-      fetchAll(()=>sb.from('clients').select('*').order('company')),
-      fetchAll(()=>sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
+      Promise.resolve({data:null}),  /* clients — already streamed above; skip the duplicate download */
+      Promise.resolve({data:null}),  /* leads (~1.2MB) — already streamed above; skip the duplicate download */
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       fetchAll(()=>sb.from('lead_activity').select('lead_id').eq('type','comment')),
@@ -41194,9 +41194,9 @@ function App(){
       fetchAll(()=>sb.from('styles').select('*').order('created_at',{ascending:false})),
       sb.from('pending_invites').select('*').order('created_at',{ascending:false}),
       // Finance Sprint 1 — fail-safe with empty fallback if SQL hasn't been run yet
-      fetchAll(()=>sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
+      Promise.resolve({data:null}),  /* sales_orders — already streamed above; skip the duplicate download */
       fetchAll(()=>sb.from('sales_order_payments').select('*').order('date',{ascending:false})),
-      sb.from('bank_accounts').select('*').order('position'),
+      Promise.resolve({data:null}),  /* bank_accounts — already streamed above; skip the duplicate download */
       fetchAll(()=>sb.from('bank_transactions').select('*').order('date',{ascending:false})),
       fetchAll(()=>sb.from('rfps').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       fetchAll(()=>sb.from('vouchers').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
@@ -41258,7 +41258,7 @@ function App(){
     setPendingInvites(pi && pi.data ? pi.data : []);
     // Map each OS account to its linked 201 photo so avatars can show the person.
     const photoByProfile={}; (emp && emp.data ? emp.data : []).forEach(e=>{ if(e.profile_id && e.photo_url) photoByProfile[e.profile_id]=e.photo_url; });
-    if(pf.data) setProfile(pf.data.photo_url ? pf.data : (photoByProfile[pf.data.id] ? { ...pf.data, photo_url: photoByProfile[pf.data.id] } : pf.data)); setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return (pr.data||[]).map(p=>{ const withSig = sig[p.id]!==undefined?{...p,signature_data:sig[p.id]}:p; return photoByProfile[p.id] ? { ...withSig, photo_url: photoByProfile[p.id] } : withSig; }); }); setClients(cl.data||[]); setLeads(ld.data||[]);
+    if(pf.data) setProfile(pf.data.photo_url ? pf.data : (photoByProfile[pf.data.id] ? { ...pf.data, photo_url: photoByProfile[pf.data.id] } : pf.data)); setProfiles(ps=>{ const sig={}; (ps||[]).forEach(p=>{ if(p.signature_data) sig[p.id]=p.signature_data; }); return (pr.data||[]).map(p=>{ const withSig = sig[p.id]!==undefined?{...p,signature_data:sig[p.id]}:p; return photoByProfile[p.id] ? { ...withSig, photo_url: photoByProfile[p.id] } : withSig; }); }); if(cl && cl.data) setClients(cl.data); if(ld && ld.data) setLeads(ld.data); /* else: keep the values already set by the streamed fetch above (dedupe) */
     const leadMentions=(lm.data||[]).map(r=>({ ...r, source:'lead' }));
     const deptMentions=(dm.data||[]).map(r=>({ ...r, source:r.job_type }));
     // Sales-order mentions: same shape, source='sales_order'. Graceful-fail
@@ -41328,14 +41328,14 @@ function App(){
     setSampleJobs(sj.data||[]);
     // Finance Sprint 1 — Supabase returns error rows when the table doesn't exist
     // yet (SQL not run). Default to [] in that case so nothing crashes.
-    setSalesOrders(so && !so.error ? (so.data||[]) : []);
+    if(so && so.data) setSalesOrders(so.data); /* else keep streamed value (dedupe) */
     // Estimates — admin/accounting only (enforced by RLS). Separate fetch so it
     // doesn't bloat the main Promise.all; graceful empty for other roles.
     try { const est = await sb.from('estimates').select('*').order('created_at',{ascending:false}); setEstimates(est && !est.error ? (est.data||[]) : []); } catch(_){ setEstimates([]); }
     // Invoices — RLS returns all for admin/accounting, own-project rows for managers, empty for others.
     try { const inv = await sb.from('invoices').select('*').order('created_at',{ascending:false}); setInvoices(inv && !inv.error ? (inv.data||[]) : []); } catch(_){ setInvoices([]); }
     setSoPayments(sop && !sop.error ? (sop.data||[]) : []);
-    setBankAccounts(ba && !ba.error ? (ba.data||[]) : []);
+    if(ba && ba.data) setBankAccounts(ba.data); /* else keep streamed value (dedupe) */
     setBankTransactions(bt && !bt.error ? (bt.data||[]) : []);
     setRfps(rf && !rf.error ? (rf.data||[]) : []);
     setVouchers(vc && !vc.error ? (vc.data||[]) : []);
