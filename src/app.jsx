@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 618 · Fixed the real cause of stuck 'Needs Proof' RFPs: proof attached to the PO wasn't carried onto the RFP. Now you can't request payment on a PO without a proof of transaction attached, that proof travels onto the RFP automatically, and the RFP goes straight to Pending Finance. Cleared all RFPs that were stuck this way (their PO proof is now on the RFP).";
+const BUILD = "Live build 619 · Deploy refresh — if you can see this build number, Vercel is deploying the latest code again. This release rolls up everything since 607: the egress/auto-refresh fixes (the OS no longer constantly reloads the whole dataset, which was driving the data-usage blowout), the tab-switch 'lost typing' fix, the Fabric Calculator, HR quality-escalation reports, lead attachment previews + Excel upload, board sort toggles, and the RFP proof-of-transaction fixes.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
