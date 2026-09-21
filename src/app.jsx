@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 620 · Egress trim (data-usage): the app was downloading Leads, Clients, Sales Orders and Bank Accounts twice on every refresh (a fast preview fetch plus a duplicate in the main load). The duplicate download is removed — same data, same speed, but ~1.6 MB less per refresh per person. No behaviour change.";
+const BUILD = "Live build 621 · You can now change your own password in My Profile → Change password (no dashboard needed). It takes effect immediately and you stay signed in. Tip: after changing it, update the saved password in your phone/browser so autofill stops entering the old one. (A login-screen 'Forgot password?' for locked-out users is next.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19915,6 +19915,46 @@ function MySignatureCard({ profile, reload }){
   );
 }
 
+// ChangePasswordCard — lets a signed-in user set a new password for their own
+// account, right from My Profile (no dashboard needed). Uses Supabase auth on
+// the current session, so no email round-trip is required.
+function ChangePasswordCard({ profile }){
+  const [pw1,setPw1]=useState(''); const [pw2,setPw2]=useState('');
+  const [show,setShow]=useState(false);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null); // {type:'ok'|'err', text}
+  async function save(){
+    setMsg(null);
+    if((pw1||'').length<8){ setMsg({type:'err',text:'Password must be at least 8 characters.'}); return; }
+    if(pw1!==pw2){ setMsg({type:'err',text:'The two passwords do not match.'}); return; }
+    setBusy(true);
+    try{
+      const { error }=await sb.auth.updateUser({ password: pw1 });
+      if(error) throw error;
+      setBusy(false); setPw1(''); setPw2('');
+      setMsg({type:'ok',text:'Password changed. Use your new password next time you sign in — and update it in your phone/browser saved passwords so autofill doesn’t enter the old one.'});
+    }catch(e){ setBusy(false); setMsg({type:'err',text:'Could not change password: '+(e.message||String(e))}); }
+  }
+  return (
+    <div className="bg-white border rounded-xl p-5 mt-6">
+      <div className="text-sm font-bold text-slate-800 mb-1">🔒 Change password</div>
+      <div className="text-xs text-slate-500 mb-3">Set a new password for your own account ({profile.email}). Takes effect immediately — you stay signed in here.</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">New password</label>
+          <input type={show?'text':'password'} className="input mt-0.5" value={pw1} onChange={e=>setPw1(e.target.value)} placeholder="At least 8 characters" autoComplete="new-password" />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">Confirm new password</label>
+          <input type={show?'text':'password'} className="input mt-0.5" value={pw2} onChange={e=>setPw2(e.target.value)} placeholder="Re-type it" autoComplete="new-password" />
+        </div>
+      </div>
+      <label className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-2 cursor-pointer w-max"><input type="checkbox" checked={show} onChange={e=>setShow(e.target.checked)} /> Show passwords</label>
+      {msg && <div className={`text-xs mt-2 ${msg.type==='ok'?'text-emerald-600':'text-rose-600'}`}>{msg.text}</div>}
+      <button disabled={busy||!pw1||!pw2} onClick={save} className="mt-3 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Change password'}</button>
+    </div>
+  );
+}
+
 function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
@@ -20162,6 +20202,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
 
       {/* Signature lives at the bottom so the sales progress shows first. */}
       <MySignatureCard profile={profile} reload={reload} />
+      <ChangePasswordCard profile={profile} />
     </div>
   );
 }
