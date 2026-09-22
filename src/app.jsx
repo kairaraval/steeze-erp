@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 621 · You can now change your own password in My Profile → Change password (no dashboard needed). It takes effect immediately and you stay signed in. Tip: after changing it, update the saved password in your phone/browser so autofill stops entering the old one. (A login-screen 'Forgot password?' for locked-out users is next.)";
+const BUILD = "Live build 622 · Fixed the OS 'keeps refreshing / can't work' loop: the app no longer force-reloads the page when a new version is deployed (that auto-reload could loop every ~20s when the CDN served the service worker inconsistently). New versions now apply on your next normal refresh instead of yanking the page, and sw.js is served no-cache so all devices settle on one version.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42618,74 +42618,22 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 
 // PWA: register the service worker so the app can install + work offline.
 // Only runs on https or localhost (browser requirement).
-// Auto-update: when a NEW service worker takes control of the page, force a
-// reload so the user immediately sees the latest build. Without this, devices
-// keep serving stale cached HTML / icons until the user manually clears data.
-// IMPORTANT: we guard against infinite reload loops with two checks:
-//   1. Skip the initial controller assignment (first time SW takes over a
-//      previously-uncontrolled page) — that fires on every fresh page load
-//      after a SW unregister and would loop us forever.
-//   2. Mark sessionStorage when we DO reload so the very next page-load
-//      ignores the immediate controllerchange that follows.
-// Update strategy: AUTO-UPDATE, reliably. A new build activates itself and the
-// page reloads to pick it up — this never gets "stuck" the way the manual
-// banner could. The one safety: we do NOT reload while the user is actively
-// typing in a field, so an in-progress form isn't wiped mid-keystroke; the
-// reload waits until they pause. No sessionStorage guards (they were the cause
-// of the stuck "Updating…" state).
+//
+// UPDATE STRATEGY: NO forced auto-reload. We used to call location.reload()
+// whenever a new service worker took control, which caused a whole-office
+// "keeps refreshing every ~20s / can't work" loop whenever the CDN served the
+// sw.js file inconsistently across edge nodes (version ping-pong). The app
+// shell is fetched network-first, so a NORMAL page refresh already picks up the
+// latest build — we simply let the new version apply on the user's next natural
+// reload instead of yanking the page. The new worker installs quietly in the
+// background; it never interrupts anyone mid-work.
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
-  let reloading = false;
-  try { sessionStorage.removeItem('sw-just-reloaded'); } catch(_) {}
-  // "Busy" = anything we must not interrupt with a version reload: a focused
-  // field, an open modal, OR a keystroke in the last ~25s (survives the blur
-  // that happens when you switch tabs), OR the tab being in the background.
-  function isBusy(){
-    if (document.hidden) return true;                                 // never reload a backgrounded tab
-    if (typeof recentlyTyped === 'function' && recentlyTyped()) return true;
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true;
-    return !!document.querySelector('.steeze-modal-backdrop');
-  }
-  function safeReload(){
-    if (reloading) return;
-    // LOOP BREAKER: never reload more than once per 20s. If controllerchange
-    // keeps firing (version ping-pong / stuck SW), this stops the endless
-    // "blinking / refreshing" loop after a single reload. The timestamp lives in
-    // sessionStorage so it survives the reload within the same tab.
-    try {
-      const now = Date.now();
-      const last = Number(sessionStorage.getItem('sw-last-reload') || 0);
-      if (now - last < 20000) { console.warn('SW reload suppressed (loop guard)'); return; }
-    } catch(_) {}
-    // Wait until the user is completely idle before applying a new version, so a
-    // deploy can never yank the page out from under someone who is typing or has
-    // a form open (including right after they switch back to the tab).
-    if (isBusy()) { setTimeout(safeReload, 8000); return; }
-    try { sessionStorage.setItem('sw-last-reload', String(Date.now())); } catch(_) {}
-    reloading = true;
-    window.location.reload();
-  }
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!navigator.serviceWorker.controller) return;   // very first SW install — no reload
-    safeReload();
-  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then(reg => {
-      setInterval(() => reg.update().catch(()=>{}), 30 * 60 * 1000);  // check every 30 min
-      // Activate an already-waiting worker immediately.
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-      reg.addEventListener('updatefound', () => {
-        const nw = reg.installing;
-        if (!nw) return;
-        nw.addEventListener('statechange', () => {
-          // New build finished installing while the old one still controls the
-          // page → tell it to take over. controllerchange then triggers the
-          // (typing-aware) reload.
-          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            nw.postMessage({ type: 'SKIP_WAITING' });
-          }
-        });
-      });
+      // Periodically check for a new build so the cached worker doesn't go
+      // stale forever, but do NOT force-activate or reload — the update is
+      // picked up the next time the user refreshes on their own.
+      setInterval(() => reg.update().catch(()=>{}), 60 * 60 * 1000);  // hourly, silent
     }).catch(err => console.warn('SW registration failed:', err));
   });
 }
