@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 622 · Fixed the OS 'keeps refreshing / can't work' loop: the app no longer force-reloads the page when a new version is deployed (that auto-reload could loop every ~20s when the CDN served the service worker inconsistently). New versions now apply on your next normal refresh instead of yanking the page, and sw.js is served no-cache so all devices settle on one version.";
+const BUILD = "Live build 623 · Added a gentle 'New version available — tap to refresh' pill at the bottom of the screen. It appears only when a newer build is ready; tap it to update when you're ready, or dismiss it. The OS never force-reloads on its own anymore, so it can't interrupt your work.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40921,6 +40921,10 @@ function ClientPortal({ session, clientUser, onSignOut }){
 /* ----------------------- App ----------------------- */
 function App(){
   const [session,setSession]=useState(undefined); const [profile,setProfile]=useState(null); const [profiles,setProfiles]=useState([]);
+  // "New version available" pill — set when the service worker reports a newer
+  // build is installed and waiting (we never auto-reload; the user taps to apply).
+  const [updateReady,setUpdateReady]=useState(()=> typeof window!=='undefined' && !!window.__steezeUpdateReady);
+  useEffect(()=>{ const on=()=>setUpdateReady(true); window.addEventListener('steeze-update-ready', on); if(window.__steezeUpdateReady) setUpdateReady(true); return ()=>window.removeEventListener('steeze-update-ready', on); },[]);
   // Client-portal accounts: an external client login is linked to a client
   // company via client_users (and has NO staff profile). undefined = still
   // checking, null = staff (not a client), object = a client account → we render
@@ -42604,6 +42608,13 @@ function App(){
       )}
 
       {profile.role==='admin' && <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>}
+      {updateReady && (
+        <div className="no-print fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-indigo-600 text-white rounded-full shadow-lg pl-4 pr-2 py-2 text-sm">
+          <span>✨ New version available</span>
+          <button onClick={()=>{ try{ window.location.reload(); }catch(_){ } }} className="bg-white text-indigo-700 font-semibold rounded-full px-3 py-1 text-xs hover:bg-indigo-50">Tap to refresh</button>
+          <button onClick={()=>setUpdateReady(false)} title="Dismiss" className="text-white/70 hover:text-white text-xs px-1">✕</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -42628,12 +42639,25 @@ ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App 
 // reload instead of yanking the page. The new worker installs quietly in the
 // background; it never interrupts anyone mid-work.
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
+  // When a newer build has installed and is waiting, we DON'T reload — we just
+  // announce it so the app can show a gentle "New version available — tap to
+  // refresh" pill. The user decides when to refresh (nothing is ever yanked).
+  function announceUpdate(){ try { window.__steezeUpdateReady = true; window.dispatchEvent(new CustomEvent('steeze-update-ready')); } catch(_){} }
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then(reg => {
-      // Periodically check for a new build so the cached worker doesn't go
-      // stale forever, but do NOT force-activate or reload — the update is
-      // picked up the next time the user refreshes on their own.
-      setInterval(() => reg.update().catch(()=>{}), 60 * 60 * 1000);  // hourly, silent
+      // A build was already waiting when this page loaded → update is ready.
+      if (reg.waiting && navigator.serviceWorker.controller) announceUpdate();
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          // New build finished installing while an old one still controls the
+          // page → a fresh version is available. Announce, don't reload.
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) announceUpdate();
+        });
+      });
+      // Check hourly so the pill can appear without a manual check.
+      setInterval(() => reg.update().catch(()=>{}), 60 * 60 * 1000);
     }).catch(err => console.warn('SW registration failed:', err));
   });
 }
