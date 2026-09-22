@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 623 · Added a gentle 'New version available — tap to refresh' pill at the bottom of the screen. It appears only when a newer build is ready; tap it to update when you're ready, or dismiss it. The OS never force-reloads on its own anymore, so it can't interrupt your work.";
+const BUILD = "Live build 624 · Build telemetry: each person's device now records which build it's running when the app loads, so admins can see the whole team's versions and spot anyone stuck on an old cached build. Plus the previous fixes: no force-reload loop, and the gentle 'New version available' pill.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40925,6 +40925,16 @@ function App(){
   // build is installed and waiting (we never auto-reload; the user taps to apply).
   const [updateReady,setUpdateReady]=useState(()=> typeof window!=='undefined' && !!window.__steezeUpdateReady);
   useEffect(()=>{ const on=()=>setUpdateReady(true); window.addEventListener('steeze-update-ready', on); if(window.__steezeUpdateReady) setUpdateReady(true); return ()=>window.removeEventListener('steeze-update-ready', on); },[]);
+  // Build telemetry: record which build this person's device is actually running,
+  // so admins can spot anyone stuck on a stale cached version. One row per user,
+  // refreshed each time their app loads. Fails silently — never blocks the app.
+  useEffect(()=>{
+    if(!profile || !profile.id) return;
+    try{
+      const num=(String(BUILD).match(/build\s+(\d+)/i)||[])[1]||null;
+      sb.from('device_builds').upsert({ profile_id:profile.id, build:num, build_label:String(BUILD).slice(0,90), user_agent:(navigator.userAgent||'').slice(0,300), seen_at:new Date().toISOString() }, { onConflict:'profile_id' }).then(()=>{}, ()=>{});
+    }catch(_){}
+  },[profile && profile.id]);
   // Client-portal accounts: an external client login is linked to a client
   // company via client_users (and has NO staff profile). undefined = still
   // checking, null = staff (not a client), object = a client account → we render
