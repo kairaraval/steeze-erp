@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 625 · The 'New version available' pill is now accurate: it compares the build you're running against the deployed build, so it appears only when you're genuinely behind and disappears on its own once you refresh onto the latest (no more lingering after you've updated).";
+const BUILD = "Live build 626 · Subcon/sewing payroll payout now guards against duplicates: if a payout for the same period already exists, it warns before creating a second voucher + bank deduction — so a slow or double-tapped Confirm can no longer double the expense.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21217,6 +21217,23 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
     if(!(lines||[]).length){ setMsg('Nothing to pay in this period.'); return; }
     if(kind!=='sewing' && !bankId){ setMsg('Pick the bank this batch is paid from.'); return; }
     setBusy(true); setMsg('');
+    // IDEMPOTENCY GUARD: a slow/double-tapped "Confirm" used to create two
+    // vouchers + two bank deductions for the same batch (double expense). Before
+    // creating anything, check for an existing payout covering this exact period
+    // and require an explicit override to make a second one.
+    try {
+      const { data: dup } = await sb.from('payroll_payouts').select('id')
+        .eq('kind', kind).eq('period_start', periodStart).eq('period_end', periodEnd)
+        .is('deleted_at', null).limit(1);
+      if(dup && dup.length){
+        setBusy(false);
+        if(!window.confirm('⚠ A payout for this exact period was already recorded.\n\nCreating another will DOUBLE the expense and the bank deduction. Only continue if you truly need a second, separate payout.\n\nCreate another payout anyway?')){
+          setMsg('Cancelled — the existing payout for this period stands. No duplicate created.');
+          return;
+        }
+        setBusy(true);
+      }
+    } catch(_){}
     try {
       const today = new Date().toISOString().slice(0,10);
       const label = `${title} · ${fmtDate(periodStart)}–${fmtDate(periodEnd)}`;
