@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 626 · Subcon/sewing payroll payout now guards against duplicates: if a payout for the same period already exists, it warns before creating a second voucher + bank deduction — so a slow or double-tapped Confirm can no longer double the expense.";
+const BUILD = "Live build 627 · Protects in-progress work on Windows laptops: Chrome/Edge were auto-unloading the OS tab in the background to save memory and reloading it (losing unsaved forms) when you switched back. The OS now tells the browser 'there's unsaved work here — don't discard this tab' whenever you're mid-edit, and warns before an accidental close. (For a full guarantee, also add the site to the browser's Memory Saver exceptions — steps shared with Kaira.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41214,6 +41214,19 @@ function App(){
     const ae=document.activeElement;
     return !!(ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA' || ae.tagName==='SELECT' || ae.isContentEditable));
   }
+  // Chrome/Edge (esp. on Windows laptops with less RAM) auto-DISCARD inactive
+  // background tabs to save memory and reload them from scratch on return —
+  // which wipes an in-progress form. A registered beforeunload handler marks the
+  // tab as having unsaved state so the browser won't silently discard it, and it
+  // warns before an accidental close/navigate. We only block when the person is
+  // actually mid-edit, so it never nags during normal browsing.
+  useEffect(()=>{
+    function onBeforeUnload(e){
+      if(isEditingNow()){ e.preventDefault(); e.returnValue = ''; return ''; }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return ()=>window.removeEventListener('beforeunload', onBeforeUnload);
+  },[]);
   function scheduleReload(){
     reloadPending.current = true;
     if(typeof document !== 'undefined' && document.hidden) return; // defer until visible
