@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 627 · Protects in-progress work on Windows laptops: Chrome/Edge were auto-unloading the OS tab in the background to save memory and reloading it (losing unsaved forms) when you switched back. The OS now tells the browser 'there's unsaved work here — don't discard this tab' whenever you're mid-edit, and warns before an accidental close. (For a full guarantee, also add the site to the browser's Memory Saver exceptions — steps shared with Kaira.)";
+const BUILD = "Live build 628 · Request for Payment view upgraded for Finance: added Due Date (red when overdue), Proof (Complete/Missing/To Follow) and Payment Method columns; a search box; sortable column headers; group-by-supplier with subtotals; a per-row ⋯ Actions menu; and pagination (10 per page) so the list stays fast. 'Pay Together as One Check' and A/P voucher preview are unchanged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30521,6 +30521,14 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   const apForRfp = (rfpId)=> (apVouchers||[]).find(a=>a.rfp_id===rfpId && !a.deleted_at);
   const [selected,setSelected]=useState({}); // { rfpId: true } for approved RFPs to batch-pay
   const [filter,setFilter]=useState('');
+  const [search,setSearch]=useState('');
+  const [sortKey,setSortKey]=useState('date');
+  const [sortDir,setSortDir]=useState('desc');
+  const [page,setPage]=useState(1);
+  const [groupBy,setGroupBy]=useState(false);
+  const [menuFor,setMenuFor]=useState(null); // RFP id whose ⋯ menu is open
+  const PER_PAGE=10;
+  useEffect(()=>{ setPage(1); },[filter,search,sortKey,sortDir,groupBy]);
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canPay = isAdmin || isAccounting;
@@ -30548,7 +30556,24 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
     reload && reload();
   }
   const counts = RFP_STATUSES.reduce((a,s)=>{ a[s.key]=rfps.filter(r=>r.status===s.key).length; return a; }, {});
-  const rows = rfps.filter(r=>!filter||r.status===filter);
+  const poNum = (r)=>{ const po=orders.find(o=>o.id===r.po_id); return po?po.number:''; };
+  const proofState = (r)=> (Array.isArray(r.attachments)&&r.attachments.length>0) ? 'complete' : (r.status==='pending_purchasing' ? 'missing' : 'tofollow');
+  const payMethodLabel = (m)=> m==='bank_transfer'?'Bank Transfer' : m==='check'?'Check' : m==='cash'?'Cash' : m==='gcash'?'GCash' : (m? m.replace(/_/g,' ') : '—');
+  // Filter (status card + search) → sort → optional supplier grouping → paginate.
+  const q=search.trim().toLowerCase();
+  let list = rfps.filter(r=> (!filter||r.status===filter) && (!q || `${r.number||''} ${r.supplier_name||''} ${poNum(r)} ${r.amount||''}`.toLowerCase().includes(q)));
+  const dir = sortDir==='asc'?1:-1;
+  const sortVal=(r)=>{ switch(sortKey){ case 'number': return r.number||''; case 'due': return r.due_date||''; case 'supplier': return (r.supplier_name||'').toLowerCase(); case 'amount': return Number(r.amount||0); case 'status': return r.status||''; default: return r.date||''; } };
+  list = list.slice().sort((a,b)=>{ const va=sortVal(a),vb=sortVal(b); if(va<vb) return -1*dir; if(va>vb) return 1*dir; return String(b.date||'').localeCompare(String(a.date||'')); });
+  // Per-supplier totals across the whole filtered set (for the group subtotal header).
+  const supTotals={}, supCounts={};
+  list.forEach(r=>{ const k=r.supplier_name||'—'; supTotals[k]=(supTotals[k]||0)+Number(r.amount||0); supCounts[k]=(supCounts[k]||0)+1; });
+  if(groupBy){ list = list.slice().sort((a,b)=>{ const sa=(a.supplier_name||'').toLowerCase(), sb=(b.supplier_name||'').toLowerCase(); if(sa<sb)return -1; if(sa>sb)return 1; return String(b.date||'').localeCompare(String(a.date||'')); }); }
+  const totalPages=Math.max(1, Math.ceil(list.length/PER_PAGE));
+  const curPage=Math.min(page, totalPages);
+  const pageRows=list.slice((curPage-1)*PER_PAGE, curPage*PER_PAGE);
+  const colCount = canPay ? 12 : 11;
+  const Th=({k,label,align})=> <th onClick={()=>{ if(sortKey===k) setSortDir(d=>d==='asc'?'desc':'asc'); else { setSortKey(k); setSortDir(k==='amount'||k==='date'||k==='due'?'desc':'asc'); } }} className={`px-3 py-2 cursor-pointer select-none hover:text-slate-700 ${align==='right'?'text-right':'text-left'}`}>{label} <span className="text-slate-300">{sortKey===k?(sortDir==='asc'?'▲':'▼'):'↕'}</span></th>;
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -30565,37 +30590,83 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <div className="text-xl font-bold">{counts[s.key]||0}</div>
         </button>
       ))}</div>
-      {canPay && (counts.approved||0) > 0 && (
-        <div className="mb-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800 flex items-center justify-between gap-2 flex-wrap">
-          <div>💡 Paying a supplier with terms (e.g. every 15th &amp; 30th)? Tick the <strong>Approved</strong> RFPs for that supplier below, then <strong>Pay together as one check</strong>.</div>
-          <button onClick={()=>setFilter(filter==='approved'?'':'approved')} className={`px-2 py-1 rounded font-semibold ${filter==='approved'?'bg-blue-600 text-white':'bg-white border border-blue-300 text-blue-700'}`}>{filter==='approved'?'Showing approved':'Show approved only'}</button>
+      {/* Toolbar: search + filters */}
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search RFP #, supplier, PO #, or amount…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-full sm:w-80" />
+        <div className="flex items-center gap-3">
+          {canPay && <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={filter==='approved'} onChange={()=>setFilter(filter==='approved'?'':'approved')} /> Approved only</label>}
+          <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={groupBy} onChange={e=>setGroupBy(e.target.checked)} /> Group by supplier</label>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          {canPay && <th className="px-2 py-2 w-8"></th>}
+          <Th k="number" label="RFP #" />
+          <Th k="date" label="Date" />
+          <Th k="due" label="Due Date" />
+          <Th k="supplier" label="Supplier" />
+          <th className="text-left px-3 py-2">PO #</th>
+          <Th k="amount" label="Amount" align="right" />
+          <Th k="status" label="Status" />
+          <th className="text-left px-3 py-2">A/P Voucher</th>
+          <th className="text-left px-3 py-2">Proof</th>
+          <th className="text-left px-3 py-2">Payment Method</th>
+          <th className="text-right px-3 py-2">Actions</th>
+        </tr></thead>
+        <tbody>{(()=>{ let prev=null; const out=[];
+          pageRows.forEach(r=>{
+            const sup=r.supplier_name||'—';
+            if(groupBy && sup!==prev && supCounts[sup]>=2){ out.push(<tr key={'g-'+r.id} className="bg-slate-100/70"><td colSpan={colCount} className="px-3 py-1.5 text-xs font-semibold text-slate-600">{sup} — {supCounts[sup]} RFPs — Total {peso(supTotals[sup])}</td></tr>); }
+            prev=sup;
+            const meta=rfpMeta(r.status); const selectable = r.status==='approved' && canPay; const ap=apForRfp(r.id); const pf=proofState(r);
+            const overdue = r.due_date && !['paid','rejected'].includes(r.status) && new Date(r.due_date+'T00:00:00') < new Date(new Date().toDateString());
+            out.push(
+            <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(r)}>
+              {canPay && <td className="px-2 py-2 text-center" onClick={(e)=>e.stopPropagation()}>{selectable ? <input type="checkbox" checked={!!selected[r.id]} onChange={()=>toggleSel(r.id)} /> : null}</td>}
+              <td className="px-3 py-2 font-mono text-xs">{r.number}</td>
+              <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
+              <td className="px-3 py-2 text-xs">{r.due_date ? <span className={overdue?'text-rose-600 font-semibold':'text-slate-600'}>{fmtDate(r.due_date)}</span> : <span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2">{r.supplier_name||'—'}</td>
+              <td className="px-3 py-2 text-xs font-mono">{poNum(r)||'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}</td>
+              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{!ap ? <span className="text-[11px] text-slate-400">—</span> : (()=>{ const am=(Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status); return (
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${am.color}`}>{am.label}</span>
+                  <button onClick={()=>setViewingAp(ap)} className="text-[11px] text-indigo-600 hover:underline" title={`Preview ${ap.number}`}>👁 Preview</button>
+                </div>
+              ); })()}</td>
+              <td className="px-3 py-2">{pf==='complete' ? <span className="text-[11px] text-emerald-700 font-medium">🧾 Complete</span> : pf==='missing' ? <span className="text-[11px] text-rose-600 font-medium">⚠ Missing</span> : <span className="text-[11px] text-blue-600 font-medium">To Follow</span>}</td>
+              <td className="px-3 py-2 text-xs">{payMethodLabel(r.payment_method)}</td>
+              <td className="px-3 py-2 text-right relative" onClick={(e)=>e.stopPropagation()}>
+                <button onClick={()=>setMenuFor(menuFor===r.id?null:r.id)} className="px-2 py-1 rounded hover:bg-slate-100 text-slate-500 text-lg leading-none" title="Actions">⋯</button>
+                {menuFor===r.id && (<>
+                  <div className="fixed inset-0 z-40" onClick={()=>setMenuFor(null)} />
+                  <div className="absolute right-2 top-9 z-50 bg-white border rounded-lg shadow-lg py-1 text-xs w-44 text-left">
+                    <button onClick={()=>{ setMenuFor(null); setEditing(r); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50">Open</button>
+                    {(r.status==='approved'||r.status==='partial') && canPay && <button onClick={()=>{ setMenuFor(null); setPaying(r); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-emerald-700">💰 {r.status==='partial'?'Pay balance':'Pay'}</button>}
+                    {ap && <button onClick={()=>{ setMenuFor(null); setViewingAp(ap); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50">👁 Preview A/P voucher</button>}
+                    {isAdmin && <button onClick={()=>{ setMenuFor(null); deleteRFP(r); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-rose-600">Delete</button>}
+                  </div>
+                </>)}
+              </td>
+            </tr>);
+          });
+          if(pageRows.length===0) out.push(<tr key="empty"><td colSpan={colCount} className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>);
+          return out;
+        })()}</tbody>
+      </table></div></div>
+      {/* Pagination */}
+      {list.length>0 && (
+        <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+          <div className="text-slate-500 text-xs">Showing {(curPage-1)*PER_PAGE+1}–{Math.min(curPage*PER_PAGE, list.length)} of {list.length} RFP{list.length===1?'':'s'}</div>
+          {totalPages>1 && <div className="flex items-center gap-1">
+            <button disabled={curPage<=1} onClick={()=>setPage(curPage-1)} className="px-2.5 py-1 rounded-lg border text-sm disabled:opacity-40 hover:bg-slate-50">‹ Prev</button>
+            <span className="px-2 text-xs text-slate-500">Page {curPage} of {totalPages}</span>
+            <button disabled={curPage>=totalPages} onClick={()=>setPage(curPage+1)} className="px-2.5 py-1 rounded-lg border text-sm disabled:opacity-40 hover:bg-slate-50">Next ›</button>
+          </div>}
         </div>
       )}
-      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{canPay && <th className="px-2 py-2 w-8"></th>}<th className="text-left px-3 py-2">RFP#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">PO</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">A/P Voucher</th><th></th></tr></thead>
-        <tbody>{rows.map(r=>{ const meta=rfpMeta(r.status); const po=orders.find(o=>o.id===r.po_id); const selectable = r.status==='approved' && canPay; return (
-          <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(r)}>
-            {canPay && <td className="px-2 py-2 text-center" onClick={(e)=>e.stopPropagation()}>{selectable ? <input type="checkbox" checked={!!selected[r.id]} onChange={()=>toggleSel(r.id)} /> : null}</td>}
-            <td className="px-3 py-2 font-mono text-xs">{r.number}</td>
-            <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
-            <td className="px-3 py-2">{r.supplier_name||'—'}</td>
-            <td className="px-3 py-2 text-xs font-mono">{po?po.number:'—'}</td>
-            <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}</td>
-            <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-            <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{(()=>{ const ap=apForRfp(r.id); if(!ap) return <span className="text-[11px] text-slate-400">—</span>; const am=(Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status); return (
-              <div className="flex items-center gap-1.5">
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${am.color}`}>{am.label}</span>
-                <button onClick={()=>setViewingAp(ap)} className="text-[11px] text-indigo-600 hover:underline" title={`Preview ${ap.number}`}>👁 Preview</button>
-              </div>
-            ); })()}</td>
-            <td className="px-3 py-2 text-right">
-              {(r.status==='approved'||r.status==='partial') && canPay && <button onClick={(e)=>{e.stopPropagation(); setPaying(r);}} className="text-xs text-emerald-600 hover:underline mr-2">💰 {r.status==='partial'?'Pay balance':'Pay'}</button>}
-              <button onClick={(e)=>{e.stopPropagation(); setEditing(r);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
-              {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteRFP(r);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
-            </td>
-          </tr>
-        ); })}{rows.length===0 && <tr><td colSpan={canPay?9:8} className="text-center text-slate-400 py-8">No RFPs match. Open a finalized PO and click "Request for Payment" to create one.</td></tr>}</tbody>
-      </table></div></div>
       {selectedRfps.length > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-white shadow-2xl border-2 border-emerald-500 rounded-xl px-4 py-3 flex items-center gap-4 text-sm">
           <div>
