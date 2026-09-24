@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 630 · Added a new 'BRAND' folder under Resources → Size Charts, for client-specific size charts. Drop or upload charts into it just like the other folders.";
+const BUILD = "Live build 631 · 'New quote' on an estimate now copies the lead's CURRENT items (fetched fresh), so any items Sales added to the lead after the first estimate show up in the new quote — instead of just copying the previous estimate.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1949,16 +1949,20 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     const list = data||[]; setEstimates(list);
     return list;
   }
-  // Start a NEW quote as a COPY of the one currently open — keep every line,
-  // VAT checkbox, discount, terms and notes exactly as-is; only the number is
-  // fresh. The user then edits just what differs between the two quotes.
+  // Start a NEW quote seeded from the LEAD's CURRENT items (fetched fresh from
+  // the DB). Sales often adds items to the lead after an estimate was first
+  // made, so a new quote must reflect everything on the lead now — including
+  // those additions — rather than just copying the previous estimate.
   async function newQuote(){
+    let leadItems = lead.items||[];
+    try{ const { data } = await sb.from('leads').select('items').eq('id', lead.id).maybeSingle(); if(data && Array.isArray(data.items)) leadItems = data.items; }catch(_){}
     setEstimate(null); setStatus('draft');
     setNumber(await nextEstimateNumber());
-    setLines(lines.map((it,i)=>({ ...it, id:'n'+Date.now()+'_'+i })));
+    setLines(estLinesFromLead({ items: leadItems }));
+    const d=new Date(); d.setDate(d.getDate()+EST_VALIDITY_DAYS); setValidUntil(d.toISOString().slice(0,10));
     setView('edit');
-    setMsg('New quote — copied as-is. Edit only what differs, then Save.');
-    setTimeout(()=>setMsg(''),3500);
+    setMsg(`New quote — copied ${leadItems.length} item${leadItems.length===1?'':'s'} from the lead. Fill in prices, then Save.`);
+    setTimeout(()=>setMsg(''),4000);
   }
   useEffect(()=>{ let alive=true; (async()=>{
     setLoading(true);
@@ -2210,7 +2214,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             {estimates.map(ex=>{ const active=estimate&&estimate.id===ex.id; return (
               <button key={ex.id} onClick={()=>loadInto(ex)} className={`text-[11px] px-2 py-1 rounded-full border ${active?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}><span className="font-semibold">{ex.number}</span> · {peso(ex.total)}</button>
             ); })}
-            {canEdit && <button onClick={newQuote} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`} title="Start a new quote copied from the current one — edit only what differs">＋ New quote (copy)</button>}
+            {canEdit && <button onClick={newQuote} className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${!estimate?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'}`} title="Start a new quote seeded with the lead's current items (including any Sales just added)">＋ New quote (from lead)</button>}
           </div>
         )}
 
