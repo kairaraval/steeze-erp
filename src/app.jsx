@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 629 · Bank Reconciliation upgraded for Accounting: an editable Bank Reference per transaction (to match the bank statement), an editable Type of Expenses column, an 'As of' date that drives the balances, filter tabs with counts (incl. Reconciled), search, bulk 'Mark reconciled', and pagination (Show 10/25/50/100). Money-in/out, opening and post-dated handling stay.";
+const BUILD = "Live build 630 · Added a new 'BRAND' folder under Resources → Size Charts, for client-specific size charts. Drop or upload charts into it just like the other folders.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3541,7 +3541,7 @@ function salesResCanEdit(category, profile){
 }
 // Preset folders per tab (Size Charts + Designs). Others have no folders.
 const RES_FOLDERS = {
-  size_charts: ['TRADITIONAL','SUBLIMATION','INTERNAL (RM)'],
+  size_charts: ['TRADITIONAL','SUBLIMATION','INTERNAL (RM)','BRAND'],
   designs: ['3D DESIGNS','2D DESIGNS'],
 };
 function foldersFor(category){ return RES_FOLDERS[category] || []; }
