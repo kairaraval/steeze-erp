@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 628 · Request for Payment view upgraded for Finance: added Due Date (red when overdue), Proof (Complete/Missing/To Follow) and Payment Method columns; a search box; sortable column headers; group-by-supplier with subtotals; a per-row ⋯ Actions menu; and pagination (10 per page) so the list stays fast. 'Pay Together as One Check' and A/P voucher preview are unchanged.";
+const BUILD = "Live build 629 · Bank Reconciliation upgraded for Accounting: an editable Bank Reference per transaction (to match the bank statement), an editable Type of Expenses column, an 'As of' date that drives the balances, filter tabs with counts (incl. Reconciled), search, bulk 'Mark reconciled', and pagination (Show 10/25/50/100). Money-in/out, opening and post-dated handling stay.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28172,7 +28172,7 @@ function soOpen(sos){ return (sos||[]).filter(s=>s.status!=='paid' && s.status!=
 
 
 /* ─────────── BANK ACCOUNTS ─────────── */
-function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
+function BankAccountsView({ profile, bankAccounts, bankTransactions, vouchers, reload }){
   const [editing,setEditing]=useState(null);  // bank to edit (account name/number/opening balance)
   const [detail,setDetail]=useState(null);    // bank to see transaction history for
   const [adding,setAdding]=useState(false);    // adding a brand-new bank account
@@ -28229,7 +28229,7 @@ function BankAccountsView({ profile, bankAccounts, bankTransactions, reload }){
 
       {adding && <BankAccountCreateModal profile={profile} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload(); }} />}
       {editing && <BankAccountEditModal bank={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} />}
-      {detail && <BankAccountDetailModal bank={detail} txns={(bankTransactions||[]).filter(t=>t.bank_id===detail.id)} onClose={()=>setDetail(null)} reload={reload} canEdit={canEdit} />}
+      {detail && <BankAccountDetailModal bank={detail} txns={(bankTransactions||[]).filter(t=>t.bank_id===detail.id)} vouchers={vouchers} onClose={()=>setDetail(null)} reload={reload} canEdit={canEdit} />}
     </div>
   );
 }
@@ -28301,56 +28301,127 @@ function BankAccountEditModal({ bank, onClose, onSaved }){
   );
 }
 
-function BankAccountDetailModal({ bank, txns, onClose, reload, canEdit }){
-  const [filter,setFilter]=useState('all');  // all | in | out | unreconciled
-  const filtered = txns.filter(t => filter==='all' || (filter==='unreconciled' ? !t.reconciled : t.direction===filter));
+const BANK_TXN_TYPES = ['Check','Bank Transfer','Cash','JV','Payroll','Subcon','Petty Cash','Cash Advance','Other'];
+function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit }){
+  const [filter,setFilter]=useState('all');  // all | in | out | unreconciled | reconciled
+  const [search,setSearch]=useState('');
+  const [asOf,setAsOf]=useState(todayLocalStr());
+  const [perPage,setPerPage]=useState(10);
+  const [page,setPage]=useState(1);
+  const [selected,setSelected]=useState({});
+  const [overrides,setOverrides]=useState({}); // local edits {id:{txn_type,bank_ref}}
+  useEffect(()=>{ setPage(1); },[filter,search,perPage]);
+  const ov=(t)=>({ ...t, ...(overrides[t.id]||{}) });
+  const voucherById = useMemo(()=>{ const m={}; (vouchers||[]).forEach(v=>{ m[v.id]=v; }); return m; },[vouchers]);
+  const refLabel=(t)=> (t.ref_type==='voucher' && voucherById[t.ref_id]) ? voucherById[t.ref_id].number : (t.reference_number || t.ref_type || '—');
+  async function saveField(id, field, value){
+    setOverrides(p=>({ ...p, [id]:{ ...(p[id]||{}), [field]: value } }));
+    try{ await sb.from('bank_transactions').update({ [field]: value||null }).eq('id', id); }catch(e){ alert('Save failed: '+(e.message||e)); }
+  }
   async function toggleReconcile(t){
     const next = !t.reconciled;
     const { error } = await sb.from('bank_transactions').update({ reconciled: next, reconciled_at: next? new Date().toISOString() : null }).eq('id', t.id);
-    if(error){ alert(error.message); return; }
-    reload();
+    if(error){ alert(error.message); return; } reload();
   }
-  const today = todayLocalStr();
-  const isFuture = (t)=> t.date && String(t.date).slice(0,10) > today;
-  // Cleared = dated on/before today. Post-dated = future (e.g. post-dated checks).
-  const inSum = txns.filter(t=>t.direction==='in' && !isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
-  const outSum = txns.filter(t=>t.direction==='out' && !isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  async function bulkReconcile(val){
+    const ids=Object.keys(selected).filter(id=>selected[id]); if(!ids.length) return;
+    const { error }=await sb.from('bank_transactions').update({ reconciled:val, reconciled_at: val? new Date().toISOString():null }).in('id', ids);
+    if(error){ alert(error.message); return; } setSelected({}); reload();
+  }
+  const cleared=(t)=> String(t.date||'').slice(0,10) <= asOf;
+  const isFuture=(t)=> t.date && String(t.date).slice(0,10) > asOf;   // post-dated relative to the "As of" date
+  const inSum  = txns.filter(t=>t.direction==='in'  && cleared(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const outSum = txns.filter(t=>t.direction==='out' && cleared(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const pdcOut = txns.filter(t=>t.direction==='out' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
-  const pdcIn = txns.filter(t=>t.direction==='in' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
+  const pdcIn  = txns.filter(t=>t.direction==='in'  && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const hasPdc = pdcOut>0.005 || pdcIn>0.005;
+  const balanceAsOf = Number(bank.opening_balance||0) + inSum - outSum;
+  // Tab counts
+  const cAll=txns.length, cIn=txns.filter(t=>t.direction==='in').length, cOut=txns.filter(t=>t.direction==='out').length, cUnrec=txns.filter(t=>!t.reconciled).length, cRec=txns.filter(t=>!!t.reconciled).length;
+  const TABS=[['all','All',cAll],['in','Money in',cIn],['out','Money out',cOut],['unreconciled','Unreconciled',cUnrec],['reconciled','Reconciled',cRec]];
+  // Filter → search → sort → paginate
+  const base = txns.filter(t=> filter==='all' ? true : filter==='in' ? t.direction==='in' : filter==='out' ? t.direction==='out' : filter==='reconciled' ? !!t.reconciled : !t.reconciled);
+  const q=search.trim().toLowerCase();
+  const searched = q ? base.filter(t=> `${t.description||''} ${refLabel(t)} ${ov(t).bank_ref||''}`.toLowerCase().includes(q)) : base;
+  const sorted = searched.slice().sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
+  const totalPages=Math.max(1, Math.ceil(sorted.length/perPage));
+  const curPage=Math.min(page, totalPages);
+  const pageRows=sorted.slice((curPage-1)*perPage, curPage*perPage);
+  const selCount=Object.values(selected).filter(Boolean).length;
+  const allOnPageSel = pageRows.length>0 && pageRows.every(t=>selected[t.id]);
+  function toggleAllOnPage(){ setSelected(p=>{ const nx={...p}; if(allOnPageSel){ pageRows.forEach(t=>delete nx[t.id]); } else { pageRows.forEach(t=>nx[t.id]=true); } return nx; }); }
   return (
-    <Modal title={`${bank.bank_name} — Transactions`} onClose={onClose} xwide>
+    <Modal title={`${bank.bank_name} — Bank Reconciliation`} onClose={onClose} xwide>
       <div className="space-y-3">
-        <div className="grid grid-cols-4 gap-2 text-center">
+        <div className="flex items-center justify-end gap-2 text-sm">
+          <span className="text-slate-500 text-xs">As of</span>
+          <input type="date" value={asOf} onChange={e=>setAsOf(e.target.value||todayLocalStr())} className="border rounded px-2 py-1 text-sm" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-center">
           <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-700">Money in (cleared)</div><div className="font-bold text-emerald-800">{peso(inSum)}</div></div>
           <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-700">Money out (cleared)</div><div className="font-bold text-rose-800">{peso(outSum)}</div></div>
-          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Opening</div><div className="font-bold">{peso(bank.opening_balance)}</div></div>
-          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-700">Balance today</div><div className="font-bold text-indigo-800">{peso(bankBalance(bank, txns))}</div></div>
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Opening balance</div><div className="font-bold">{peso(bank.opening_balance)}</div></div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-700">Balance as of {fmtDate(asOf)}</div><div className="font-bold text-indigo-800">{peso(balanceAsOf)}</div></div>
         </div>
         {hasPdc && <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 text-xs text-amber-800">🕒 <b>Post-dated (not yet cleared):</b> {pdcOut>0.005 && <>−{peso(pdcOut)} out</>}{pdcOut>0.005&&pdcIn>0.005 && ' · '}{pdcIn>0.005 && <>+{peso(pdcIn)} in</>}. These are excluded from the balance until their date arrives.</div>}
-        <div className="flex items-center gap-1 text-xs">
-          {['all','in','out','unreconciled'].map(k=>(
-            <button key={k} onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{k==='all'?'All':k==='in'?'Money in':k==='out'?'Money out':'Unreconciled'}</button>
-          ))}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1 text-xs flex-wrap">
+            {TABS.map(([k,label,n])=>(
+              <button key={k} onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded ${filter===k?'bg-indigo-600 text-white font-semibold':'bg-slate-100 hover:bg-slate-200'}`}>{label} <span className={`ml-1 ${filter===k?'text-indigo-100':'text-slate-400'}`}>{n}</span></button>
+            ))}
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search description, reference, or bank ref…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
         </div>
-        <div className="bg-white border rounded-lg overflow-hidden"><div className="max-h-[60vh] overflow-y-auto"><table className="w-full text-sm">
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Reconciled</th></tr></thead>
-          <tbody>{filtered.map(t=>(
+        {selCount>0 && canEdit && (
+          <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 text-sm">
+            <span className="font-semibold">{selCount} selected</span>
+            <button onClick={()=>bulkReconcile(true)} className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Mark reconciled</button>
+            <button onClick={()=>bulkReconcile(false)} className="px-3 py-1 rounded-lg border text-xs font-semibold hover:bg-white">Unmark</button>
+            <button onClick={()=>setSelected({})} className="text-xs text-slate-500 hover:underline ml-auto">Clear</button>
+          </div>
+        )}
+        <div className="bg-white border rounded-lg overflow-hidden"><div className="max-h-[55vh] overflow-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500 sticky top-0"><tr>
+            {canEdit && <th className="px-2 py-2 w-8"><input type="checkbox" checked={allOnPageSel} onChange={toggleAllOnPage} /></th>}
+            <th className="text-left px-3 py-2">Date</th>
+            <th className="text-left px-3 py-2">Type of Expenses</th>
+            <th className="text-left px-3 py-2">Description</th>
+            <th className="text-left px-3 py-2">Reference</th>
+            <th className="text-right px-3 py-2">Amount</th>
+            <th className="text-left px-3 py-2">Bank Reference (for reconciliation)</th>
+            <th className="text-center px-3 py-2">Reconciled</th>
+          </tr></thead>
+          <tbody>{pageRows.map(t=>{ const o=ov(t); return (
             <tr key={t.id} className={`border-t ${isFuture(t)?'bg-amber-50/40':''}`}>
-              <td className="px-3 py-2 text-xs">{fmtDate(t.date)}{isFuture(t) && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">post-dated</span>}</td>
-              <td className="px-3 py-2">{t.description||'—'}</td>
-              <td className="px-3 py-2 text-xs text-slate-500">{t.reference_number||t.ref_type||''}</td>
-              <td className={`px-3 py-2 text-right font-semibold ${t.direction==='in'?'text-emerald-700':'text-rose-700'}`}>{t.direction==='in'?'+':'−'}{peso(t.amount)}</td>
+              {canEdit && <td className="px-2 py-2 text-center"><input type="checkbox" checked={!!selected[t.id]} onChange={()=>setSelected(p=>{ const nx={...p}; if(nx[t.id]) delete nx[t.id]; else nx[t.id]=true; return nx; })} /></td>}
+              <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(t.date)}{isFuture(t) && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">post-dated</span>}</td>
+              <td className="px-3 py-2">{canEdit ? (
+                <select value={o.txn_type||''} onChange={e=>saveField(t.id,'txn_type',e.target.value)} className="border rounded px-2 py-1 text-xs bg-white"><option value="">—</option>{BANK_TXN_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select>
+              ) : <span className="text-xs">{o.txn_type||'—'}</span>}</td>
+              <td className="px-3 py-2 text-xs max-w-[22rem]"><div className="line-clamp-2" title={t.description||''}>{t.description||'—'}</div></td>
+              <td className="px-3 py-2 text-xs font-mono text-slate-500 whitespace-nowrap">{refLabel(t)}</td>
+              <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${t.direction==='in'?'text-emerald-700':'text-rose-700'}`}>{t.direction==='in'?'+':'−'}{peso(t.amount)}</td>
+              <td className="px-3 py-2">{canEdit ? (
+                <input key={t.id} defaultValue={o.bank_ref||''} onBlur={e=>{ if((e.target.value||'')!==(o.bank_ref||'')) saveField(t.id,'bank_ref',e.target.value.trim()); }} placeholder="Enter bank reference…" className="border rounded px-2 py-1 text-xs w-44" />
+              ) : <span className="text-xs">{o.bank_ref||'—'}</span>}</td>
               <td className="px-3 py-2 text-center">
-                {canEdit ? (
-                  <button onClick={()=>toggleReconcile(t)} className={`text-xs px-2 py-0.5 rounded ${t.reconciled?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{t.reconciled?'✓':'○'}</button>
-                ) : (
-                  <span className={`text-xs ${t.reconciled?'text-emerald-700':'text-slate-300'}`}>{t.reconciled?'✓':'○'}</span>
-                )}
+                {canEdit ? <input type="checkbox" checked={!!t.reconciled} onChange={()=>toggleReconcile(t)} />
+                         : <span className={`text-xs ${t.reconciled?'text-emerald-700':'text-slate-300'}`}>{t.reconciled?'✓':'○'}</span>}
               </td>
             </tr>
-          ))}{filtered.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-6">No transactions match this filter.</td></tr>}</tbody>
+          ); })}{pageRows.length===0 && <tr><td colSpan={canEdit?8:7} className="text-center text-slate-400 py-6">No transactions match.</td></tr>}</tbody>
         </table></div></div>
+        <div className="flex items-center justify-between flex-wrap gap-2 text-sm">
+          <div className="flex items-center gap-2 text-xs text-slate-500">Show
+            <select value={perPage} onChange={e=>setPerPage(Number(e.target.value))} className="border rounded px-2 py-1">{[10,25,50,100].map(n=><option key={n} value={n}>{n}</option>)}</select>
+            entries · {sorted.length} total
+          </div>
+          {totalPages>1 && <div className="flex items-center gap-1">
+            <button disabled={curPage<=1} onClick={()=>setPage(curPage-1)} className="px-2.5 py-1 rounded-lg border disabled:opacity-40 hover:bg-slate-50">‹</button>
+            <span className="px-2 text-xs text-slate-500">Page {curPage} of {totalPages}</span>
+            <button disabled={curPage>=totalPages} onClick={()=>setPage(curPage+1)} className="px-2.5 py-1 rounded-lg border disabled:opacity-40 hover:bg-slate-50">›</button>
+          </div>}
+        </div>
       </div>
     </Modal>
   );
@@ -42601,7 +42672,7 @@ function App(){
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
-        {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} reload={loadAll} />}
+        {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} journalEntries={journalEntries} chartAccounts={chartAccounts} />}
