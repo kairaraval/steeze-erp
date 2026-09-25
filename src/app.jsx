@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 634 · The 201 file's Loans tab now shows each company loan's total payable, amount paid and REMAINING balance (not just principal) — matching the Employee Loans view. Government loan remaining was already shown.";
+const BUILD = "Live build 635 · Imported 112 government loans (SSS + Pag-IBIG) from the 2025 201 records across 47 employees into the Government Loans register — each linked to its employee's 201 file with amount granted, monthly amortization, deductions to date and remaining balance. Added 'Emergency Loan' as a loan type.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16759,7 +16759,7 @@ async function notifyAccountingLoanReady(loan, empName, actorId, profiles){
 
 /* ─────────── GOVERNMENT LOANS (SSS / Pag-IBIG monitoring) ─────────── */
 const GOV_AGENCIES = ['SSS','Pag-IBIG'];
-const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Multi-Purpose Loan','Housing Loan','Other'];
+const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Emergency Loan','Multi-Purpose Loan','Housing Loan','Other'];
 function govLoanRemaining(l){ return Math.max(0, Number(l.loan_amount||0) - Number(l.amount_paid||0)); }
 function canManageGovLoans(p){ return ['admin','hr','accounting','accounting_officer'].includes(p?.role); }
 
