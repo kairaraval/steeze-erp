@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 636 · Government Loans now flags OVERPAID loans (deductions beyond the loan amount = agency over-collected): a red ⚠ Overpaid summary card, an Overpaid filter tab, red row highlight, and the over-collected amount shown in place of the remaining balance so HR can chase refunds. 7 loans across 5 staff currently flagged.";
+const BUILD = "Live build 637 · Government Loans now have a per-month PAYMENT SCHEDULE like company loans: click any loan to see each monthly deduction with due date, mark-paid / undo, overdue flags, an X/Y-paid counter and Mark-fully-paid. Schedules were auto-generated for all 110 imported loans with past deductions already ticked.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16763,13 +16763,37 @@ const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Emergency Loan','Multi-Pu
 function govLoanRemaining(l){ return Math.max(0, Number(l.loan_amount||0) - Number(l.amount_paid||0)); }
 // Amount deducted BEYOND the loan (agency over-collected). >0 means the employee is owed a refund / credit.
 function govLoanOverpaid(l){ return Math.max(0, Number(l.amount_paid||0) - Number(l.loan_amount||0)); }
+// Monthly due dates for a gov loan: starts at the deduction start date, one per month.
+function govLoanInstallmentDates(loan){
+  const start=loan.deduction_start_date; if(!start) return [];
+  const monthly=Number(loan.monthly_amortization)||0;
+  let n=Number(loan.num_months)||0;
+  if(!n && monthly>0) n=Math.max(1, Math.round((Number(loan.loan_amount)||0)/monthly));
+  if(!n) return [];
+  const out=[]; const d=new Date(start+'T00:00:00');
+  for(let i=0;i<n;i++){ out.push(d.toISOString().slice(0,10)); d.setMonth(d.getMonth()+1); }
+  return out;
+}
+// (Re)generate the monthly deduction schedule for a gov loan. Auto-ticks the
+// installments already covered by amount_paid (carried over from the import).
+async function regenGovLoanSchedule(loan){
+  const dates=govLoanInstallmentDates(loan); const n=dates.length; if(!n) return;
+  const monthly=Number(loan.monthly_amortization)||0;
+  const total=Number(loan.loan_amount)||0;
+  const rows=dates.map((dd,i)=>({ gov_loan_id:loan.id, seq:i+1, due_date:dd, amount: i===n-1 ? Math.round((total-monthly*(n-1))*100)/100 : monthly, paid:false }));
+  const paidTotal=Number(loan.amount_paid)||0; let acc=0;
+  for(const r of rows){ if(acc + r.amount <= paidTotal + 0.01){ r.paid=true; acc+=r.amount; } else break; }
+  try{ await sb.from('gov_loan_installments').delete().eq('gov_loan_id', loan.id); }catch(_){}
+  try{ await sb.from('gov_loan_installments').insert(rows); }catch(e){ console.warn('gov schedule insert failed', e); }
+}
 function canManageGovLoans(p){ return ['admin','hr','accounting','accounting_officer'].includes(p?.role); }
 
-function GovLoansView({ profile, employees, govLoans, reload }){
+function GovLoansView({ profile, employees, govLoans, govLoanInstallments, reload }){
   const canEdit = canManageGovLoans(profile);
   const [adding,setAdding]=useState(false);
   const [editing,setEditing]=useState(null);
-  const [tab,setTab]=useState('all');   // all | sss | pagibig | active | completed
+  const [viewing,setViewing]=useState(null);
+  const [tab,setTab]=useState('all');   // all | sss | pagibig | active | completed | overpaid
   const [search,setSearch]=useState('');
   const [menuFor,setMenuFor]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
@@ -16792,15 +16816,6 @@ function GovLoansView({ profile, employees, govLoans, reload }){
     if(q && !`${empName(l.employee_id)} ${l.reference_no||''} ${l.loan_type||''} ${l.department||''}`.toLowerCase().includes(q)) return false;
     return true;
   });
-  async function recordDeduction(l){
-    const rem=govLoanRemaining(l); if(rem<=0){ alert('This loan is already fully paid.'); return; }
-    const amt=Math.min(Number(l.monthly_amortization||0), rem);
-    if(!confirm(`Record this month's deduction of ${peso(amt)} for ${empName(l.employee_id)} (${l.agency} ${l.loan_type})?\n\nRemaining after: ${peso(rem-amt)}.`)) return;
-    const newPaid=Number(l.amount_paid||0)+amt;
-    const done=newPaid >= Number(l.loan_amount||0)-0.005;
-    const { error }=await sb.from('gov_loans').update({ amount_paid:newPaid, status: done?'completed':'active', updated_at:new Date().toISOString() }).eq('id', l.id);
-    if(error){ alert(error.message); return; } setMenuFor(null); reload();
-  }
   async function del(l){ if(!confirm(`Delete this ${l.agency||''} loan record for ${empName(l.employee_id)}?`)) return; const { error }=await sb.from('gov_loans').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', l.id); if(error){ alert(error.message); return; } setMenuFor(null); reload(); }
   const agencyBadge=(a)=> a==='SSS' ? 'bg-sky-100 text-sky-700' : a==='Pag-IBIG' ? 'bg-fuchsia-100 text-fuchsia-700' : 'bg-slate-100 text-slate-600';
   const TABS=[['all','All',counts.all],['sss','SSS',counts.sss],['pagibig','Pag-IBIG',counts.pagibig],['active','Active',counts.active],['completed','Completed',counts.completed],['overpaid','⚠ Overpaid',counts.overpaid]];
@@ -16835,7 +16850,7 @@ function GovLoansView({ profile, employees, govLoans, reload }){
           <th className="text-right px-3 py-2">Loan Amount</th><th className="text-right px-3 py-2">Monthly</th><th className="text-left px-3 py-2">Start</th><th className="text-right px-3 py-2">Remaining</th><th className="text-center px-3 py-2">Status</th><th className="text-right px-3 py-2">Actions</th>
         </tr></thead>
         <tbody>{shown.map(l=>{ const rem=govLoanRemaining(l); const over=govLoanOverpaid(l); return (
-          <tr key={l.id} className={`border-t cursor-pointer ${over>0.005?'bg-rose-50 hover:bg-rose-100':'hover:bg-slate-50'}`} onClick={()=>canEdit&&setEditing(l)}>
+          <tr key={l.id} className={`border-t cursor-pointer ${over>0.005?'bg-rose-50 hover:bg-rose-100':'hover:bg-slate-50'}`} onClick={()=>setViewing(l)}>
             <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
             <td className="px-3 py-2 text-xs text-slate-500">{l.department||'—'}</td>
             <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${agencyBadge(l.agency)}`}>{l.agency||'—'}</span></td>
@@ -16851,7 +16866,7 @@ function GovLoansView({ profile, employees, govLoans, reload }){
                 {menuFor===l.id && (<>
                   <div className="fixed inset-0 z-40" onClick={()=>setMenuFor(null)} />
                   <div className="absolute right-2 top-9 z-50 bg-white border rounded-lg shadow-lg py-1 text-xs w-48 text-left">
-                    {l.status==='active' && <button onClick={()=>recordDeduction(l)} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-emerald-700">✓ Record this month's deduction</button>}
+                    <button onClick={()=>{ setMenuFor(null); setViewing(l); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-emerald-700">📅 Payment schedule</button>
                     <button onClick={()=>{ setMenuFor(null); setEditing(l); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50">Edit</button>
                     <button onClick={()=>del(l)} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-rose-600">Delete</button>
                   </div>
@@ -16862,7 +16877,105 @@ function GovLoansView({ profile, employees, govLoans, reload }){
         ); })}{shown.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No government loans yet.{canEdit?' Click "+ Record New Loan" to add one.':''}</td></tr>}</tbody>
       </table></div></div>
       {(adding||editing) && <GovLoanFormModal profile={profile} employees={employees} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); reload(); }} />}
+      {viewing && <GovLoanDetailModal profile={profile} loan={govLoans.find(g=>g.id===viewing.id)||viewing} empName={empName} installments={(govLoanInstallments||[]).filter(x=>x.gov_loan_id===viewing.id)} canEdit={canEdit} onEdit={()=>{ setEditing(viewing); setViewing(null); }} onClose={()=>setViewing(null)} reload={reload} />}
     </div>
+  );
+}
+
+function GovLoanDetailModal({ profile, loan, empName, installments, canEdit, onEdit, onClose, reload }){
+  const [busy,setBusy]=useState(false);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const total=sched.length;
+  const paidCount=sched.filter(x=>x.paid).length;
+  const allPaid=total>0 && paidCount===total;
+  const rem=govLoanRemaining(loan); const over=govLoanOverpaid(loan);
+  const canGen = Number(loan.monthly_amortization)>0 && (Number(loan.num_months)>0 || Number(loan.loan_amount)>0) && loan.deduction_start_date;
+  async function syncPaid(after){
+    const paidSum=after.filter(x=>x.paid).reduce((s,x)=>s+Number(x.amount||0),0);
+    const n=after.length; const everyPaid=n>0 && after.every(x=>x.paid);
+    const cur=Number(loan.amount_paid)||0; const amt=Number(loan.loan_amount)||0;
+    const newPaid=(everyPaid && cur>amt) ? cur : paidSum;   // keep a historical overpayment intact
+    const status = newPaid >= amt-0.005 ? 'completed' : 'active';
+    await sb.from('gov_loans').update({ amount_paid:newPaid, status, updated_at:new Date().toISOString() }).eq('id', loan.id);
+  }
+  async function toggleInst(it){
+    if(!canEdit) return;
+    setBusy(true);
+    const nextPaid=!it.paid;
+    const { error }=await sb.from('gov_loan_installments').update({ paid:nextPaid, paid_date: nextPaid?todayISO:null }).eq('id', it.id);
+    if(error){ setBusy(false); alert(error.message); return; }
+    await syncPaid(sched.map(x=> x.id===it.id ? {...x, paid:nextPaid} : x));
+    setBusy(false); reload && reload();
+  }
+  async function genSchedule(){ setBusy(true); await regenGovLoanSchedule(loan); setBusy(false); reload && reload(); }
+  async function markAllPaid(){
+    if(!confirm('Mark this loan as fully paid? Every scheduled deduction will be ticked.')) return;
+    setBusy(true);
+    await sb.from('gov_loan_installments').update({ paid:true, paid_date:todayISO }).eq('gov_loan_id', loan.id).eq('paid', false);
+    await syncPaid(sched.map(x=>({...x, paid:true})));
+    setBusy(false); reload && reload();
+  }
+  async function undoAll(){
+    setBusy(true);
+    await sb.from('gov_loan_installments').update({ paid:false, paid_date:null }).eq('gov_loan_id', loan.id);
+    await sb.from('gov_loans').update({ amount_paid:0, status:'active', updated_at:new Date().toISOString() }).eq('id', loan.id);
+    setBusy(false); reload && reload();
+  }
+  const agencyBadge=(a)=> a==='SSS' ? 'bg-sky-100 text-sky-700' : a==='Pag-IBIG' ? 'bg-fuchsia-100 text-fuchsia-700' : 'bg-slate-100 text-slate-600';
+  return (
+    <Modal title={`Loan · ${empName(loan.employee_id)}`} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Loan amount</div><div className="font-bold">{peso(loan.loan_amount)}</div></div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-600">Monthly</div><div className="font-bold text-indigo-800">{peso(loan.monthly_amortization)}</div></div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-2"><div className="text-[10px] uppercase text-emerald-600">Total deduction</div><div className="font-bold text-emerald-800">{peso(loan.amount_paid)}</div></div>
+          {over>0.005
+            ? <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">⚠ Overpaid</div><div className="font-bold text-rose-800">−{peso(over)}</div></div>
+            : <div className="bg-rose-50 border border-rose-200 rounded p-2"><div className="text-[10px] uppercase text-rose-600">Remaining balance</div><div className="font-bold text-rose-800">{peso(rem)}</div></div>}
+        </div>
+        <div className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
+          <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${agencyBadge(loan.agency)}`}>{loan.agency||'—'}</span>
+          <span>{loan.loan_type||'—'}</span>
+          {loan.date_granted && <span>· Granted {fmtDate(loan.date_granted)}</span>}
+          {loan.num_months ? <span>· {loan.num_months} mo</span> : null}
+          {loan.deduction_start_date && <span>· Deductions from {fmtDate(loan.deduction_start_date)}</span>}
+          {allPaid && <span className="text-emerald-700 font-semibold">· FULLY PAID</span>}
+        </div>
+        {over>0.005 && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">This loan has been over-collected by <b>{peso(over)}</b> vs the recorded loan amount — verify with {loan.agency||'the agency'} and process a refund/credit if confirmed.</div>}
+        {loan.remarks && <div className="text-xs text-slate-600 bg-slate-50 border rounded p-2 whitespace-pre-line">{loan.remarks}</div>}
+
+        <div className="border rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase text-slate-500">Payment schedule</span>
+            <span className="text-xs text-slate-500">{paidCount}/{total} paid</span>
+          </div>
+          {total===0 ? (
+            <div className="p-4 text-center text-xs text-slate-400">No schedule plotted yet.{canEdit && canGen ? <> <button onClick={genSchedule} disabled={busy} className="text-indigo-600 hover:underline font-medium">Generate monthly schedule</button></> : ' Set a monthly amortization and deduction start date on the loan first.'}</div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto"><table className="w-full text-sm">
+              <thead className="bg-white text-[10px] uppercase text-slate-400 sticky top-0"><tr><th className="text-left px-3 py-1.5">#</th><th className="text-left px-3 py-1.5">Due date</th><th className="text-right px-3 py-1.5">Amount</th><th className="text-left px-3 py-1.5">Status</th>{canEdit&&<th></th>}</tr></thead>
+              <tbody>{sched.map(it=>{ const overdue=!it.paid && it.due_date && it.due_date<todayISO; return (
+                <tr key={it.id} className={`border-t ${it.paid?'bg-emerald-50/40':overdue?'bg-rose-50/40':''}`}>
+                  <td className="px-3 py-1.5 text-xs text-slate-400">{it.seq}</td>
+                  <td className="px-3 py-1.5 text-xs whitespace-nowrap">{it.due_date?fmtDate(it.due_date):'—'}</td>
+                  <td className="px-3 py-1.5 text-right">{peso(it.amount)}</td>
+                  <td className="px-3 py-1.5">{it.paid ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Paid{it.paid_date?` · ${fmtDate(it.paid_date)}`:''}</span> : overdue ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Overdue</span> : <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">Pending</span>}</td>
+                  {canEdit && <td className="px-3 py-1.5 text-right"><button disabled={busy} onClick={()=>toggleInst(it)} className={`text-xs font-semibold ${it.paid?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{it.paid?'Undo':'✓ Mark paid'}</button></td>}
+                </tr>
+              ); })}</tbody>
+            </table></div>
+          )}
+        </div>
+
+        {canEdit && <div className="flex gap-2 pt-2 border-t flex-wrap">
+          <button onClick={onEdit} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">✎ Edit loan</button>
+          {total>0 && !allPaid && <button onClick={markAllPaid} disabled={busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">Mark fully paid</button>}
+          {total>0 && paidCount>0 && <button onClick={undoAll} disabled={busy} className="px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-50 disabled:opacity-50">Reset payments</button>}
+          {total>0 && canGen && <button onClick={()=>{ if(confirm('Rebuild the schedule from the loan terms? Payment ticks will be recalculated from the total deducted.')) genSchedule(); }} disabled={busy} className="px-3 py-2 rounded-lg bg-white border text-slate-600 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">↻ Rebuild</button>}
+        </div>}
+      </div>
+    </Modal>
   );
 }
 
@@ -41461,6 +41574,7 @@ function App(){
   const [hrEscalations,setHrEscalations]=useState([]); const [inboxEscalationId,setInboxEscalationId]=useState(null);
   const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]); const [hrLoanInstallments,setHrLoanInstallments]=useState([]);
   const [govLoans,setGovLoans]=useState([]);
+  const [govLoanInstallments,setGovLoanInstallments]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
@@ -41813,6 +41927,7 @@ function App(){
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const gvl = await sb.from('gov_loans').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setGovLoans(gvl && !gvl.error ? (gvl.data||[]) : []); } catch(_){ setGovLoans([]); }
+    try { const gvi = await sb.from('gov_loan_installments').select('*').order('seq',{ascending:true}); setGovLoanInstallments(gvi && !gvi.error ? (gvi.data||[]) : []); } catch(_){ setGovLoanInstallments([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
     try { const hli = await sb.from('employee_loan_installments').select('*').order('seq',{ascending:true}); setHrLoanInstallments(hli && !hli.error ? (hli.data||[]) : []); } catch(_){ setHrLoanInstallments([]); }
     try { const stg = await sb.from('sales_targets').select('*'); setSalesTargets(stg && !stg.error ? (stg.data||[]) : []); } catch(_){ setSalesTargets([]); }
@@ -42864,7 +42979,7 @@ function App(){
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='gov-loans' && <GovLoansView profile={profile} employees={employees} govLoans={govLoans} reload={loadAll} />}
+        {view==='gov-loans' && <GovLoansView profile={profile} employees={employees} govLoans={govLoans} govLoanInstallments={govLoanInstallments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
