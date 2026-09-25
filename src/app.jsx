@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 631 · 'New quote' on an estimate now copies the lead's CURRENT items (fetched fresh), so any items Sales added to the lead after the first estimate show up in the new quote — instead of just copying the previous estimate.";
+const BUILD = "Live build 632 · New HR module: Government Loans (SSS & Pag-IBIG). Record each employee's gov loan with agency, type, reference, amount, monthly amortization, schedule and a supporting document; track remaining balance and mark each month's deduction as taken. Summary cards (active loans, this month's deductions, per-agency outstanding, completed), filter tabs, and search. HR/Admin/Accounting only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16689,6 +16689,174 @@ async function notifyAccountingLoanReady(loan, empName, actorId, profiles){
     const rows=recips.map(id=>({ recipient_id:id, actor_id:actorId||null, text:`Loan for ${empName||'an employee'} — ${peso(loan.principal)} (total payable ${peso(total)}) approved. Ready for you to process & release.`, link_view:'hr-loans', ref_type:'loan', ref_id:loan.id, type:'system' }));
     await sb.from('notifications').insert(rows);
   } catch(e){ console.warn('loan notify failed', e?.message||e); }
+}
+
+/* ─────────── GOVERNMENT LOANS (SSS / Pag-IBIG monitoring) ─────────── */
+const GOV_AGENCIES = ['SSS','Pag-IBIG'];
+const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Multi-Purpose Loan','Housing Loan','Other'];
+function govLoanRemaining(l){ return Math.max(0, Number(l.loan_amount||0) - Number(l.amount_paid||0)); }
+function canManageGovLoans(p){ return ['admin','hr','accounting','accounting_officer'].includes(p?.role); }
+
+function GovLoansView({ profile, employees, govLoans, reload }){
+  const canEdit = canManageGovLoans(profile);
+  const [adding,setAdding]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [tab,setTab]=useState('all');   // all | sss | pagibig | active | completed
+  const [search,setSearch]=useState('');
+  const [menuFor,setMenuFor]=useState(null);
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  const list=(govLoans||[]);
+  const active=list.filter(l=>l.status==='active');
+  const monthlyDeductions=active.reduce((s,l)=>s+Number(l.monthly_amortization||0),0);
+  const sssActive=active.filter(l=>l.agency==='SSS'); const pagActive=active.filter(l=>l.agency==='Pag-IBIG');
+  const sssOut=sssActive.reduce((s,l)=>s+govLoanRemaining(l),0); const pagOut=pagActive.reduce((s,l)=>s+govLoanRemaining(l),0);
+  const completedCount=list.filter(l=>l.status==='completed').length;
+  const counts={ all:list.length, sss:list.filter(l=>l.agency==='SSS').length, pagibig:list.filter(l=>l.agency==='Pag-IBIG').length, active:active.length, completed:completedCount };
+  const q=search.trim().toLowerCase();
+  const shown=list.filter(l=>{
+    if(tab==='sss' && l.agency!=='SSS') return false;
+    if(tab==='pagibig' && l.agency!=='Pag-IBIG') return false;
+    if(tab==='active' && l.status!=='active') return false;
+    if(tab==='completed' && l.status!=='completed') return false;
+    if(q && !`${empName(l.employee_id)} ${l.reference_no||''} ${l.loan_type||''} ${l.department||''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  async function recordDeduction(l){
+    const rem=govLoanRemaining(l); if(rem<=0){ alert('This loan is already fully paid.'); return; }
+    const amt=Math.min(Number(l.monthly_amortization||0), rem);
+    if(!confirm(`Record this month's deduction of ${peso(amt)} for ${empName(l.employee_id)} (${l.agency} ${l.loan_type})?\n\nRemaining after: ${peso(rem-amt)}.`)) return;
+    const newPaid=Number(l.amount_paid||0)+amt;
+    const done=newPaid >= Number(l.loan_amount||0)-0.005;
+    const { error }=await sb.from('gov_loans').update({ amount_paid:newPaid, status: done?'completed':'active', updated_at:new Date().toISOString() }).eq('id', l.id);
+    if(error){ alert(error.message); return; } setMenuFor(null); reload();
+  }
+  async function del(l){ if(!confirm(`Delete this ${l.agency||''} loan record for ${empName(l.employee_id)}?`)) return; const { error }=await sb.from('gov_loans').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', l.id); if(error){ alert(error.message); return; } setMenuFor(null); reload(); }
+  const agencyBadge=(a)=> a==='SSS' ? 'bg-sky-100 text-sky-700' : a==='Pag-IBIG' ? 'bg-fuchsia-100 text-fuchsia-700' : 'bg-slate-100 text-slate-600';
+  const TABS=[['all','All',counts.all],['sss','SSS',counts.sss],['pagibig','Pag-IBIG',counts.pagibig],['active','Active',counts.active],['completed','Completed',counts.completed]];
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🏦 Government Loans</h1>
+            <p className="text-slate-500 text-sm">SSS &amp; Pag-IBIG salary / calamity loans and their monthly payroll deductions.</p>
+          </div>
+          {canEdit && <button onClick={()=>setAdding(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Record New Loan</button>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Active Loans</div><div className="text-2xl font-bold">{counts.active}</div></div>
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">This Month's Deductions</div><div className="text-2xl font-bold text-emerald-700">{peso(monthlyDeductions)}</div></div>
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">SSS Loans</div><div className="text-2xl font-bold">{sssActive.length}</div><div className="text-[10px] text-slate-400">{peso(sssOut)} outstanding</div></div>
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Pag-IBIG Loans</div><div className="text-2xl font-bold">{pagActive.length}</div><div className="text-[10px] text-slate-400">{peso(pagOut)} outstanding</div></div>
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Completed</div><div className="text-2xl font-bold text-slate-500">{completedCount}</div></div>
+      </div>
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-1 text-xs flex-wrap">{TABS.map(([k,label,n])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg ${tab===k?'bg-indigo-600 text-white font-semibold':'bg-white border hover:bg-slate-50'}`}>{label} <span className={tab===k?'text-indigo-100':'text-slate-400'}>{n}</span></button>
+        ))}</div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee, reference, type…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Agency</th><th className="text-left px-3 py-2">Loan Type</th>
+          <th className="text-right px-3 py-2">Loan Amount</th><th className="text-right px-3 py-2">Monthly</th><th className="text-left px-3 py-2">Start</th><th className="text-right px-3 py-2">Remaining</th><th className="text-center px-3 py-2">Status</th><th className="text-right px-3 py-2">Actions</th>
+        </tr></thead>
+        <tbody>{shown.map(l=>{ const rem=govLoanRemaining(l); return (
+          <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>canEdit&&setEditing(l)}>
+            <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{l.department||'—'}</td>
+            <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${agencyBadge(l.agency)}`}>{l.agency||'—'}</span></td>
+            <td className="px-3 py-2 text-xs">{l.loan_type||'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold">{peso(l.loan_amount)}</td>
+            <td className="px-3 py-2 text-right">{peso(l.monthly_amortization)}</td>
+            <td className="px-3 py-2 text-xs">{l.deduction_start_date?fmtDate(l.deduction_start_date):'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold">{peso(rem)}</td>
+            <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='completed'?'bg-slate-200 text-slate-600':l.status==='cancelled'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{l.status||'active'}</span></td>
+            <td className="px-3 py-2 text-right relative" onClick={(e)=>e.stopPropagation()}>
+              {canEdit ? (<>
+                <button onClick={()=>setMenuFor(menuFor===l.id?null:l.id)} className="px-2 py-1 rounded hover:bg-slate-100 text-slate-500 text-lg leading-none">⋯</button>
+                {menuFor===l.id && (<>
+                  <div className="fixed inset-0 z-40" onClick={()=>setMenuFor(null)} />
+                  <div className="absolute right-2 top-9 z-50 bg-white border rounded-lg shadow-lg py-1 text-xs w-48 text-left">
+                    {l.status==='active' && <button onClick={()=>recordDeduction(l)} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-emerald-700">✓ Record this month's deduction</button>}
+                    <button onClick={()=>{ setMenuFor(null); setEditing(l); }} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50">Edit</button>
+                    <button onClick={()=>del(l)} className="block w-full text-left px-3 py-1.5 hover:bg-slate-50 text-rose-600">Delete</button>
+                  </div>
+                </>)}
+              </>) : <span className="text-slate-300">—</span>}
+            </td>
+          </tr>
+        ); })}{shown.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No government loans yet.{canEdit?' Click "+ Record New Loan" to add one.':''}</td></tr>}</tbody>
+      </table></div></div>
+      {(adding||editing) && <GovLoanFormModal profile={profile} employees={employees} existing={editing} onClose={()=>{ setAdding(false); setEditing(null); }} onSaved={()=>{ setAdding(false); setEditing(null); reload(); }} />}
+    </div>
+  );
+}
+
+function GovLoanFormModal({ profile, employees, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState(existing || { employee_id:'', department:'', agency:'SSS', loan_type:'Salary Loan', reference_no:'', date_granted:'', loan_amount:'', monthly_amortization:'', num_months:'', deduction_start_date:'', remarks:'', document_url:null });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(''); const [uploading,setUploading]=useState(false);
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  function up(k,v){ setF(p=>({...p,[k]:v})); }
+  function onEmp(id){ const e=(employees||[]).find(x=>x.id===id); up('employee_id',id); if(e && e.department && !f.department) up('department', e.department); }
+  async function onDoc(file){ if(!file) return; setUploading(true); setMsg('');
+    try{ const meta=await uploadFile('gov-loans', file); up('document_url', meta.path); }catch(e){ setMsg('Upload failed: '+(e.message||e)); }
+    setUploading(false);
+  }
+  const amt=Number(f.loan_amount)||0, monthly=Number(f.monthly_amortization)||0, months=Number(f.num_months)||0;
+  const estEnd=(()=>{ if(!f.deduction_start_date||!months) return null; const d=new Date(f.deduction_start_date+'T00:00:00'); d.setMonth(d.getMonth()+months); return d.toISOString().slice(0,10); })();
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    if(!(amt>0)){ setMsg('Enter the loan amount.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ employee_id:f.employee_id, department:f.department||null, agency:f.agency, loan_type:f.loan_type, reference_no:f.reference_no||null, date_granted:f.date_granted||null, loan_amount:amt, monthly_amortization:monthly, num_months:months||null, deduction_start_date:f.deduction_start_date||null, remarks:f.remarks||null, document_url:f.document_url||null };
+    try{
+      if(isEdit){ payload.updated_at=new Date().toISOString(); const { error }=await sb.from('gov_loans').update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('gov_loans').insert({ ...payload, status:'active', amount_paid:0, created_by:profile.id }); if(error) throw error; }
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?'Edit government loan':'Record New Loan'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-500">Encode the employee's government loan and its monthly payroll deduction.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2"><label className="text-[10px] uppercase font-semibold text-slate-400">Employee *</label>
+            <select value={f.employee_id} onChange={e=>onEmp(e.target.value)} className="input mt-0.5"><option value="">— Select employee —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Department</label><input className="input mt-0.5" value={f.department} onChange={e=>up('department',e.target.value)} placeholder="e.g. Marketing" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Government Agency *</label><select value={f.agency} onChange={e=>up('agency',e.target.value)} className="input mt-0.5">{GOV_AGENCIES.map(a=><option key={a} value={a}>{a}</option>)}</select></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Loan Type *</label><select value={f.loan_type} onChange={e=>up('loan_type',e.target.value)} className="input mt-0.5">{GOV_LOAN_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Loan Reference No.</label><input className="input mt-0.5" value={f.reference_no} onChange={e=>up('reference_no',e.target.value)} placeholder="SSS-SL-2025-00123" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Date Granted</label><input type="date" className="input mt-0.5" value={f.date_granted||''} onChange={e=>up('date_granted',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Loan Amount ₱ *</label><input type="number" className="input mt-0.5" value={f.loan_amount} onChange={e=>up('loan_amount',e.target.value)} placeholder="200000" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Monthly Amortization ₱</label><input type="number" className="input mt-0.5" value={f.monthly_amortization} onChange={e=>up('monthly_amortization',e.target.value)} placeholder="5000" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Number of Months</label><input type="number" className="input mt-0.5" value={f.num_months} onChange={e=>up('num_months',e.target.value)} placeholder="40" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Deduction Start Date</label><input type="date" className="input mt-0.5" value={f.deduction_start_date||''} onChange={e=>up('deduction_start_date',e.target.value)} /></div>
+        </div>
+        <div><label className="text-[10px] uppercase font-semibold text-slate-400">Remarks</label><textarea className="input mt-0.5 min-h-[50px]" value={f.remarks} onChange={e=>up('remarks',e.target.value)} placeholder="e.g. Regular SSS salary loan for housing improvement." /></div>
+        <div><label className="text-[10px] uppercase font-semibold text-slate-400">Supporting Document</label>
+          <div className="mt-1 flex items-center gap-2">
+            <label className="text-xs px-3 py-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:border-slate-400 cursor-pointer">📎 {uploading?'Uploading…':(f.document_url?'Replace file':'Upload PDF / photo')}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ onDoc(e.target.files?.[0]); e.target.value=''; }} /></label>
+            {f.document_url && <span className="text-xs text-emerald-600">✓ attached</span>}
+          </div>
+        </div>
+        <div className="rounded-lg bg-indigo-50 border border-indigo-100 p-3 text-sm">
+          <div className="font-semibold text-indigo-800 mb-1">📅 Deduction schedule preview</div>
+          <div className="flex justify-between"><span className="text-slate-600">Loan amount</span><span className="font-semibold">{peso(amt)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-600">Monthly amortization</span><span className="font-semibold">{peso(monthly)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-600">Number of months</span><span className="font-semibold">{months||'—'}{months?' months':''}</span></div>
+          <div className="flex justify-between border-t mt-1 pt-1"><span className="text-slate-600">Estimated end date</span><span className="font-semibold">{estEnd?fmtDate(estEnd):'—'}</span></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex justify-end gap-2 pt-1 border-t">
+          <button onClick={onClose} className="px-3 py-2 rounded-lg border text-sm font-semibold">Cancel</button>
+          <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Save & Activate')}</button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 function EmployeeLoansView({ profile, profiles, employees, hrLoans, hrLoanInstallments, bankAccounts, reload }){
@@ -41220,6 +41388,7 @@ function App(){
   const [hrCases,setHrCases]=useState([]); const [hrMovements,setHrMovements]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
   const [hrEscalations,setHrEscalations]=useState([]); const [inboxEscalationId,setInboxEscalationId]=useState(null);
   const [hrLoans,setHrLoans]=useState([]); const [hrLoanPayments,setHrLoanPayments]=useState([]); const [hrLoanInstallments,setHrLoanInstallments]=useState([]);
+  const [govLoans,setGovLoans]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
@@ -41571,6 +41740,7 @@ function App(){
     try { const eca = await sb.from('expense_categories').select('name').order('name',{ascending:true}); const names=(eca && !eca.error)?(eca.data||[]).map(r=>r.name).filter(Boolean):[]; EXTRA_EXPENSE_CATEGORIES = names; setExtraExpenseCats(names); } catch(_){ EXTRA_EXPENSE_CATEGORIES=[]; setExtraExpenseCats([]); }
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
+    try { const gvl = await sb.from('gov_loans').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setGovLoans(gvl && !gvl.error ? (gvl.data||[]) : []); } catch(_){ setGovLoans([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
     try { const hli = await sb.from('employee_loan_installments').select('*').order('seq',{ascending:true}); setHrLoanInstallments(hli && !hli.error ? (hli.data||[]) : []); } catch(_){ setHrLoanInstallments([]); }
     try { const stg = await sb.from('sales_targets').select('*'); setSalesTargets(stg && !stg.error ? (stg.data||[]) : []); } catch(_){ setSalesTargets([]); }
@@ -41736,7 +41906,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','hr-recruit','hr-templates','payroll','budgets','profile','trip-tickets']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates','payroll','budgets','profile','trip-tickets']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -42332,7 +42502,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       FINANCE_DEPT_ONLY,
@@ -42468,7 +42638,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -42622,6 +42792,7 @@ function App(){
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='gov-loans' && <GovLoansView profile={profile} employees={employees} govLoans={govLoans} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
         {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
