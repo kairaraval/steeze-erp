@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 633 · The 201 employee file is now complete: opening an employee shows new tabs for Loans (government + company), Leave (records + credits), and NTE / Cases (disciplinary), alongside Documents, Checklists, Trainings, Memos and Timeline — everything for that person connected in one place.";
+const BUILD = "Live build 634 · The 201 file's Loans tab now shows each company loan's total payable, amount paid and REMAINING balance (not just principal) — matching the Employee Loans view. Government loan remaining was already shown.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13102,7 +13102,7 @@ function SalaryReportView({ profile, employees }){
   );
 }
 
-function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, hrTemplates, hrChecklists, hrTrainings, govLoans, hrLoans, hrCases, hrLeaves, reload }){
+function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeMemos, employeeNotes, hrTemplates, hrChecklists, hrTrainings, govLoans, hrLoans, hrLoanInstallments, hrCases, hrLeaves, reload }){
   const [search,setSearch]=useState('');
   const [filterDept,setFilterDept]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
@@ -13254,7 +13254,7 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
         })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No employees match the filters. {totalCount===0 && 'Click "+ New employee" to add the first one.'}</td></tr>}</tbody>
       </table></div></div>
 
-      {opening && <EmployeeDetailModal employee={(employees||[]).find(x=>x.id===opening.id)||opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} checklists={(hrChecklists||[]).filter(c=>c.employee_id===opening.id)} trainings={(hrTrainings||[]).filter(t=>t.employee_id===opening.id)} govLoans={(govLoans||[]).filter(g=>g.employee_id===opening.id)} companyLoans={(hrLoans||[]).filter(g=>g.employee_id===opening.id)} cases={(hrCases||[]).filter(c=>c.employee_id===opening.id)} leaves={(hrLeaves||[]).filter(l=>l.employee_id===opening.id)} hrTemplates={hrTemplates} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
+      {opening && <EmployeeDetailModal employee={(employees||[]).find(x=>x.id===opening.id)||opening} profiles={profiles} profile={profile} allEmployees={employees} docs={(employeeDocs||[]).filter(d=>d.employee_id===opening.id)} memos={(employeeMemos||[]).filter(m=>m.employee_id===opening.id)} notes={(employeeNotes||[]).filter(n=>n.employee_id===opening.id)} checklists={(hrChecklists||[]).filter(c=>c.employee_id===opening.id)} trainings={(hrTrainings||[]).filter(t=>t.employee_id===opening.id)} govLoans={(govLoans||[]).filter(g=>g.employee_id===opening.id)} companyLoans={(hrLoans||[]).filter(g=>g.employee_id===opening.id)} loanInstallments={hrLoanInstallments||[]} cases={(hrCases||[]).filter(c=>c.employee_id===opening.id)} leaves={(hrLeaves||[]).filter(l=>l.employee_id===opening.id)} hrTemplates={hrTemplates} onClose={()=>setOpening(null)} onSaved={()=>{ reload(); }} />}
       {creating && <EmployeeFormModal employee={null} profiles={profiles} profile={profile} allEmployees={employees} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
     </div>
   );
@@ -13262,7 +13262,7 @@ function HREmployeesView({ profile, profiles, employees, employeeDocs, employeeM
 
 // 201 Detail with tabs (Overview / Documents / Memos / Timeline). Edit button
 // at the top opens the form modal in edit mode.
-function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, memos, notes, checklists, trainings, govLoans=[], companyLoans=[], cases=[], leaves=[], hrTemplates, onClose, onSaved }){
+function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, memos, notes, checklists, trainings, govLoans=[], companyLoans=[], loanInstallments=[], cases=[], leaves=[], hrTemplates, onClose, onSaved }){
   const [tab,setTab]=useState('overview');
   const [editing,setEditing]=useState(false);
   const [addingMemo,setAddingMemo]=useState(false);
@@ -13520,12 +13520,12 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             <div>
               <div className="text-xs uppercase font-bold text-slate-500 mb-2">💵 Company loans / cash advances</div>
               {companyLoans.length===0 ? <div className="text-sm text-slate-400 bg-white border rounded-lg p-3">No company loans on file. <span className="text-slate-400">Manage in HR → Employee Loans.</span></div> : (
-                <div className="bg-white border rounded-lg overflow-hidden"><table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-1.5">Date granted</th><th className="text-left px-3 py-1.5">Purpose</th><th className="text-right px-3 py-1.5">Principal</th><th className="text-center px-3 py-1.5">Status</th></tr></thead>
-                  <tbody>{companyLoans.map(l=>(
-                    <tr key={l.id} className="border-t"><td className="px-3 py-1.5 text-xs">{l.date_granted?fmtDate(l.date_granted):'—'}</td><td className="px-3 py-1.5 text-xs">{l.purpose||l.loan_type||'—'}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(l.principal||l.amount)}</td><td className="px-3 py-1.5 text-center"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='paid'?'bg-slate-200 text-slate-600':l.status==='rejected'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{l.status||'—'}</span></td></tr>
-                  ))}</tbody>
-                </table></div>
+                <div className="bg-white border rounded-lg overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-1.5">Date granted</th><th className="text-left px-3 py-1.5">Purpose</th><th className="text-right px-3 py-1.5">Principal</th><th className="text-right px-3 py-1.5">Total payable</th><th className="text-right px-3 py-1.5">Paid</th><th className="text-right px-3 py-1.5">Remaining</th><th className="text-center px-3 py-1.5">Status</th></tr></thead>
+                  <tbody>{companyLoans.map(l=>{ const c=loanCompute(l, loanInstallments); return (
+                    <tr key={l.id} className="border-t"><td className="px-3 py-1.5 text-xs">{l.date_granted?fmtDate(l.date_granted):'—'}</td><td className="px-3 py-1.5 text-xs">{l.purpose||l.loan_type||'—'}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(c.principal)}</td><td className="px-3 py-1.5 text-right">{peso(c.totalPayable)}</td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(c.paid)}</td><td className="px-3 py-1.5 text-right font-semibold text-rose-700">{peso(c.outstanding)}</td><td className="px-3 py-1.5 text-center"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='paid'?'bg-slate-200 text-slate-600':l.status==='rejected'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{l.status||'—'}</span></td></tr>
+                  ); })}</tbody>
+                </table></div></div>
               )}
             </div>
           </div>
@@ -42847,7 +42847,7 @@ function App(){
         {view==='goals' && profile.role==='admin' && <GoalsBoardView profile={profile} soPayments={soPayments} salesOrders={salesOrders} clients={clients} employees={employees} />}
         {view==='sourcing' && profile.role==='admin' && <SourcingView profile={profile} profiles={profiles} />}
         {view==='reports' && <ReportsView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} orders={orders} suppliers={suppliers} salesOrders={salesOrders} soPayments={soPayments} items={items} requests={requests} stockMovements={stockMovements} employees={employees} bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} vouchers={vouchers} cashAdvances={cashAdvances} budgetRequests={budgetRequests} rfps={rfps} apVouchers={apVouchers} />}
-        {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} govLoans={govLoans} hrLoans={hrLoans} hrCases={hrCases} hrLeaves={hrLeaves} reload={loadAll} />}
+        {view==='employees' && <HREmployeesView profile={profile} profiles={profiles} employees={employees} employeeDocs={employeeDocs} employeeMemos={employeeMemos} employeeNotes={employeeNotes} hrTemplates={hrTemplates} hrChecklists={hrChecklists} hrTrainings={hrTrainings} govLoans={govLoans} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} hrCases={hrCases} hrLeaves={hrLeaves} reload={loadAll} />}
         {view==='hr-salary' && <SalaryReportView profile={profile} employees={employees} />}
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
