@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 635 · Imported 112 government loans (SSS + Pag-IBIG) from the 2025 201 records across 47 employees into the Government Loans register — each linked to its employee's 201 file with amount granted, monthly amortization, deductions to date and remaining balance. Added 'Emergency Loan' as a loan type.";
+const BUILD = "Live build 636 · Government Loans now flags OVERPAID loans (deductions beyond the loan amount = agency over-collected): a red ⚠ Overpaid summary card, an Overpaid filter tab, red row highlight, and the over-collected amount shown in place of the remaining balance so HR can chase refunds. 7 loans across 5 staff currently flagged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16761,6 +16761,8 @@ async function notifyAccountingLoanReady(loan, empName, actorId, profiles){
 const GOV_AGENCIES = ['SSS','Pag-IBIG'];
 const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Emergency Loan','Multi-Purpose Loan','Housing Loan','Other'];
 function govLoanRemaining(l){ return Math.max(0, Number(l.loan_amount||0) - Number(l.amount_paid||0)); }
+// Amount deducted BEYOND the loan (agency over-collected). >0 means the employee is owed a refund / credit.
+function govLoanOverpaid(l){ return Math.max(0, Number(l.amount_paid||0) - Number(l.loan_amount||0)); }
 function canManageGovLoans(p){ return ['admin','hr','accounting','accounting_officer'].includes(p?.role); }
 
 function GovLoansView({ profile, employees, govLoans, reload }){
@@ -16777,13 +16779,16 @@ function GovLoansView({ profile, employees, govLoans, reload }){
   const sssActive=active.filter(l=>l.agency==='SSS'); const pagActive=active.filter(l=>l.agency==='Pag-IBIG');
   const sssOut=sssActive.reduce((s,l)=>s+govLoanRemaining(l),0); const pagOut=pagActive.reduce((s,l)=>s+govLoanRemaining(l),0);
   const completedCount=list.filter(l=>l.status==='completed').length;
-  const counts={ all:list.length, sss:list.filter(l=>l.agency==='SSS').length, pagibig:list.filter(l=>l.agency==='Pag-IBIG').length, active:active.length, completed:completedCount };
+  const overpaidList=list.filter(l=>govLoanOverpaid(l)>0.005);
+  const overpaidTotal=overpaidList.reduce((s,l)=>s+govLoanOverpaid(l),0);
+  const counts={ all:list.length, sss:list.filter(l=>l.agency==='SSS').length, pagibig:list.filter(l=>l.agency==='Pag-IBIG').length, active:active.length, completed:completedCount, overpaid:overpaidList.length };
   const q=search.trim().toLowerCase();
   const shown=list.filter(l=>{
     if(tab==='sss' && l.agency!=='SSS') return false;
     if(tab==='pagibig' && l.agency!=='Pag-IBIG') return false;
     if(tab==='active' && l.status!=='active') return false;
     if(tab==='completed' && l.status!=='completed') return false;
+    if(tab==='overpaid' && !(govLoanOverpaid(l)>0.005)) return false;
     if(q && !`${empName(l.employee_id)} ${l.reference_no||''} ${l.loan_type||''} ${l.department||''}`.toLowerCase().includes(q)) return false;
     return true;
   });
@@ -16798,7 +16803,7 @@ function GovLoansView({ profile, employees, govLoans, reload }){
   }
   async function del(l){ if(!confirm(`Delete this ${l.agency||''} loan record for ${empName(l.employee_id)}?`)) return; const { error }=await sb.from('gov_loans').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', l.id); if(error){ alert(error.message); return; } setMenuFor(null); reload(); }
   const agencyBadge=(a)=> a==='SSS' ? 'bg-sky-100 text-sky-700' : a==='Pag-IBIG' ? 'bg-fuchsia-100 text-fuchsia-700' : 'bg-slate-100 text-slate-600';
-  const TABS=[['all','All',counts.all],['sss','SSS',counts.sss],['pagibig','Pag-IBIG',counts.pagibig],['active','Active',counts.active],['completed','Completed',counts.completed]];
+  const TABS=[['all','All',counts.all],['sss','SSS',counts.sss],['pagibig','Pag-IBIG',counts.pagibig],['active','Active',counts.active],['completed','Completed',counts.completed],['overpaid','⚠ Overpaid',counts.overpaid]];
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -16810,12 +16815,13 @@ function GovLoansView({ profile, employees, govLoans, reload }){
           {canEdit && <button onClick={()=>setAdding(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Record New Loan</button>}
         </div>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-2 mb-4">
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Active Loans</div><div className="text-2xl font-bold">{counts.active}</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">This Month's Deductions</div><div className="text-2xl font-bold text-emerald-700">{peso(monthlyDeductions)}</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">SSS Loans</div><div className="text-2xl font-bold">{sssActive.length}</div><div className="text-[10px] text-slate-400">{peso(sssOut)} outstanding</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Pag-IBIG Loans</div><div className="text-2xl font-bold">{pagActive.length}</div><div className="text-[10px] text-slate-400">{peso(pagOut)} outstanding</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Completed</div><div className="text-2xl font-bold text-slate-500">{completedCount}</div></div>
+        <button onClick={()=>setTab('overpaid')} className={`text-left rounded-xl border p-3 ${counts.overpaid?'bg-rose-50 border-rose-200 hover:bg-rose-100':'bg-white'}`}><div className="text-[10px] uppercase text-slate-400">⚠ Overpaid</div><div className={`text-2xl font-bold ${counts.overpaid?'text-rose-700':'text-slate-400'}`}>{counts.overpaid}</div>{counts.overpaid>0 && <div className="text-[10px] text-rose-500">{peso(overpaidTotal)} to refund</div>}</button>
       </div>
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-1 text-xs flex-wrap">{TABS.map(([k,label,n])=>(
@@ -16828,8 +16834,8 @@ function GovLoansView({ profile, employees, govLoans, reload }){
           <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Agency</th><th className="text-left px-3 py-2">Loan Type</th>
           <th className="text-right px-3 py-2">Loan Amount</th><th className="text-right px-3 py-2">Monthly</th><th className="text-left px-3 py-2">Start</th><th className="text-right px-3 py-2">Remaining</th><th className="text-center px-3 py-2">Status</th><th className="text-right px-3 py-2">Actions</th>
         </tr></thead>
-        <tbody>{shown.map(l=>{ const rem=govLoanRemaining(l); return (
-          <tr key={l.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>canEdit&&setEditing(l)}>
+        <tbody>{shown.map(l=>{ const rem=govLoanRemaining(l); const over=govLoanOverpaid(l); return (
+          <tr key={l.id} className={`border-t cursor-pointer ${over>0.005?'bg-rose-50 hover:bg-rose-100':'hover:bg-slate-50'}`} onClick={()=>canEdit&&setEditing(l)}>
             <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
             <td className="px-3 py-2 text-xs text-slate-500">{l.department||'—'}</td>
             <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${agencyBadge(l.agency)}`}>{l.agency||'—'}</span></td>
@@ -16837,8 +16843,8 @@ function GovLoansView({ profile, employees, govLoans, reload }){
             <td className="px-3 py-2 text-right font-semibold">{peso(l.loan_amount)}</td>
             <td className="px-3 py-2 text-right">{peso(l.monthly_amortization)}</td>
             <td className="px-3 py-2 text-xs">{l.deduction_start_date?fmtDate(l.deduction_start_date):'—'}</td>
-            <td className="px-3 py-2 text-right font-semibold">{peso(rem)}</td>
-            <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='completed'?'bg-slate-200 text-slate-600':l.status==='cancelled'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{l.status||'active'}</span></td>
+            <td className="px-3 py-2 text-right font-semibold">{over>0.005 ? <span className="text-rose-700">−{peso(over)}<div className="text-[9px] font-normal uppercase">overpaid</div></span> : peso(rem)}</td>
+            <td className="px-3 py-2 text-center">{over>0.005 ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">⚠ Overpaid</span> : <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='completed'?'bg-slate-200 text-slate-600':l.status==='cancelled'?'bg-rose-100 text-rose-700':'bg-emerald-100 text-emerald-700'}`}>{l.status||'active'}</span>}</td>
             <td className="px-3 py-2 text-right relative" onClick={(e)=>e.stopPropagation()}>
               {canEdit ? (<>
                 <button onClick={()=>setMenuFor(menuFor===l.id?null:l.id)} className="px-2 py-1 rounded hover:bg-slate-100 text-slate-500 text-lg leading-none">⋯</button>
