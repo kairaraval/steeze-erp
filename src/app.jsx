@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 638 · New Production list: SUBCON SEWING. Toggle By Subcon ↔ By Project to see what each subcontract sewer is working on and which subcons are on each project (2–3 per project supported). Auto-pulls pcs out / returned / balance + due dates from sewing batch-outs, and lets production assign a subcon to a project with an item + target return date. Overdue flagging built in.";
+const BUILD = "Live build 639 · Subcon Sewing now flows from the Production Board: any job set to “Out to Sewing Subcon” appears here automatically with its client, item and quantity. Assign one or more subcons (with editable quantity + due date), tick each subcon's portion done, and Admin/Production Supervisor can Mark the whole project done — which moves it to Quality Check on the board. Active / Done / All tabs added.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8258,16 +8258,24 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
    project are simply listed together (no single "lead"). */
 function subconSewingCanEdit(p){ return ['admin','production','production_supervisor','production_assistant','sewing_lead','accounting','accounting_officer','purchasing_admin'].includes(p?.role); }
 
-function SubconSewingView({ profile, subcons, leads, clients, reload }){
+const SUBCON_SEW_STATUS='out to sewing subcon';
+const SUBCON_SEW_NEXT='quality check (qc)';
+function prodStatusIdx(k){ return PRODUCTION_STATUSES.findIndex(s=>s.key===k); }
+function canDoneSubconProject(p){ return ['admin','production_supervisor'].includes(p?.role); }
+
+function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }){
   const canEdit = subconSewingCanEdit(profile);
-  const [mode,setMode]=useState('subcon');   // 'subcon' | 'project'
+  const canDone = canDoneSubconProject(profile);
+  const [mode,setMode]=useState('project');   // 'subcon' | 'project'
+  const [tab,setTab]=useState('active');       // 'active' | 'done' | 'all'
   const [batches,setBatches]=useState([]);
   const [assigns,setAssigns]=useState([]);
   const [search,setSearch]=useState('');
   const [busy,setBusy]=useState(true);
-  const [editing,setEditing]=useState(null);  // assignment object (or {lead_id?,subcon_id?}) when the modal is open
+  const [editing,setEditing]=useState(null);
   const [collapsed,setCollapsed]=useState({});
   const todayISO=new Date().toISOString().slice(0,10);
+  const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
   async function load(){ setBusy(true);
     try{ const { data }=await sb.from('sorting_batches').select('*').eq('destination_type','subcon').is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
@@ -8279,114 +8287,190 @@ function SubconSewingView({ profile, subcons, leads, clients, reload }){
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
   const subconName=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
   const projLabel=(leadId, fbClient, fbItem)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?clientName(l.client_id):''; const parts=[]; if(c) parts.push(c); else if(fbClient) parts.push(fbClient); if(l&&l.title) parts.push(l.title); else if(fbItem) parts.push(fbItem); return parts.filter(Boolean).join(' · ') || (fbClient||fbItem||'Project'); };
+  const num=(n)=>Number(n||0).toLocaleString();
 
-  const rows = React.useMemo(()=>{
-    const map=new Map();
-    const keyOf=(lead,sub)=>`${lead||'?'}|${sub||'?'}`;
-    const blank=(lead,sub)=>({ lead_id:lead, subcon_id:sub, items:new Set(), out:0, returned:0, batchCount:0, dueDates:[], assignment:null, clientName:'', itemName:'', subconNameRaw:'' });
+  // Build one entry per PROJECT (from the Production Board job that's "out to sewing
+  // subcon", plus any project that already has subcon assignments/batches), each
+  // carrying its subcon sub-rows.
+  const projects = React.useMemo(()=>{
     const idByName={}; (subcons||[]).forEach(s=>{ idByName[(s.name||'').toLowerCase()]=s.id; });
-    (assigns||[]).forEach(a=>{ const k=keyOf(a.lead_id,a.subcon_id); const r=map.get(k)||blank(a.lead_id,a.subcon_id); r.assignment=a; if(a.item_label) r.items.add(a.item_label); if(a.target_return_date) r.dueDates.push(a.target_return_date); map.set(k,r); });
-    (batches||[]).forEach(b=>{ const sub=b.subcon_id || idByName[(b.subcon_name||'').toLowerCase()] || null; const k=keyOf(b.lead_id,sub); const r=map.get(k)||blank(b.lead_id,sub); const g=batchGarmentTotal(b); r.out+=g; if(b.status==='returned') r.returned+=g; if(b.item_label) r.items.add(b.item_label); else if(b.item) r.items.add(b.item); if(!r.clientName && b.client_name) r.clientName=b.client_name; if(!r.itemName && b.item) r.itemName=b.item; if(!r.subconNameRaw && b.subcon_name) r.subconNameRaw=b.subcon_name; if(b.expected_due_date && b.status!=='returned') r.dueDates.push(b.expected_due_date); r.batchCount++; map.set(k,r); });
-    return Array.from(map.values()).map(r=>{
-      r.balance=Math.max(0, r.out - r.returned);
-      r.due=(r.dueDates||[]).filter(Boolean).sort()[0]||null;
-      r.overdue=!!(r.due && r.due<todayISO && r.balance>0);
-      r.project=projLabel(r.lead_id, r.clientName, r.itemName);
-      r.subcon=r.subcon_id ? subconName(r.subcon_id) : (r.subconNameRaw||'Subcon');
-      r.itemList=Array.from(r.items).filter(Boolean).join(', ');
-      r.manualOnly=r.batchCount===0;
-      return r;
+    const map=new Map();
+    const blankSub=(sk)=>({ subcon_id: sk==='?'?null:sk, items:new Set(), out:0, returned:0, qty:0, dueDates:[], assignment:null, done:false, batchCount:0, subconNameRaw:'' });
+    const ensure=(leadId, jobHint)=>{ const k=leadId||(jobHint?('job:'+jobHint.id):null); if(!k) return null; if(map.has(k)){ const p=map.get(k); if(!p.job&&jobHint) p.job=jobHint; return p; } const job=jobHint||(prodJobs||[]).find(j=>j.lead_id===leadId&&!j.deleted_at); const p={ key:k, lead_id:leadId||null, job:job||null, subs:new Map(), client:job?.client_name||'', item:job?.item||'', plannedQty:Number(job?.quantity)||0, projDue:job?.due_date||null, number:job?.number||'' }; map.set(k,p); return p; };
+    (prodJobs||[]).filter(j=>j.status===SUBCON_SEW_STATUS && !j.deleted_at).forEach(j=>ensure(j.lead_id,j));
+    (assigns||[]).forEach(a=>{ const p=ensure(a.lead_id); if(!p) return; const sk=a.subcon_id||'?'; const s=p.subs.get(sk)||blankSub(sk); s.assignment=a; if(a.item_label) s.items.add(a.item_label); if(a.qty!=null&&a.qty!=='') s.qty=Number(a.qty)||0; if(a.target_return_date) s.dueDates.push(a.target_return_date); if(a.done) s.done=true; p.subs.set(sk,s); });
+    (batches||[]).forEach(b=>{ const p=ensure(b.lead_id); if(!p) return; const sub=b.subcon_id||idByName[(b.subcon_name||'').toLowerCase()]||'?'; const s=p.subs.get(sub)||blankSub(sub); const g=batchGarmentTotal(b); s.out+=g; if(b.status==='returned') s.returned+=g; if(b.item_label) s.items.add(b.item_label); else if(b.item) s.items.add(b.item); if(!s.subconNameRaw&&b.subcon_name) s.subconNameRaw=b.subcon_name; if(b.expected_due_date&&b.status!=='returned') s.dueDates.push(b.expected_due_date); s.batchCount++; if(!p.client&&b.client_name)p.client=b.client_name; if(!p.item&&b.item)p.item=b.item; p.subs.set(sub,s); });
+    return Array.from(map.values()).map(p=>{
+      p.label=projLabel(p.lead_id, p.client, p.item);
+      const ji=p.job?prodStatusIdx(p.job.status):-1;
+      p.projectDone = ji>=0 && ji>SUBCON_IDX;
+      p.rows=Array.from(p.subs.values()).filter(s=>s.subcon_id||s.assignment||s.out>0||s.batchCount>0).map(s=>{
+        s.balance=Math.max(0, s.out - s.returned);
+        s.due=(s.dueDates||[]).filter(Boolean).sort()[0]||null;
+        s.overdue=!!(s.due && s.due<todayISO && s.balance>0 && !s.done && !p.projectDone);
+        s.subcon=s.subcon_id?subconName(s.subcon_id):(s.subconNameRaw||'Subcon');
+        s.itemList=Array.from(s.items).filter(Boolean).join(', ');
+        s.manualOnly=s.batchCount===0;
+        return s;
+      }).sort((a,b)=>a.subcon.localeCompare(b.subcon));
+      p.out=p.rows.reduce((x,s)=>x+s.out,0); p.returned=p.rows.reduce((x,s)=>x+s.returned,0); p.balance=p.rows.reduce((x,s)=>x+s.balance,0);
+      p.overdue=p.rows.some(s=>s.overdue);
+      return p;
     });
-  }, [assigns, batches, subcons, leads, clients]);
+  }, [assigns, batches, subcons, leads, clients, prodJobs]);
 
   const q=search.trim().toLowerCase();
-  const shown=rows.filter(r=> !q || `${r.subcon} ${r.project} ${r.itemList}`.toLowerCase().includes(q));
+  const matchP=(p)=> !q || `${p.label} ${p.number} ${p.rows.map(s=>s.subcon+' '+s.itemList).join(' ')}`.toLowerCase().includes(q);
+  const tabP=(p)=> tab==='all' ? true : tab==='done' ? p.projectDone : !p.projectDone;
+  const projShown=projects.filter(p=>matchP(p)&&tabP(p)).sort((a,b)=>a.label.localeCompare(b.label));
 
-  const activeSubcons=new Set(shown.filter(r=>r.out>0||r.balance>0||r.manualOnly).map(r=>r.subcon_id||r.subcon)).size;
-  const activeProjects=new Set(shown.map(r=>r.lead_id||r.project)).size;
-  const totalOut=shown.reduce((s,r)=>s+r.out,0);
-  const totalPending=shown.reduce((s,r)=>s+r.balance,0);
-  const overdueCount=shown.filter(r=>r.overdue).length;
+  // flat rows for the By-Subcon view (only rows with a real subcon)
+  const flat=[]; projShown.forEach(p=> p.rows.forEach(s=>{ if(s.subcon_id) flat.push({p,s}); }));
 
-  const groups=(()=>{ const g=new Map(); shown.forEach(r=>{ const k=mode==='subcon'?(r.subcon_id||r.subcon):(r.lead_id||r.project); if(!g.has(k)) g.set(k,{ title: mode==='subcon'?r.subcon:r.project, rows:[] }); g.get(k).rows.push(r); }); return Array.from(g.entries()).map(([k,v])=>({ key:k, ...v })).sort((a,b)=>a.title.localeCompare(b.title)); })();
+  const activeSubcons=new Set(projects.filter(p=>!p.projectDone).flatMap(p=>p.rows.filter(s=>s.subcon_id).map(s=>s.subcon_id))).size;
+  const activeProjects=projects.filter(p=>!p.projectDone).length;
+  const totalOut=projects.filter(p=>!p.projectDone).reduce((s,p)=>s+p.out,0);
+  const totalPending=projects.filter(p=>!p.projectDone).reduce((s,p)=>s+p.balance,0);
+  const overdueCount=projects.filter(p=>!p.projectDone && p.overdue).length;
 
-  async function del(a){ if(!confirm('Remove this subcon assignment? (This only removes the manual assignment — batch-out history stays.)')) return; await sb.from('subcon_assignments').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',a.id); load(); reload&&reload(); }
+  async function del(a){ if(!confirm('Remove this subcon assignment? (Batch-out history stays.)')) return; await sb.from('subcon_assignments').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',a.id); load(); reload&&reload(); }
+  async function toggleDone(p,s){
+    const now=new Date().toISOString();
+    if(s.assignment){ await sb.from('subcon_assignments').update({ done:!s.done, done_at: !s.done?now:null, done_by: !s.done?profile.id:null, updated_at:now }).eq('id',s.assignment.id); }
+    else if(s.subcon_id && p.lead_id){ await sb.from('subcon_assignments').insert({ lead_id:p.lead_id, subcon_id:s.subcon_id, done:true, done_at:now, done_by:profile.id, created_by:profile.id }); }
+    load(); reload&&reload();
+  }
+  async function markProjectDone(p){
+    if(!confirm(`Mark subcon sewing DONE for "${p.label}"?${p.job?`\n\nThis moves the job to “Quality Check (QC)” on the Production Board.`:''}`)) return;
+    const now=new Date().toISOString();
+    // tick every subcon portion done
+    const ids=p.rows.filter(s=>s.assignment&&!s.done).map(s=>s.assignment.id);
+    if(ids.length) await sb.from('subcon_assignments').update({ done:true, done_at:now, done_by:profile.id, updated_at:now }).in('id',ids);
+    if(p.job){ await sb.from('production_jobs').update({ status:SUBCON_SEW_NEXT }).eq('id',p.job.id); }
+    load(); reload&&reload();
+  }
+  async function reopenProject(p){
+    if(!p.job) return;
+    if(!confirm(`Reopen "${p.label}" back to “Out to Sewing Subcon”?`)) return;
+    await sb.from('production_jobs').update({ status:SUBCON_SEW_STATUS }).eq('id',p.job.id);
+    load(); reload&&reload();
+  }
+  const statusMeta=(k)=>PRODUCTION_STATUSES.find(s=>s.key===k);
 
-  const num=(n)=>Number(n||0).toLocaleString();
+  // sub-row action cell (shared by both views)
+  const ActionCell=({p,s})=> !canEdit ? null : (
+    <td className="px-3 py-2 text-right whitespace-nowrap">
+      {!p.projectDone && <button onClick={()=>toggleDone(p,s)} className={`text-xs font-semibold mr-2 ${s.done?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{s.done?'Undo':'✓ Done'}</button>}
+      <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+      {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
+    </td>
+  );
+  const subRow=(p,s,i,showProject)=>(
+    <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
+      <td className="px-3 py-2 font-medium">{showProject?p.label:s.subcon}{s.done && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>}{!s.done&&s.manualOnly && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
+      <td className="px-3 py-2 text-xs text-slate-500">{s.itemList||'—'}</td>
+      <td className="px-3 py-2 text-right">{s.qty?num(s.qty):'—'}</td>
+      <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
+      <td className="px-3 py-2 text-right text-emerald-700">{s.returned?num(s.returned):'—'}</td>
+      <td className="px-3 py-2 text-right font-semibold">{s.out?<span className={s.balance>0?'text-amber-700':'text-emerald-700'}>{num(s.balance)}</span>:'—'}</td>
+      <td className="px-3 py-2 text-xs">{s.due ? <span className={s.overdue?'text-rose-700 font-semibold':''}>{fmtDate(s.due)}{s.overdue?' ⚠':''}</span> : '—'}</td>
+      <ActionCell p={p} s={s} />
+    </tr>
+  );
+  const headRow=(firstCol)=>(
+    <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr>
+      <th className="text-left px-3 py-2">{firstCol}</th>
+      <th className="text-left px-3 py-2">Item</th>
+      <th className="text-right px-3 py-2">Qty</th>
+      <th className="text-right px-3 py-2">Out</th>
+      <th className="text-right px-3 py-2">Returned</th>
+      <th className="text-right px-3 py-2">Balance</th>
+      <th className="text-left px-3 py-2">Due</th>
+      {canEdit && <th></th>}
+    </tr></thead>
+  );
+
+  // By-Subcon grouping
+  const subGroups=(()=>{ const g=new Map(); flat.forEach(({p,s})=>{ const k=s.subcon_id; if(!g.has(k)) g.set(k,{ title:s.subcon, items:[] }); g.get(k).items.push({p,s}); }); return Array.from(g.entries()).map(([k,v])=>({ key:k, ...v })).sort((a,b)=>a.title.localeCompare(b.title)); })();
+
+  const TABS=[['active','Active'],['done','Done'],['all','All']];
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">🧵 Subcon Sewing</h1><p className="text-slate-500 text-sm">Who our subcontract sewers are working on — and which subcons are on each project.</p></div>
+          <div><h1 className="text-2xl font-bold">🧵 Subcon Sewing</h1><p className="text-slate-500 text-sm">Projects sent “Out to Sewing Subcon” on the Production Board — who's on each, and each subcon's projects.</p></div>
           {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Assign subcon</button>}
         </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Active Subcons</div><div className="text-2xl font-bold">{activeSubcons}</div></div>
-        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Projects Out</div><div className="text-2xl font-bold">{activeProjects}</div></div>
+        <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Active Projects</div><div className="text-2xl font-bold">{activeProjects}</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Pcs Out</div><div className="text-2xl font-bold text-indigo-700">{num(totalOut)}</div></div>
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Pcs Pending</div><div className="text-2xl font-bold text-amber-700">{num(totalPending)}</div></div>
         <div className={`rounded-xl border p-3 ${overdueCount?'bg-rose-50 border-rose-200':'bg-white'}`}><div className="text-[10px] uppercase text-slate-400">⚠ Overdue</div><div className={`text-2xl font-bold ${overdueCount?'text-rose-700':'text-slate-400'}`}>{overdueCount}</div></div>
       </div>
 
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-        <div className="inline-flex rounded-lg border bg-white overflow-hidden text-sm">
-          <button onClick={()=>setMode('subcon')} className={`px-4 py-1.5 font-semibold ${mode==='subcon'?'bg-indigo-600 text-white':'hover:bg-slate-50'}`}>By Subcon</button>
-          <button onClick={()=>setMode('project')} className={`px-4 py-1.5 font-semibold ${mode==='project'?'bg-indigo-600 text-white':'hover:bg-slate-50'}`}>By Project</button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-white overflow-hidden text-sm">
+            <button onClick={()=>setMode('project')} className={`px-4 py-1.5 font-semibold ${mode==='project'?'bg-indigo-600 text-white':'hover:bg-slate-50'}`}>By Project</button>
+            <button onClick={()=>setMode('subcon')} className={`px-4 py-1.5 font-semibold ${mode==='subcon'?'bg-indigo-600 text-white':'hover:bg-slate-50'}`}>By Subcon</button>
+          </div>
+          <div className="flex items-center gap-1 text-xs">{TABS.map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg ${tab===k?'bg-slate-800 text-white font-semibold':'bg-white border hover:bg-slate-50'}`}>{l}</button>
+          ))}</div>
         </div>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search subcon, project, item…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, subcon, item…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
       </div>
 
-      {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : groups.length===0 ? (
-        <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No subcon sewing yet. {canEdit?'Click "+ Assign subcon" to assign one to a project, or it will appear automatically once panels are batched out to a subcon.':'Work will appear here once panels are batched out to a subcon.'}</div>
-      ) : (
-        <div className="space-y-3">{groups.map(g=>{
-          const gout=g.rows.reduce((s,r)=>s+r.out,0), gret=g.rows.reduce((s,r)=>s+r.returned,0), gbal=g.rows.reduce((s,r)=>s+r.balance,0);
-          const gOverdue=g.rows.some(r=>r.overdue);
-          const isCol=collapsed[g.key];
+      {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : mode==='project' ? (
+        projShown.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No projects here. A project lands in this list once its Production Board status is set to “Out to Sewing Subcon”.</div> : (
+        <div className="space-y-3">{projShown.map(p=>{
+          const isCol=collapsed[p.key]; const sm=statusMeta(p.job?.status);
           return (
-          <div key={g.key} className={`bg-white rounded-xl border overflow-hidden ${gOverdue?'border-rose-200':''}`}>
-            <button onClick={()=>setCollapsed(c=>({...c,[g.key]:!c[g.key]}))} className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 hover:bg-slate-100 text-left">
-              <div className="flex items-center gap-2 min-w-0">
+          <div key={p.key} className={`bg-white rounded-xl border overflow-hidden ${p.overdue?'border-rose-200':p.projectDone?'border-emerald-200':''}`}>
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
+              <button onClick={()=>setCollapsed(c=>({...c,[p.key]:!c[p.key]}))} className="flex items-center gap-2 min-w-0 text-left">
                 <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span>
-                <span className="text-base">{mode==='subcon'?'🧵':'📦'}</span>
-                <span className="font-bold truncate">{g.title}</span>
-                <span className="text-xs text-slate-400">· {g.rows.length} {mode==='subcon'?'project'+(g.rows.length===1?'':'s'):'subcon'+(g.rows.length===1?'':'s')}</span>
-                {gOverdue && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}
+                <span className="text-base">📦</span>
+                <span className="font-bold truncate">{p.label}</span>
+                {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
+                {p.plannedQty>0 && <span className="text-[11px] text-slate-500">· {num(p.plannedQty)} pcs</span>}
+                {sm && <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.label}</span>}
+                {p.projectDone && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ done</span>}
+                {p.overdue && !p.projectDone && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}
+              </button>
+              <div className="flex items-center gap-3 whitespace-nowrap">
+                <span className="text-xs text-slate-500">{num(p.out)} out · <b className={p.balance>0?'text-amber-700':'text-emerald-700'}>{num(p.balance)} pending</b></span>
+                {canEdit && !p.projectDone && <button onClick={()=>setEditing({ lead_id:p.lead_id })} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Subcon</button>}
+                {canDone && !p.projectDone && <button onClick={()=>markProjectDone(p)} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Mark done</button>}
+                {canDone && p.projectDone && p.job && <button onClick={()=>reopenProject(p)} className="text-xs px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-700 font-semibold hover:bg-amber-50">Reopen</button>}
               </div>
-              <div className="text-xs text-slate-500 whitespace-nowrap">{num(gout)} out · {num(gret)} returned · <b className={gbal>0?'text-amber-700':'text-emerald-700'}>{num(gbal)} pending</b></div>
-            </button>
-            {!isCol && <div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr>
-                <th className="text-left px-3 py-2">{mode==='subcon'?'Project':'Subcon'}</th>
-                <th className="text-left px-3 py-2">Item</th>
-                <th className="text-right px-3 py-2">Out</th>
-                <th className="text-right px-3 py-2">Returned</th>
-                <th className="text-right px-3 py-2">Balance</th>
-                <th className="text-left px-3 py-2">Due</th>
-                {canEdit && <th className="text-right px-3 py-2"></th>}
-              </tr></thead>
-              <tbody>{g.rows.slice().sort((a,b)=> (mode==='subcon'?a.project:a.subcon).localeCompare(mode==='subcon'?b.project:b.subcon)).map((r,i)=>(
-                <tr key={i} className={`border-t ${r.overdue?'bg-rose-50/50':''}`}>
-                  <td className="px-3 py-2 font-medium">{mode==='subcon'?r.project:r.subcon}{r.manualOnly && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500">{r.itemList||'—'}</td>
-                  <td className="px-3 py-2 text-right">{r.out?num(r.out):'—'}</td>
-                  <td className="px-3 py-2 text-right text-emerald-700">{r.returned?num(r.returned):'—'}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{r.out?<span className={r.balance>0?'text-amber-700':'text-emerald-700'}>{num(r.balance)}</span>:'—'}</td>
-                  <td className="px-3 py-2 text-xs">{r.due ? <span className={r.overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.due)}{r.overdue?' ⚠':''}</span> : '—'}</td>
-                  {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {r.assignment ? <>
-                      <button onClick={()=>setEditing(r.assignment)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
-                      <button onClick={()=>del(r.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>
-                    </> : <button onClick={()=>setEditing({ lead_id:r.lead_id, subcon_id:r.subcon_id })} className="text-xs text-slate-400 hover:text-indigo-600">+ due date</button>}
-                  </td>}
-                </tr>
-              ))}</tbody>
-            </table></div>}
+            </div>
+            {!isCol && (p.rows.length===0 ? (
+              <div className="p-4 text-center text-xs text-slate-400">No subcon assigned yet.{canEdit && <> <button onClick={()=>setEditing({ lead_id:p.lead_id })} className="text-indigo-600 hover:underline font-medium">Assign a subcon</button></>}</div>
+            ) : (
+              <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Subcon')}<tbody>{p.rows.map((s,i)=>subRow(p,s,i,false))}</tbody></table></div>
+            ))}
           </div>
         ); })}</div>
-      )}
+      )) : (
+        subGroups.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No subcons assigned in this filter.</div> : (
+        <div className="space-y-3">{subGroups.map(g=>{
+          const isCol=collapsed['s:'+g.key];
+          const gout=g.items.reduce((s,{s:r})=>s+r.out,0), gbal=g.items.reduce((s,{s:r})=>s+r.balance,0);
+          const gOver=g.items.some(({s:r})=>r.overdue);
+          return (
+          <div key={g.key} className={`bg-white rounded-xl border overflow-hidden ${gOver?'border-rose-200':''}`}>
+            <button onClick={()=>setCollapsed(c=>({...c,['s:'+g.key]:!c['s:'+g.key]}))} className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 hover:bg-slate-100 text-left">
+              <div className="flex items-center gap-2 min-w-0"><span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">🧵</span><span className="font-bold truncate">{g.title}</span><span className="text-xs text-slate-400">· {g.items.length} project{g.items.length===1?'':'s'}</span>{gOver && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}</div>
+              <div className="text-xs text-slate-500 whitespace-nowrap">{num(gout)} out · <b className={gbal>0?'text-amber-700':'text-emerald-700'}>{num(gbal)} pending</b></div>
+            </button>
+            {!isCol && <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Project')}<tbody>{g.items.map(({p,s},i)=>subRow(p,s,i,true))}</tbody></table></div>}
+          </div>
+        ); })}</div>
+      ))}
 
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
     </div>
@@ -8395,7 +8479,7 @@ function SubconSewingView({ profile, subcons, leads, clients, reload }){
 
 function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose, onSaved }){
   const isEdit=!!(existing&&existing.id);
-  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', target_return_date: existing?.target_return_date||'', notes: existing?.notes||'' });
+  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', qty: (existing?.qty!=null?existing.qty:''), target_return_date: existing?.target_return_date||'', done: !!existing?.done, notes: existing?.notes||'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
   const leadOpts=(leads||[]).map(l=>({ id:l.id, label:`${clientName(l.client_id)||'—'}${l.title?(' · '+l.title):''}` })).sort((a,b)=>a.label.localeCompare(b.label));
@@ -8405,7 +8489,8 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
     if(!f.lead_id){ setMsg('Pick a project.'); return; }
     if(!f.subcon_id){ setMsg('Pick a subcon.'); return; }
     setBusy(true); setMsg('');
-    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, target_return_date:f.target_return_date||null, notes:f.notes||null, updated_at:new Date().toISOString() };
+    const now=new Date().toISOString();
+    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, qty: (f.qty===''||f.qty==null)?null:Number(f.qty), target_return_date:f.target_return_date||null, done:!!f.done, done_at: f.done?(existing?.done_at||now):null, done_by: f.done?(existing?.done_by||profile.id):null, notes:f.notes||null, updated_at:now };
     let error;
     if(isEdit){ ({ error }=await sb.from('subcon_assignments').update(payload).eq('id',existing.id)); }
     else { ({ error }=await sb.from('subcon_assignments').insert({ ...payload, created_by:profile.id })); }
@@ -8414,13 +8499,17 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
   return (
     <Modal title={isEdit?'Edit subcon assignment':'Assign subcon to project'} onClose={onClose}>
       <div className="space-y-3">
-        <p className="text-xs text-slate-500">Assign a subcon sewer to a project. Pieces out / returned fill in automatically from batch-outs; this sets the item and the target return date.</p>
+        <p className="text-xs text-slate-500">Assign a subcon sewer to a project. Pieces out / returned fill in automatically from batch-outs; here you set the item, the quantity, and the target return date.</p>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Project *</label>
           <select value={f.lead_id} onChange={e=>up('lead_id',e.target.value)} className="input mt-0.5"><option value="">— Select project —</option>{leadOpts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select></div>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Subcon *</label>
           <select value={f.subcon_id} onChange={e=>up('subcon_id',e.target.value)} className="input mt-0.5"><option value="">— Select subcon —</option>{subOpts.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-        <div><label className="text-[10px] uppercase font-semibold text-slate-400">Item / garment (optional)</label><input className="input mt-0.5" value={f.item_label} onChange={e=>up('item_label',e.target.value)} placeholder="e.g. Jersey tops, Shorts" /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Item / garment</label><input className="input mt-0.5" value={f.item_label} onChange={e=>up('item_label',e.target.value)} placeholder="e.g. Jersey tops" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Quantity (pcs)</label><input type="number" className="input mt-0.5" value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="e.g. 300" /></div>
+        </div>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Target return date</label><input type="date" className="input mt-0.5" value={f.target_return_date||''} onChange={e=>up('target_return_date',e.target.value)} /></div>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.done} onChange={e=>up('done',e.target.checked)} className="w-4 h-4" /> Mark this subcon's portion done</label>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Notes</label><textarea className="input mt-0.5 min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. Handling only the tops; JR Sewing on the shorts." /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex justify-end gap-2 pt-1 border-t">
@@ -43178,7 +43267,7 @@ function App(){
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
-        {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} reload={loadAll} />}
+        {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
