@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 643 · Loan schedule fix: the government + company loan installment loads were capped at 1000 rows, so loans with many months lost their later installments — a schedule looked 'fully paid' early (e.g. showed 9/9 when 22 months exist) and you couldn't mark the rest. Both now load every installment, so schedules run to a zero balance.";
+const BUILD = "Live build 644 · Government loan term now reflects the real payoff length: the schedule always spans exactly enough months to reach a zero balance (never short, never overshooting), the loan header shows the true month count, and stored terms were corrected across all loans (e.g. Marquez now 22 mo, not 32).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17041,12 +17041,20 @@ const GOV_LOAN_TYPES = ['Salary Loan','Calamity Loan','Emergency Loan','Multi-Pu
 function govLoanRemaining(l){ return Math.max(0, Number(l.loan_amount||0) - Number(l.amount_paid||0)); }
 // Amount deducted BEYOND the loan (agency over-collected). >0 means the employee is owed a refund / credit.
 function govLoanOverpaid(l){ return Math.max(0, Number(l.amount_paid||0) - Number(l.loan_amount||0)); }
+// How many monthly installments a gov loan needs to reach a zero balance. When
+// we know the amount + monthly, that governs (so the schedule always runs until
+// the balance is paid off, never short and never overshooting); num_months is
+// only a fallback when we can't compute it.
+function govLoanTermMonths(loan){
+  const monthly=Number(loan.monthly_amortization)||0;
+  const total=Number(loan.loan_amount)||0;
+  if(monthly>0 && total>0) return Math.max(1, Math.ceil((total-0.005)/monthly));
+  return Number(loan.num_months)||0;
+}
 // Monthly due dates for a gov loan: starts at the deduction start date, one per month.
 function govLoanInstallmentDates(loan){
   const start=loan.deduction_start_date; if(!start) return [];
-  const monthly=Number(loan.monthly_amortization)||0;
-  let n=Number(loan.num_months)||0;
-  if(!n && monthly>0) n=Math.max(1, Math.round((Number(loan.loan_amount)||0)/monthly));
+  const n=govLoanTermMonths(loan);
   if(!n) return [];
   const out=[]; const d=new Date(start+'T00:00:00');
   for(let i=0;i<n;i++){ out.push(d.toISOString().slice(0,10)); d.setMonth(d.getMonth()+1); }
@@ -17216,7 +17224,7 @@ function GovLoanDetailModal({ profile, loan, empName, installments, canEdit, onE
           <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${agencyBadge(loan.agency)}`}>{loan.agency||'—'}</span>
           <span>{loan.loan_type||'—'}</span>
           {loan.date_granted && <span>· Granted {fmtDate(loan.date_granted)}</span>}
-          {loan.num_months ? <span>· {loan.num_months} mo</span> : null}
+          {(total || govLoanTermMonths(loan)) ? <span>· {total || govLoanTermMonths(loan)} mo</span> : null}
           {loan.deduction_start_date && <span>· Deductions from {fmtDate(loan.deduction_start_date)}</span>}
           {allPaid && <span className="text-emerald-700 font-semibold">· FULLY PAID</span>}
         </div>
