@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 640 · Timezone fix: every “today” date the OS stamps — Sales Orders, vouchers, payments, movements, forms — now uses Manila time (Asia/Manila) instead of UTC. This stops month-boundary drift where a sale closed early-morning Manila was dated the previous day. Sample vs production sales already post as separate orders in their own months.";
+const BUILD = "Live build 641 · Reports → Sales YTD panel now has a Booked ↔ Collected toggle. Booked = total value of sales orders placed each month (paid or not); Collected = how much of each month's orders has actually been paid. The monthly column, YTD and full-year totals all follow the toggle.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -18695,18 +18695,22 @@ function YtdSalesPanel({ profile, salesOrders, year }){
   const [manual,setManual]=useState({});   // { 'YYYY-MM': amount }
   const [edit,setEdit]=useState({});        // local edits
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [mode,setMode]=useState('booked');  // 'booked' = order value placed · 'collected' = amount actually paid
   async function load(){
     const { data }=await sb.from('annual_sales_manual').select('*').like('ym', `${year}-%`);
     const m={}; (data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; });
     setManual(m); setEdit({});
   }
   useEffect(()=>{ load(); },[year]);
-  // OS-recorded sales per month = sum of SO totals (excl. cancelled) by SO date.
-  const osByMonth = {};
-  (salesOrders||[]).forEach(o=>{ if(o.status==='cancelled' || o.deleted_at) return; const ym=String(o.date||'').slice(0,7); if(!ym.startsWith(String(year))) return; osByMonth[ym]=(osByMonth[ym]||0)+Number(o.total||0); });
+  // OS-recorded sales per month, by SO date (excl. cancelled). Booked = order
+  // value placed; Collected = how much of that has actually been paid.
+  const osBookedByMonth = {}; const osPaidByMonth = {};
+  (salesOrders||[]).forEach(o=>{ if(o.status==='cancelled' || o.deleted_at) return; const ym=String(o.date||'').slice(0,7); if(!ym.startsWith(String(year))) return; osBookedByMonth[ym]=(osBookedByMonth[ym]||0)+Number(o.total||0); osPaidByMonth[ym]=(osPaidByMonth[ym]||0)+Number(o.amount_paid||0); });
+  const osByMonth = mode==='collected' ? osPaidByMonth : osBookedByMonth;
   const ym = (i)=> `${year}-${String(i+1).padStart(2,'0')}`;
   const manualVal = (i)=> { const k=ym(i); return (edit[k]!==undefined ? edit[k] : (manual[k]!=null ? String(manual[k]) : '')); };
-  // Effective monthly sales = manual entry if provided, otherwise OS-recorded.
+  // Effective monthly sales = manual entry if provided, otherwise OS-recorded
+  // (booked or collected per the toggle).
   const effFor = (i)=> { const k=ym(i); const man = edit[k]!==undefined ? edit[k] : manual[k]; const hasMan = man!=='' && man!=null && !isNaN(Number(man)); return hasMan ? Number(man) : (osByMonth[k]||0); };
   const ytdTotal = MONTHS.reduce((s,_,i)=> i<=curMonthIdx ? s+effFor(i) : s, 0);
   const fullYearTotal = MONTHS.reduce((s,_,i)=> s+effFor(i), 0);
@@ -18728,16 +18732,20 @@ function YtdSalesPanel({ profile, salesOrders, year }){
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div className="text-sm font-bold">📅 {year} Total Sales (Year to Date)</div>
         <div className="flex items-center gap-4">
+          <div className="inline-flex rounded-lg border bg-white overflow-hidden text-xs">
+            <button onClick={()=>setMode('booked')} className={`px-3 py-1.5 font-semibold ${mode==='booked'?'bg-emerald-600 text-white':'hover:bg-slate-50'}`}>Booked</button>
+            <button onClick={()=>setMode('collected')} className={`px-3 py-1.5 font-semibold ${mode==='collected'?'bg-emerald-600 text-white':'hover:bg-slate-50'}`}>Collected</button>
+          </div>
           <div className="text-right"><div className="text-[10px] uppercase text-slate-400">YTD (Jan–{MONTHS[curMonthIdx]})</div><div className="text-xl font-extrabold text-emerald-700">{peso(ytdTotal)}</div></div>
           <div className="text-right"><div className="text-[10px] uppercase text-slate-400">Full year</div><div className="text-lg font-bold text-slate-700">{peso(fullYearTotal)}</div></div>
         </div>
       </div>
-      {isAdmin && <div className="text-[11px] text-slate-400 mb-2">Type your pre-OS monthly sales (e.g. Jan–May). Months with a manual figure use it; the rest use OS Sales Orders automatically. Leave a month blank to fall back to the OS number.</div>}
+      <div className="text-[11px] text-slate-400 mb-2">{mode==='booked' ? 'Booked = total value of sales orders placed each month (paid or not).' : 'Collected = how much of each month’s orders has actually been paid so far.'}{isAdmin ? ' Pre-OS months (e.g. Jan–May) use your typed figure; the rest use OS Sales Orders. Leave a month blank to fall back to the OS number.' : ''}</div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-[10px] uppercase text-slate-400"><tr>
             <th className="text-left py-1">Month</th>
-            <th className="text-right py-1">OS sales</th>
+            <th className="text-right py-1">OS {mode==='collected'?'collected':'sales'}</th>
             <th className="text-right py-1">Manual entry</th>
             <th className="text-right py-1">Total used</th>
           </tr></thead>
