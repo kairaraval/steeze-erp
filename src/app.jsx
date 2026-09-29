@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 642 · Graphic ticket queue fix: a ticket that was 'assigned' but had no artist (orphaned) showed no owner and no action buttons and got stuck. Orphaned tickets now surface in the Open pool with a Claim/Assign button so they can always be picked up. Fixed the one stuck ticket too.";
+const BUILD = "Live build 643 · Loan schedule fix: the government + company loan installment loads were capped at 1000 rows, so loans with many months lost their later installments — a schedule looked 'fully paid' early (e.g. showed 9/9 when 22 months exist) and you couldn't mark the rest. Both now load every installment, so schedules run to a zero balance.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42213,9 +42213,9 @@ function App(){
     try { const hen = await sb.from('hr_engagements').select('*').order('event_date',{ascending:true}); setHrEngagements(hen && !hen.error ? (hen.data||[]) : []); } catch(_){ setHrEngagements([]); }
     try { const hln = await sb.from('employee_loans').select('*').is('deleted_at',null).order('date_granted',{ascending:false}); setHrLoans(hln && !hln.error ? (hln.data||[]) : []); } catch(_){ setHrLoans([]); }
     try { const gvl = await sb.from('gov_loans').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setGovLoans(gvl && !gvl.error ? (gvl.data||[]) : []); } catch(_){ setGovLoans([]); }
-    try { const gvi = await sb.from('gov_loan_installments').select('*').order('seq',{ascending:true}); setGovLoanInstallments(gvi && !gvi.error ? (gvi.data||[]) : []); } catch(_){ setGovLoanInstallments([]); }
+    try { const gvi = await fetchAllRows('gov_loan_installments','*','seq',true); setGovLoanInstallments(gvi && !gvi.error ? (gvi.data||[]) : []); } catch(_){ setGovLoanInstallments([]); }
     try { const hlp = await sb.from('employee_loan_payments').select('*').order('date',{ascending:true}); setHrLoanPayments(hlp && !hlp.error ? (hlp.data||[]) : []); } catch(_){ setHrLoanPayments([]); }
-    try { const hli = await sb.from('employee_loan_installments').select('*').order('seq',{ascending:true}); setHrLoanInstallments(hli && !hli.error ? (hli.data||[]) : []); } catch(_){ setHrLoanInstallments([]); }
+    try { const hli = await fetchAllRows('employee_loan_installments','*','seq',true); setHrLoanInstallments(hli && !hli.error ? (hli.data||[]) : []); } catch(_){ setHrLoanInstallments([]); }
     try { const stg = await sb.from('sales_targets').select('*'); setSalesTargets(stg && !stg.error ? (stg.data||[]) : []); } catch(_){ setSalesTargets([]); }
     setHrChecklists(hck && !hck.error ? (hck.data||[]) : []);
     setHrTrainings(htr && !htr.error ? (htr.data||[]) : []);
