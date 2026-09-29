@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 639 · Subcon Sewing now flows from the Production Board: any job set to “Out to Sewing Subcon” appears here automatically with its client, item and quantity. Assign one or more subcons (with editable quantity + due date), tick each subcon's portion done, and Admin/Production Supervisor can Mark the whole project done — which moves it to Quality Check on the board. Active / Done / All tabs added.";
+const BUILD = "Live build 640 · Timezone fix: every “today” date the OS stamps — Sales Orders, vouchers, payments, movements, forms — now uses Manila time (Asia/Manila) instead of UTC. This stops month-boundary drift where a sale closed early-morning Manila was dated the previous day. Sample vs production sales already post as separate orders in their own months.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1218,7 +1218,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   // Closed Won so Accounting knows the expected payment timing without
   // having to re-enter it.
   const [paymentTerms,setPaymentTerms]=useState(existing?.payment_terms||'');
-  const [creationDate,setCreationDate]=useState(existing?.created_at ? String(existing.created_at).slice(0,10) : new Date().toISOString().slice(0,10));
+  const [creationDate,setCreationDate]=useState(existing?.created_at ? String(existing.created_at).slice(0,10) : todayManila());
   const [poNumber,setPoNumber]=useState(existing?.po_number||''); const [techpackNumber,setTechpackNumber]=useState(existing?.techpack_number||'');
   const [leadSource,setLeadSource]=useState(existing?.lead_source||'');
   const [notes,setNotes]=useState(existing?.notes||'');
@@ -2381,7 +2381,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   const [dpPercent,setDpPercent]=useState(existing?.dp_percent!=null?String(existing.dp_percent):'50');
   const [lines,setLines]=useState([]);
   const [paymentTerms,setPaymentTerms]=useState(existing?.payment_terms||so?.payment_terms||'');
-  const [issueDate,setIssueDate]=useState(existing?.issue_date||new Date().toISOString().slice(0,10));
+  const [issueDate,setIssueDate]=useState(existing?.issue_date||todayManila());
   const [dueDate,setDueDate]=useState(existing?.due_date||'');
   const [notes,setNotes]=useState(existing?.notes||'');
   const [vatInclusive,setVatInclusive]=useState(!!existing?.vat_inclusive); // prices already include 12%
@@ -2397,7 +2397,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
   async function loadSoPays(){ if(!so?.id){ setSoPays([]); return; } try{ const { data }=await sb.from('sales_order_payments').select('*').eq('sales_order_id', so.id); setSoPays(data||[]); }catch(_){ setSoPays([]); } }
   // Due date = delivery (or expected delivery / issue) + payment terms.
   function dueFromTerms(){
-    const base = so?.delivered_at || so?.expected_delivery || issueDate || new Date().toISOString().slice(0,10);
+    const base = so?.delivered_at || so?.expected_delivery || issueDate || todayManila();
     const d = new Date(base); if(isNaN(d.getTime())) return '';
     d.setDate(d.getDate()+arTermsDays(paymentTerms||so?.payment_terms));
     return d.toISOString().slice(0,10);
@@ -2801,7 +2801,7 @@ function InvoicesListView({ profile, profiles, invoices, salesOrders, leads, cli
   const byStatus = k => all.filter(e=>(e.status||'draft')===k);
   const sumBalance = arr => arr.reduce((a,e)=>a+(Number(e.balance_due)||0),0);
   const sumTotal = arr => arr.reduce((a,e)=>a+(Number(e.total)||0),0);
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const outstanding = all.filter(e=>e.status==='issued'||e.status==='partially_paid');
   const preparerName = id => { const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
 
@@ -2888,7 +2888,7 @@ function EstimatesListView({ profile, profiles, estimates, leads, clients, reloa
   const byStatus = k => all.filter(e=>(e.status||'draft')===k);
   const sum = arr => arr.reduce((a,e)=>a+(Number(e.total)||0),0);
   const preparerName = id => { const p=(profiles||[]).find(x=>x.id===id); return p? (p.name||p.email) : '—'; };
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
 
   const [openPurpose,setOpenPurpose]=useState('production');
   function openEstimate(e){
@@ -5111,7 +5111,7 @@ function DeptDailyLogModal({ job, process, profile, employees, onClose }){
   const projItems=Array.isArray(job.items)?job.items:[];
   const projQty=Number(job.quantity)||0;
   const [logs,setLogs]=useState([]);
-  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'', item_label:'' };
+  const emptyLog={ log_date:todayManila(), machine:'', operators:[], qty:'', notes:'', item_label:'' };
   const [lf,setLf]=useState(emptyLog);
   const [busy,setBusy]=useState(false);
   let staff=(employees||[]).filter(e=> e.is_active!==false && outputStaffMatch(process,e));
@@ -5565,7 +5565,7 @@ function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved })
   })();
   const [rows,setRows]=useState(initialRows);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(todayManila());
   // Pre-filled rows from the linked PR are locked by default (just a plain
   // text label + qty). The user clicks Edit on a row to unlock it for changes.
   // editingRow holds the index of the unlocked row, or null.
@@ -5824,7 +5824,7 @@ function MaterialsBuyListView({ profile, requests, items, suppliers, orders, pro
     if(!confirm(`Create a Purchase Request with ${filtered.length} line${filtered.length===1?'':'s'}?\n\nIt'll land in Purchase Requests as Submitted. After approval it flows through Materials Queue → POs grouped by supplier.`)) return;
     setBusy(true);
     try {
-      const today = new Date().toISOString().slice(0,10);
+      const today = todayManila();
       const number = 'PR-' + Date.now().toString().slice(-5);
       const lines = filtered.map(r => ({
         item_id: r.item.id,
@@ -6360,7 +6360,7 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
   // 7. Active production jobs needing materials
   const activeProdJobs = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
   // 8. Stock issuances today (out movements, created_at = today)
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const stockOutToday = (stockMovements||[]).filter(s => s.type==='out' && (s.created_at||'').startsWith(today));
   // 9. Total reserved stock value (for Layer 2 visibility)
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
@@ -6677,7 +6677,7 @@ function ManualStockOutModal({ profile, items, prodJobs, onClose, onSaved }){
     setBusy(true); setMsg('');
     try{
       const job=activeJobs.find(j=>j.id===jobId);
-      const date=new Date().toISOString().slice(0,10);
+      const date=todayManila();
       const reasonText = note.trim() ? `${reason} — ${note.trim()}` : reason;
       const movements=valid.map(r=>({ item_id:r.item_id, type:'out', qty:Number(r.qty), reason:reasonText, ref_type: job?'production_job':'manual', ref_id: job?job.id:null, actor_id:profile.id, date }));
       const { error } = await sb.from('stock_movements').insert(movements);
@@ -7479,7 +7479,7 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
     if(srcId===dstId){ setMsg('Source and product must be different items.'); return; }
     setBusy(true); setMsg('');
     try{
-      const date=new Date().toISOString().slice(0,10);
+      const date=todayManila();
       const wastePart = Number(waste)>0 ? ` · ${Number(waste)}% waste` : '';
       const movs=[
         { item_id:srcId, type:'out', qty:Number(srcQty), reason:`convert → ${dst?.name||'product'}${wastePart}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
@@ -7526,7 +7526,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
     if(!confirm(`Reverse this ${s.type==='in'?'STOCK-IN':'STOCK-OUT'} of ${Number(s.qty||0).toFixed(2)} ${s._item?.unit||''} · ${s._item?.name||'item'}?\n\nA counter-entry is posted and on-hand is corrected. Nothing is deleted.`)) return;
     try{
       const oppType = s.type==='in' ? 'out' : 'in';
-      const mv={ item_id:s.item_id, type:oppType, qty:Number(s.qty||0), reason:`↩ reversal of ${s._ref||s.reason||'entry'}`.slice(0,120), ref_type:'reversal', ref_id:s.id, actor_id:profile.id, date:new Date().toISOString().slice(0,10) };
+      const mv={ item_id:s.item_id, type:oppType, qty:Number(s.qty||0), reason:`↩ reversal of ${s._ref||s.reason||'entry'}`.slice(0,120), ref_type:'reversal', ref_id:s.id, actor_id:profile.id, date:todayManila() };
       let { error }=await sb.from('stock_movements').insert(mv);
       if(error){ const { date, ...rest }=mv; const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
       // The counter-entry corrects on-hand automatically via the stock_movements trigger.
@@ -7768,7 +7768,7 @@ function planProcState(def, row){ if(!row) return 'none'; if(planProcDone(def,ro
 
 // --- Gantt date helpers (operate on 'YYYY-MM-DD' strings; ISO sorts chronologically) ---
 function ganttDays(a,b){ if(!a||!b) return 0; return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
-function ganttAddDays(iso,n){ const d=new Date((iso||new Date().toISOString().slice(0,10))+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function ganttAddDays(iso,n){ const d=new Date((iso||todayManila())+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function ganttMin(arr){ return arr.filter(Boolean).slice().sort()[0]||null; }
 function ganttMax(arr){ const f=arr.filter(Boolean).slice().sort(); return f.length?f[f.length-1]:null; }
 // Tailwind status pill class (e.g. 'bg-purple-100 text-purple-700') -> a solid
@@ -7784,7 +7784,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState('');
-  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(todayManila());
   const [stage,setStage]=useState('printing');
   const [sewingMode,setSewingMode]=useState('inhouse');
   const [subconId,setSubconId]=useState('');
@@ -7799,7 +7799,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [batchEdit,setBatchEdit]=useState(null);    // { entry, kind:'release'|'receive' }
 
   const total = Number(job.quantity)||0;
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = todayManila();
   const clampPct = (n)=> Math.max(0, Math.min(100, n));
   const canEdit = true; // production floor logs output; RLS allows any signed-in user
 
@@ -7932,7 +7932,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(stage==='sewing' && sewingMode==='subcon' && !subconId){ setMsg('Pick which subcon did this sewing.'); return; }
     setBusy(true); setMsg('');
     const payload = {
-      production_job_id: job.id, date: date||new Date().toISOString().slice(0,10),
+      production_job_id: job.id, date: date||todayManila(),
       stage, quantity: q, notes: notes||null, created_by: profile.id, entry_type: 'plan', done: false,
       deadline: deadline||null,
       sewing_mode: stage==='sewing'?sewingMode:null,
@@ -8067,7 +8067,7 @@ function PlanBatchModal({ entry, kind, subconName, onClose }){
   const qtyField = isRelease?'released_qty':'received_qty';
   const atField = isRelease?'released_at':'received_at';
   const [batches,setBatches]=useState(Array.isArray(entry[field])?entry[field]:[]);
-  const [q,setQ]=useState(''); const [d,setD]=useState(new Date().toISOString().slice(0,10));
+  const [q,setQ]=useState(''); const [d,setD]=useState(todayManila());
   const [busy,setBusy]=useState(false);
   const planq=Number(entry.quantity)||0;
   const total=batches.reduce((s,b)=>s+(Number(b.qty)||0),0);
@@ -8123,7 +8123,7 @@ function ProductionTimelineView({ profile, profiles, jobs, leads, subcons, reloa
   const [showDone,setShowDone]=useState(false);
   const [capacity,setCapacity]=useState(()=>{ try{ return Number(localStorage.getItem('steeze_prod_capacity'))||5000; }catch(e){ return 5000; } });
   function saveCapacity(v){ const n=Math.max(0,Number(v)||0); setCapacity(n); try{ localStorage.setItem('steeze_prod_capacity', String(n)); }catch(e){} }
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = todayManila();
   const clampPct = (n)=> Math.max(0, Math.min(100, n));
   const active = (jobs||[]).filter(j=> showDone ? true : !PRODUCTION_DONE.includes(j.status));
   function spanOf(j){
@@ -8274,7 +8274,7 @@ function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }
   const [busy,setBusy]=useState(true);
   const [editing,setEditing]=useState(null);
   const [collapsed,setCollapsed]=useState({});
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
   async function load(){ setBusy(true);
@@ -8869,7 +8869,7 @@ function MyTasksView({ profile }){
   const [draft,setDraft]=useState({ today:'', week:'', later:'' });
   const [busy,setBusy]=useState('');
   const [showDone,setShowDone]=useState(false);
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const welcomeKey='steeze_mytasks_welcome_'+profile.id;
   const [showWelcome,setShowWelcome]=useState(()=>{ try{ return localStorage.getItem(welcomeKey)!=='1'; }catch(e){ return true; } });
   function dismissWelcome(){ setShowWelcome(false); try{ localStorage.setItem(welcomeKey,'1'); }catch(e){} }
@@ -9105,7 +9105,7 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
   async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('pattern_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function markDone(w){ const { error }=await sb.from('pattern_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('pattern_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('pattern_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=todayManila(); const { error }=await sb.from('pattern_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   const boardItems=(patternWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the worklist?')) return; const { error }=await sb.from('pattern_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
@@ -10142,7 +10142,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   async function saveNotes(w, val){ if((w.notes||'')===(val||'')) return; const { error }=await sb.from('cutting_worklist').update({ notes: val||null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function markDone(w){ const { error }=await sb.from('cutting_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function reopenItem(w){ const { error }=await sb.from('cutting_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
-  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString(): null }; if(st==='in_progress' && !w.start_date) patch.start_date=todayManila(); const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   const boardItems=(cuttingWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
@@ -10412,7 +10412,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   const [batchReceipt,setBatchReceipt]=useState(null);
   async function loadBatches(){ if(!showBatches) return; const { data }=await sb.from('sorting_batches').select('*').eq('process',process).is('deleted_at',null).order('released_at',{ascending:false}).order('created_at',{ascending:false}); setBatches(data||[]); }
   useEffect(()=>{ loadBatches(); },[process, tab]);
-  async function toggleReturned(bt){ const upd = bt.status==='returned' ? { status:'released', returned_at:null } : { status:'returned', returned_at:new Date().toISOString().slice(0,10) }; await sb.from('sorting_batches').update(upd).eq('id',bt.id); loadBatches(); }
+  async function toggleReturned(bt){ const upd = bt.status==='returned' ? { status:'released', returned_at:null } : { status:'returned', returned_at:todayManila() }; await sb.from('sorting_batches').update(upd).eq('id',bt.id); loadBatches(); }
   const showPress=isPressingProcess(process);
   const [pressLogs,setPressLogs]=useState([]);
   async function loadPressLogs(){ if(!showPress) return; const { data }=await sb.from('process_output_logs').select('*').eq('process',process).is('deleted_at',null).order('log_date',{ascending:false}); setPressLogs(data||[]); }
@@ -10458,7 +10458,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   async function markDone(w){ const { error }=await sb.from('process_worklist').update({ status:'done', done_at:new Date().toISOString() }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function reopenItem(w){ const { error }=await sb.from('process_worklist').update({ status:'open', done_at:null }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   // Kanban status move (To Do / In Progress / Done) for the pressing board.
-  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString() : null }; if(st!=='done' && !w.start_date && st==='in_progress') patch.start_date=new Date().toISOString().slice(0,10); const { error }=await sb.from('process_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString() : null }; if(st!=='done' && !w.start_date && st==='in_progress') patch.start_date=todayManila(); const { error }=await sb.from('process_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   // Pcs pressed per project (from the daily output logs) — for the board cards.
   const pressedByWork={}; (pressLogs||[]).forEach(l=>{ if(l.worklist_id) pressedByWork[l.worklist_id]=(pressedByWork[l.worklist_id]||0)+(Number(l.qty_done)||0); });
   const PRESS_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
@@ -10651,7 +10651,7 @@ function ProcessReportModal({ w, profile, profiles, employees, leads, subcons, p
   const showPress=isPressingProcess(process);
   const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffMatch(process, e)).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   const [logs,setLogs]=useState([]);
-  const emptyLog={ log_date:new Date().toISOString().slice(0,10), machine:'', operators:[], qty:'', notes:'', item_label:'' };
+  const emptyLog={ log_date:todayManila(), machine:'', operators:[], qty:'', notes:'', item_label:'' };
   const [lf,setLf]=useState(emptyLog);
   async function loadLogs(){ if(!showPress) return; const { data }=await sb.from('process_output_logs').select('*').eq('worklist_id',w.id).is('deleted_at',null).order('log_date',{ascending:false}).order('created_at',{ascending:false}); setLogs(data||[]); }
   useEffect(()=>{ loadLogs(); },[w.id]);
@@ -10943,7 +10943,7 @@ function SortingBatchModal({ batch, worklistItem, projItems, process, title, pro
   const [sizes,setSizes]=useState(Array.isArray(batch?.garment_sizes)&&batch.garment_sizes.length?batch.garment_sizes.map(s=>({...s})):[{size:'',qty:''}]);
   const [trims,setTrims]=useState(Array.isArray(batch?.trims)&&batch.trims.length?batch.trims.map(t=>({...t})):[{name:'',qty:'',unit:'pcs'}]);
   const [polybags,setPolybags]=useState(batch?.polybags!=null?String(batch.polybags):'');
-  const [releasedAt,setReleasedAt]=useState(batch?.released_at||new Date().toISOString().slice(0,10));
+  const [releasedAt,setReleasedAt]=useState(batch?.released_at||todayManila());
   const [dueDate,setDueDate]=useState(batch?.expected_due_date||'');
   const [releasedBy,setReleasedBy]=useState(Array.isArray(batch?.released_by)?batch.released_by:[]);
   const [notes,setNotes]=useState(batch?.notes||'');
@@ -12332,7 +12332,7 @@ function SalesTicketQueue({ profile, profiles, leads, clients, onOpenLead }){
   const [showForm,setShowForm]=useState(false);
   const [editTicket,setEditTicket]=useState(null);
   const canManage = profile.role!=='assistant'; // admin + managers can edit/delete/reopen
-  const today=new Date().toISOString().slice(0,10);
+  const today=todayManila();
 
   async function load(){
     setLoading(true);
@@ -12534,7 +12534,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const role=profile.role;
   const canManage = ['admin','manager','sales_representative'].includes(role);
   const isSalesSide = ['admin','manager','sales_representative','assistant'].includes(role);
-  const today=new Date().toISOString().slice(0,10);
+  const today=todayManila();
 
   async function load(){
     setLoading(true);
@@ -13321,7 +13321,7 @@ function SalaryReportView({ profile, employees }){
     lines.push(['','','','','TOTAL', tBasic+' / '+tAllow, tMonthly]);
     const csv=[head,...lines].map(row=>row.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`salary-report-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a=document.createElement('a'); a.href=url; a.download=`salary-report-${todayManila()}.csv`; a.click(); URL.revokeObjectURL(url);
   }
   return (
     <div className="p-6">
@@ -13746,7 +13746,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
             <div className="flex justify-end"><button onClick={()=>setAddingTraining(true)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold">+ Add training</button></div>
             {(trainings||[]).length===0 ? <div className="text-sm text-slate-400 text-center py-6">No trainings recorded.</div> : (
               <div className="space-y-2">{(trainings||[]).map(t => {
-                const isExpired = t.expiry_date && t.expiry_date < new Date().toISOString().slice(0,10);
+                const isExpired = t.expiry_date && t.expiry_date < todayManila();
                 return (
                   <div key={t.id} className={`bg-white border rounded-lg p-3 ${isExpired?'border-rose-200':''}`}>
                     <div className="flex items-start justify-between gap-2">
@@ -14161,7 +14161,7 @@ function EmployeeFormModal({ employee, profiles, profile, allEmployees, onClose,
 }
 
 function EmployeeMemoForm({ employeeId, profile, onClose, onSaved }){
-  const [f,setF]=useState({ date: new Date().toISOString().slice(0,10), type:'memo', subject:'', description:'', resolution:'' });
+  const [f,setF]=useState({ date: todayManila(), type:'memo', subject:'', description:'', resolution:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
@@ -14193,7 +14193,7 @@ function EmployeeMemoForm({ employeeId, profile, onClose, onSaved }){
 }
 
 function EmployeeNoteForm({ employeeId, profile, onClose, onSaved }){
-  const [f,setF]=useState({ date: new Date().toISOString().slice(0,10), category:'note', title:'', description:'' });
+  const [f,setF]=useState({ date: todayManila(), category:'note', title:'', description:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
@@ -14819,7 +14819,7 @@ function EvalStartModal({ employees, templates, onClose, onStart }){
     if(!empId){ alert('Pick an employee.'); return; }
     if(!tplId){ alert('Pick a template.'); return; }
     const tpl=(templates||[]).find(t=>t.id===tplId);
-    onStart({ template_id:tplId, template_name:tpl?.name||null, employee_id:empId, position:emp?.position||null, two_raters: tpl?.two_raters!==false, review_period:period||null, evaluation_date:new Date().toISOString().slice(0,10), start_date: emp?.date_hired||null, employment_status: emp?.employment_status||emp?.status||null, answers:{}, status:'draft', outcome:{} });
+    onStart({ template_id:tplId, template_name:tpl?.name||null, employee_id:empId, position:emp?.position||null, two_raters: tpl?.two_raters!==false, review_period:period||null, evaluation_date:todayManila(), start_date: emp?.date_hired||null, employment_status: emp?.employment_status||emp?.status||null, answers:{}, status:'draft', outcome:{} });
   }
   return (
     <Modal title="New evaluation" onClose={onClose}>
@@ -14884,7 +14884,7 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
   const tpl = template || { name:review.template_name, structure:{ scale:DEFAULT_EVAL_SCALE, bands:DEFAULT_EVAL_BANDS, categories:[] } };
   const two = review.two_raters!==false;
   const [answers,setAnswers]=useState(review.answers||{});
-  const [f,setF]=useState({ review_period:review.review_period||'', evaluation_date:review.evaluation_date||new Date().toISOString().slice(0,10), immediate_supervisor:review.immediate_supervisor||'', employment_status:review.employment_status||'', reviewer_id:review.reviewer_id||profile.id, reviewer_b_id:review.reviewer_b_id||review.assigned_to||'', areas_improvement:review.areas_improvement||'', strong_points:review.strong_points||'', areas_improvement_b:review.areas_improvement_b||'', strong_points_b:review.strong_points_b||'', employee_review:review.employee_review||'', status:review.status||'draft' });
+  const [f,setF]=useState({ review_period:review.review_period||'', evaluation_date:review.evaluation_date||todayManila(), immediate_supervisor:review.immediate_supervisor||'', employment_status:review.employment_status||'', reviewer_id:review.reviewer_id||profile.id, reviewer_b_id:review.reviewer_b_id||review.assigned_to||'', areas_improvement:review.areas_improvement||'', strong_points:review.strong_points||'', areas_improvement_b:review.areas_improvement_b||'', strong_points_b:review.strong_points_b||'', employee_review:review.employee_review||'', status:review.status||'draft' });
   const [outcome,setOutcome]=useState(review.outcome||{});
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
@@ -15600,7 +15600,7 @@ function CriteriaManagerModal({ criteria, employees, profile, onClose, onSaved }
 
 /* ─────────── HR — Dashboard (home) ─────────── */
 function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, hrMemos, hrJobs, setView }){
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const in28=new Date(Date.now()+28*86400000).toISOString().slice(0,10);
   const first=(profile.name||'').split(' ')[0]||'there';
   const hour=new Date().getHours();
@@ -15836,7 +15836,7 @@ function HRMemoBoardView({ profile, profiles, hrMemos, reload }){
 function MemoUploadModal({ profile, onClose, onSaved }){
   const [files,setFiles]=useState([]);       // {name, url, path, type}
   const [category,setCategory]=useState((MEMO_CATEGORIES[0]||{}).key||'general');
-  const [memoDate,setMemoDate]=useState(new Date().toISOString().slice(0,10));
+  const [memoDate,setMemoDate]=useState(todayManila());
   const [uploading,setUploading]=useState(false);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function addFiles(fileList){
@@ -15953,7 +15953,7 @@ function leaveTypeMeta(k){ return LEAVE_TYPES.find(t=>t.key===k) || LEAVE_TYPES[
 function HRLeaveView({ profile, employees, hrLeaves, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const in28=new Date(Date.now()+28*86400000).toISOString().slice(0,10);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
   const dayCount=(a,b)=> Math.max(1, Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000)+1);
@@ -16157,7 +16157,7 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalatio
     .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
   async function toggleClose(c){
     const closing=!caseIsClosed(c);
-    const { error }=await sb.from('hr_cases').update({ status: closing?'closed_case':'pending_decision', closed_date: closing? new Date().toISOString().slice(0,10): null }).eq('id',c.id);
+    const { error }=await sb.from('hr_cases').update({ status: closing?'closed_case':'pending_decision', closed_date: closing? todayManila(): null }).eq('id',c.id);
     if(error){ alert(error.message); return; } reload();
   }
   async function del(c){ if(!confirm('Delete this case record?')) return; const { error }=await sb.from('hr_cases').delete().eq('id',c.id); if(error){ alert(error.message); return; } reload(); }
@@ -16323,7 +16323,7 @@ function movTypeMeta(t){
 }
 function MovementFormModal({ movement, employees, profile, onPrint, onClose, onSaved }){
   const isEdit=!!movement;
-  const [f,setF]=useState(movement || { employee_id:'', movement_type:'Salary Increase', effective_date:new Date().toISOString().slice(0,10), date_prepared:new Date().toISOString().slice(0,10), previous_position:'', new_position:'', previous_department:'', new_department:'', previous_salary:'', new_salary:'', reason:'', remarks:'', status:'proposed' });
+  const [f,setF]=useState(movement || { employee_id:'', movement_type:'Salary Increase', effective_date:todayManila(), date_prepared:todayManila(), previous_position:'', new_position:'', previous_department:'', new_department:'', previous_salary:'', new_salary:'', reason:'', remarks:'', status:'proposed' });
   const [npa,setNpa]=useState(movement?.npa_details || {});
   const [showNpa,setShowNpa]=useState(false);
   const [attachments,setAttachments]=useState(Array.isArray(movement?.attachments)?movement.attachments:[]);
@@ -16526,7 +16526,7 @@ function NPAPrintView({ movement, employees, profile, onClose }){
 
 function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved }){
   const isEdit=!!caseRow;
-  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', client_name:'', severity:'', sanction_type:'', status:'issuance_nte', opened_date:new Date().toISOString().slice(0,10), description:'', remarks:'', resolution:'' });
+  const [f,setF]=useState(caseRow || { employee_id:'', case_type:'disciplinary', title:'', client_name:'', severity:'', sanction_type:'', status:'issuance_nte', opened_date:todayManila(), description:'', remarks:'', resolution:'' });
   const [attachments,setAttachments]=useState(Array.isArray(caseRow?.attachments)?caseRow.attachments:[]);
   const [uploading,setUploading]=useState(false); const [drag,setDrag]=useState(false);
   const fileInput=useRef(null);
@@ -16582,7 +16582,7 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
     if(!f.title?.trim()){ setMsg('Add a short title.'); return; }
     setBusy(true); setMsg('');
     const closed = f.status==='closed_case';
-    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), client_name:f.client_name?.trim()||null, severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||new Date().toISOString().slice(0,10)) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
+    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), client_name:f.client_name?.trim()||null, severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||todayManila()) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
     if(!isEdit) payload.created_by=profile.id;
     const { error } = isEdit ? await sb.from('hr_cases').update(payload).eq('id',caseRow.id) : await sb.from('hr_cases').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; }
@@ -16718,7 +16718,7 @@ function CaseNTEPrintView({ caseRow, employees, profile, initialDoc, onClose }){
           {/* The NOD is dated when the decision is issued (the case's closed
               date), NOT the NTE/opened date. Falls back to today if the case
               isn't marked closed yet. Other documents keep the opened date. */}
-          {(() => { const docDate = docKey==='nod' ? (caseRow.closed_date || new Date().toISOString().slice(0,10)) : caseRow.opened_date; return (
+          {(() => { const docDate = docKey==='nod' ? (caseRow.closed_date || todayManila()) : caseRow.opened_date; return (
           <div className="grid grid-cols-3 gap-3 mt-3 mb-3 text-[11px]">
             <div><div className={LBL}>Date</div><div className="font-medium">{fmtDate(docDate)}</div></div>
             <div><div className={LBL}>Case type</div><div className="font-medium">{ct.label}</div></div>
@@ -16764,7 +16764,7 @@ function HREngagementsView({ profile, employees, hrEngagements, reload }){
   const [cursor,setCursor]=useState({ y:now.getFullYear(), m:now.getMonth() });
   const [creating,setCreating]=useState(null); // date string to prefill, or true
   const [editing,setEditing]=useState(null);
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const isFinal=(g)=> (g.status||'finalized')==='finalized';
   async function finalizeEng(g){ const { error }=await sb.from('hr_engagements').update({ status:'finalized' }).eq('id',g.id); if(error){ alert(error.message); return; } reload(); }
   const planned=(hrEngagements||[]).filter(g=>!isFinal(g)).slice().sort((a,b)=>String(a.event_date||'').localeCompare(String(b.event_date||'')));
@@ -16886,7 +16886,7 @@ function HREngagementsView({ profile, employees, hrEngagements, reload }){
 
 function EngagementFormModal({ engagement, prefillDate, defaultStatus, profile, onClose, onSaved, onDelete }){
   const isEdit=!!engagement;
-  const [f,setF]=useState(engagement || { title:'', engagement_type:'event', event_date:prefillDate||new Date().toISOString().slice(0,10), end_date:'', location:'', description:'', status: defaultStatus||'finalized' });
+  const [f,setF]=useState(engagement || { title:'', engagement_type:'event', event_date:prefillDate||todayManila(), end_date:'', location:'', description:'', status: defaultStatus||'finalized' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
@@ -16943,7 +16943,7 @@ const LOAN_PAY_METHODS = ['salary_deduction','cash','bank','other'];
 function loanPayMethodLabel(m){ return m==='salary_deduction'?'Salary deduction':m==='cash'?'Cash':m==='bank'?'Bank':m==='other'?'Other':(m||'—'); }
 function loanMonthsElapsed(loan){
   if(!loan?.date_granted) return 0;
-  const end = loan.settled_at || new Date().toISOString().slice(0,10);
+  const end = loan.settled_at || todayManila();
   const a = new Date(loan.date_granted+'T00:00:00'), b = new Date(end+'T00:00:00');
   let m = (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth());
   if(b.getDate() < a.getDate()) m -= 1;   // not a full month elapsed yet
@@ -16960,7 +16960,7 @@ function loanFreqLabel(k){ return (LOAN_FREQUENCIES.find(f=>f.key===k)||LOAN_FRE
 function loanInstallmentDates(loan){
   const term=Number(loan.term_months)||0; if(term<=0) return [];
   const freq=loan.repayment_frequency||'weekly';
-  const start=new Date((loan.date_granted||new Date().toISOString().slice(0,10))+'T00:00:00');
+  const start=new Date((loan.date_granted||todayManila())+'T00:00:00');
   const iso=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const out=[];
   if(freq==='semimonthly'){
@@ -17157,7 +17157,7 @@ function GovLoansView({ profile, employees, govLoans, govLoanInstallments, reloa
 
 function GovLoanDetailModal({ profile, loan, empName, installments, canEdit, onEdit, onClose, reload }){
   const [busy,setBusy]=useState(false);
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
   const total=sched.length;
   const paidCount=sched.filter(x=>x.paid).length;
@@ -17417,7 +17417,7 @@ function LoanDisbursementModal({ profile, loans, employees, bankAccounts, onClos
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   const [sel,setSel]=useState(()=> new Set((loans||[]).map(l=>l.id)));
   const [bankId,setBankId]=useState((bankAccounts||[])[0]?.id||'');
-  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(todayManila());
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const chosen=(loans||[]).filter(l=>sel.has(l.id));
   const total=chosen.reduce((s,l)=>s+(Number(l.principal)||0),0);
@@ -17508,7 +17508,7 @@ function AdvancesToEmployeesView({ profile, profiles, employees, hrLoans, hrLoan
   const totRepaid=advances.reduce((s,l)=>s+loanCompute(l,hrLoanInstallments).paid,0);
   const totOutstanding=advances.filter(l=>l.status==='active').reduce((s,l)=>s+loanCompute(l,hrLoanInstallments).outstanding,0);
   async function markPaid(l){ if(!confirm(`Mark ${empName(l.employee_id)}'s advance as fully paid? Record the final repayment as a Journal Entry (Dr Cash · Cr Advances to Employees) if you haven't yet.`)) return;
-    const { error }=await sb.from('employee_loans').update({ status:'paid', settled_at:new Date().toISOString().slice(0,10) }).eq('id', l.id); if(error){ alert(error.message); return; } reload && reload(); }
+    const { error }=await sb.from('employee_loans').update({ status:'paid', settled_at:todayManila() }).eq('id', l.id); if(error){ alert(error.message); return; } reload && reload(); }
   async function reopen(l){ const { error }=await sb.from('employee_loans').update({ status:'active', settled_at:null }).eq('id', l.id); if(error){ alert(error.message); return; } reload && reload(); }
   return (
     <div className="p-6">
@@ -17556,7 +17556,7 @@ function LoanFormModal({ profile, employees, existing, onClose, onSaved }){
   const liveEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated');
   const [f,setF]=useState({
     employee_id: existing?.employee_id||'', principal: existing?.principal??'', rate_pct: existing?.rate_pct??3,
-    date_granted: existing?.date_granted||new Date().toISOString().slice(0,10), term_months: existing?.term_months??'',
+    date_granted: existing?.date_granted||todayManila(), term_months: existing?.term_months??'',
     repayment_frequency: existing?.repayment_frequency||'weekly',
     purpose: existing?.purpose||'', notes: existing?.notes||'',
   });
@@ -17637,7 +17637,7 @@ function LoanDetailModal({ profile, profiles, loan, employees, installments, rel
   const c=loanCompute(loan, installments);
   const sched=(installments||[]).slice().sort((a,b)=>a.seq-b.seq);
   const total=sched.length; const allPaid = total>0 && c.paidCount===total;
-  const todayISO=new Date().toISOString().slice(0,10);
+  const todayISO=todayManila();
   async function toggleInst(inst){
     setBusy(true);
     const nextPaid=!inst.paid;
@@ -17883,7 +17883,7 @@ function HRRecruitmentView({ profile, profiles, employees, hrJobs, hrApplicants,
 
 function JobPostingForm({ job, profile, employees, onClose, onSaved }){
   const isEdit = !!job;
-  const [f,setF]=useState(job || { title:'', department:'', description:'', requirements:'', employment_type:'full-time', positions_to_fill:1, status:'draft', posted_date:new Date().toISOString().slice(0,10), hiring_manager_id:null });
+  const [f,setF]=useState(job || { title:'', department:'', description:'', requirements:'', employment_type:'full-time', positions_to_fill:1, status:'draft', posted_date:todayManila(), hiring_manager_id:null });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function save(){
@@ -17940,7 +17940,7 @@ function JobPostingForm({ job, profile, employees, onClose, onSaved }){
 
 function ApplicantForm({ applicant, jobId, profile, onClose, onSaved }){
   const isEdit = !!applicant;
-  const [f,setF]=useState(applicant || { job_id:jobId, first_name:'', last_name:'', email:'', phone:'', current_position:'', resume_url:'', current_stage:'applied', source:'', expected_salary:'', applied_date:new Date().toISOString().slice(0,10), notes:'', interview_date:'', rejection_reason:'' });
+  const [f,setF]=useState(applicant || { job_id:jobId, first_name:'', last_name:'', email:'', phone:'', current_position:'', resume_url:'', current_stage:'applied', source:'', expected_salary:'', applied_date:todayManila(), notes:'', interview_date:'', rejection_reason:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [uploading,setUploading]=useState(false);
   const [preview,setPreview]=useState(null); // inline resume viewer
@@ -19141,7 +19141,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
 
       {/* ───── ACCOUNTING ───── */}
       {tab==='accounting' && (()=>{
-        const todayISO = new Date().toISOString().slice(0,10);
+        const todayISO = todayManila();
         const mKey = todayISO.slice(0,7), yKey = todayISO.slice(0,4);
         const cash = (bankAccounts||[]).reduce((s,b)=>s+bankBalance(b, bankTransactions), 0);
         const liveSOs = (salesOrders||[]).filter(s=>s.status!=='cancelled' && !s.deleted_at);
@@ -21600,7 +21600,7 @@ const TECHPACK_SECTIONS = [
   { key:'bom', label:'Bill of Materials' }, { key:'signatures', label:'Signature Page' },
 ];
 const TECHPACK_TYPES = ['TRAD PRODUCTION','SUBLI PRODUCTION','TRAD SAMPLE','SUBLI SAMPLE'];
-const todayISO = () => new Date().toISOString().slice(0,10);
+const todayISO = () => todayManila();
 
 function blankTechpack(lead, client, profile){
   return {
@@ -21865,7 +21865,7 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
       }
     } catch(_){}
     try {
-      const today = new Date().toISOString().slice(0,10);
+      const today = todayManila();
       const label = `${title} · ${fmtDate(periodStart)}–${fmtDate(periodEnd)}`;
       // Finance footprint by kind:
       //   • subcon  → one bank deduction + ONE cash voucher (listed in Expense Log)
@@ -21942,7 +21942,7 @@ function PayoutModal({ kind, periodStart, periodEnd, lines, bankAccounts, profil
               <tr className="bg-slate-50 font-bold"><td className="px-2 py-1.5 border" colSpan={2}>TOTAL</td><td className="px-2 py-1.5 border text-right">{peso(total)}</td><td className="px-2 py-1.5 border"></td></tr>
             </tbody>
           </table>
-          <div className="text-[10px] text-slate-400 mt-2">Prepared by {profile?.name||profile?.email||''} · {fmtDate(new Date().toISOString().slice(0,10))}</div>
+          <div className="text-[10px] text-slate-400 mt-2">Prepared by {profile?.name||profile?.email||''} · {fmtDate(todayManila())}</div>
         </div>
 
         {msg && <div className="no-print text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
@@ -24457,7 +24457,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
           if(!profile?.signature_data){
             if(!confirm("You don't have an e-signature on file yet. Sign without a signature image? (Set up your signature on My Profile to use e-signatures.)")) return;
           }
-          const today = new Date().toISOString().slice(0,10);
+          const today = todayManila();
           setSec('signatures',{ rows: sec.rows.map((x,j)=> j===i ? { ...x, name: profile.name||profile.email, date: today, signedByUserId: profile.id, signedAt: today } : x ) });
         }
         function unsignRow(i){
@@ -25175,7 +25175,7 @@ function StockInModal({ profile, items, onClose, onSaved }){
     if(valid.length===0){ setMsg('Add at least one item with a quantity.'); return; }
     setBusy(true); setMsg('');
     try {
-      const date = new Date().toISOString().slice(0,10);
+      const date = todayManila();
       const movements = valid.map(l=>({ item_id:l.item_id, type:'in', qty:Number(l.qty), reason:'production return', ref_type:'manual', actor_id:profile?.id||null, notes:l.notes||'Excess from production', date }));
       const { error: smErr } = await sb.from('stock_movements').insert(movements);
       if(smErr){ const stripped=movements.map(({date,notes,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
@@ -25467,7 +25467,7 @@ function BulkColorItemForm({ defaultBucket, suppliers, departments, onClose, onS
     const { data:created, error } = await sb.from('items').insert(clean).select('id');
     if(error){ setBusy(false); setMsg(error.message); return; }
     // Post opening-balance movements so on-hand (set by the trigger) matches the ledger.
-    const mvs=(created||[]).map((row,i)=> openings[i]>0 ? { item_id:row.id, type:'in', qty:openings[i], reason:'Opening balance (new item)', ref_type:'opening', ref_id:null, actor_id:null, date:new Date().toISOString().slice(0,10) } : null).filter(Boolean);
+    const mvs=(created||[]).map((row,i)=> openings[i]>0 ? { item_id:row.id, type:'in', qty:openings[i], reason:'Opening balance (new item)', ref_type:'opening', ref_id:null, actor_id:null, date:todayManila() } : null).filter(Boolean);
     if(mvs.length){ const { error:mErr }=await sb.from('stock_movements').insert(mvs); if(mErr){ const stripped=mvs.map(({date,...rest})=>rest); await sb.from('stock_movements').insert(stripped); } }
     setBusy(false);
     onSaved();
@@ -25577,7 +25577,7 @@ function ItemImportModal({ suppliers, departments, onClose, onDone }){
       payloads.push({ name, sku:getVal(r,headers,'sku'), bucket, category:cat, brand:getVal(r,headers,'brand'), model:getVal(r,headers,'model'), color:getVal(r,headers,'color'), size:getVal(r,headers,'size'), unit:getVal(r,headers,'unit')||'pc', qty:0, _openingQty:Number(getVal(r,headers,'qty'))||0, cost:Number(getVal(r,headers,'cost'))||0, price:Number(getVal(r,headers,'price'))||0, reorder:Number(getVal(r,headers,'reorder'))||0, dept_id, supplier_id, location:getVal(r,headers,'location'), notes:getVal(r,headers,'notes') });
     }
     const chunkSize=100;
-    const today=new Date().toISOString().slice(0,10);
+    const today=todayManila();
     for(let i=0;i<payloads.length;i+=chunkSize){
       const chunk=payloads.slice(i,i+chunkSize);
       const openings=chunk.map(p=>p._openingQty);
@@ -25736,7 +25736,7 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
     // ledger + trigger. A new item's opening qty and any change to the qty field
     // are posted as movements so the ledger and on-hand can never disagree.
     const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null };
-    const today=new Date().toISOString().slice(0,10);
+    const today=todayManila();
     try{
       let data;
       if(existing){
@@ -26564,7 +26564,7 @@ function buildPRFromLead(profile, lead){
   }));
   return {
     number:'PR-'+Date.now().toString().slice(-5),
-    date:new Date().toISOString().slice(0,10),
+    date:todayManila(),
     requested_by: profile.id,
     dept_id:null,
     urgency:'normal',
@@ -26609,7 +26609,7 @@ async function maybeAutoCreatePRForSample(profile, sample){
     }));
     const payload = {
       number:'PR-'+Date.now().toString().slice(-5),
-      date:new Date().toISOString().slice(0,10),
+      date:todayManila(),
       requested_by: profile.id, dept_id:null, urgency:'normal', status:'submitted',
       justification:`Sample materials for "${sample.item||''}"${sample.client_name?` · ${sample.client_name}`:''} (${sample.number||''}).`,
       approver_note:'', source:'sampling', linked_sample_id: sample.id,
@@ -26836,7 +26836,7 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       return null;
     }
     // Pull next SO number: SO-YYYY-MM-NNN (count within month)
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayManila();
     const monthKey = today.slice(0,7); // YYYY-MM
     const { data: monthRows } = await sb.from('sales_orders').select('number').like('number', `SO-${monthKey}-%`);
     let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
@@ -26942,7 +26942,7 @@ async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
       await linkAll(so.id);
       return so;
     }
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayManila();
     const monthKey = today.slice(0,7);
     const { data: monthRows } = await sb.from('sales_orders').select('number').like('number', `SO-${monthKey}-%`);
     let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
@@ -26978,7 +26978,7 @@ async function maybeAutoCreateSamplingJobForLead(profile, lead, clients){
     if(lookupErr){ console.warn('Sampling auto-create lookup failed:', lookupErr.message); return null; }
     if(existing && existing.length > 0) return null;
     // Date-based sampling number: SMP-YYYY-MM-NNN (sequential within month).
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayManila();
     const monthKey = today.slice(0,7);
     const { data: monthRows } = await sb.from('sampling_jobs').select('number').like('number', `SMP-${monthKey}-%`);
     let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
@@ -27038,7 +27038,7 @@ async function maybeAutoCreateDeliveryFromJob(profile, job, jobType){
     if(lookupErr){ console.warn('Logistics auto-create lookup failed:', lookupErr.message); return null; }
     if(existing && existing.length > 0) return null;
     // Pick a date — prefer job.due_date, but never schedule into the past.
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayManila();
     const dueDate = (job.due_date && job.due_date >= today) ? job.due_date : today;
     // Carry the contact + address from the LEAD (this order's specifics), then
     // fall back to the client record.
@@ -27213,7 +27213,7 @@ function prFullyCovered(pr, items, reservations){
 // (fully consumed — no leftover to buy, nothing left reserved). Shared by the
 // board card + the PR form so both behave identically.
 async function issuePRFromStock(pr, items, profile){
-  const date = new Date().toISOString().slice(0,10);
+  const date = todayManila();
   const consume = (pr.lines||[])
     .filter(l=> l.item_id && (Number(l.qty||0)+Number(l.stock_allocated||0))>0)
     .map(l=>({ item_id:l.item_id, qty: Number(l.qty||0)+Number(l.stock_allocated||0) }));
@@ -27505,7 +27505,7 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
       const number='PR-'+Date.now().toString().slice(-5);
       const line={ description:f.item.trim(), sku:'', item_id:null, qty:Number(f.qty)||1, unit:f.unit||null, est_cost:0, link:'', notes:'' };
       const payload={
-        number, date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null,
+        number, date:todayManila(), requested_by:profile.id, dept_id:null,
         urgency:f.urgency, status:'manual_request', source:'manual',
         justification:`Manual request by ${profile.name||profile.email}${f.needed_by?` · needed by ${f.needed_by}`:''}${f.details?` — ${f.details}`:''}`,
         approver_note:'', lines:[line], attachments,
@@ -27634,7 +27634,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   // Purchasing owns the PR review queue — they're the ones who decide what to
   // buy and when, so they can approve / reject PRs the same as admin.
   const canApprove = isAdmin || isPurchasing;
-  const [f,setF]=useState(existing?{...existing, lines:existing.lines||[]}:{ date:new Date().toISOString().slice(0,10), requested_by:profile.id, dept_id:null, urgency:'normal', status:'submitted', justification:'', approver_note:'', lines:[{item_id:null, sku:'', description:'', qty:1, est_cost:0, stock_allocated:0}] });
+  const [f,setF]=useState(existing?{...existing, lines:existing.lines||[]}:{ date:todayManila(), requested_by:profile.id, dept_id:null, urgency:'normal', status:'submitted', justification:'', approver_note:'', lines:[{item_id:null, sku:'', description:'', qty:1, est_cost:0, stock_allocated:0}] });
   // Reservations = what's already committed from inventory by other approved PRs.
   // For accuracy when editing this PR, we EXCLUDE this PR's own lines from the
   // pool so the user sees the true "what's left for me to take" number.
@@ -28240,7 +28240,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
           const totOrdered=(o.lines||[]).reduce((s,l)=>s+Number(l.qty||0),0);
           const totRecv=(o.lines||[]).reduce((s,l)=>s+Number(l.qty_received||0),0);
           const short = o.status==='received' && totRecv < totOrdered-0.001;
-          const today=new Date().toISOString().slice(0,10);
+          const today=todayManila();
           const showEta = o.expected_date && ['open','partial'].includes(o.status);
           const overdue = showEta && o.expected_date < today;
           return (
@@ -28300,7 +28300,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     });
   })() : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
-    date: isEdit?existing.date:new Date().toISOString().slice(0,10),
+    date: isEdit?existing.date:todayManila(),
     expected_date: isEdit?(existing.expected_date||''):'',
     supplier_id: isEdit?existing.supplier_id:null,
     pr_id: isEdit?existing.pr_id:(fromPR?fromPR.id:null),
@@ -28447,7 +28447,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!confirm(`Create a Request for Payment for this PO?\n\nAmount: ${peso(netPayable)}\nSupplier: ${supplier?.company||'(none)'}\n\nThe proof of transaction attached here goes with it, so the RFP goes straight to Accounting for approval.`)) return;
     setBusy(true); setMsg('');
     try {
-      const today = new Date().toISOString().slice(0,10);
+      const today = todayManila();
       const monthKey = today.slice(0,7);
       const { data: monthRows } = await sb.from('rfps').select('id,number').like('number', `RFP-${monthKey}-%`);
       const seq = String((monthRows?.length||0)+1).padStart(3,'0');
@@ -28719,7 +28719,7 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
       const fully=newLines.every(l=>Number(l.qty_received||0)>=Number(l.qty||0));
       const any=newLines.some(l=>Number(l.qty_received||0)>0);
       const status = fully?'received':(any?'partial':'open');
-      const {error}=await sb.from('purchase_orders').update({ lines:newLines.map(({receive_now,...rest})=>rest), status, received_at: fully?new Date().toISOString().slice(0,10):po.received_at }).eq('id',po.id); if(error) throw error;
+      const {error}=await sb.from('purchase_orders').update({ lines:newLines.map(({receive_now,...rest})=>rest), status, received_at: fully?todayManila():po.received_at }).eq('id',po.id); if(error) throw error;
       onSaved();
     } catch(err){ setBusy(false); setMsg(err.message||String(err)); }
   }
@@ -29462,7 +29462,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
   }
   async function markDelivered(){
     if(!confirm('Mark this SO as delivered? You can then generate the Invoice from this order.')) return;
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayManila();
     const { error } = await sb.from('sales_orders').update({ delivered_at: today }).eq('id', so.id);
     if(error){ alert(error.message); return; }
     setF({...f, delivered_at: today});
@@ -29724,7 +29724,7 @@ function payStatusBadge(status){
 // ─────────── LOG PAYMENT (Pending) — used by Sales + Accounting ───────────
 function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClose, onSaved }){
   const [f,setF]=useState({
-    date: new Date().toISOString().slice(0,10),
+    date: todayManila(),
     amount: '',
     method: 'gcash',
     bank_id: '',
@@ -29852,7 +29852,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
   const [verifyAmount,setVerifyAmount]=useState(loggedAmount);
   const [method,setMethod]=useState(payment.method||'gcash');
   const [reference,setReference]=useState(payment.reference||'');
-  const [payDate,setPayDate]=useState(payment.date||new Date().toISOString().slice(0,10));
+  const [payDate,setPayDate]=useState(payment.date||todayManila());
   const [bankId,setBankId]=useState(payment.bank_id || (payment.method==='cash' ? null : (bankAccounts[0]?.id||null)));
   const [verifyNotes,setVerifyNotes]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -30073,7 +30073,7 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
   const [amount,setAmount]=useState(String(payment.amount||''));
   const [method,setMethod]=useState(payment.method||'gcash');
   const [reference,setReference]=useState(payment.reference||'');
-  const [date,setDate]=useState(payment.date||new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(payment.date||todayManila());
   const [bankId,setBankId]=useState(payment.bank_id||(payment.method==='cash'?null:(bankAccounts[0]?.id||null)));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const isVerified = payment.status==='verified';
@@ -30312,7 +30312,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
   const dates = sorted.map(r=>String(r.earned_at||'').slice(0,10)).filter(Boolean);
   const periodFrom = dates[0]||''; const periodTo = dates[dates.length-1]||'';
   const repNm = rep ? (rep.name||rep.email) : 'Sales rep';
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   return ReactDOM.createPortal(
     <div className="tp-root fixed inset-0 bg-slate-100 z-[60] overflow-auto">
       <PortraitPagePrintStyle />
@@ -30657,7 +30657,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
         // Retry once on conflict (mirrors the existing voucher creation pattern).
         for(let attempt = 0; attempt < 5; attempt++){
           const res = await sb.from('vouchers').insert({
-            number, type:payoutType, date: new Date().toISOString().slice(0,10),
+            number, type:payoutType, date: todayManila(),
             payee, amount: payout.amount,
             particulars: `Sales commission payout — ${payee}. ${rowsTxt}`,
             expense_category: payoutCategory||null,
@@ -31656,7 +31656,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
 
 function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, costCenters, chartAccounts, onClose, onSaved }){
   const supplier = suppliers.find(s=>s.id===rfp.supplier_id);
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const monthKey = ymdToMonthKey(today);
   // Pre-select voucher type from RFP payment method:
   //   'check'         → Check Voucher (CV)
@@ -31894,7 +31894,7 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
   const list = rfps||[];
   const first = list[0]||{};
   const supplier = suppliers.find(s=>s.id===first.supplier_id);
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const monthKey = ymdToMonthKey(today);
   const total = list.reduce((s,r)=> s + Number(r.amount||0), 0);
   const poNumberFor = (r)=> { const po=(orders||[]).find(o=>o.id===r.po_id); return po?po.number:(r.number||'—'); };
@@ -32105,7 +32105,7 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
 */
 function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, costCenters, chartAccounts, existing, onClose, onSaved }){
   const isEdit = !!existing;
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const monthKey = ymdToMonthKey(today);
   const [f,setF]=useState(isEdit ? {
     type: existing.type || 'check',
@@ -33622,7 +33622,7 @@ function ExpensesView({ profile, profiles, expenses, bankAccounts, costCenters, 
 function ExpenseFormModal({ existing, profile, bankAccounts, costCenters, chartAccounts, onClose, onSaved }){
   const isEdit = !!existing;
   const [f,setF]=useState({
-    date: existing?.date || new Date().toISOString().slice(0,10),
+    date: existing?.date || todayManila(),
     category: existing?.category || '',
     gl_account_code: existing?.gl_account_code || '',
     cost_center_id: existing?.cost_center_id || '',
@@ -34647,7 +34647,7 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     // Try to stamp spent_at so the Expense Log can use the actual spend date.
     // Falls back gracefully if the column doesn't exist yet.
     let { error } = await sb.from('budget_requests').update({
-      status:'spent', spent_at: new Date().toISOString().slice(0,10),
+      status:'spent', spent_at: todayManila(),
     }).eq('id', existing.id);
     if(error && /spent_at/i.test(error.message||'')){
       const r2 = await sb.from('budget_requests').update({ status:'spent' }).eq('id', existing.id);
@@ -34798,7 +34798,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   const currentCount = linkedExpenses.filter(e=>!e.pc_liquidated_at).length;
   function periodForRepl(r){ const t=new Date(r.requested_at||r.created_at||0).getTime(); let best=null, bestDiff=Infinity; periods.forEach(p=>{ const d=Math.abs(new Date(p.key).getTime()-t); if(d<bestDiff){ bestDiff=d; best=p.key; } }); return (best && bestDiff < 1000*60*60*24*3) ? best : 'current'; }
   // Local state for the add-expense form — MULTI-LINE.
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, gl_account_code:'', category:'', cost_center_id:'', vendor:'', description:'', amount:'', input_vat:'', receipt_url:'' });
   const [addOpen,setAddOpen]=useState(false);
   const [rows,setRows]=useState([ blankRow() ]);
@@ -35114,12 +35114,12 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
       const old=(cashAdvances||[]).find(c=>c.id===r.petty_cash_id);
       const released=Number(r.amount||0);
       // The bank withdrawal (this is the only GL-driving cash movement).
-      await sb.from('bank_transactions').insert({ bank_id:bankId, date:new Date().toISOString().slice(0,10), direction:'out', amount:released, description:`Petty cash replenishment · ${old?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
+      await sb.from('bank_transactions').insert({ bank_id:bankId, date:todayManila(), direction:'out', amount:released, description:`Petty cash replenishment · ${old?.number||''}`, ref_type:'cash_advance', ref_id:r.petty_cash_id, created_by:profile.id });
       // Close the batch being replenished and open its successor.
       if(old){
         const carry=onHandOf(old);                       // unspent cash carried forward
         const opening=carry+released;                    // new batch's starting balance
-        const today=new Date().toISOString().slice(0,10);
+        const today=todayManila();
         const monthKey=today.slice(0,7);
         const { data: monthRows } = await sb.from('cash_advances').select('id').like('number', `PC-${monthKey}-%`);
         const seq=String((monthRows?.length||0)+1).padStart(3,'0');
@@ -35262,7 +35262,7 @@ function CashAdvanceFormModal({ existing, kind, profile, profiles, bankAccounts,
   // existing row preserves its original kind.
   const effectiveKind = existing?.kind || kind || 'cash_advance';
   const isPetty = effectiveKind === 'petty_cash';
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const monthKey = today.slice(0,7);
   const [f,setF]=useState({
     date: existing?.date || today,
@@ -35394,14 +35394,14 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
     try {
       if(returned > 0.01 && ca.bank_id){
         await sb.from('bank_transactions').insert({
-          bank_id: ca.bank_id, date: new Date().toISOString().slice(0,10), direction:'in', amount: returned,
+          bank_id: ca.bank_id, date: todayManila(), direction:'in', amount: returned,
           description: `Return from ${ca.number||'CA'} · ${ca.custodian_name||''}`,
           ref_type:'cash_advance', ref_id: ca.id, created_by: profile.id,
         });
       }
       const { error } = await sb.from('cash_advances').update({
         receipts, supporting_docs:docs, amount_liquidated: total, amount_returned: returned,
-        status: 'liquidated', liquidated_at: new Date().toISOString().slice(0,10),
+        status: 'liquidated', liquidated_at: todayManila(),
       }).eq('id', ca.id);
       if(error) throw error;
       setBusy(false); onSaved();
@@ -35580,7 +35580,7 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
     description: asset.description||'', serial_number: asset.serial_number||'',
     assigned_to_id: asset.assigned_to_id||'', assigned_to_name: asset.assigned_to_name||'',
     department: asset.department||'', location: asset.location||'',
-    purchase_date: asset.purchase_date||new Date().toISOString().slice(0,10),
+    purchase_date: asset.purchase_date||todayManila(),
     cost: asset.cost??'', salvage_value: asset.salvage_value??0, useful_life_years: asset.useful_life_years??5,
     status: asset.status||'in_use', notes: asset.notes||'',
   });
@@ -36295,7 +36295,7 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
 }
 function JournalFormModal({ entry, chartAccounts, bankAccounts, costCenters, profile, onClose, onSaved }){
   const isEdit = !!entry?.id;
-  const [date,setDate]=useState(entry.date||new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(entry.date||todayManila());
   const [reference,setReference]=useState(entry.reference||'');
   const [memo,setMemo]=useState(entry.memo||'');
   const [bankId,setBankId]=useState(entry.bank_id||'');
@@ -36927,7 +36927,7 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
           )}
         </div>
       )}
-      {adding && <CalendarEventModal profile={profile} defaultDate={selectedDay ? `${year}-${String(month+1).padStart(2,'0')}-${String(selectedDay).padStart(2,'0')}` : new Date().toISOString().slice(0,10)} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload && reload(); }} />}
+      {adding && <CalendarEventModal profile={profile} defaultDate={selectedDay ? `${year}-${String(month+1).padStart(2,'0')}-${String(selectedDay).padStart(2,'0')}` : todayManila()} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload && reload(); }} />}
     </div>
   );
 }
@@ -36937,7 +36937,7 @@ function PaymentCalendarView({ profile, salesOrders, rfps, budgetRequests, vouch
 // rent, insurance renewals, ad-hoc planned spend, etc.
 function CalendarEventModal({ profile, defaultDate, onClose, onSaved }){
   const [f,setF]=useState({
-    date: defaultDate || new Date().toISOString().slice(0,10),
+    date: defaultDate || todayManila(),
     title: '',
     amount: 0,
     direction: 'out',
@@ -37309,7 +37309,7 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
   const [from,setFrom]=useState('');
   const [to,setTo]=useState('');
   const [pdcMode,setPdcMode]=useState('exclude'); // 'exclude' | 'all' | 'only'
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const monthKey = today.slice(0,7);
   const yearKey = today.slice(0,4);
   function startOfWeek(){ const d=new Date(today+'T00:00:00'); const day=d.getDay(); const diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); return d.toISOString().slice(0,10); }
@@ -38014,7 +38014,7 @@ function DeliveryReceiptModal({ profile, profiles, clients, salesOrders, prodJob
   const isEdit = !!existing;
   const ctx = drCtx || {};
   // Header state.
-  const [date,setDate]=useState(existing?.date || new Date().toISOString().slice(0,10));
+  const [date,setDate]=useState(existing?.date || todayManila());
   const [kind,setKind]=useState(existing?.kind || ctx.kind || 'production');
   const [clientId,setClientId]=useState(existing?.client_id || ctx.client_id || '');
   const [soId,setSoId]=useState(existing?.sales_order_id || ctx.sales_order_id || '');
@@ -38524,7 +38524,7 @@ function TransmittalModal({ profile, profiles, clients, salesOrders, leads, samp
   const ctx = trnCtx || {};
   // Default expected return date = today + 14 days (locked in via question).
   const defaultReturnDate = (()=>{ const d = new Date(); d.setDate(d.getDate()+14); return d.toISOString().slice(0,10); })();
-  const [dateSent,setDateSent]=useState(existing?.date_sent || new Date().toISOString().slice(0,10));
+  const [dateSent,setDateSent]=useState(existing?.date_sent || todayManila());
   const [clientId,setClientId]=useState(existing?.client_id || ctx.client_id || '');
   const [soId,setSoId]=useState(existing?.sales_order_id || ctx.sales_order_id || '');
   const [leadId]=useState(existing?.lead_id || ctx.lead_id || null);
@@ -38925,7 +38925,7 @@ function TransmittalViewModal({ trn, transmittalItems, clients, profiles, salesO
   async function applyReturns(){
     setBusy(true); setMsg('');
     try {
-      const today = new Date().toISOString().slice(0,10);
+      const today = todayManila();
       let anyReturnedOrWrittenOff = false;
       for(let i=0; i<items.length; i++){
         const it = items[i]; const r = retState[i] || {};
@@ -39805,7 +39805,7 @@ function SubconProjectDetailModal({ project, subcons, subconSends, subconReturns
 // ─────────── SEND BATCH MODAL ───────────
 function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects, prefillProjectId, existing, onClose, onSaved }){
   const isEdit = !!existing;
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const activeSubcons = (subcons||[]).filter(s => s.active !== false);
   const openProjects = (projects||[]).filter(p => p.status === 'open' && !p.deleted_at);
   const [f,setF]=useState({
@@ -40001,7 +40001,7 @@ function SubconSendModal({ profile, subcons, leads, prodJobs, clients, projects,
 // status is re-derived (in_progress → partial_returned → fully_returned).
 function SubconReturnModal({ profile, send, subcons, allReturns, existing, onClose, onSaved }){
   const isEdit=!!existing;
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayManila();
   const subcon = (subcons||[]).find(s=> s.id===send.subcon_id);
   const totals = subconSendTotals(send, allReturns);
   // When editing, add this return's own qty back to the cap so it isn't double-counted.
