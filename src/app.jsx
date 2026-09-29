@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 641 · Reports → Sales YTD panel now has a Booked ↔ Collected toggle. Booked = total value of sales orders placed each month (paid or not); Collected = how much of each month's orders has actually been paid. The monthly column, YTD and full-year totals all follow the toggle.";
+const BUILD = "Live build 642 · Graphic ticket queue fix: a ticket that was 'assigned' but had no artist (orphaned) showed no owner and no action buttons and got stuck. Orphaned tickets now surface in the Open pool with a Claim/Assign button so they can always be picked up. Fixed the one stuck ticket too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12605,9 +12605,13 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
   const visible = tickets.filter(t=> (filterType==='all'||t.task_type===filterType) && (!mineOnly || t.assignee_id===profile.id) && matchesSearch(t));
   const prioRank=(t)=>ticketPrioMeta(t.priority).rank;
   const byPrioDue=(a,b)=>{ const pr=prioRank(a)-prioRank(b); if(pr) return pr; return String(a.due_date||'9999').localeCompare(String(b.due_date||'9999')); };
-  const open = visible.filter(t=>t.status==='open').sort(byPrioDue);
-  const assigned = visible.filter(t=>t.status==='assigned').sort(byPrioDue);
-  const inprog = visible.filter(t=>t.status==='in_progress').sort(byPrioDue);
+  // A ticket that's "assigned"/"in progress" but has no artist (e.g. its artist
+  // was removed) is orphaned — nobody owns it, so no owner buttons show. Treat it
+  // as claimable and surface it in the Open pool so it never gets stuck.
+  const orphaned = (t)=> !t.assignee_id && (t.status==='assigned' || t.status==='in_progress');
+  const open = visible.filter(t=>t.status==='open' || orphaned(t)).sort(byPrioDue);
+  const assigned = visible.filter(t=>t.status==='assigned' && t.assignee_id).sort(byPrioDue);
+  const inprog = visible.filter(t=>t.status==='in_progress' && t.assignee_id).sort(byPrioDue);
   const done = visible.filter(t=>t.status==='done').sort((a,b)=>String(b.done_at||'').localeCompare(String(a.done_at||''))).slice(0,30);
 
   const artists=graphicArtists(profiles);
@@ -12622,6 +12626,7 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
     const overdue = t.due_date && t.due_date<today && t.status!=='done';
     const canWork = t.assignee_id===profile.id || canManage;
     const canApprove = isSalesSide || profile.id===t.created_by || profile.id===t.requested_by;
+    const isClaimable = t.status==='open' || (!t.assignee_id && t.status!=='done');  // open, or orphaned (assigned/in-progress w/ no artist)
     return (
       <div className={`bg-white rounded-xl border p-3 ${overdue?'border-rose-300':''}`}>
         <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
@@ -12639,10 +12644,10 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
         <div className="flex items-center gap-2 mt-2">
           {asg && <div className="flex items-center gap-1.5"><Avatar profile={asg} size="sm" /><span className="text-[11px] text-slate-500">{asg.name||asg.email}{t.status==='done'&&t.done_at?` · ${fmtDate(t.done_at.slice(0,10))}`:''}</span></div>}
           <div className="ml-auto flex items-center gap-1.5">
-            {t.status==='open' && canManage && artists.length>0 && <select defaultValue="" onChange={e=>{ if(e.target.value){ assignTo(t, e.target.value); e.target.value=''; } }} className="text-[11px] border rounded px-1 py-1 bg-white text-slate-600" title="Assign this ticket to an artist"><option value="">Assign to…</option>{artists.map(a=><option key={a.id} value={a.id}>{a.name||a.email}</option>)}</select>}
-            {t.status==='open' && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
-            {t.status==='assigned' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>start(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700">▶ Start</button></>}
-            {t.status==='in_progress' && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Mark done</button></>}
+            {isClaimable && canManage && artists.length>0 && <select defaultValue="" onChange={e=>{ if(e.target.value){ assignTo(t, e.target.value); e.target.value=''; } }} className="text-[11px] border rounded px-1 py-1 bg-white text-slate-600" title="Assign this ticket to an artist"><option value="">Assign to…</option>{artists.map(a=><option key={a.id} value={a.id}>{a.name||a.email}</option>)}</select>}
+            {isClaimable && <button onClick={()=>claim(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">✋ Claim</button>}
+            {t.status==='assigned' && t.assignee_id && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>start(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700">▶ Start</button></>}
+            {t.status==='in_progress' && t.assignee_id && canWork && <><button onClick={()=>release(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-600">Release</button><button onClick={()=>markDone(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">✓ Mark done</button></>}
             {t.status==='done' && canApprove && <button onClick={()=>requestRevision(t)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700" title="Send back to the assigned artist for revision">↺ Request revision</button>}
             {t.status==='done' && canManage && <button onClick={()=>reopen(t)} className="text-xs px-2 py-1 rounded-lg border text-slate-500">Reopen</button>}
           </div>
