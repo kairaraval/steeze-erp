@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 645 · Leave credits (VL/SL) monitoring: every regular employee now holds VL/SL balances (start 10/5). Logging a Vacation/Emergency leave auto-deducts VL, Sick deducts SL (Mon–Sat working days). The 201 file shows remaining credits (HR-editable); Leave Tracker gains a Credit Balances tab (editable) and an Anniversary Cash-out tab that values unused VL+SL at the daily rate, sends the payout to Accounting, and resets to 10/5.";
+const BUILD = "Live build 646 · Leave cash-out now has a signed, printable form + approval flow: HR opens an anniversary cash-out, reviews the VL/SL computation, prints the signable form, then Finalizes (signs as preparer) — which resets credits to 10/5 and raises a Request for Payment that flows into Accounting's For Approval → For Payment queue. Status on each cash-out tracks the linked RFP (For Approval → For Payment → Paid).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15989,7 +15989,7 @@ async function applyLeaveBalanceDelta(employeeId, bucket, deltaDays, actorId){
 }
 
 const canEditLeaves=(p)=>['admin','hr'].includes(p?.role);
-function HRLeaveView({ profile, employees, hrLeaves, leaveBalances, leaveCashouts, reload }){
+function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, leaveCashouts, rfps, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [tab,setTab]=useState('log');   // 'log' | 'balances' | 'anniversary'
@@ -16023,7 +16023,7 @@ function HRLeaveView({ profile, employees, hrLeaves, leaveBalances, leaveCashout
         </div>
       </div>
       {tab==='balances' && <LeaveBalancesPanel profile={profile} employees={employees} leaveBalances={leaveBalances} canEdit={canEdit} reload={reload} />}
-      {tab==='anniversary' && <LeaveAnniversaryPanel profile={profile} employees={employees} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} canEdit={canEdit} reload={reload} />}
+      {tab==='anniversary' && <LeaveAnniversaryPanel profile={profile} profiles={profiles} employees={employees} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} rfps={rfps} canEdit={canEdit} reload={reload} />}
       {tab==='log' && (<>
 
       <div className="grid md:grid-cols-2 gap-3 mb-4">
@@ -16152,13 +16152,24 @@ function LeaveBalancesPanel({ profile, employees, leaveBalances, canEdit, reload
 
 // Anniversary cash-out: unused VL+SL × daily rate, per employee whose hire
 // anniversary falls in the chosen month. HR records it (→ Accounting) and resets.
-function LeaveAnniversaryPanel({ profile, employees, leaveBalances, leaveCashouts, canEdit, reload }){
+const LEAVE_CASHOUT_STATUS = {
+  draft:        { label:'Draft',            color:'bg-slate-100 text-slate-600' },
+  for_approval: { label:'For Approval',     color:'bg-amber-100 text-amber-700' },
+  approved:     { label:'For Payment',      color:'bg-blue-100 text-blue-700' },
+  paid:         { label:'Paid',             color:'bg-emerald-100 text-emerald-700' },
+  rejected:     { label:'Rejected',         color:'bg-rose-100 text-rose-700' },
+};
+function leaveCashoutMeta(k){ return LEAVE_CASHOUT_STATUS[k||'for_approval'] || LEAVE_CASHOUT_STATUS.for_approval; }
+
+function LeaveAnniversaryPanel({ profile, profiles, employees, leaveBalances, leaveCashouts, rfps, canEdit, reload }){
   const now=new Date();
   const [ym,setYm]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
-  const [busy,setBusy]=useState(false);
+  const [viewing,setViewing]=useState(null);   // { e, hd, b, vl, sl, rate, amount, cashout? }
   const monthNum=Number(ym.slice(5,7));
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   const anniv=(e)=>{ const hd=e.hire_date||e.first_day; return hd? new Date(hd+'T00:00:00') : null; };
+  // effective status: follow the linked RFP if present so it tracks Accounting's progress
+  const liveStatus=(c)=>{ if(!c) return null; const r=(rfps||[]).find(x=>x.id===c.rfp_id); if(r){ if(r.status==='paid') return 'paid'; if(r.status==='rejected') return 'rejected'; if(['approved','partial'].includes(r.status)) return 'approved'; return 'for_approval'; } return c.status||'for_approval'; };
   const due=(employees||[]).filter(e=>e.status==='regular').map(e=>{
     const hd=anniv(e); if(!hd) return null;
     if((hd.getMonth()+1)!==monthNum) return null;
@@ -16166,66 +16177,182 @@ function LeaveAnniversaryPanel({ profile, employees, leaveBalances, leaveCashout
     const vl=b?Math.max(0,Number(b.vl_remaining)):0, sl=b?Math.max(0,Number(b.sl_remaining)):0;
     const rate=Number(e.current_rate)||0;
     const amount=(vl+sl)*rate;
-    const already=(leaveCashouts||[]).find(c=>c.employee_id===e.id && !c.deleted_at && String(c.cycle_start||'').slice(0,4)===ym.slice(0,4));
-    return { e, hd, b, vl, sl, rate, amount, already };
+    const cashout=(leaveCashouts||[]).find(c=>c.employee_id===e.id && !c.deleted_at && String(c.anniversary_date||c.cycle_start||'').slice(0,4)===ym.slice(0,4) && (c.anniversary_date? Number(c.anniversary_date.slice(5,7))===monthNum : true));
+    return { e, hd, b, vl, sl, rate, amount, cashout };
   }).filter(Boolean).sort((a,b)=>a.hd.getDate()-b.hd.getDate());
-  const totalCash=due.reduce((s,r)=>s+(r.already?0:r.amount),0);
-  async function recordCashout(r){
-    if(!r.rate){ alert(`No daily rate on file for ${fullName(r.e)} — set their current rate first.`); return; }
-    if(!confirm(`Record anniversary cash-out for ${fullName(r.e)}?\n\nVL ${r.vl} + SL ${r.sl} = ${r.vl+r.sl} days × ${peso(r.rate)} = ${peso(r.amount)}\n\nThis sends it to Accounting and resets their credits to 10 VL / 5 SL for the new cycle.`)) return;
-    setBusy(true);
-    try{
-      const b=r.b;
-      const newStart=b?.cycle_end ? new Date(new Date(b.cycle_end+'T00:00:00').getTime()+86400000).toISOString().slice(0,10) : todayManila();
-      const newEnd=(()=>{ const d=new Date(newStart+'T00:00:00'); d.setFullYear(d.getFullYear()+1); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })();
-      await sb.from('leave_cashouts').insert({ employee_id:r.e.id, cycle_start:b?.cycle_start||null, cycle_end:b?.cycle_end||null, vl_days:r.vl, sl_days:r.sl, rate:r.rate, amount:r.amount, status:'for_accounting', created_by:profile.id });
-      if(b){ await sb.from('leave_balances').update({ vl_remaining:10, sl_remaining:5, vl_entitled:10, sl_entitled:5, cycle_start:newStart, cycle_end:newEnd, updated_at:new Date().toISOString(), updated_by:profile.id }).eq('id', b.id); }
-      else { await sb.from('leave_balances').insert({ employee_id:r.e.id, vl_entitled:10, sl_entitled:5, vl_remaining:10, sl_remaining:5, cycle_start:newStart, cycle_end:newEnd, updated_by:profile.id }); }
-      // Notify accounting team
-      try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`🌴 Leave cash-out for ${fullName(r.e)} — ${r.vl+r.sl} days = ${peso(r.amount)} — ready for payment.`, link_view:'hr-leave', type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
-    }catch(err){ alert(err.message||err); }
-    setBusy(false); reload&&reload();
-  }
+  const totalCash=due.reduce((s,r)=>s+(r.cashout?0:r.amount),0);
   const recent=(leaveCashouts||[]).filter(c=>!c.deleted_at).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||''))).slice(0,15);
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="text-xs text-slate-500">Employees whose <b>hire anniversary</b> falls in the selected month. Unused VL+SL × daily rate = cash-out. Recording it sends the amount to Accounting and resets credits to 10/5.</div>
+        <div className="text-xs text-slate-500">Employees whose <b>hire anniversary</b> falls in the selected month. Unused VL+SL × daily rate = cash-out. Open one to review, print the signed form, and finalize — it then goes to Accounting's For Approval → For Payment queue and resets credits to 10/5.</div>
         <input type="month" value={ym} onChange={e=>setYm(e.target.value)} className="border rounded-lg px-3 py-1.5 text-sm" />
       </div>
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="px-4 py-2.5 bg-slate-50 border-b text-sm font-bold flex items-center justify-between"><span>Anniversaries in {new Date(ym+'-01T00:00:00').toLocaleString('en-PH',{month:'long',year:'numeric'})}</span><span className="text-xs text-slate-500">To cash out: {peso(totalCash)}</span></div>
+        <div className="px-4 py-2.5 bg-slate-50 border-b text-sm font-bold flex items-center justify-between"><span>Anniversaries in {new Date(ym+'-01T00:00:00').toLocaleString('en-PH',{month:'long',year:'numeric'})}</span><span className="text-xs text-slate-500">Still to cash out: {peso(totalCash)}</span></div>
         <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr>
             <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Anniversary</th>
             <th className="text-right px-3 py-2">VL</th><th className="text-right px-3 py-2">SL</th>
-            <th className="text-right px-3 py-2">Daily rate</th><th className="text-right px-3 py-2">Cash-out</th>{canEdit && <th></th>}
+            <th className="text-right px-3 py-2">Daily rate</th><th className="text-right px-3 py-2">Cash-out</th><th className="text-right px-3 py-2"></th>
           </tr></thead>
-          <tbody>{due.length===0 ? <tr><td colSpan={canEdit?7:6} className="text-center text-slate-400 py-8">No regular-employee anniversaries this month.</td></tr> : due.map((r,i)=>(
-            <tr key={i} className="border-t">
+          <tbody>{due.length===0 ? <tr><td colSpan="7" className="text-center text-slate-400 py-8">No regular-employee anniversaries this month.</td></tr> : due.map((r,i)=>{ const st=liveStatus(r.cashout); return (
+            <tr key={i} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(r)}>
               <td className="px-3 py-2 font-medium">{fullName(r.e)}</td>
               <td className="px-3 py-2 text-xs">{fmtDate(r.hd.toISOString().slice(0,10))}</td>
-              <td className="px-3 py-2 text-right">{r.vl}</td>
-              <td className="px-3 py-2 text-right">{r.sl}</td>
+              <td className="px-3 py-2 text-right">{r.cashout?Number(r.cashout.vl_days):r.vl}</td>
+              <td className="px-3 py-2 text-right">{r.cashout?Number(r.cashout.sl_days):r.sl}</td>
               <td className="px-3 py-2 text-right">{r.rate?peso(r.rate):<span className="text-rose-500 text-xs">no rate</span>}</td>
-              <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}</td>
-              {canEdit && <td className="px-3 py-2 text-right">{r.already ? <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">recorded</span> : <button disabled={busy} onClick={()=>recordCashout(r)} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">Record &amp; send</button>}</td>}
+              <td className="px-3 py-2 text-right font-semibold">{peso(r.cashout?r.cashout.amount:r.amount)}</td>
+              <td className="px-3 py-2 text-right">{st ? <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${leaveCashoutMeta(st).color}`}>{leaveCashoutMeta(st).label}</span> : <span className="text-xs text-indigo-600 font-semibold">Review &amp; sign →</span>}</td>
             </tr>
-          ))}</tbody>
+          ); })}</tbody>
         </table></div>
       </div>
       <div className="bg-white rounded-xl border overflow-hidden">
         <div className="px-4 py-2.5 bg-slate-50 border-b text-sm font-bold">Recent cash-outs</div>
         {recent.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-400">None yet.</div> : (
           <div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Date</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
-            <tbody>{recent.map(c=>(
-              <tr key={c.id} className="border-t"><td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td><td className="px-3 py-2 text-xs">{c.created_at?fmtDate(c.created_at.slice(0,10)):'—'}</td><td className="px-3 py-2 text-right">{Number(c.vl_days)+Number(c.sl_days)}</td><td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td><td className="px-3 py-2"><span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">{(c.status||'').replace(/_/g,' ')}</span></td></tr>
-            ))}</tbody>
+            <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Date</th><th className="text-right px-3 py-2">Days</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
+            <tbody>{recent.map(c=>{ const e=(employees||[]).find(x=>x.id===c.employee_id); const st=liveStatus(c); return (
+              <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>e&&setViewing({ e, hd: c.anniversary_date?new Date(c.anniversary_date+'T00:00:00'):new Date(), b: balanceOfEmp(leaveBalances,c.employee_id), vl:Number(c.vl_days), sl:Number(c.sl_days), rate:Number(c.rate), amount:Number(c.amount), cashout:c })}>
+                <td className="px-3 py-2 font-medium">{empName(c.employee_id)}</td><td className="px-3 py-2 text-xs">{c.created_at?fmtDate(c.created_at.slice(0,10)):'—'}</td><td className="px-3 py-2 text-right">{Number(c.vl_days)+Number(c.sl_days)}</td><td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td><td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${leaveCashoutMeta(st).color}`}>{leaveCashoutMeta(st).label}</span></td><td className="px-3 py-2 text-right text-xs text-indigo-600">View →</td>
+              </tr>
+            ); })}</tbody>
           </table></div>
         )}
       </div>
+      {viewing && <LeaveCashoutModal profile={profile} profiles={profiles} row={viewing} canEdit={canEdit} liveStatus={liveStatus(viewing.cashout)} onClose={()=>setViewing(null)} reload={reload} />}
     </div>
+  );
+}
+
+// Review + finalize + print a single anniversary leave cash-out.
+function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClose, reload }){
+  const { e, hd, b, vl, sl, rate, amount, cashout } = row;
+  const [busy,setBusy]=useState(false);
+  const [printing,setPrinting]=useState(false);
+  const days=(cashout?Number(cashout.vl_days)+Number(cashout.sl_days):vl+sl);
+  const amt=cashout?Number(cashout.amount):amount;
+  const prof=(id)=>(profiles||[]).find(p=>p.id===id);
+  const hrSigner=cashout?prof(cashout.hr_signed_by):null;
+  async function finalize(){
+    if(!rate){ alert(`No daily rate on file for ${fullName(e)} — set their current rate in the 201 file first.`); return; }
+    if(!confirm(`Finalize and send this cash-out to Accounting?\n\n${fullName(e)} — VL ${vl} + SL ${sl} = ${vl+sl} days × ${peso(rate)} = ${peso(amount)}\n\nYou (${profile.name||'HR'}) sign as preparer. Their credits reset to 10 VL / 5 SL for the new cycle, and a Request for Payment is created for Accounting.`)) return;
+    setBusy(true);
+    try{
+      const nowISO=new Date().toISOString();
+      // 1) create the cash-out record (HR signed)
+      const annivISO=hd?hd.toISOString().slice(0,10):todayManila();
+      const { data:coIns, error:coErr }=await sb.from('leave_cashouts').insert({
+        employee_id:e.id, employee_name:fullName(e), anniversary_date:annivISO,
+        cycle_start:b?.cycle_start||null, cycle_end:b?.cycle_end||null,
+        vl_days:vl, sl_days:sl, rate, amount, status:'for_approval',
+        hr_signed_by:profile.id, hr_signed_at:nowISO, created_by:profile.id,
+      }).select().single();
+      if(coErr) throw coErr;
+      // 2) create the RFP so it flows into Accounting's For Approval → For Payment
+      const monthKey=todayManila().slice(0,7);
+      const { data:monthRows }=await sb.from('rfps').select('number').like('number', `RFP-${monthKey}-%`);
+      let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+      const rfpNumber=`RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
+      const particulars=`Leave cash-out (hire anniversary ${fmtDate(annivISO)}) — ${fullName(e)}: unused VL ${vl} + SL ${sl} = ${vl+sl} day(s) × ${peso(rate)}/day.`;
+      const { data:rfpIns }=await sb.from('rfps').insert({
+        number:rfpNumber, date:todayManila(), supplier_name:fullName(e), amount, particulars,
+        payment_method:'cash', status:'pending_finance', requested_by:profile.id, requested_at:nowISO,
+      }).select().single();
+      if(rfpIns?.id){ await sb.from('leave_cashouts').update({ rfp_id:rfpIns.id }).eq('id', coIns.id); }
+      // 3) roll the leave cycle: reset to 10/5
+      const newStart=b?.cycle_end ? new Date(new Date(b.cycle_end+'T00:00:00').getTime()+86400000).toISOString().slice(0,10) : todayManila();
+      const newEnd=(()=>{ const d=new Date(newStart+'T00:00:00'); d.setFullYear(d.getFullYear()+1); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })();
+      if(b){ await sb.from('leave_balances').update({ vl_remaining:10, sl_remaining:5, vl_entitled:10, sl_entitled:5, cycle_start:newStart, cycle_end:newEnd, updated_at:nowISO, updated_by:profile.id }).eq('id', b.id); }
+      else { await sb.from('leave_balances').insert({ employee_id:e.id, vl_entitled:10, sl_entitled:5, vl_remaining:10, sl_remaining:5, cycle_start:newStart, cycle_end:newEnd, updated_by:profile.id }); }
+      // 4) ping Finance/Accounting
+      try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`🌴 Leave cash-out for ${fullName(e)} — ${peso(amount)} — submitted for approval (${rfpNumber}).`, link_view:'rfps', ref_type:'rfp', ref_id:rfpIns?.id||null, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    }catch(err){ setBusy(false); alert(err.message||err); return; }
+    setBusy(false); onClose(); reload&&reload();
+  }
+  if(printing) return <LeaveCashoutPrintView row={row} preparer={hrSigner||profile} onClose={()=>setPrinting(false)} />;
+  const finalized=!!cashout;
+  return (
+    <Modal title={`Leave Cash-out · ${fullName(e)}`} onClose={onClose} wide>
+      <div className="space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-xs text-slate-500">Hire anniversary <b>{hd?fmtDate(hd.toISOString().slice(0,10)):'—'}</b>{b?.cycle_start?<> · cycle {fmtDate(b.cycle_start)} → {fmtDate(b.cycle_end)}</>:''}</div>
+          {finalized && <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${leaveCashoutMeta(liveStatus).color}`}>{leaveCashoutMeta(liveStatus).label}</span>}
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Credit</th><th className="text-right px-3 py-2">Unused days</th><th className="text-right px-3 py-2">Daily rate</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+            <tbody>
+              <tr className="border-t"><td className="px-3 py-2">Vacation Leave (VL)</td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(vl*rate)}</td></tr>
+              <tr className="border-t"><td className="px-3 py-2">Sick Leave (SL)</td><td className="px-3 py-2 text-right">{sl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(sl*rate)}</td></tr>
+              <tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">Total</td><td className="px-3 py-2 text-right">{vl+sl} days</td><td></td><td className="px-3 py-2 text-right text-emerald-700">{peso(amt)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="text-xs text-slate-500">
+          {finalized
+            ? <>Prepared &amp; signed by <b>{hrSigner?(hrSigner.name||hrSigner.email):'HR'}</b>{cashout.hr_signed_at?` on ${fmtDate(cashout.hr_signed_at.slice(0,10))}`:''}. {cashout.rfp_id?'A Request for Payment was created — track it in Accounting → RFPs (For Approval / For Payment).':''}</>
+            : <>Review the figures, print the form for signature if needed, then finalize to sign as preparer and send to Accounting.</>}
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t flex-wrap">
+          <button onClick={()=>setPrinting(true)} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print form</button>
+          <div className="flex-1"></div>
+          {!finalized && canEdit && <button disabled={busy} onClick={finalize} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Finalizing…':'✍ Finalize & send to Accounting'}</button>}
+          {finalized && <button onClick={onClose} className="px-4 py-2 rounded-lg border text-sm font-semibold">Close</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Printable, signable anniversary leave cash-out form.
+function LeaveCashoutPrintView({ row, preparer, onClose }){
+  const { e, hd, b, vl, sl, rate, amount, cashout } = row;
+  const annivISO=hd?hd.toISOString().slice(0,10):null;
+  const amt=cashout?Number(cashout.amount):amount;
+  const sig=(label, name)=> (
+    <div className="mt-8">
+      <div className="border-t border-slate-800 pt-1 w-64">{name?<div className="font-semibold text-sm">{name}</div>:<div className="h-4"></div>}<div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div></div>
+    </div>
+  );
+  return (
+    <Modal title="Leave Cash-out Form" onClose={onClose} wide>
+      <div className="bg-white">
+        <div className="flex justify-end mb-2 print:hidden"><button onClick={()=>window.print()} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold">🖨 Print / Save PDF</button></div>
+        <div className="border rounded-lg p-6 text-sm text-slate-800" id="leave-cashout-print">
+          <div className="text-center mb-4">
+            <div className="text-lg font-bold">STEEZE</div>
+            <div className="text-base font-semibold mt-1">Leave Credit Cash-out — Hire Anniversary</div>
+            <div className="text-xs text-slate-500">Generated {fmtDate(todayManila())}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-1 mb-4">
+            <div><span className="text-slate-500">Employee:</span> <b>{fullName(e)}</b></div>
+            <div><span className="text-slate-500">Department:</span> {e.department||'—'}</div>
+            <div><span className="text-slate-500">Position:</span> {e.position||'—'}</div>
+            <div><span className="text-slate-500">Hire anniversary:</span> {annivISO?fmtDate(annivISO):'—'}</div>
+            <div><span className="text-slate-500">Leave cycle:</span> {b?.cycle_start?`${fmtDate(b.cycle_start)} → ${fmtDate(b.cycle_end)}`:'—'}</div>
+            <div><span className="text-slate-500">Daily rate:</span> {peso(rate)}</div>
+          </div>
+          <table className="w-full text-sm border border-slate-300 mb-2">
+            <thead className="bg-slate-100"><tr><th className="text-left px-3 py-2 border-b border-slate-300">Leave credit</th><th className="text-right px-3 py-2 border-b border-slate-300">Unused days</th><th className="text-right px-3 py-2 border-b border-slate-300">Daily rate</th><th className="text-right px-3 py-2 border-b border-slate-300">Amount</th></tr></thead>
+            <tbody>
+              <tr><td className="px-3 py-2">Vacation Leave (VL)</td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(vl*rate)}</td></tr>
+              <tr><td className="px-3 py-2">Sick Leave (SL)</td><td className="px-3 py-2 text-right">{sl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(sl*rate)}</td></tr>
+              <tr className="bg-slate-50 font-bold"><td className="px-3 py-2 border-t border-slate-300">TOTAL</td><td className="px-3 py-2 text-right border-t border-slate-300">{vl+sl} days</td><td className="border-t border-slate-300"></td><td className="px-3 py-2 text-right border-t border-slate-300">{peso(amt)}</td></tr>
+            </tbody>
+          </table>
+          <div className="text-xs text-slate-500 mb-6">Computation: (VL {vl} + SL {sl}) = {vl+sl} unused day(s) × {peso(rate)} per day = <b>{peso(amt)}</b>. Credits reset to 10 VL / 5 SL for the new anniversary cycle.</div>
+          <div className="grid grid-cols-2 gap-8">
+            {sig('Prepared by (HR)', preparer?(preparer.name||preparer.email):'')}
+            {sig('Noted / Approved by', '')}
+            {sig('Received by (Employee)', fullName(e))}
+            {sig('Accounting', '')}
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -43507,7 +43634,7 @@ function App(){
         {view==='my-evals' && <MyEvaluationsView profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
-        {view==='hr-leave' && <HRLeaveView profile={profile} employees={employees} hrLeaves={hrLeaves} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} reload={loadAll} />}
+        {view==='hr-leave' && <HRLeaveView profile={profile} profiles={profiles} employees={employees} hrLeaves={hrLeaves} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} rfps={rfps} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
