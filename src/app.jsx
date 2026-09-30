@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 648 · Leave cash-out rules updated: only the 5 Sick Leave credits are convertible to cash — unused Vacation Leave is now forfeited, not paid. Eligibility extended to contractual and project-based staff (seeded 0 VL / 5 SL) in addition to regular. Cycle reset now respects each employee's own entitlement.";
+const BUILD = "Live build 649 · Admin can now VOID a Sales Order from the SO view (reason required). A voided SO is marked VOIDED, excluded from sales, revenue and reports, and its unpaid commissions are removed; already-paid commissions and recorded payments are left untouched (void those separately if needed). Admin can Reopen a voided SO.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29854,17 +29854,47 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
     setF({...f, delivered_at: today});
     onSaved();
   }
+  const isAdmin = profile.role==='admin';
+  const voidedByName = so.voided_by ? (()=>{ const p=(profiles||[]).find(x=>x.id===so.voided_by); return p?(p.name||p.email):''; })() : '';
+  async function voidSO(){
+    if(!isAdmin) return;
+    const paid=Number(so.amount_paid)||0;
+    if(paid>0.01 && !confirm(`⚠ This SO already has ${peso(paid)} in recorded payments.\n\nVoiding removes it from sales & revenue but does NOT reverse those payments — void the payment entries separately if the money must be returned.\n\nContinue?`)) return;
+    const reason=(prompt('Reason for voiding this Sales Order? (required)','')||'').trim();
+    if(!reason){ alert('A reason is required to void.'); return; }
+    if(!confirm(`Void ${so.number}?\n\nIt will be excluded from sales reports, revenue and commissions. Unpaid commissions on it are removed. You can reopen it later.`)) return;
+    setBusy(true);
+    const { error }=await sb.from('sales_orders').update({ status:'cancelled', voided_at:new Date().toISOString(), voided_by:profile.id, void_reason:reason }).eq('id', so.id);
+    if(error){ setBusy(false); alert(error.message); return; }
+    // Remove commissions that were NOT yet paid out (keep any already paid/vouchered).
+    try{ await sb.from('sales_commissions').delete().eq('sales_order_id', so.id).is('paid_at', null).is('voucher_id', null); }catch(_){}
+    setBusy(false); onSaved();
+  }
+  async function unvoidSO(){
+    if(!isAdmin) return;
+    if(!confirm(`Reopen ${so.number}? It returns to the active sales orders and revenue.`)) return;
+    const paid=Number(so.amount_paid)||0; const bal=Math.max(0,(Number(so.total)||0)-paid);
+    const st=(bal<=0.01 && paid>0.01)?'paid':(paid>0.01?'partial':'open');
+    setBusy(true);
+    const { error }=await sb.from('sales_orders').update({ status:st, voided_at:null, voided_by:null, void_reason:null }).eq('id', so.id);
+    setBusy(false); if(error){ alert(error.message); return; } onSaved();
+  }
   const lead = so.lead_id ? (leads||[]).find(l=>l.id===so.lead_id) : null;
   return (
     <Modal title={`Sales Order — ${so.number}`} onClose={onClose} xwide>
       <div className="space-y-4">
         {/* Status banner */}
-        <div className={`border rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap ${so.status==='paid' ? 'bg-emerald-50 border-emerald-200' : so.status==='partial' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+        <div className={`border rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap ${so.status==='cancelled' ? 'bg-rose-50 border-rose-200' : so.status==='paid' ? 'bg-emerald-50 border-emerald-200' : so.status==='partial' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
           <div className="text-sm">
-            <span className={`font-bold ${so.status==='paid'?'text-emerald-700':so.status==='partial'?'text-blue-700':'text-amber-700'}`}>{soMeta(so.status).label.toUpperCase()}</span>
+            <span className={`font-bold ${so.status==='cancelled'?'text-rose-700':so.status==='paid'?'text-emerald-700':so.status==='partial'?'text-blue-700':'text-amber-700'}`}>{so.status==='cancelled'?'VOIDED':soMeta(so.status).label.toUpperCase()}</span>
             <span className="text-slate-600 ml-3">Total {peso(so.total)} · Paid {peso(so.amount_paid)} · <strong className="text-rose-700">Balance {peso(so.balance_due)}</strong></span>
+            {so.status==='cancelled' && so.void_reason && <div className="text-[11px] text-rose-600 mt-1">Void reason: {so.void_reason}{voidedByName?` — ${voidedByName}`:''}{so.voided_at?` · ${fmtDate(so.voided_at.slice(0,10))}`:''}</div>}
           </div>
-          {so.status!=='paid' && so.status!=='cancelled' && canLogSOPayment(profile) && <button onClick={()=>onPay(so)} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Log payment</button>}
+          <div className="flex items-center gap-2">
+            {so.status!=='paid' && so.status!=='cancelled' && canLogSOPayment(profile) && <button onClick={()=>onPay(so)} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Log payment</button>}
+            {isAdmin && so.status!=='cancelled' && <button disabled={busy} onClick={voidSO} className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-700 font-semibold hover:bg-rose-50 disabled:opacity-50" title="Void this Sales Order (admin only) — excludes it from sales & revenue">⊘ Void SO</button>}
+            {isAdmin && so.status==='cancelled' && <button disabled={busy} onClick={unvoidSO} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600 disabled:opacity-50">↩ Reopen</button>}
+          </div>
         </div>
 
         {/* Tab switcher — Details vs Activity (per-SO chat for Sales ↔ Accounting). */}
