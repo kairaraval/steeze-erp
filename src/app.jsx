@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 647 · Accounting Supervisor and Accounting Officer now have access to Government Loans (HR module) — added to their Payroll nav and allowed views. Edit rights and table security already covered these roles.";
+const BUILD = "Live build 648 · Leave cash-out rules updated: only the 5 Sick Leave credits are convertible to cash — unused Vacation Leave is now forfeited, not paid. Eligibility extended to contractual and project-based staff (seeded 0 VL / 5 SL) in addition to regular. Cycle reset now respects each employee's own entitlement.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16170,13 +16170,14 @@ function LeaveAnniversaryPanel({ profile, profiles, employees, leaveBalances, le
   const anniv=(e)=>{ const hd=e.hire_date||e.first_day; return hd? new Date(hd+'T00:00:00') : null; };
   // effective status: follow the linked RFP if present so it tracks Accounting's progress
   const liveStatus=(c)=>{ if(!c) return null; const r=(rfps||[]).find(x=>x.id===c.rfp_id); if(r){ if(r.status==='paid') return 'paid'; if(r.status==='rejected') return 'rejected'; if(['approved','partial'].includes(r.status)) return 'approved'; return 'for_approval'; } return c.status||'for_approval'; };
-  const due=(employees||[]).filter(e=>e.status==='regular').map(e=>{
+  const CASHOUT_STATUSES=['regular','contractual','project_based'];
+  const due=(employees||[]).filter(e=>CASHOUT_STATUSES.includes(e.status)).map(e=>{
     const hd=anniv(e); if(!hd) return null;
     if((hd.getMonth()+1)!==monthNum) return null;
     const b=balanceOfEmp(leaveBalances, e.id);
     const vl=b?Math.max(0,Number(b.vl_remaining)):0, sl=b?Math.max(0,Number(b.sl_remaining)):0;
     const rate=Number(e.current_rate)||0;
-    const amount=(vl+sl)*rate;
+    const amount=sl*rate;   // only Sick Leave is cashable; unused VL is forfeited
     const cashout=(leaveCashouts||[]).find(c=>c.employee_id===e.id && !c.deleted_at && String(c.anniversary_date||c.cycle_start||'').slice(0,4)===ym.slice(0,4) && (c.anniversary_date? Number(c.anniversary_date.slice(5,7))===monthNum : true));
     return { e, hd, b, vl, sl, rate, amount, cashout };
   }).filter(Boolean).sort((a,b)=>a.hd.getDate()-b.hd.getDate());
@@ -16185,7 +16186,7 @@ function LeaveAnniversaryPanel({ profile, profiles, employees, leaveBalances, le
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="text-xs text-slate-500">Employees whose <b>hire anniversary</b> falls in the selected month. Unused VL+SL × daily rate = cash-out. Open one to review, print the signed form, and finalize — it then goes to Accounting's For Approval → For Payment queue and resets credits to 10/5.</div>
+        <div className="text-xs text-slate-500">Regular, contractual &amp; project-based staff whose <b>hire anniversary</b> falls in the selected month. <b>Only the 5 Sick Leave credits are cashable</b> (unused SL × daily rate); unused Vacation Leave is forfeited, not paid. Open one to review, print the signed form, and finalize — it goes to Accounting's For Approval → For Payment queue and resets credits for the new cycle.</div>
         <input type="month" value={ym} onChange={e=>setYm(e.target.value)} className="border rounded-lg px-3 py-1.5 text-sm" />
       </div>
       <div className="bg-white rounded-xl border overflow-hidden">
@@ -16238,7 +16239,7 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
   const hrSigner=cashout?prof(cashout.hr_signed_by):null;
   async function finalize(){
     if(!rate){ alert(`No daily rate on file for ${fullName(e)} — set their current rate in the 201 file first.`); return; }
-    if(!confirm(`Finalize and send this cash-out to Accounting?\n\n${fullName(e)} — VL ${vl} + SL ${sl} = ${vl+sl} days × ${peso(rate)} = ${peso(amount)}\n\nYou (${profile.name||'HR'}) sign as preparer. Their credits reset to 10 VL / 5 SL for the new cycle, and a Request for Payment is created for Accounting.`)) return;
+    if(!confirm(`Finalize and send this cash-out to Accounting?\n\n${fullName(e)} — SL ${sl} day(s) × ${peso(rate)} = ${peso(amount)} (Sick Leave only; unused VL is forfeited).\n\nYou (${profile.name||'HR'}) sign as preparer. Their credits reset for the new cycle, and a Request for Payment is created for Accounting.`)) return;
     setBusy(true);
     try{
       const nowISO=new Date().toISOString();
@@ -16256,7 +16257,7 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
       const { data:monthRows }=await sb.from('rfps').select('number').like('number', `RFP-${monthKey}-%`);
       let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
       const rfpNumber=`RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
-      const particulars=`Leave cash-out (hire anniversary ${fmtDate(annivISO)}) — ${fullName(e)}: unused VL ${vl} + SL ${sl} = ${vl+sl} day(s) × ${peso(rate)}/day.`;
+      const particulars=`Leave cash-out (hire anniversary ${fmtDate(annivISO)}) — ${fullName(e)}: unused Sick Leave ${sl} day(s) × ${peso(rate)}/day = ${peso(amount)}. (Vacation Leave is not convertible to cash.)`;
       const { data:rfpIns }=await sb.from('rfps').insert({
         number:rfpNumber, date:todayManila(), supplier_name:fullName(e), amount, particulars,
         payment_method:'cash', status:'pending_finance', requested_by:profile.id, requested_at:nowISO,
@@ -16265,8 +16266,10 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
       // 3) roll the leave cycle: reset to 10/5
       const newStart=b?.cycle_end ? new Date(new Date(b.cycle_end+'T00:00:00').getTime()+86400000).toISOString().slice(0,10) : todayManila();
       const newEnd=(()=>{ const d=new Date(newStart+'T00:00:00'); d.setFullYear(d.getFullYear()+1); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })();
-      if(b){ await sb.from('leave_balances').update({ vl_remaining:10, sl_remaining:5, vl_entitled:10, sl_entitled:5, cycle_start:newStart, cycle_end:newEnd, updated_at:nowISO, updated_by:profile.id }).eq('id', b.id); }
-      else { await sb.from('leave_balances').insert({ employee_id:e.id, vl_entitled:10, sl_entitled:5, vl_remaining:10, sl_remaining:5, cycle_start:newStart, cycle_end:newEnd, updated_by:profile.id }); }
+      // Reset each credit to its entitlement for the new cycle (VL keeps its own
+      // entitlement — regular 10, contractual/project-based 0 — SL back to 5).
+      if(b){ const vlEnt=Number(b.vl_entitled)||0, slEnt=Number(b.sl_entitled)||5; await sb.from('leave_balances').update({ vl_remaining:vlEnt, sl_remaining:slEnt, cycle_start:newStart, cycle_end:newEnd, updated_at:nowISO, updated_by:profile.id }).eq('id', b.id); }
+      else { const vlEnt=(e.status==='regular')?10:0; await sb.from('leave_balances').insert({ employee_id:e.id, vl_entitled:vlEnt, sl_entitled:5, vl_remaining:vlEnt, sl_remaining:5, cycle_start:newStart, cycle_end:newEnd, updated_by:profile.id }); }
       // 4) ping Finance/Accounting
       try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`🌴 Leave cash-out for ${fullName(e)} — ${peso(amount)} — submitted for approval (${rfpNumber}).`, link_view:'rfps', ref_type:'rfp', ref_id:rfpIns?.id||null, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
     }catch(err){ setBusy(false); alert(err.message||err); return; }
@@ -16285,9 +16288,9 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Credit</th><th className="text-right px-3 py-2">Unused days</th><th className="text-right px-3 py-2">Daily rate</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
             <tbody>
-              <tr className="border-t"><td className="px-3 py-2">Vacation Leave (VL)</td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(vl*rate)}</td></tr>
+              <tr className="border-t text-slate-400"><td className="px-3 py-2">Vacation Leave (VL) <span className="text-[10px] uppercase">· not cashable</span></td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">—</td><td className="px-3 py-2 text-right">forfeited</td></tr>
               <tr className="border-t"><td className="px-3 py-2">Sick Leave (SL)</td><td className="px-3 py-2 text-right">{sl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(sl*rate)}</td></tr>
-              <tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">Total</td><td className="px-3 py-2 text-right">{vl+sl} days</td><td></td><td className="px-3 py-2 text-right text-emerald-700">{peso(amt)}</td></tr>
+              <tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">Cash-out total (SL only)</td><td className="px-3 py-2 text-right">{sl} days</td><td></td><td className="px-3 py-2 text-right text-emerald-700">{peso(amt)}</td></tr>
             </tbody>
           </table>
         </div>
@@ -16338,12 +16341,12 @@ function LeaveCashoutPrintView({ row, preparer, onClose }){
           <table className="w-full text-sm border border-slate-300 mb-2">
             <thead className="bg-slate-100"><tr><th className="text-left px-3 py-2 border-b border-slate-300">Leave credit</th><th className="text-right px-3 py-2 border-b border-slate-300">Unused days</th><th className="text-right px-3 py-2 border-b border-slate-300">Daily rate</th><th className="text-right px-3 py-2 border-b border-slate-300">Amount</th></tr></thead>
             <tbody>
-              <tr><td className="px-3 py-2">Vacation Leave (VL)</td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(vl*rate)}</td></tr>
+              <tr className="text-slate-400"><td className="px-3 py-2">Vacation Leave (VL) — not convertible</td><td className="px-3 py-2 text-right">{vl}</td><td className="px-3 py-2 text-right">—</td><td className="px-3 py-2 text-right">Forfeited</td></tr>
               <tr><td className="px-3 py-2">Sick Leave (SL)</td><td className="px-3 py-2 text-right">{sl}</td><td className="px-3 py-2 text-right">{peso(rate)}</td><td className="px-3 py-2 text-right">{peso(sl*rate)}</td></tr>
-              <tr className="bg-slate-50 font-bold"><td className="px-3 py-2 border-t border-slate-300">TOTAL</td><td className="px-3 py-2 text-right border-t border-slate-300">{vl+sl} days</td><td className="border-t border-slate-300"></td><td className="px-3 py-2 text-right border-t border-slate-300">{peso(amt)}</td></tr>
+              <tr className="bg-slate-50 font-bold"><td className="px-3 py-2 border-t border-slate-300">TOTAL CASH-OUT (SL only)</td><td className="px-3 py-2 text-right border-t border-slate-300">{sl} days</td><td className="border-t border-slate-300"></td><td className="px-3 py-2 text-right border-t border-slate-300">{peso(amt)}</td></tr>
             </tbody>
           </table>
-          <div className="text-xs text-slate-500 mb-6">Computation: (VL {vl} + SL {sl}) = {vl+sl} unused day(s) × {peso(rate)} per day = <b>{peso(amt)}</b>. Credits reset to 10 VL / 5 SL for the new anniversary cycle.</div>
+          <div className="text-xs text-slate-500 mb-6">Computation: unused Sick Leave {sl} day(s) × {peso(rate)} per day = <b>{peso(amt)}</b>. Only Sick Leave credits are convertible to cash; any unused Vacation Leave ({vl} day{vl===1?'':'s'}) is forfeited. Credits reset for the new anniversary cycle.</div>
           <div className="grid grid-cols-2 gap-8">
             {sig('Prepared by (HR)', preparer?(preparer.name||preparer.email):'')}
             {sig('Noted / Approved by', '')}
