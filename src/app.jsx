@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 649 · Admin can now VOID a Sales Order from the SO view (reason required). A voided SO is marked VOIDED, excluded from sales, revenue and reports, and its unpaid commissions are removed; already-paid commissions and recorded payments are left untouched (void those separately if needed). Admin can Reopen a voided SO.";
+const BUILD = "Live build 650 · Purchase Requests reworked into the real 2-person workflow: a 4-lane board — To Review (Minda) → Ready for PO (Jay-Ann) → Ordered → Fulfilled — with each role's queue highlighted. Cards are now titled by project (client · item · techpack) with due date, priority and a red 'short N items' flag when stock can't cover it. Minda's Approve hands off to Jay-Ann for PO and notifies her.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27687,6 +27687,15 @@ const PR_STATUSES=[
 // Statuses that represent a new, not-yet-actioned request awaiting approval.
 const PR_AWAITING = ['submitted','manual_request'];
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
+// The real 2-person workflow lanes: Minda reviews new requests → approves →
+// hands off to Jay-Ann (Purchasing Admin) for PO processing.
+const PR_LANES=[
+  { key:'review',  title:'To Review',    who:'Minda · Purchasing',        statuses:['submitted','manual_request'], color:'bg-amber-100 text-amber-700' },
+  { key:'ready',   title:'Ready for PO', who:'Jay-Ann · Purchasing Admin', statuses:['approved'],                    color:'bg-emerald-100 text-emerald-700' },
+  { key:'ordered', title:'Ordered',      who:'',                           statuses:['ordered'],                     color:'bg-indigo-100 text-indigo-700' },
+  { key:'done',    title:'Fulfilled',    who:'',                           statuses:['fulfilled_stock'],             color:'bg-teal-100 text-teal-700' },
+];
+const PR_URGENCY_BADGE={ urgent:'bg-rose-100 text-rose-700', high:'bg-amber-100 text-amber-700', normal:'' };
 const PR_URGENCIES=['normal','high','urgent'];
 
 function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, openPRId, onConsumedPR }){
@@ -27705,6 +27714,10 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     .filter(r=>(!filter||r.status===filter))
     .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
     .filter(r=>(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
+  // Board lanes ignore the status count-card filter (they ARE the stages) but honour search + source.
+  const boardRows=requests
+    .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
+    .filter(r=>(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
   const reqName=(id)=>profiles.find(p=>p.id===id)?.name||'—';
   const deptName=(id)=>departments.find(d=>d.id===id)?.name||'—';
   // Resolve display fields for a PR row from whichever source it came from.
@@ -27721,7 +27734,17 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     const moreCount = Math.max(0, lines.length-1);
     const totalQty = lines.reduce((s,l)=>s+(Number(l.qty)||0), 0);
     const noTechpack = !!r.linked_lead_id && !!lead && !lead.techpack;
-    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack };
+    // Project title for the card: prefer the linked lead's own title, else the client + item.
+    const projectTitle = lead?.title || sample?.item || (clientName!=='—'&&clientName!=='Manual request'? `${clientName}` : firstItemName);
+    // Required-by: the client's due date on the lead (falls back to sample due).
+    const requiredBy = lead?.expected_close || lead?.delivery_date || sample?.due_date || null;
+    const priority = r.urgency || 'normal';
+    const matCount = lines.length;
+    const estTotal = lines.reduce((s,l)=> s + (Number(l.est_cost)|| (Number(l.qty)||0)*(Number(l.unit_cost)||Number(l.price)||0)), 0);
+    // Stock shortfall across inventory lines (needs ordering — can't come fully from stock).
+    let shortCount=0;
+    lines.forEach(l=>{ if(!l.item_id) return; const it=(items||[]).find(i=>i.id===l.item_id); const cov=lineCoverage(l, it, prReservations); if(cov && (cov.state==='partial'||cov.state==='none')) shortCount++; });
+    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack, projectTitle, requiredBy, priority, matCount, estTotal, shortCount };
   }
   async function setPRStatus(pr, s){
     const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
@@ -27738,6 +27761,13 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
   const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
+  const myLane = profile.role==='purchasing_admin' ? 'ready' : (profile.role==='purchasing' ? 'review' : null);
+  async function approveAndHandoff(pr){
+    const { error } = await sb.from('purchase_requests').update({ status:'approved' }).eq('id', pr.id);
+    if(error){ alert(error.message); return; }
+    try{ const { data:admins }=await sb.from('profiles').select('id').eq('role','purchasing_admin'); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`✅ PR ${pr.number||''} approved — ready for PO processing.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    reload();
+  }
   const canDelete = isAdmin;
   const canCancel = isAdmin || isPurchasing;
   async function cancelPR(pr){
@@ -27781,34 +27811,46 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
 
       {layout==='board' ? (
         <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-300px)]">
-          {PR_STATUSES.map(st=>{ const col=rows.filter(r=>r.status===st.key); return (
-            <div key={st.key} className="flex-shrink-0 w-72 flex flex-col h-full">
-              <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold flex items-center justify-between ${st.color}`}><span>{st.label}</span><span className="opacity-70">{col.length}</span></div>
+          {PR_LANES.map(lane=>{ const col=boardRows.filter(r=>lane.statuses.includes(r.status)).sort((a,b)=>{ const da=derivePR(a).requiredBy||'9999', db=derivePR(b).requiredBy||'9999'; return String(da).localeCompare(String(db)); }); const mine=myLane===lane.key; return (
+            <div key={lane.key} className={`flex-shrink-0 w-80 flex flex-col h-full rounded-lg ${mine?'ring-2 ring-indigo-400':''}`}>
+              <div className={`shrink-0 rounded-t-lg px-3 py-2 ${lane.color}`}>
+                <div className="flex items-center justify-between text-xs font-bold"><span>{lane.title}</span><span className="opacity-70">{col.length}</span></div>
+                {lane.who && <div className="text-[10px] opacity-80">{lane.who}{mine?' · your queue':''}</div>}
+              </div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/50">
                 {col.map(r=>{ const d=derivePR(r); const sm=prSourceMeta(d.src); return (
-                  <div key={r.id} className="bg-white border rounded-lg shadow-sm p-2.5 group">
+                  <div key={r.id} className={`bg-white border rounded-lg shadow-sm p-2.5 group ${d.shortCount>0?'border-rose-200':''}`}>
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <span className="font-mono text-[11px] text-slate-500">{r.number||r.id.slice(0,6)}</span>
-                      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span>
+                      <div className="flex items-center gap-1">
+                        {d.priority!=='normal' && <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${PR_URGENCY_BADGE[d.priority]||'bg-slate-100 text-slate-600'}`}>{d.priority}</span>}
+                        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span>
+                      </div>
                     </div>
                     <button onClick={()=>setEditing(r)} className="text-left w-full">
-                      <div className="text-sm font-semibold leading-tight truncate" title={d.firstItemName}>{d.firstItemName}</div>
-                      {d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}
-                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.clientName}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
-                      {d.tpNo && <div className="text-[10px] font-mono text-slate-400 mt-0.5">TP {d.tpNo}</div>}
-                      {d.noTechpack && <div className="text-[9px] font-bold uppercase inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="This project has no techpack yet">⚠ no techpack</div>}
+                      <div className="text-sm font-bold leading-tight truncate" title={d.projectTitle}>📁 {d.projectTitle}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.firstItemName}{d.moreCount>0?` +${d.moreCount} more`:''}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
+                      <div className="flex items-center gap-x-2 mt-1 flex-wrap text-[10px] text-slate-500">
+                        {d.tpNo && <span className="font-mono text-slate-400">TP {d.tpNo}</span>}
+                        {d.requiredBy && <span>· due {fmtDate(d.requiredBy)}</span>}
+                        {d.estTotal>0 && <span>· est {peso(d.estTotal)}</span>}
+                        <span>· {d.matCount} material{d.matCount===1?'':'s'}</span>
+                      </div>
+                      <div className="flex items-center gap-1 mt-1 flex-wrap">
+                        {d.shortCount>0 && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700" title="Can't be fully covered from stock — needs ordering">⚠ short {d.shortCount} item{d.shortCount===1?'':'s'}</span>}
+                        {d.noTechpack && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="This project has no techpack yet">⚠ no techpack</span>}
+                      </div>
                     </button>
-                    <div className="flex items-center gap-2 mt-2 pt-2 border-t">
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t flex-wrap">
                       {PR_AWAITING.includes(r.status) && <>
-                        <button onClick={()=>setPRStatus(r,'approved')} className="text-[11px] text-emerald-600 hover:underline font-medium">✔ Approve</button>
+                        <button onClick={()=>approveAndHandoff(r)} className="text-[11px] text-emerald-600 hover:underline font-medium" title="Approve and hand off to Jay-Ann for PO processing">✔ Approve → Jay-Ann</button>
                         <button onClick={()=>setPRStatus(r,'rejected')} className="text-[11px] text-rose-500 hover:underline">✕ Reject</button>
                       </>}
                       {r.status==='approved' && prFullyCovered(r, items, prReservations) && <button onClick={()=>fulfillFromStock(r)} className="text-[11px] text-teal-600 hover:underline font-medium" title="No PO needed — draw from stock">📦 From stock</button>}
                       {r.status==='approved' && onCreatePO && <button onClick={()=>onCreatePO(r)} className="text-[11px] text-indigo-600 hover:underline font-medium">→ Create PO</button>}
-                      {r.linked_lead_id && <button onClick={()=>{ setCreateLeadId(r.linked_lead_id); setCreating(true); }} className="text-[11px] text-teal-600 hover:underline font-medium" title="Buy more for this same project — opens a new PR pre-linked to it">➕ Add PR</button>}
-                      {(r.status==='rejected'||r.status==='cancelled') && canCancel && <button onClick={()=>setPRStatus(r,'submitted')} className="text-[11px] text-slate-500 hover:underline">↩ Reopen</button>}
+                      {r.linked_lead_id && <button onClick={()=>{ setCreateLeadId(r.linked_lead_id); setCreating(true); }} className="text-[11px] text-teal-600 hover:underline font-medium" title="Buy more for this same project">➕ Add PR</button>}
                       <button onClick={()=>setPrinting(r)} className="text-[11px] text-slate-400 hover:text-slate-700 ml-auto" title="Print">🖨</button>
-                      {canCancel && !['cancelled','ordered','fulfilled_stock','rejected'].includes(r.status) && <button onClick={()=>cancelPR(r)} className="text-[11px] text-slate-400 hover:text-amber-600" title="Cancel this PR (keeps the record)">⊘ Cancel</button>}
+                      {canCancel && !['cancelled','ordered','fulfilled_stock','rejected'].includes(r.status) && <button onClick={()=>cancelPR(r)} className="text-[11px] text-slate-400 hover:text-amber-600" title="Cancel this PR (keeps the record)">⊘</button>}
                       {canDelete && <button onClick={()=>delPR(r)} className="text-[11px] text-slate-300 hover:text-rose-500" title="Delete (admin only — sends to Trash)">🗑</button>}
                     </div>
                   </div>
@@ -28182,6 +28224,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                   {techpackNumber && <span>📋 Techpack: <strong>{techpackNumber}</strong></span>}
                   {fabric && <span>🧵 Fabric: <strong>{fabric}</strong></span>}
                   {totalQty > 0 && <span>📦 Total qty: <strong>{totalQty}</strong></span>}
+                  {(linkedLead.expected_close||linkedLead.delivery_date) && <span>📅 Due: <strong>{fmtDate(linkedLead.expected_close||linkedLead.delivery_date)}</strong></span>}
                 </div>
                 {leadItems.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
