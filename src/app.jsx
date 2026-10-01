@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 655 · Sample-sourced Purchase Requests now show the project header too (client, sales manager, sample #, techpack, fabric, due + View techpack) — previously only production-lead PRs had it, so sample PRs in the To Review lane looked bare.";
+const BUILD = "Live build 656 · Purchasing upgrade. PO Receive now lets you issue received items straight to the project they were bought for (stock-in + per-project stock-out in one step), and reflects received qty back on the source PR. Materials Queue: assign a supplier to Unassigned lines inline, plus a 📥 Materials Queue button on the PR board. POs now carry an expected pay-date (auto-snapped to the next 15th/30th cut-off from supplier terms) shown on the PO list.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27698,7 +27698,7 @@ const PR_LANES=[
 const PR_URGENCY_BADGE={ urgent:'bg-rose-100 text-rose-700', high:'bg-amber-100 text-amber-700', normal:'' };
 const PR_URGENCIES=['normal','high','urgent'];
 
-function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, openPRId, onConsumedPR }){
+function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, onOpenQueue, openPRId, onConsumedPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [createLeadId,setCreateLeadId]=useState(''); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
   // From the Inbox: a Purchase Request mention opens the exact PR here.
   React.useEffect(()=>{
@@ -27806,6 +27806,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
               <button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button>
               <button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button>
             </div>
+            {onOpenQueue && isPurchasing && <button onClick={onOpenQueue} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Consolidate approved PRs into supplier POs">📥 Materials Queue</button>}
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New PR</button>
           </div>
         </div>
@@ -28461,6 +28462,17 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  // Assign a supplier to one PR line right here (fixes the "Unassigned" bucket),
+  // and set it as the inventory item's default supplier if it had none so future
+  // PRs auto-route to the right card.
+  async function assignSupplier(pr, lineIdx, supplierId){
+    if(!supplierId) return;
+    const newLines=(pr.lines||[]).map((l,i)=> i===lineIdx ? { ...l, supplier_id: supplierId } : l);
+    const { error }=await sb.from('purchase_requests').update({ lines:newLines }).eq('id', pr.id);
+    if(error){ alert(error.message); return; }
+    try{ const line=(pr.lines||[])[lineIdx]; if(line?.item_id){ const it=(items||[]).find(x=>x.id===line.item_id); if(it && !it.supplier_id){ await sb.from('items').update({ supplier_id:supplierId }).eq('id', it.id); } } }catch(_){}
+    reload && reload();
+  }
 
   // Build per-supplier buckets of unfulfilled PR lines.
   const buckets = (()=>{
@@ -28523,7 +28535,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
       const seq = String(((todayPOs||[]).length)+1).padStart(3,'0');
       const number = `PO-${todayStr}-${seq}`;
 
-      const lines = bucket.items.map(({ line, lead })=>{
+      const lines = bucket.items.map(({ pr, lineIdx, line, lead })=>{
         const company = lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company||'') : '';
         const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
         return {
@@ -28531,10 +28543,19 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
           description: line.description + forPart,
           qty: Number(line.qty)||0,
           qty_received: 0,
+          qty_issued: 0,
           unit_cost: Number(line.est_cost)||0,
+          // Project traceability so receiving can issue straight to the project.
+          pr_id: pr.id,
+          pr_line_idx: lineIdx,
+          lead_id: lead?.id || null,
+          client_name: company || null,
+          project_title: lead?.title || null,
         };
       });
 
+      const supp = bucket.supplier;
+      const payment_terms = supp?.payment_terms || null;
       const payload = {
         number,
         date: todayStr,
@@ -28543,6 +28564,8 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
         notes: `Auto-built from Materials Queue · ${bucket.prIds.size} PR(s) consolidated`,
         total: bucket.total,
         lines,
+        payment_terms,
+        expected_pay_date: poExpectedPayDate(payment_terms, todayStr),
       };
 
       const { data: po, error } = await sb.from('purchase_orders').insert(payload).select().single();
@@ -28618,7 +28641,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
                   </button>
                 )}
                 {isUnassigned && (
-                  <span className="text-[11px] text-amber-700 font-semibold">Set supplier in Inventory →</span>
+                  <span className="text-[11px] text-amber-700 font-semibold">Expand &amp; assign a supplier per line →</span>
                 )}
               </div>
             </div>
@@ -28630,6 +28653,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
                     <div className="col-span-5">
                       <div className="font-medium">{line.description||'—'}</div>
                       {inventoryItem && <div className="text-[10px] text-slate-500">{inventoryItem.sku} · {inventoryItem.name}{inventoryItem.color?` · ${inventoryItem.color}`:''}</div>}
+                      {isUnassigned && <select defaultValue="" onChange={e=>assignSupplier(pr, lineIdx, e.target.value)} className="mt-1 text-[11px] border border-amber-300 rounded px-1.5 py-1 bg-white"><option value="">+ assign supplier…</option>{(suppliers||[]).slice().sort((a,b)=>(a.company||'').localeCompare(b.company||'')).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select>}
                     </div>
                     <div className="col-span-2 text-right text-slate-700"><strong>{line.qty}</strong></div>
                     <div className="col-span-2 text-right text-xs text-slate-600">{peso(line.est_cost)}</div>
@@ -28661,6 +28685,19 @@ function poMeta(k){ return PO_STATUSES.find(s=>s.key===k)||PO_STATUSES[0]; }
 // A PO is "locked" once finalized — line items become read-only and totals
 // can't drift. Only Draft POs are fully editable.
 function isPOEditable(po){ return !po || po.status === 'draft'; }
+// Payment timing helpers: suppliers are paid on the 15th / end-of-month (30th)
+// cut-offs. Given payment terms (e.g. "Net 15") we add the term days to the PO
+// date, then snap to the next 15th/30th cut-off so Finance sees the payable on
+// the right cycle.
+function parseTermDays(terms){ const m=String(terms||'').match(/(\d+)/); return m?parseInt(m[1],10):0; }
+function nextPayCutoff(fromISO){
+  const d=new Date((fromISO||todayManila())+'T00:00:00'); if(isNaN(d.getTime())) return null;
+  const y=d.getFullYear(), m=d.getMonth(), day=d.getDate();
+  if(day<=15) return `${y}-${String(m+1).padStart(2,'0')}-15`;
+  const last=new Date(y,m+1,0).getDate(); const eo=Math.min(30,last);
+  return `${y}-${String(m+1).padStart(2,'0')}-${String(eo).padStart(2,'0')}`;
+}
+function poExpectedPayDate(terms, fromISO){ const base=new Date((fromISO||todayManila())+'T00:00:00'); base.setDate(base.getDate()+parseTermDays(terms)); return nextPayCutoff(base.toISOString().slice(0,10)); }
 // Build a date-based PO number like PO-2026-06-09-003 by counting how many
 // POs already exist for this date string.
 function nextPONumber(allOrders, dateStr){
@@ -28736,6 +28773,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
                   ? <span className="text-xs px-2 py-1 rounded font-semibold bg-emerald-100 text-emerald-700">✅ Paid</span>
                   : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
               ) : <span className="text-xs text-slate-300">—</span>}
+              {!isPaid && o.expected_pay_date && <div className={`text-[10px] mt-0.5 ${o.expected_pay_date<todayManila()?'text-rose-600 font-semibold':'text-slate-400'}`}>pay by {fmtDate(o.expected_pay_date)}{o.payment_terms?` · ${o.payment_terms}`:''}</div>}
             </td>
             <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
           </tr>
@@ -28770,9 +28808,9 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     const lead = fromPR.linked_lead_id ? (leads||[]).find(l=>l.id===fromPR.linked_lead_id) : null;
     const company = lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company||'') : '';
     const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
-    return (fromPR.lines||[]).map(l=>{
+    return (fromPR.lines||[]).map((l,idx)=>{
       const desc = l.description||'';
-      return { item_id:l.item_id||null, description: desc + (forPart && !desc.includes('— for "') ? forPart : ''), qty:Number(l.qty)||1, qty_received:0, unit_cost:Number(l.est_cost)||0 };
+      return { item_id:l.item_id||null, description: desc + (forPart && !desc.includes('— for "') ? forPart : ''), qty:Number(l.qty)||1, qty_received:0, qty_issued:0, unit_cost:Number(l.est_cost)||0, pr_id:fromPR.id, pr_line_idx:idx, lead_id: lead?.id||null, client_name: company||null, project_title: lead?.title||null };
     });
   })() : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
@@ -28786,6 +28824,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     payment_method: isEdit?(existing.payment_method||''):'',
     payment_method_detail: isEdit?(existing.payment_method_detail||''):'',
     payment_terms: isEdit?(existing.payment_terms||''):'',
+    expected_pay_date: isEdit?(existing.expected_pay_date||''):'',
     vat_enabled: isEdit?!!existing.vat_enabled:false,
     withholding_tax_enabled: isEdit?!!existing.withholding_tax_enabled:false,
     withholding_tax_rate: isEdit?(Number(existing.withholding_tax_rate)||2):2,
@@ -28860,7 +28899,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
     setBusy(true); setMsg('');
     const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
-      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
+      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null, expected_pay_date:f.expected_pay_date||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
       vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0, attachments:f.attachments||[] };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
@@ -28877,7 +28916,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     if(!confirm('Finalize this PO?\n\nOnce finalized:\n• Lines are locked for editing\n• The total goes to finance\n• Use the Receive button later to record deliveries\n\nMake sure quantities match what you actually bought.')) return;
     setBusy(true); setMsg('');
     const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id,
-      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null,
+      payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null, expected_pay_date:f.expected_pay_date||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
       vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
       attachments:f.attachments||[],
@@ -29050,6 +29089,12 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
                 )}
               </select>
             </TpLbl>
+            <TpLbl t="Expected pay date">
+              <div className="flex items-center gap-1">
+                <input type="date" className="input" value={f.expected_pay_date||''} onChange={e=>up('expected_pay_date', e.target.value)} />
+                <button type="button" onClick={()=>up('expected_pay_date', poExpectedPayDate(f.payment_terms, f.date))} className="text-[11px] px-2 py-1 rounded border text-indigo-600 hover:bg-indigo-50 whitespace-nowrap" title="Snap to the next 15th / 30th cut-off based on terms">↻ cut-off</button>
+              </div>
+            </TpLbl>
           </div>
 
           {/* Conditional detail per method */}
@@ -29179,41 +29224,59 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
 }
 
 function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
-  const [rec,setRec]=useState((po.lines||[]).map(l=>({ ...l, receive_now:0 })));
+  // receive_now = qty arriving into inventory. issue_now = how much of that goes
+  // STRAIGHT to the line's project (stock-out), defaulting to all for lines that
+  // belong to a project. The rest stays on hand.
+  const [rec,setRec]=useState((po.lines||[]).map(l=>({ ...l, receive_now:0, issue_now:0 })));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  function up(i,v){ setRec(rec.map((r,j)=>j===i?{...r,receive_now:v}:r)); }
-  async function save(){ const toPost=rec.filter(r=>Number(r.receive_now)>0); if(!toPost.length){ setMsg('Enter at least one quantity to receive.'); return; } setBusy(true); setMsg('');
+  function setRecv(i,v){ setRec(rec.map((r,j)=>{ if(j!==i) return r; const recv=v; const auto = r.lead_id ? recv : 0; return {...r, receive_now:recv, issue_now:auto}; })); }
+  function setIssue(i,v){ setRec(rec.map((r,j)=>j===i?{...r,issue_now:v}:r)); }
+  async function save(){
+    const toPost=rec.filter(r=>Number(r.receive_now)>0 || Number(r.issue_now)>0);
+    if(!toPost.length){ setMsg('Enter at least one quantity to receive.'); return; }
+    for(const r of rec){ if(Number(r.issue_now)>0 && Number(r.issue_now)>Number(r.receive_now||0)){ setMsg('You can’t issue more to a project than you receive now.'); return; } }
+    setBusy(true); setMsg('');
     try{
-      for(const r of toPost){
-        // Post the stock-in movement; on-hand (items.qty) is updated automatically
-        // by the stock_movements trigger for linked items.
-        const { error:smErr }=await sb.from('stock_movements').insert({ item_id:r.item_id||null, type:'in', qty:Number(r.receive_now), reason:'PO receive', ref_type:'po', ref_id:po.id, actor_id:profile.id });
-        if(smErr) throw smErr;
+      for(const r of rec){
+        const recvNow=Number(r.receive_now)||0, issueNow=Number(r.issue_now)||0;
+        if(recvNow>0){ const { error:smErr }=await sb.from('stock_movements').insert({ item_id:r.item_id||null, type:'in', qty:recvNow, reason:'PO receive', ref_type:'po', ref_id:po.id, actor_id:profile.id }); if(smErr) throw smErr; }
+        if(issueNow>0 && r.item_id && r.lead_id){ const { error:soErr }=await sb.from('stock_movements').insert({ item_id:r.item_id, type:'out', qty:issueNow, reason:'production', ref_type:'lead', ref_id:r.lead_id, actor_id:profile.id }); if(soErr) throw soErr; }
       }
       // Update PO lines + status
-      const newLines=rec.map(r=>({ ...r, qty_received:(Number(r.qty_received)||0)+Number(r.receive_now||0), receive_now:undefined }));
+      const newLines=rec.map(r=>({ ...r, qty_received:(Number(r.qty_received)||0)+Number(r.receive_now||0), qty_issued:(Number(r.qty_issued)||0)+Number(r.issue_now||0), receive_now:undefined, issue_now:undefined }));
       const fully=newLines.every(l=>Number(l.qty_received||0)>=Number(l.qty||0));
       const any=newLines.some(l=>Number(l.qty_received||0)>0);
-      const status = fully?'received':(any?'partial':'open');
-      const {error}=await sb.from('purchase_orders').update({ lines:newLines.map(({receive_now,...rest})=>rest), status, received_at: fully?todayManila():po.received_at }).eq('id',po.id); if(error) throw error;
+      const status = fully?'received':(any?'partial':(po.status||'open'));
+      const {error}=await sb.from('purchase_orders').update({ lines:newLines.map(({receive_now,issue_now,...rest})=>rest), status, received_at: fully?todayManila():po.received_at }).eq('id',po.id); if(error) throw error;
+      // Reflect received qty back on the source PR lines (partial fulfilment visibility).
+      const byPR=new Map();
+      rec.forEach(r=>{ const rn=Number(r.receive_now)||0; if(rn>0 && r.pr_id!=null && r.pr_line_idx!=null){ if(!byPR.has(r.pr_id)) byPR.set(r.pr_id,[]); byPR.get(r.pr_id).push({ idx:r.pr_line_idx, recv:rn }); } });
+      for(const [prId, upds] of byPR){
+        try{ const { data:prRow }=await sb.from('purchase_requests').select('lines').eq('id',prId).maybeSingle();
+          if(prRow){ const pl=(prRow.lines||[]).map((l,i)=>{ const u=upds.find(x=>x.idx===i); return u?{...l, qty_received:(Number(l.qty_received)||0)+u.recv}:l; }); await sb.from('purchase_requests').update({ lines:pl }).eq('id',prId); }
+        }catch(_){}
+      }
       onSaved();
     } catch(err){ setBusy(false); setMsg(err.message||String(err)); }
   }
+  const anyProject = rec.some(r=>r.lead_id);
   return (
     <Modal title={`Receive PO ${po.number||''}`} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="text-xs text-slate-500">Enter the qty received for each line. Received items add to Inventory and log a stock movement.</div>
-        <div className="bg-white border rounded-lg overflow-hidden"><table className="w-full text-sm">
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Already received</th><th className="text-right px-3 py-2">Receive now</th></tr></thead>
-          <tbody>{rec.map((r,i)=>{ const it=items.find(x=>x.id===r.item_id); const remaining=Number(r.qty||0)-Number(r.qty_received||0); return (
+        <div className="text-xs text-slate-500">Enter what arrived per line. <b>Receive now</b> adds to Inventory; <b>Issue to project</b> stock-outs that qty straight to the project it was bought for (leave less to keep some on hand).</div>
+        <div className="bg-white border rounded-lg overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Project</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Recv'd</th><th className="text-right px-3 py-2">Receive now</th>{anyProject && <th className="text-right px-3 py-2">Issue to project</th>}</tr></thead>
+          <tbody>{rec.map((r,i)=>{ const it=items.find(x=>x.id===r.item_id); const remaining=Math.max(0,Number(r.qty||0)-Number(r.qty_received||0)); return (
             <tr key={i} className="border-t">
               <td className="px-3 py-2">{it?.name||r.description}{r.item_id ? '' : <span className="text-[10px] text-amber-600 ml-1">(no inventory link)</span>}</td>
+              <td className="px-3 py-2 text-xs text-slate-600">{r.project_title ? <span title={r.client_name||''}>📁 {r.project_title}</span> : <span className="text-slate-400">— general stock —</span>}</td>
               <td className="px-3 py-2 text-right">{r.qty}</td>
               <td className="px-3 py-2 text-right">{r.qty_received||0}</td>
-              <td className="px-3 py-2 text-right"><input type="number" min="0" max={remaining} className="input text-xs text-right w-24" value={r.receive_now} onChange={e=>up(i,e.target.value)} /></td>
+              <td className="px-3 py-2 text-right"><input type="number" min="0" max={remaining} className="input text-xs text-right w-24" value={r.receive_now} onChange={e=>setRecv(i,e.target.value)} /></td>
+              {anyProject && <td className="px-3 py-2 text-right">{r.lead_id ? <input type="number" min="0" max={Number(r.receive_now)||0} className="input text-xs text-right w-24" value={r.issue_now} onChange={e=>setIssue(i,e.target.value)} /> : <span className="text-slate-300">—</span>}</td>}
             </tr>
           ); })}</tbody>
-        </table></div>
+        </table></div></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'Confirm receive'}</button>
       </div>
@@ -43804,7 +43867,7 @@ function App(){
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
-        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
+        {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} onOpenQueue={()=>setView('queue')} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} openPRId={inboxPRId} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
