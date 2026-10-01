@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 666 · FIX: Delivery Receipt (and loan installment / stock) quantities no longer shift. Once a table passed 1,000 rows, the loader paged by a non-unique column (position/seq) which let rows leak between records. Paging now uses a unique key so every line is fetched exactly once and matches what was entered.";
+const BUILD = "Live build 667 · Delivery Receipts list now paginates 20 per page (First/Prev/Next/Last + a row count). Paging resets to page 1 when you search or change filters.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39086,6 +39086,8 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
   const [search,setSearch]=useState('');
   const [statusFilter,setStatusFilter]=useState('');
   const [kindFilter,setKindFilter]=useState('');
+  const [page,setPage]=useState(1);
+  const PER_PAGE=20;
   const rows = (deliveryReceipts||[])
     .filter(d=> !statusFilter || d.status === statusFilter)
     .filter(d=> !kindFilter || d.kind === kindFilter)
@@ -39095,6 +39097,13 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
       const client = (clients||[]).find(c=> c.id===d.client_id);
       return `${d.number||''} ${client?.company||''} ${d.received_by_name||''}`.toLowerCase().includes(q);
     });
+  // Reset to the first page whenever the filtered result set changes.
+  useEffect(()=>{ setPage(1); },[search,statusFilter,kindFilter]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  const curPage = Math.min(page, totalPages);
+  const pageRows = rows.slice((curPage-1)*PER_PAGE, curPage*PER_PAGE);
+  const firstShown = rows.length===0 ? 0 : (curPage-1)*PER_PAGE + 1;
+  const lastShown = Math.min(curPage*PER_PAGE, rows.length);
   async function voidDR(d){
     if(!confirm(`Void DR ${d.number}? It will be soft-deleted and the SO delivered qty will recalculate.`)) return;
     const { error } = await sb.from('delivery_receipts').update({
@@ -39148,7 +39157,7 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
           </thead>
           <tbody>{rows.length===0 ? (
             <tr><td colSpan="8" className="text-center px-3 py-10 text-slate-400">No delivery receipts yet. Click + New DR or use the button on a production / sampling job.</td></tr>
-          ) : rows.map(d=> {
+          ) : pageRows.map(d=> {
             const client = (clients||[]).find(c=> c.id===d.client_id);
             const so = (salesOrders||[]).find(s=> s.id===d.sales_order_id);
             const itemsForDr = (drItems||[]).filter(it=> it.dr_id===d.id);
@@ -39182,6 +39191,21 @@ function DeliveryReceiptsView({ profile, profiles, clients, salesOrders, deliver
           })}</tbody>
         </table>
       </div>
+
+      {rows.length>0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm">
+          <div className="text-slate-500">Showing <span className="font-semibold text-slate-700">{firstShown}–{lastShown}</span> of <span className="font-semibold text-slate-700">{rows.length}</span></div>
+          {totalPages>1 && (
+            <div className="flex items-center gap-1">
+              <button onClick={()=>setPage(1)} disabled={curPage===1} className="px-2 py-1 rounded border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">« First</button>
+              <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={curPage===1} className="px-2 py-1 rounded border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">‹ Prev</button>
+              <span className="px-3 py-1 font-semibold text-slate-700">Page {curPage} / {totalPages}</span>
+              <button onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={curPage===totalPages} className="px-2 py-1 rounded border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">Next ›</button>
+              <button onClick={()=>setPage(totalPages)} disabled={curPage===totalPages} className="px-2 py-1 rounded border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">Last »</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
