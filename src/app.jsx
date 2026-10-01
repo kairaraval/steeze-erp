@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 656 · Purchasing upgrade. PO Receive now lets you issue received items straight to the project they were bought for (stock-in + per-project stock-out in one step), and reflects received qty back on the source PR. Materials Queue: assign a supplier to Unassigned lines inline, plus a 📥 Materials Queue button on the PR board. POs now carry an expected pay-date (auto-snapped to the next 15th/30th cut-off from supplier terms) shown on the PO list.";
+const BUILD = "Live build 657 · Redesigned the Purchase Order view for easier tracking: a progress stepper (Draft → Placed → Partially Received → Received), an Order details card (supplier + contact, linked job & request, order/delivery dates, ship-to), a Supplier & terms panel (payment terms, expected pay-date, currency, grand total), and an Activity & audit summary — on top of the existing editable form.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29003,8 +29003,15 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     onSaved();
   }
   const lineCount = f.lines.filter(l=>l.description||l.item_id).length;
+  // Tracking context: linked PR, linked job (lead), client, and the stepper stage.
+  const poLinkedPR = f.pr_id ? (requests||[]).find(r=>r.id===f.pr_id) : null;
+  const poJobLeadId = poLinkedPR?.linked_lead_id || (f.lines||[]).find(l=>l.lead_id)?.lead_id || null;
+  const poJobLead = poJobLeadId ? (leads||[]).find(l=>l.id===poJobLeadId) : null;
+  const poJobClient = poJobLead?.client_id ? (clients||[]).find(c=>c.id===poJobLead.client_id) : null;
+  const poStepIdx = ({ draft:0, open:1, partial:2, received:3 })[f.status] ?? 0;
+  const PO_STEP_LABELS=['Draft','Placed · Sent to supplier','Partially Received','Received · Closed'];
   return (
-    <Modal title={isEdit ? `PO ${existing.number||existing.id.slice(0,6)}` : 'New purchase order'} onClose={onClose} wide>
+    <Modal title={isEdit ? `PO ${existing.number||existing.id.slice(0,6)}` : 'New purchase order'} onClose={onClose} xwide>
       <div className="space-y-3">
         {/* Status banner: tells the user immediately whether they're editing
             a Draft or looking at a finalized read-only PO. */}
@@ -29015,6 +29022,59 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
               <button onClick={reopen} className="text-xs text-emerald-700 hover:underline font-semibold">↺ Reopen as draft</button>
             </div>
         }
+
+        {/* Progress stepper — quick visual of where this PO stands. */}
+        {isEdit && f.status!=='cancelled' && (
+          <div className="flex items-center gap-1 bg-white border rounded-lg px-3 py-3">
+            {PO_STEP_LABELS.map((lbl,i)=>(
+              <React.Fragment key={lbl}>
+                <div className="flex flex-col items-center text-center shrink-0" style={{minWidth:'70px'}}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${i<poStepIdx?'bg-emerald-500 text-white':i===poStepIdx?'bg-indigo-600 text-white':'bg-slate-200 text-slate-500'}`}>{i<poStepIdx?'✓':i+1}</div>
+                  <div className={`text-[9px] leading-tight mt-1 ${i===poStepIdx?'font-bold text-indigo-700':'text-slate-500'}`}>{lbl}</div>
+                </div>
+                {i<PO_STEP_LABELS.length-1 && <div className={`flex-1 h-0.5 ${i<poStepIdx?'bg-emerald-400':'bg-slate-200'}`} />}
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+
+        {/* Order details + Supplier & terms — tracking summary (read). */}
+        {isEdit && (
+          <div className="grid md:grid-cols-3 gap-3">
+            <div className="md:col-span-2 bg-white border rounded-lg p-3">
+              <div className="text-[10px] uppercase font-bold text-slate-500 mb-2">Order details</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div><div className="text-slate-400 text-[11px]">Supplier</div><div className="font-semibold">{supplier?.company||'—'}</div>{supplier?.contact && <div className="text-xs text-slate-600">{supplier.contact}</div>}{(supplier?.email||supplier?.phone) && <div className="text-[11px] text-slate-400">{[supplier?.email,supplier?.phone].filter(Boolean).join(' · ')}</div>}</div>
+                <div><div className="text-slate-400 text-[11px]">Linked job</div><div className="font-medium truncate">{poJobLead?`📁 ${poJobLead.title}`:'—'}</div>{poJobClient && <div className="text-xs text-slate-500 truncate">{poJobClient.company}</div>}</div>
+                <div><div className="text-slate-400 text-[11px]">Linked request</div><div className="font-mono text-xs">{poLinkedPR?.number||'—'}</div></div>
+                <div><div className="text-slate-400 text-[11px]">Order date</div><div>{fmtDate(f.date)}</div></div>
+                <div><div className="text-slate-400 text-[11px]">Delivery due</div><div>{f.expected_date?fmtDate(f.expected_date):'—'}</div></div>
+                <div><div className="text-slate-400 text-[11px]">Ship to</div><div className="text-xs">Steeze Main Warehouse</div></div>
+              </div>
+            </div>
+            <div className="bg-white border rounded-lg p-3">
+              <div className="text-[10px] uppercase font-bold text-slate-500 mb-2">Supplier &amp; terms</div>
+              <dl className="text-sm space-y-1.5">
+                <div className="flex justify-between gap-2"><dt className="text-slate-400 text-[11px]">Payment terms</dt><dd className="text-right">{f.payment_terms||'—'}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-slate-400 text-[11px]">Expected pay date</dt><dd className="text-right">{f.expected_pay_date?fmtDate(f.expected_pay_date):'—'}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-slate-400 text-[11px]">Currency</dt><dd className="text-right">PHP</dd></div>
+                <div className="flex justify-between gap-2 border-t pt-1.5"><dt className="text-slate-500 text-[11px] font-semibold">Grand total</dt><dd className="text-right font-bold">{peso(total)}</dd></div>
+              </dl>
+            </div>
+          </div>
+        )}
+
+        {isEdit && (existing.created_at||existing.finalized_at||existing.received_at) && (
+          <div className="bg-white border rounded-lg p-3">
+            <div className="text-[10px] uppercase font-bold text-slate-500 mb-1.5">Activity &amp; audit</div>
+            <ul className="text-xs text-slate-600 space-y-1">
+              {existing.created_at && <li>• Created {fmtDate(String(existing.created_at).slice(0,10))}</li>}
+              {existing.finalized_at && <li>• Placed / finalized {fmtDate(String(existing.finalized_at).slice(0,10))}{finalizedBy?` by ${finalizedBy.name||finalizedBy.email}`:''}</li>}
+              {existing.received_at && <li>• Last receipt {fmtDate(existing.received_at)}</li>}
+              {existing.rfp_id && <li>• Payment requested (RFP created)</li>}
+            </ul>
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Purchasing date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} disabled={locked} /></TpLbl>
