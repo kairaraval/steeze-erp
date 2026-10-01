@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 665 · Fabric Swatch names in Sales Resources now save: editing a swatch wrote to the wrong table (swatches live in the shared store with Purchasing), so renames silently did nothing. Edits now go to the right place.";
+const BUILD = "Live build 666 · FIX: Delivery Receipt (and loan installment / stock) quantities no longer shift. Once a table passed 1,000 rows, the loader paged by a non-unique column (position/seq) which let rows leak between records. Paging now uses a unique key so every line is fetched exactly once and matches what was entered.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -512,6 +512,14 @@ async function fetchAllRows(table, cols='*', orderCol=null, ascending=true){
   for(;;){
     let q=sb.from(table).select(cols);
     if(orderCol) q=q.order(orderCol,{ ascending });
+    // CRITICAL: page by a UNIQUE tiebreaker (id). Ordering only by a non-unique
+    // column (position, seq, name, created_at…) makes the order between equal
+    // values unstable across .range() windows, so once a table passes 1000 rows
+    // boundary rows get duplicated or skipped — e.g. DR line items leaking between
+    // receipts and quantities not matching what was entered. id is unique, so the
+    // total order is stable and every row is fetched exactly once. (Per-record
+    // sort by position/seq still happens in-memory where it's displayed.)
+    if(orderCol!=='id') q=q.order('id',{ ascending:true });
     q=q.range(from, from+size-1);
     const { data, error } = await q;
     if(error) return { data:all, error };
