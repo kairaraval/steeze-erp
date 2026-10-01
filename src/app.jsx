@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 658 · Removed Styles & BOMs from the Purchasing module (nav + access) across purchasing roles and admin's Purchasing group.";
+const BUILD = "Live build 659 · Redesigned the Purchasing home dashboard: 4 KPI cards (Open POs, Pending Approvals, Low Stock, Incoming This Week), a Materials Requiring Action table (on-hand / reserved / incoming / reorder / status with Create-PO), a Production Demand panel, Recent Purchase Orders, and a 30-day Stock Movements In/Out chart.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6406,79 +6406,116 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
     );
   }
 
+  // ---- Dashboard aggregates (new layout) ----
+  const weekEnd = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+  const incomingByItem = (()=>{ const m=new Map(); (orders||[]).filter(o=>['open','partial'].includes(o.status)).forEach(o=>{ (o.lines||[]).forEach(l=>{ if(!l.item_id) return; const rem=Math.max(0,Number(l.qty||0)-Number(l.qty_received||0)); if(rem>0) m.set(l.item_id,(m.get(l.item_id)||0)+rem); }); }); return m; })();
+  const neededForByItem = (()=>{ const m=new Map(); (requests||[]).filter(r=>(r.status==='submitted'||r.status==='approved')&&!r.deleted_at).forEach(pr=>{ const lead=pr.linked_lead_id?(leads||[]).find(l=>l.id===pr.linked_lead_id):null; (pr.lines||[]).forEach(l=>{ if(l.item_id && !l.linked_po_id && !m.has(l.item_id)) m.set(l.item_id, lead?.title || pr.number || ''); }); }); return m; })();
+  const demandItemIds = (()=>{ const s=new Set(); (requests||[]).filter(r=>(r.status==='submitted'||r.status==='approved')&&!r.deleted_at).forEach(pr=>{ (pr.lines||[]).forEach(l=>{ if(l.item_id && !l.linked_po_id && Number(l.qty||0)>0) s.add(l.item_id); }); }); return s; })();
+  const actionRows = (items||[]).map(it=>{ const onHand=Number(it.qty||0), reserved=reservations.get(it.id)||0, incoming=incomingByItem.get(it.id)||0, reorder=Number(it.reorder||0); const belowReorder=reorder>0 && onHand<=reorder; const inDemand=demandItemIds.has(it.id); if(!belowReorder && !inDemand) return null; const projected=onHand-reserved+incoming; const status=projected<=0?'Critical':(belowReorder?'Low':'OK'); return { it, onHand, reserved, incoming, reorder, status, neededFor:neededForByItem.get(it.id)||'—' }; }).filter(Boolean).sort((a,b)=>({Critical:0,Low:1,OK:2}[a.status]-{Critical:0,Low:1,OK:2}[b.status])).slice(0,8);
+  const incomingThisWeek = (orders||[]).filter(o=>['open','partial'].includes(o.status) && o.expected_date && o.expected_date>=today && o.expected_date<=weekEnd).length;
+  const shortByLead = (()=>{ const m=new Map(); (requests||[]).filter(r=>(r.status==='submitted'||r.status==='approved')&&!r.deleted_at).forEach(pr=>{ if(!pr.linked_lead_id) return; let c=0; (pr.lines||[]).forEach(l=>{ if(!l.linked_po_id && Number(l.qty||0)>0) c++; }); if(c) m.set(pr.linked_lead_id,(m.get(pr.linked_lead_id)||0)+c); }); return m; })();
+  const prodDemand = activeProdJobs.slice().sort((a,b)=>String(a.due_date||'9999').localeCompare(String(b.due_date||'9999'))).slice(0,6);
+  const recentPOs = (orders||[]).filter(o=>!o.deleted_at).slice().sort((a,b)=>String(b.created_at||b.date||'').localeCompare(String(a.created_at||a.date||''))).slice(0,6);
+  const suppName=(id)=>(suppliers||[]).find(s=>s.id===id)?.company||'—';
+  const recvLabel=(st)=>({draft:'Draft',open:'Placed',partial:'Partially Received',received:'Received',cancelled:'Cancelled'})[st]||st;
+  const recvColor=(st)=>({draft:'bg-slate-100 text-slate-600',open:'bg-amber-100 text-amber-700',partial:'bg-blue-100 text-blue-700',received:'bg-emerald-100 text-emerald-700',cancelled:'bg-slate-200 text-slate-500'})[st]||'bg-slate-100 text-slate-600';
+  const statusPill=(st)=> st==='Critical'?'bg-rose-100 text-rose-700':st==='Low'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700';
+  const chartDays = (()=>{ const days=[]; const idx={}; for(let i=29;i>=0;i--){ const d=new Date(Date.now()-i*86400000); const key=d.toISOString().slice(0,10); idx[key]=days.length; days.push({ key, label:`${d.getMonth()+1}/${d.getDate()}`, in:0, out:0 }); } (stockMovements||[]).forEach(s=>{ const k=String(s.created_at||s.date||'').slice(0,10); if(idx[k]!=null){ const q=Number(s.qty||0); if(s.type==='in') days[idx[k]].in+=q; else if(s.type==='out') days[idx[k]].out+=q; } }); return days; })();
+  const chartMax = Math.max(1, ...chartDays.map(d=>Math.max(d.in,d.out)));
+  const KPI = ({ icon, label, value, color })=> (
+    <div className="bg-white border rounded-xl p-4 flex items-center gap-3">
+      <div className={`w-11 h-11 rounded-lg flex items-center justify-center text-xl ${color}`}>{icon}</div>
+      <div><div className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-3xl font-extrabold text-slate-900 leading-tight">{value}</div></div>
+    </div>
+  );
   return (
     <div className="p-6">
-      <div className="mb-5">
-        <h1 className="text-2xl font-bold text-slate-900">🛒 Purchasing Home</h1>
-        <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — here's what needs your attention today.</p>
-      </div>
-
-      {/* PRIMARY tiles — the 5 things a purchaser should look at every morning */}
-      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 mt-1">▸ Your action queue</div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Tile icon="📝" label="PRs to approve" count={prsToApprove.length} sub={prsToApprove.length>0?'Click to review':'All clear'} color="indigo" onClick={()=>navTo('requests')} />
-        <Tile icon="📥" label="Supplier groups ready" count={queueSupplierCount} sub={queueLineCount>0?`${queueLineCount} unfulfilled line${queueLineCount===1?'':'s'}`:'Nothing queued'} color="blue" onClick={()=>navTo('queue')} />
-        <Tile icon="📝" label="Draft POs to finalize" count={draftPOs.length} sub={draftPOs.length>0?'Finalize to lock pricing':'No drafts pending'} color="amber" onClick={()=>navTo('orders')} />
-        <Tile icon="🧾" label="POs to receive" count={openPOs.length} sub={openPOs.length>0?'Placed but not received':'All received'} color="emerald" onClick={()=>navTo('orders')} />
-      </div>
-
-      {/* SECONDARY tiles — useful but not daily action items */}
-      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ At a glance</div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <Tile icon="📤" label="Issuances today" count={stockOutToday.length} sub="Materials to production" color="purple" onClick={()=>navTo('stock-out')} />
-        <Tile icon="💳" label="RFPs in Finance" count={rfpsInPipeline.length} sub="Sent to Finance" color="indigo" onClick={()=>navTo('rfps')} />
-        <Tile icon="⚙" label="Active prod jobs" count={activeProdJobs.length} sub="Awaiting materials" color="blue" onClick={()=>navTo('prod')} />
-        <button onClick={()=>navTo('inventory')} className="text-left rounded-xl border-2 border-emerald-200 hover:border-emerald-400 bg-emerald-50/40 p-4 transition shadow-sm hover:shadow-md">
-          <div className="text-2xl">📦</div>
-          <div className="text-2xl font-extrabold mt-2 text-emerald-800">{peso(reservedValue)}</div>
-          <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">Reserved stock value</div>
-          <div className="text-[11px] text-slate-500 mt-0.5">Locked by approved PRs</div>
-        </button>
-      </div>
-
-      {/* Low stock teaser */}
-      {lowStock.length>0 && (
-        <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-sm font-bold text-rose-900">🚨 {lowStock.length} item{lowStock.length===1?'':'s'} below reorder point</div>
-            <button onClick={()=>navTo('inventory')} className="text-xs text-rose-700 font-semibold hover:underline">View all in Inventory →</button>
-          </div>
-          <div className="grid md:grid-cols-2 gap-2 text-xs">
-            {lowStock.slice(0, 6).map(it=>(
-              <div key={it.id} className="bg-white border border-rose-200 rounded p-2 flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{it.name}{it.color?<span className="text-slate-500"> · {it.color}</span>:''}</div>
-                  <div className="text-[10px] text-slate-500">{it.bucket||'other'}{it.sku?` · ${it.sku}`:''}</div>
-                </div>
-                <div className="text-right shrink-0 ml-2">
-                  <div className="font-bold text-rose-700">{it.qty||0} {it.unit||''}</div>
-                  <div className="text-[10px] text-slate-500">reorder at {it.reorder}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          {lowStock.length > 6 && <div className="text-[11px] text-slate-500 mt-2 text-center">+ {lowStock.length-6} more below threshold</div>}
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">🛒 Purchasing &amp; Inventory</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Materials supply for production demand · {greet}, {firstName}</p>
         </div>
-      )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {prsToApprove.length>0 && <button onClick={()=>navTo('requests')} className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-semibold hover:bg-emerald-100">✓ {prsToApprove.length} PR{prsToApprove.length===1?'':'s'} to review ›</button>}
+          <button onClick={()=>navTo('queue')} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Create PO</button>
+          <button onClick={()=>navTo('orders')} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">🚚 Receive Items</button>
+        </div>
+      </div>
 
-      {/* Recent activity */}
-      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Recent activity</div>
-      <div className="bg-white border rounded-xl overflow-hidden">
-        {recentEvents.length===0 ? (
-          <div className="text-center text-slate-400 text-sm py-6">No recent activity yet.</div>
-        ) : (
-          <table className="w-full text-sm">
-            <tbody>{recentEvents.map((e,i)=>(
-              <tr key={i} className="border-t first:border-t-0 hover:bg-slate-50 cursor-pointer" onClick={e.click}>
-                <td className="px-3 py-2 w-10 text-center">
-                  <span className="text-lg">{e.kind==='pr'?'📝':e.kind==='po'?'🧾':'📤'}</span>
-                </td>
-                <td className="px-3 py-2 text-sm">{e.label}</td>
-                <td className="px-3 py-2 text-xs text-slate-500 text-right whitespace-nowrap">{e.when ? fmtTime(e.when) : '—'}</td>
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <KPI icon="📄" label="Open POs" value={openPOs.length} color="bg-blue-100" />
+        <KPI icon="⏳" label="Pending Approvals" value={prsToApprove.length} color="bg-amber-100" />
+        <KPI icon="⚠️" label="Low Stock Items" value={lowStock.length} color="bg-rose-100" />
+        <KPI icon="🚚" label="Incoming This Week" value={incomingThisWeek} color="bg-teal-100" />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4 mb-4">
+        {/* Materials Requiring Action */}
+        <div className="lg:col-span-2 bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between"><div className="font-bold text-slate-900">Materials Requiring Action</div><button onClick={()=>navTo('inventory')} className="text-xs text-indigo-600 font-semibold hover:underline">View All</button></div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Material / SKU</th><th className="text-left px-3 py-2">Needed for</th><th className="text-right px-3 py-2">On hand</th><th className="text-right px-3 py-2">Reserved</th><th className="text-right px-3 py-2">Incoming</th><th className="text-right px-3 py-2">Reorder</th><th className="text-center px-3 py-2">Status</th><th className="text-right px-3 py-2"></th></tr></thead>
+            <tbody>{actionRows.length===0 ? <tr><td colSpan="8" className="text-center text-slate-400 py-8">Nothing needs action — stock covers demand. 🎉</td></tr> : actionRows.map((r,i)=>(
+              <tr key={i} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2"><div className="font-medium">{r.it.name}{r.it.color?` · ${r.it.color}`:''}</div><div className="text-[10px] text-slate-400 font-mono">{r.it.sku||''}</div></td>
+                <td className="px-3 py-2 text-xs text-slate-600 truncate max-w-[12rem]">{r.neededFor}</td>
+                <td className="px-3 py-2 text-right">{r.onHand.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right text-slate-500">{r.reserved.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right text-slate-500">{r.incoming?r.incoming.toLocaleString():'0'}</td>
+                <td className="px-3 py-2 text-right text-slate-500">{r.reorder.toLocaleString()}</td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${statusPill(r.status)}`}>{r.status}</span></td>
+                <td className="px-3 py-2 text-right">{r.status==='OK'?<button onClick={()=>navTo('inventory')} className="text-xs text-slate-500 hover:underline">View</button>:<button onClick={()=>navTo('queue')} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Create PO</button>}</td>
               </tr>
             ))}</tbody>
-          </table>
-        )}
+          </table></div>
+        </div>
+
+        {/* Production Demand */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between"><div className="font-bold text-slate-900">Production Demand</div><button onClick={()=>navTo('prod')} className="text-xs text-indigo-600 font-semibold hover:underline">View All</button></div>
+          <div className="divide-y">{prodDemand.length===0 ? <div className="text-center text-slate-400 py-8 text-sm">No active production jobs.</div> : prodDemand.map((j,i)=>{ const shortN=shortByLead.get(j.lead_id)||0; const overdue=j.due_date && j.due_date<today; return (
+            <div key={i} className="px-4 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0"><div className="font-semibold text-sm truncate">{j.client_name||'—'}</div><div className="text-[11px] text-slate-500 truncate">{j.item||j.number||''}</div></div>
+                <div className="text-right shrink-0">{j.due_date && <div className={`text-[11px] ${overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>by {fmtDate(j.due_date)}</div>}{shortN>0 && <div className="text-[10px] text-amber-700 font-semibold">⚠ {shortN} short</div>}</div>
+              </div>
+            </div>
+          ); })}</div>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        {/* Recent Purchase Orders */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between"><div className="font-bold text-slate-900">Recent Purchase Orders</div><button onClick={()=>navTo('orders')} className="text-xs text-indigo-600 font-semibold hover:underline">View All</button></div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">PO#</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">ETA</th><th className="text-left px-3 py-2">Receiving</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+            <tbody>{recentPOs.length===0 ? <tr><td colSpan="5" className="text-center text-slate-400 py-8">No purchase orders yet.</td></tr> : recentPOs.map(o=>(
+              <tr key={o.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>navTo('orders')}>
+                <td className="px-3 py-2 font-mono text-xs text-indigo-700">{o.number||o.id.slice(0,6)}</td>
+                <td className="px-3 py-2 text-xs">{suppName(o.supplier_id)}</td>
+                <td className="px-3 py-2 text-xs">{o.expected_date?fmtDate(o.expected_date):'—'}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${recvColor(o.status)}`}>{recvLabel(o.status)}</span></td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(o.total)}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </div>
+
+        {/* Stock Movements chart */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between"><div className="font-bold text-slate-900">Stock Movements <span className="text-xs font-normal text-slate-400">· last 30 days</span></div><div className="flex items-center gap-3 text-[11px]"><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>In</span><span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-teal-500"></span>Out</span></div></div>
+          <div className="p-4">
+            <div className="flex items-end gap-[3px] h-40">{chartDays.map((d,i)=>(
+              <div key={i} className="flex-1 flex items-end justify-center gap-[1px] group relative" title={`${d.label} · in ${d.in} · out ${d.out}`}>
+                <div className="w-1/2 bg-blue-500 rounded-t" style={{height:`${Math.round((d.in/chartMax)*100)}%`}}></div>
+                <div className="w-1/2 bg-teal-500 rounded-t" style={{height:`${Math.round((d.out/chartMax)*100)}%`}}></div>
+              </div>
+            ))}</div>
+            <div className="flex justify-between text-[9px] text-slate-400 mt-1"><span>{chartDays[0]?.label}</span><span>{chartDays[Math.floor(chartDays.length/2)]?.label}</span><span>{chartDays[chartDays.length-1]?.label}</span></div>
+          </div>
+        </div>
       </div>
     </div>
   );
