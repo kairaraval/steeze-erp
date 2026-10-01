@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 664 · Techpack Design Board text: typing now happens in a dedicated Text bar above the canvas (a real text field that always takes focus) instead of inside the drawing, so labels always accept input and save. The box on the canvas mirrors what you type live.";
+const BUILD = "Live build 665 · Fabric Swatch names in Sales Resources now save: editing a swatch wrote to the wrong table (swatches live in the shared store with Purchasing), so renames silently did nothing. Edits now go to the right place.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3601,17 +3601,23 @@ function SalesResourceForm({ profile, category, existing, defaultFolder, onClose
     if(!f.title.trim() && !file && !f.url.trim() && !existing?.file_path){ setMsg('Add a title, a link, or a file.'); return; }
     setBusy(true); setMsg('');
     try {
+      // Fabric Swatches are stored in the shared purchasing_resources table (so
+      // Sales and Purchasing see the same set). Everything else is a sales_resources row.
+      const isSwatch = category==='swatches';
+      const table = isSwatch ? 'purchasing_resources' : 'sales_resources';
       let file_path=existing?.file_path||null, file_name=existing?.file_name||null, file_type=existing?.file_type||null;
       if(file){
         const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
-        const key=`sales-resources/${category}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const key=`${isSwatch?'purchasing-resources':'sales-resources'}/${category}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
         const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
         if(upErr) throw upErr;
         file_path=key; file_name=file.name||key; file_type=file.type||'';
       }
-      const payload={ category, folder: folders.length ? (f.folder||folders[0]) : null, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
-      if(isEdit){ const { error }=await sb.from('sales_resources').update(payload).eq('id', existing.id); if(error) throw error; }
-      else { const { error }=await sb.from('sales_resources').insert({ ...payload, created_by:profile.id }); if(error) throw error; }
+      // purchasing_resources has no folder column; only include folder for sales_resources.
+      const payload={ category, title:f.title.trim()||file_name||f.url||'Untitled', url:f.url.trim()||null, notes:f.notes||null, file_path, file_name, file_type };
+      if(!isSwatch) payload.folder = folders.length ? (f.folder||folders[0]) : null;
+      if(isEdit){ const { error }=await sb.from(table).update(payload).eq('id', existing.id); if(error) throw error; }
+      else { const { error }=await sb.from(table).insert({ ...payload, created_by:profile.id }); if(error) throw error; }
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
