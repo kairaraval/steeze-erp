@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 652 · Fixed the techpack overlap when opened from a Purchase Request: the PR panel now steps aside so the techpack shows on its own, and closing the techpack reopens the same PR (lead/BOM details) exactly where you left off.";
+const BUILD = "Live build 653 · Purchase Request detail now shows the Sales manager (from the linked lead) in the BOM header, alongside client, techpack, fabric and due date.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28233,6 +28233,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                 <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{styleName}</div>
                 <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
                   {client && <span>👤 Client: <strong>{client.company}</strong></span>}
+                  {(()=>{ const mgr=(profiles||[]).find(p=>p.id===linkedLead.manager_id); return mgr ? <span>🧑‍💼 Sales: <strong>{mgr.name||mgr.email}</strong></span> : null; })()}
                   {techpackNumber && <span>📋 Techpack: <strong>{techpackNumber}</strong></span>}
                   {fabric && <span>🧵 Fabric: <strong>{fabric}</strong></span>}
                   {totalQty > 0 && <span>📦 Total qty: <strong>{totalQty}</strong></span>}
