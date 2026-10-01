@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 651 · Purchase Request board: client name now shows on each card, and the search box covers everything — PR number, client, project/lead name, item/SKU/color, techpack and justification.";
+const BUILD = "Live build 652 · Fixed the techpack overlap when opened from a Purchase Request: the PR panel now steps aside so the techpack shows on its own, and closing the techpack reopens the same PR (lead/BOM details) exactly where you left off.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27903,7 +27903,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
         })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
       </table></div></div>
       )}
-      {(creating||editing) && <PurchaseRequestForm profile={profile} profiles={profiles} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={onViewTechpack} onPrint={(pr)=>setPrinting(pr)} />}
+      {(creating||editing) && <PurchaseRequestForm profile={profile} profiles={profiles} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={(lead)=>{ const pr=editing; setEditing(null); setCreating(false); onViewTechpack(lead, pr?()=>setEditing(pr):null); }} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
   );
@@ -42359,8 +42359,9 @@ function App(){
   const [techpackLead,setTechpackLead]=useState(null);
   const [techpackReadOnly,setTechpackReadOnly]=useState(false);
   const [techpackSnapView,setTechpackSnapView]=useState(null); // { lead, snap } — stacked view-only snapshot
-  const openTechpackEdit=(lead)=>{ setTechpackReadOnly(false); setTechpackLead(lead); };
-  const openTechpackView=(lead)=>{ setTechpackReadOnly(true); setTechpackLead(lead); };
+  const [techpackOnClose,setTechpackOnClose]=useState(null);   // optional callback to run when the techpack is closed (e.g. reopen the PR that launched it)
+  const openTechpackEdit=(lead)=>{ setTechpackReadOnly(false); setTechpackOnClose(null); setTechpackLead(lead); };
+  const openTechpackView=(lead,onCloseCb=null)=>{ setTechpackReadOnly(true); setTechpackOnClose(()=> onCloseCb || null); setTechpackLead(lead); };
   const [deptActivity,setDeptActivity]=useState(null); // { job, jobType, title }
   // Collapsible sidebar groups — remembered across reloads.
   const [collapsedGroups,setCollapsedGroups]=useState(()=>{
@@ -43892,7 +43893,7 @@ function App(){
           }}
         />
       )}
-      {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onOpenSnapshot={(snap)=>setTechpackSnapView({ lead:(leads.find(l=>l.id===techpackLead.id)||techpackLead), snap })} onClose={()=>{ setTechpackLead(null); setTechpackReadOnly(false); }} />}
+      {techpackLead && <TechpackEditor profile={profile} profiles={profiles} lead={leads.find(l=>l.id===techpackLead.id)||techpackLead} client={clients.find(c=>c.id===(leads.find(l=>l.id===techpackLead.id)||techpackLead).client_id)} reload={loadAll} readOnly={techpackReadOnly} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onOpenSnapshot={(snap)=>setTechpackSnapView({ lead:(leads.find(l=>l.id===techpackLead.id)||techpackLead), snap })} onClose={()=>{ const cb=techpackOnClose; setTechpackLead(null); setTechpackReadOnly(false); setTechpackOnClose(null); if(typeof cb==='function'){ try{ cb(); }catch(_){} } }} />}
       {techpackSnapView && <TechpackEditor key={'snap-'+techpackSnapView.snap.id} profile={profile} profiles={profiles} lead={techpackSnapView.lead} client={clients.find(c=>c.id===techpackSnapView.lead.client_id)} reload={loadAll} readOnly overrideTechpack={techpackSnapView.snap.data} snapshotMeta={techpackSnapView.snap} sizeCharts={sizeCharts} reloadCharts={loadAll} garmentMockups={garmentMockups} reloadMockups={loadAll} onClose={()=>setTechpackSnapView(null)} />}
       {editLead && <LeadForm key={editLead.id || 'new'} profile={profile} profiles={profiles} clients={clients} leads={leads} existing={editLead} onClose={()=>setEditLead(null)} onSaved={()=>{ setEditLead(null); loadAll(); }} />}
       {sendGraphicLead && <SendToGraphicModal profile={profile} profiles={profiles} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
