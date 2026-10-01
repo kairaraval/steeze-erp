@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 650 · Purchase Requests reworked into the real 2-person workflow: a 4-lane board — To Review (Minda) → Ready for PO (Jay-Ann) → Ordered → Fulfilled — with each role's queue highlighted. Cards are now titled by project (client · item · techpack) with due date, priority and a red 'short N items' flag when stock can't cover it. Minda's Approve hands off to Jay-Ann for PO and notifies her.";
+const BUILD = "Live build 651 · Purchase Request board: client name now shows on each card, and the search box covers everything — PR number, client, project/lead name, item/SKU/color, techpack and justification.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27710,14 +27710,25 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   const [sourceFilter,setSourceFilter]=useState(''); // '' | production | sampling | manual
   const counts=PR_STATUSES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>r.status===s.key).length; return a; },{});
   const srcCounts=PR_SOURCES.reduce((a,s)=>{ a[s.key]=requests.filter(r=>prSource(r)===s.key).length; return a; },{});
+  // Build one searchable text blob per PR: number, justification, lead/project
+  // title, client company, item/SKU/color names, techpack number, sample.
+  function prSearchText(r){
+    const lead = r.linked_lead_id ? (leads||[]).find(l=>l.id===r.linked_lead_id) : null;
+    const sample = r.linked_sample_id ? (sampleJobs||[]).find(s=>s.id===r.linked_sample_id) : null;
+    const cli = lead&&lead.client_id ? (clients||[]).find(c=>c.id===lead.client_id) : null;
+    const itemNames = (r.lines||[]).map(l=>{ if(l.item_id){ const it=(items||[]).find(i=>i.id===l.item_id); return it?`${it.name} ${it.sku||''} ${it.color||''}`:''; } return l.description||''; }).join(' ');
+    return [r.number, r.justification, lead?.title, lead?.client_name, cli?.company, cli?.name, sample?.client_name, sample?.number, lead?.techpack_number, lead?.techpack?.prodFormNo].filter(Boolean).join(' ').concat(' '+itemNames).toLowerCase();
+  }
+  const q=search.trim().toLowerCase();
+  const matchSearch=(r)=> !q || prSearchText(r).includes(q);
   const rows=requests
     .filter(r=>(!filter||r.status===filter))
     .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
-    .filter(r=>(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
+    .filter(matchSearch);
   // Board lanes ignore the status count-card filter (they ARE the stages) but honour search + source.
   const boardRows=requests
     .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
-    .filter(r=>(!search||`${r.number} ${r.justification}`.toLowerCase().includes(search.toLowerCase())));
+    .filter(matchSearch);
   const reqName=(id)=>profiles.find(p=>p.id===id)?.name||'—';
   const deptName=(id)=>departments.find(d=>d.id===id)?.name||'—';
   // Resolve display fields for a PR row from whichever source it came from.
@@ -27801,7 +27812,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
       </div>
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR# or justification…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR#, client, project, item, techpack…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-80" />
         <div className="flex items-center gap-1 flex-wrap ml-auto">
           <span className="text-xs text-slate-400 mr-1">Source:</span>
           <button onClick={()=>setSourceFilter('')} className={`text-xs px-2.5 py-1 rounded-full border ${sourceFilter===''?'bg-slate-800 text-white border-slate-800':'bg-white hover:bg-slate-50'}`}>All</button>
@@ -27829,6 +27840,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                     </div>
                     <button onClick={()=>setEditing(r)} className="text-left w-full">
                       <div className="text-sm font-bold leading-tight truncate" title={d.projectTitle}>📁 {d.projectTitle}</div>
+                      {d.clientName && d.clientName!=='—' && d.clientName!==d.projectTitle && <div className="text-[11px] font-medium text-slate-700 truncate" title={d.clientName}>👤 {d.clientName}</div>}
                       <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.firstItemName}{d.moreCount>0?` +${d.moreCount} more`:''}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
                       <div className="flex items-center gap-x-2 mt-1 flex-wrap text-[10px] text-slate-500">
                         {d.tpNo && <span className="font-mono text-slate-400">TP {d.tpNo}</span>}
