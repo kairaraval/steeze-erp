@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 661 · Fabric Swatches now appear in BOTH Sales Resources and Purchasing Resources from one shared library — add a swatch in either place and everyone sees it in both.";
+const BUILD = "Live build 662 · Fixed techpack Design Board text: typing in a text box now saves what you actually typed (previously a re-render reset it to the placeholder 'Text' before saving). Text editing uses a proper textarea; new boxes show 'Double-click to type'.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24558,6 +24558,7 @@ function DesignCanvas({ value, onChange, readOnly }){
   const [fill,setFill] = useState('#ffe08a');
   const [fontSize,setFontSize] = useState(26);
   const [uploading,setUploading] = useState(false);
+  const [draftText,setDraftText] = useState('');  // live text while editing a text box (kept in state so saves capture it)
 
   const commit = (nextEls)=> onChange({ ...v, w:DC_W, h:DC_H, els:nextEls });
   const addEl = (el)=> commit([...els, el]);
@@ -24578,7 +24579,7 @@ function DesignCanvas({ value, onChange, readOnly }){
     const p=evtPt(e);
     const id=nid();
     let el;
-    if(tool==='text') el={ id, type:'text', x:p.x, y:p.y, w:240, h:56, text:'Text', color:stroke, fill:useFill?fill:'none', fontSize };
+    if(tool==='text') el={ id, type:'text', x:p.x, y:p.y, w:240, h:56, text:'', color:stroke, fill:useFill?fill:'none', fontSize };
     else if(tool==='rect') el={ id, type:'rect', x:p.x, y:p.y, w:2, h:2, stroke, fill:useFill?fill:'none', strokeW:3 };
     else if(tool==='circle') el={ id, type:'circle', x:p.x, y:p.y, w:2, h:2, stroke, fill:useFill?fill:'none', strokeW:3 };
     else if(tool==='line'||tool==='arrow') el={ id, type:tool, x1:p.x, y1:p.y, x2:p.x, y2:p.y, stroke, strokeW:3 };
@@ -24602,7 +24603,7 @@ function DesignCanvas({ value, onChange, readOnly }){
       updEl(d.id, d.handle==='a' ? { x1:p.x, y1:p.y } : { x2:p.x, y2:p.y });
     }
   }
-  function onSvgUp(){ const d=dragRef.current; dragRef.current=null; if(d && d.mode==='create'){ if(d.type!=='text') setTool('select'); else { setTool('select'); setEditingId(d.id); } } }
+  function onSvgUp(){ const d=dragRef.current; dragRef.current=null; if(d && d.mode==='create'){ if(d.type!=='text') setTool('select'); else { setTool('select'); setSel(d.id); setEditingId(d.id); setDraftText(''); } } }
   function elDown(e, el){ if(readOnly||tool!=='select') return; e.stopPropagation(); setSel(el.id); const p=evtPt(e); dragRef.current={ mode:'move', id:el.id, el:{...el}, px:p.x, py:p.y }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
   function handleDown(e, el, mode, handle){ if(readOnly) return; e.stopPropagation(); dragRef.current={ mode, id:el.id, el:{...el}, handle }; try{ svgRef.current.setPointerCapture(e.pointerId); }catch(_){} }
 
@@ -24625,18 +24626,24 @@ function DesignCanvas({ value, onChange, readOnly }){
       <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke="transparent" strokeWidth={18} {...common} pointerEvents="stroke" />
       {isSel && <>{pt_handle(el,'a',el.x1,el.y1)}{pt_handle(el,'b',el.x2,el.y2)}</>}
     </g>;
-    if(el.type==='text') return <g key={el.id}>
+    if(el.type==='text'){ const editing = !readOnly && editingId===el.id; return <g key={el.id}>
       <foreignObject x={el.x} y={el.y} width={el.w} height={el.h} {...common} pointerEvents="all">
-        <div xmlns="http://www.w3.org/1999/xhtml"
-          contentEditable={!readOnly && editingId===el.id}
-          suppressContentEditableWarning
-          onDoubleClick={()=>{ if(!readOnly){ setSel(el.id); setEditingId(el.id); } }}
-          onBlur={(ev)=>{ if(editingId===el.id){ updEl(el.id,{ text:ev.currentTarget.textContent||'' }); setEditingId(null); } }}
-          style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'transparent':el.fill, outline: editingId===el.id?'2px solid #6366f1':'none', overflow:'hidden', whiteSpace:'pre-wrap', wordBreak:'break-word' }}
-        >{el.text}</div>
+        {editing ? (
+          <textarea xmlns="http://www.w3.org/1999/xhtml" autoFocus value={draftText}
+            onChange={(ev)=>setDraftText(ev.target.value)}
+            onBlur={()=>{ updEl(el.id,{ text:draftText }); setEditingId(null); }}
+            onPointerDown={(ev)=>ev.stopPropagation()}
+            placeholder="Type…"
+            style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'rgba(255,255,255,0.85)':el.fill, border:'2px solid #6366f1', borderRadius:4, resize:'none', outline:'none', fontFamily:'inherit', whiteSpace:'pre-wrap', boxSizing:'border-box' }} />
+        ) : (
+          <div xmlns="http://www.w3.org/1999/xhtml"
+            onDoubleClick={()=>{ if(!readOnly){ setSel(el.id); setEditingId(el.id); setDraftText(el.text||''); } }}
+            style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'transparent':el.fill, overflow:'hidden', whiteSpace:'pre-wrap', wordBreak:'break-word' }}
+          >{el.text || (readOnly ? '' : <span style={{color:'#94a3b8'}}>Double-click to type</span>)}</div>
+        )}
       </foreignObject>
       {isSel && sel_box(el)}
-    </g>;
+    </g>; }
     return null;
   };
   function sel_box(el){ return <>
