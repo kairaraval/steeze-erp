@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 663 · Techpack Design Board text: the text box now grabs focus the moment you create or double-click it, so you can type right away and it saves on blur. Fixes the box that wouldn't accept typing.";
+const BUILD = "Live build 664 · Techpack Design Board text: typing now happens in a dedicated Text bar above the canvas (a real text field that always takes focus) instead of inside the drawing, so labels always accept input and save. The box on the canvas mirrors what you type live.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24628,22 +24628,15 @@ function DesignCanvas({ value, onChange, readOnly }){
       <line x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke="transparent" strokeWidth={18} {...common} pointerEvents="stroke" />
       {isSel && <>{pt_handle(el,'a',el.x1,el.y1)}{pt_handle(el,'b',el.x2,el.y2)}</>}
     </g>;
-    if(el.type==='text'){ const editing = !readOnly && editingId===el.id; return <g key={el.id}>
+    if(el.type==='text'){ const editing = !readOnly && editingId===el.id; const shownText = editing ? draftText : el.text; return <g key={el.id}>
+      {/* Text is always a display box here. Editing happens in the Text bar above
+          the canvas (a real DOM textarea), because a textarea inside an SVG
+          foreignObject does not reliably take keyboard focus. */}
       <foreignObject x={el.x} y={el.y} width={el.w} height={el.h} {...common} pointerEvents="all">
-        {editing ? (
-          <textarea xmlns="http://www.w3.org/1999/xhtml" ref={editRef} value={draftText}
-            onChange={(ev)=>setDraftText(ev.target.value)}
-            onBlur={()=>{ updEl(el.id,{ text:draftText }); setEditingId(null); }}
-            onPointerDown={(ev)=>ev.stopPropagation()}
-            onMouseDown={(ev)=>ev.stopPropagation()}
-            placeholder="Type…"
-            style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'rgba(255,255,255,0.85)':el.fill, border:'2px solid #6366f1', borderRadius:4, resize:'none', outline:'none', fontFamily:'inherit', whiteSpace:'pre-wrap', boxSizing:'border-box' }} />
-        ) : (
-          <div xmlns="http://www.w3.org/1999/xhtml"
-            onDoubleClick={()=>{ if(!readOnly){ setSel(el.id); setEditingId(el.id); setDraftText(el.text||''); } }}
-            style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'transparent':el.fill, overflow:'hidden', whiteSpace:'pre-wrap', wordBreak:'break-word' }}
-          >{el.text || (readOnly ? '' : <span style={{color:'#94a3b8'}}>Double-click to type</span>)}</div>
-        )}
+        <div xmlns="http://www.w3.org/1999/xhtml"
+          onDoubleClick={()=>{ if(!readOnly){ setSel(el.id); setEditingId(el.id); setDraftText(el.text||''); } }}
+          style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background: editing ? 'rgba(199,210,254,0.35)' : (el.fill==='none'?'transparent':el.fill), overflow:'hidden', whiteSpace:'pre-wrap', wordBreak:'break-word', outline: editing ? '2px solid #6366f1' : 'none', borderRadius:4, boxSizing:'border-box' }}
+        >{shownText || (readOnly ? '' : <span style={{color:'#94a3b8'}}>{editing ? 'Type in the Text bar above…' : 'Double-click to type'}</span>)}</div>
       </foreignObject>
       {isSel && sel_box(el)}
     </g>; }
@@ -24674,12 +24667,23 @@ function DesignCanvas({ value, onChange, readOnly }){
           {sel && <button onClick={()=>removeEl(sel)} className="text-xs px-2.5 py-1.5 rounded-md bg-rose-500 text-white ml-auto">🗑 Delete</button>}
         </div>
       )}
+      {!readOnly && editingId && (
+        <div className="flex items-start gap-2 mb-2 p-2 bg-indigo-50 border border-indigo-200 rounded-lg no-print">
+          <span className="text-[11px] font-semibold text-indigo-700 mt-2 whitespace-nowrap">✎ Text</span>
+          <textarea ref={editRef} value={draftText} rows={2}
+            onChange={(ev)=>{ setDraftText(ev.target.value); if(editingId) updEl(editingId,{ text:ev.target.value }); }}
+            onKeyDown={(ev)=>{ if(ev.key==='Escape'){ ev.preventDefault(); if(editingId) updEl(editingId,{ text:draftText }); setEditingId(null); } }}
+            placeholder="Type your label here…"
+            className="flex-1 input" style={{ minHeight:46, resize:'vertical', fontFamily:'inherit' }} />
+          <button onClick={()=>{ if(editingId) updEl(editingId,{ text:draftText }); setEditingId(null); }} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold mt-0.5 whitespace-nowrap">Done</button>
+        </div>
+      )}
       <svg ref={svgRef} viewBox={`0 0 ${DC_W} ${DC_H}`} onPointerDown={onSvgDown} onPointerMove={onSvgMove} onPointerUp={onSvgUp}
         style={{ width:'100%', aspectRatio:`${DC_W} / ${DC_H}`, background:'#fff', border:'1px solid #cbd5e1', touchAction:'none', display:'block' }}>
         {v.bg && <DesignCanvasBg path={v.bg} />}
         {els.map(renderEl)}
       </svg>
-      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick a tool, then drag on the canvas to draw. Double-click a text box to edit. Select a shape to move, resize (corner handle), recolor, or delete. Paste (⌘V) or upload a photo to use as the background.</div>}
+      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick the Text tool and click the canvas to drop a label — then type in the Text bar that appears above (double-click any text box to edit it again). Drag other tools to draw. Select a shape to move, resize (corner handle), recolor, or delete. Paste (⌘V) or upload a photo as the background.</div>}
     </div>
   );
 }
