@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 653 · Purchase Request detail now shows the Sales manager (from the linked lead) in the BOM header, alongside client, techpack, fabric and due date.";
+const BUILD = "Live build 654 · Purchasing (head) and Purchasing Admin now see the Production Board and Sampling Board in their nav (added to their allowed views too) for material-planning visibility.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42817,11 +42817,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -43480,18 +43480,19 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
-      { group:'Production', items:[ ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
     ];
   } else if(isPurchasing){
     // Purchasing team — Operations + Purchasing + Logistics + RFP visibility + inbox.
-    // (Production module removed from Purchasing's nav.)
+    // Production + Sampling boards for material-planning visibility.
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
