@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 660 · Purchasing home: kept the new KPIs + tables and brought back the action-queue tiles — PRs to approve (coming in), supplier groups ready to PO, draft POs, POs to receive — plus a Production materials & at-a-glance row (active prod jobs, issuances today, RFPs in Finance, reserved stock value).";
+const BUILD = "Live build 661 · Fabric Swatches now appear in BOTH Sales Resources and Purchasing Resources from one shared library — add a swatch in either place and everyone sees it in both.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3532,15 +3532,18 @@ function DesignResourcesBoard({ profile }){
 
 // ─────────── SALES RESOURCES (pricelist / size charts / sizers / designs) ───────────
 const SALES_RES_TABS = [
-  { key:'pricelist',   label:'Pricelist',   icon:'💲' },
-  { key:'size_charts', label:'Size Charts', icon:'📐' },
-  { key:'sizers',      label:'Sizers',      icon:'📏' },
-  { key:'designs',     label:'Designs',     icon:'🎨' },
+  { key:'pricelist',   label:'Pricelist',     icon:'💲' },
+  { key:'size_charts', label:'Size Charts',   icon:'📐' },
+  { key:'sizers',      label:'Sizers',        icon:'📏' },
+  { key:'designs',     label:'Designs',       icon:'🎨' },
+  { key:'swatches',    label:'Fabric Swatches', icon:'🧵' },  // shared with Purchasing Resources
 ];
 // Pricelist: admin only can add/edit. The rest: admin + sales managers + sales assistants.
+// Fabric Swatches are shared with Purchasing, so purchasing roles can edit them from here too.
 function salesResCanEdit(category, profile){
   const r = profile?.role;
   if(category === 'pricelist') return r === 'admin';
+  if(category === 'swatches') return r === 'admin' || isManagerRole(r) || r === 'assistant' || r === 'sales_representative' || r === 'purchasing' || r === 'purchasing_admin';
   return r === 'admin' || isManagerRole(r) || r === 'assistant';
 }
 // Preset folders per tab (Size Charts + Designs). Others have no folders.
@@ -4083,15 +4086,20 @@ function SalesResourcesView({ profile }){
   const [lightbox,setLightbox]=useState(null);
   const [dragOver,setDragOver]=useState(false);
   const [uploading,setUploading]=useState('');
+  const [swatchRows,setSwatchRows]=useState([]);   // Fabric Swatches live in the shared purchasing_resources store
+  const swatchFileRef=useRef(null);
   const folders = foldersFor(tab);
   const isPricelist = tab==='pricelist';
+  const isSwatches = tab==='swatches';
   const canEdit = salesResCanEdit(tab, profile);
   // Reset the active folder when switching tabs.
   useEffect(()=>{ setFolder(foldersFor(tab)[0]||''); }, [tab]);
   async function load(){
     setLoading(true);
     const { data }=await sb.from('sales_resources').select('*').is('deleted_at',null).order('created_at',{ascending:false});
-    setRows(data||[]); setLoading(false);
+    setRows(data||[]);
+    try{ const { data:sw }=await sb.from('purchasing_resources').select('*').eq('category','swatches').is('deleted_at',null).order('created_at',{ascending:false}); setSwatchRows(sw||[]); }catch(_){ setSwatchRows([]); }
+    setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
   // Drag-and-drop / paste upload: drop image or PDF files straight onto the tab
@@ -4104,11 +4112,20 @@ function SalesResourcesView({ profile }){
       done++; setUploading(`Uploading ${done}/${files.length}…`);
       try {
         const ext=((file.name||'').includes('.') ? file.name.split('.').pop() : (file.type||'').split('/')[1]||'bin').toLowerCase();
-        const key=`sales-resources/${tab}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-        const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
-        if(upErr) throw upErr;
-        const { error }=await sb.from('sales_resources').insert({ category:tab, folder: folders.length ? folder : null, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
-        if(error) throw error;
+        if(isSwatches){
+          // Shared store with Purchasing Resources.
+          const key=`purchasing-resources/swatches/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+          const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+          if(upErr) throw upErr;
+          const { error }=await sb.from('purchasing_resources').insert({ category:'swatches', title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
+          if(error) throw error;
+        } else {
+          const key=`sales-resources/${tab}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+          const { error: upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+          if(upErr) throw upErr;
+          const { error }=await sb.from('sales_resources').insert({ category:tab, folder: folders.length ? folder : null, title:file.name||key, file_path:key, file_name:file.name||key, file_type:file.type||'', created_by:profile.id });
+          if(error) throw error;
+        }
       } catch(e){ alert('Upload failed: '+(e.message||e)); }
     }
     setUploading(''); await load();
@@ -4119,7 +4136,8 @@ function SalesResourcesView({ profile }){
   function onPaste(e){ if(!canEdit || isPricelist) return; const imgs=Array.from(e.clipboardData?.items||[]).filter(i=>i.type.startsWith('image')).map(i=>i.getAsFile()).filter(Boolean); if(imgs.length){ e.preventDefault(); uploadFiles(imgs); } }
   async function delRes(r){
     if(!confirm(`Delete "${r.title||r.garment_type||r.file_name||'this item'}"?`)) return;
-    const { error }=await sb.from('sales_resources').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
+    const table = r.category==='swatches' ? 'purchasing_resources' : 'sales_resources';
+    const { error }=await sb.from(table).update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
     if(error){ alert(error.message); return; } load();
   }
   async function openRes(r){
@@ -4133,9 +4151,9 @@ function SalesResourcesView({ profile }){
   const matchTxt=(r)=> !q || `${r.title||''} ${r.notes||''} ${r.file_name||''} ${r.url||''} ${r.garment_type||''}`.toLowerCase().includes(q);
   // Legacy items saved before folders existed (null folder) fall into the first folder.
   const inFolder=(r)=> !folders.length || r.folder===folder || (!r.folder && folder===folders[0]);
-  const list = rows.filter(r=> r.category===tab && inFolder(r) && matchTxt(r));
+  const list = isSwatches ? swatchRows.filter(matchTxt) : rows.filter(r=> r.category===tab && inFolder(r) && matchTxt(r));
   const priceRows = rows.filter(r=> r.category==='pricelist' && matchTxt(r)).slice().sort((a,b)=> String(a.garment_type||'').localeCompare(String(b.garment_type||'')));
-  const countFor=(k)=> rows.filter(r=>r.category===k).length;
+  const countFor=(k)=> k==='swatches' ? swatchRows.length : rows.filter(r=>r.category===k).length;
   const folderCount=(fd)=> rows.filter(r=>r.category===tab && (r.folder===fd || (!r.folder && fd===folders[0]))).length;
   return (
     <div className="p-6">
@@ -4144,7 +4162,8 @@ function SalesResourcesView({ profile }){
           <div><h1 className="text-2xl font-bold">📚 Sales Resources</h1><p className="text-slate-500 text-sm">Shared pricelist, size charts, sizers &amp; design references</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-44" />
-            {canEdit && <button onClick={()=> isPricelist ? setAddingPrice(true) : setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
+            {canEdit && <button onClick={()=> isPricelist ? setAddingPrice(true) : isSwatches ? swatchFileRef.current?.click() : setAdding(true)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add</button>}
+            <input ref={swatchFileRef} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={e=>{ uploadFiles(e.target.files); e.target.value=''; }} />
           </div>
         </div>
         <div className="flex gap-1 mt-3 flex-wrap">
