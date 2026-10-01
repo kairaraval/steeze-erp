@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 662 · Fixed techpack Design Board text: typing in a text box now saves what you actually typed (previously a re-render reset it to the placeholder 'Text' before saving). Text editing uses a proper textarea; new boxes show 'Double-click to type'.";
+const BUILD = "Live build 663 · Techpack Design Board text: the text box now grabs focus the moment you create or double-click it, so you can type right away and it saves on blur. Fixes the box that wouldn't accept typing.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24559,6 +24559,8 @@ function DesignCanvas({ value, onChange, readOnly }){
   const [fontSize,setFontSize] = useState(26);
   const [uploading,setUploading] = useState(false);
   const [draftText,setDraftText] = useState('');  // live text while editing a text box (kept in state so saves capture it)
+  const editRef = useRef(null);                   // the textarea while editing — focused explicitly (SVG foreignObject autofocus is unreliable)
+  useEffect(()=>{ if(editingId && editRef.current){ const t=editRef.current; setTimeout(()=>{ try{ t.focus(); t.select(); }catch(_){} }, 0); } },[editingId]);
 
   const commit = (nextEls)=> onChange({ ...v, w:DC_W, h:DC_H, els:nextEls });
   const addEl = (el)=> commit([...els, el]);
@@ -24629,10 +24631,11 @@ function DesignCanvas({ value, onChange, readOnly }){
     if(el.type==='text'){ const editing = !readOnly && editingId===el.id; return <g key={el.id}>
       <foreignObject x={el.x} y={el.y} width={el.w} height={el.h} {...common} pointerEvents="all">
         {editing ? (
-          <textarea xmlns="http://www.w3.org/1999/xhtml" autoFocus value={draftText}
+          <textarea xmlns="http://www.w3.org/1999/xhtml" ref={editRef} value={draftText}
             onChange={(ev)=>setDraftText(ev.target.value)}
             onBlur={()=>{ updEl(el.id,{ text:draftText }); setEditingId(null); }}
             onPointerDown={(ev)=>ev.stopPropagation()}
+            onMouseDown={(ev)=>ev.stopPropagation()}
             placeholder="Type…"
             style={{ width:'100%', height:'100%', color:el.color, fontSize:el.fontSize+'px', fontWeight:600, lineHeight:1.15, padding:'2px 4px', background:el.fill==='none'?'rgba(255,255,255,0.85)':el.fill, border:'2px solid #6366f1', borderRadius:4, resize:'none', outline:'none', fontFamily:'inherit', whiteSpace:'pre-wrap', boxSizing:'border-box' }} />
         ) : (
