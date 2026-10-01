@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 654 · Purchasing (head) and Purchasing Admin now see the Production Board and Sampling Board in their nav (added to their allowed views too) for material-planning visibility.";
+const BUILD = "Live build 655 · Sample-sourced Purchase Requests now show the project header too (client, sales manager, sample #, techpack, fabric, due + View techpack) — previously only production-lead PRs had it, so sample PRs in the To Review lane looked bare.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27903,7 +27903,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
         })}{rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No purchase requests match. {sourceFilter||filter?'Try clearing filters.':'Click "+ New PR" to add one.'}</td></tr>}</tbody>
       </table></div></div>
       )}
-      {(creating||editing) && <PurchaseRequestForm profile={profile} profiles={profiles} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={(lead)=>{ const pr=editing; setEditing(null); setCreating(false); onViewTechpack(lead, pr?()=>setEditing(pr):null); }} onPrint={(pr)=>setPrinting(pr)} />}
+      {(creating||editing) && <PurchaseRequestForm profile={profile} profiles={profiles} existing={editing} prefillLeadId={createLeadId} items={items} suppliers={suppliers} departments={departments} leads={leads} clients={clients} sampleJobs={sampleJobs} allRequests={requests} reload={reload} onClose={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); }} onSaved={()=>{ setCreating(false); setEditing(null); setCreateLeadId(''); reload(); }} onCreatePO={onCreatePO} onViewTechpack={(lead)=>{ const pr=editing; setEditing(null); setCreating(false); onViewTechpack(lead, pr?()=>setEditing(pr):null); }} onPrint={(pr)=>setPrinting(pr)} />}
       {printing && <PRPrintView pr={printing} leads={leads} profiles={profiles} profile={profile} onClose={()=>setPrinting(null)} />}
     </div>
   );
@@ -28064,7 +28064,7 @@ function PurchaseIntakeView({ profile, profiles, openPRId }){
   );
 }
 
-function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items, suppliers, departments, leads, clients, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
+function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items, suppliers, departments, leads, clients, sampleJobs, allRequests, reload, onClose, onSaved, onCreatePO, onViewTechpack, onPrint }){
   // When the user picks "+ Add new inventory item" on a line, this stores the
   // line index so we can auto-select the new item on that line after save.
   const [addingItemForLine, setAddingItemForLine] = useState(null);
@@ -28098,6 +28098,9 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   const [leadId,setLeadId]=useState(existing?.linked_lead_id||prefillLeadId||'');
   // Resolve linked lead → client → techpack for the header banner.
   const linkedLead = leadId ? (leads||[]).find(l=>l.id===leadId) : null;
+  // Sample-sourced PRs link to a sampling job (not a lead) — resolve it so the
+  // header shows the same project context for samples too.
+  const linkedSample = existing?.linked_sample_id ? (sampleJobs||[]).find(s=>s.id===existing.linked_sample_id) : null;
   const client = linkedLead && linkedLead.client_id ? (clients||[]).find(c=>c.id===linkedLead.client_id) : null;
   const techpackNumber = linkedLead?.techpack?.prodFormNo || linkedLead?.techpack_number || '';
   const styleName = linkedLead?.techpack?.styleName || linkedLead?.title || '';
@@ -28254,6 +28257,37 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
               </div>
               {linkedLead.techpack && onViewTechpack && (
                 <button onClick={()=>onViewTechpack(linkedLead)} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 shrink-0">📋 View techpack</button>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Sample-sourced PRs: same project header, from the sampling job. */}
+        {!linkedLead && linkedSample && (()=>{
+          const sLead = linkedSample.lead_id ? (leads||[]).find(l=>l.id===linkedSample.lead_id) : null;
+          const cli = (sLead?.client_id ? (clients||[]).find(c=>c.id===sLead.client_id) : null) || (linkedSample.client_id ? (clients||[]).find(c=>c.id===linkedSample.client_id) : null);
+          const clientName = cli?.company || linkedSample.client_name || '—';
+          const tp = sLead?.techpack || {};
+          const tpNo = tp.prodFormNo || sLead?.techpack_number || '';
+          const fabric = tp.fabric || tp.fabricName || tp.mainFabric || '';
+          const due = linkedSample.due_date || sLead?.delivery_date || sLead?.expected_close || null;
+          const mgr = sLead ? (profiles||[]).find(p=>p.id===sLead.manager_id) : null;
+          return (
+            <div className="bg-gradient-to-r from-fuchsia-50 to-teal-50 border border-fuchsia-200 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Sample materials request (BOM) for</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{linkedSample.item || linkedSample.number || 'Sample'}</div>
+                <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
+                  <span>👤 Client: <strong>{clientName}</strong></span>
+                  {mgr && <span>🧑‍💼 Sales: <strong>{mgr.name||mgr.email}</strong></span>}
+                  {linkedSample.number && <span>🧪 Sample: <strong>{linkedSample.number}</strong></span>}
+                  {tpNo && <span>📋 Techpack: <strong>{tpNo}</strong></span>}
+                  {fabric && <span>🧵 Fabric: <strong>{fabric}</strong></span>}
+                  {due && <span>📅 Due: <strong>{fmtDate(due)}</strong></span>}
+                </div>
+              </div>
+              {sLead?.techpack && onViewTechpack && (
+                <button onClick={()=>onViewTechpack(sLead)} className="px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 shrink-0">📋 View techpack</button>
               )}
             </div>
           );
