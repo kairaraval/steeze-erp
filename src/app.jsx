@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 659 · Redesigned the Purchasing home dashboard: 4 KPI cards (Open POs, Pending Approvals, Low Stock, Incoming This Week), a Materials Requiring Action table (on-hand / reserved / incoming / reorder / status with Create-PO), a Production Demand panel, Recent Purchase Orders, and a 30-day Stock Movements In/Out chart.";
+const BUILD = "Live build 660 · Purchasing home: kept the new KPIs + tables and brought back the action-queue tiles — PRs to approve (coming in), supplier groups ready to PO, draft POs, POs to receive — plus a Production materials & at-a-glance row (active prod jobs, issuances today, RFPs in Finance, reserved stock value).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6448,6 +6448,29 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
         <KPI icon="⏳" label="Pending Approvals" value={prsToApprove.length} color="bg-amber-100" />
         <KPI icon="⚠️" label="Low Stock Items" value={lowStock.length} color="bg-rose-100" />
         <KPI icon="🚚" label="Incoming This Week" value={incomingThisWeek} color="bg-teal-100" />
+      </div>
+
+      {/* Action queue tiles — PRs coming in, queue, drafts, receiving. */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Your action queue</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <Tile icon="📝" label="PRs to approve" count={prsToApprove.length} sub={prsToApprove.length>0?'New requests coming in':'All clear'} color="indigo" onClick={()=>navTo('requests')} />
+        <Tile icon="📥" label="Supplier groups ready" count={queueSupplierCount} sub={queueLineCount>0?`${queueLineCount} line${queueLineCount===1?'':'s'} to PO`:'Nothing queued'} color="blue" onClick={()=>navTo('queue')} />
+        <Tile icon="📝" label="Draft POs to finalize" count={draftPOs.length} sub={draftPOs.length>0?'Finalize to lock pricing':'No drafts'} color="amber" onClick={()=>navTo('orders')} />
+        <Tile icon="🧾" label="POs to receive" count={openPOs.length} sub={openPOs.length>0?'Placed, awaiting delivery':'All received'} color="emerald" onClick={()=>navTo('orders')} />
+      </div>
+
+      {/* Production materials status + at-a-glance. */}
+      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Production materials &amp; at a glance</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <Tile icon="⚙" label="Active prod jobs" count={activeProdJobs.length} sub="Awaiting materials" color="blue" onClick={()=>navTo('prod')} />
+        <Tile icon="📤" label="Issuances today" count={stockOutToday.length} sub="Materials to production" color="purple" onClick={()=>navTo('stock-out')} />
+        <Tile icon="💳" label="RFPs in Finance" count={rfpsInPipeline.length} sub="Sent for payment" color="indigo" onClick={()=>navTo('rfps')} />
+        <button onClick={()=>navTo('inventory')} className="text-left rounded-xl border-2 border-emerald-200 hover:border-emerald-400 bg-emerald-50/40 p-4 transition shadow-sm hover:shadow-md">
+          <div className="text-2xl">📦</div>
+          <div className="text-2xl font-extrabold mt-2 text-emerald-800">{peso(reservedValue)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">Reserved stock value</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">Locked by approved PRs</div>
+        </button>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4 mb-4">
