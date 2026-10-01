@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 657 · Redesigned the Purchase Order view for easier tracking: a progress stepper (Draft → Placed → Partially Received → Received), an Order details card (supplier + contact, linked job & request, order/delivery dates, ship-to), a Supplier & terms panel (payment terms, expected pay-date, currency, grand total), and an Activity & audit summary — on top of the existing editable form.";
+const BUILD = "Live build 658 · Removed Styles & BOMs from the Purchasing module (nav + access) across purchasing roles and admin's Purchasing group.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42974,11 +42974,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -43636,7 +43636,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -43648,7 +43648,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -43728,7 +43728,7 @@ function App(){
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['styles','Styles & BOMs','👕'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
