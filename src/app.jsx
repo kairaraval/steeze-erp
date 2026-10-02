@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 667 · Delivery Receipts list now paginates 20 per page (First/Prev/Next/Last + a row count). Paging resets to page 1 when you search or change filters.";
+const BUILD = "Live build 668 · Sales Orders: you can now Log a payment whenever there's a real balance, even if the order was previously marked Paid (the button was wrongly hidden by the status label). Also fixed the re-sum path that left an SO stuck on 'Paid' after its total went up, and corrected the one affected order.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -27427,11 +27427,19 @@ async function maybeCreateSampleSOFromEstimate(profile, lead, client, estimate){
     const linkAll = async (soId)=>{ try { await sb.from('estimates').update({ sales_order_id: soId }).eq('lead_id', lead.id).eq('purpose','sample').eq('status','approved'); } catch(_){} };
     // Existing sample SO for this lead → rebuild it from the full accepted set.
     const { data: existing } = await sb.from('sales_orders')
-      .select('id, number, amount_paid').eq('lead_id', lead.id).eq('kind','sample').is('deleted_at', null).limit(1);
+      .select('id, number, amount_paid, status').eq('lead_id', lead.id).eq('kind','sample').is('deleted_at', null).limit(1);
     if(existing && existing.length>0){
       const so = existing[0];
-      const balance = Math.max(0, total - (Number(so.amount_paid)||0));
-      await sb.from('sales_orders').update({ items, subtotal, total, balance_due: balance }).eq('id', so.id);
+      const paid = Number(so.amount_paid)||0;
+      const balance = Math.max(0, total - paid);
+      // Recompute status along with the total — otherwise bumping the total on an
+      // already-"paid" SO leaves it stuck on "paid" with a real balance, which
+      // hides the Log payment button. (Keep voided SOs untouched.)
+      const upd = { items, subtotal, total, balance_due: balance };
+      if(so.status!=='cancelled'){
+        upd.status = (balance<=0.01 && paid>0.01) ? 'paid' : (paid>0.01 ? 'partial' : 'open');
+      }
+      await sb.from('sales_orders').update(upd).eq('id', so.id);
       await linkAll(so.id);
       return so;
     }
@@ -30044,7 +30052,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
               {(soActivityCounts||{})[o.id] > 0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-bold bg-indigo-100 text-indigo-800" title={`${(soActivityCounts||{})[o.id]} comment${(soActivityCounts||{})[o.id]===1?'':'s'} on this SO`}>💬 {(soActivityCounts||{})[o.id]}</span>}
             </td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
-              {o.status!=='paid' && o.status!=='cancelled' && canLogSOPayment(profile) && <button onClick={(e)=>{e.stopPropagation(); setPaying(o);}} className="text-xs text-amber-600 hover:underline mr-2">📩 Log payment</button>}
+              {o.status!=='cancelled' && Number(o.balance_due||0) > 0.01 && canLogSOPayment(profile) && <button onClick={(e)=>{e.stopPropagation(); setPaying(o);}} className="text-xs text-amber-600 hover:underline mr-2">📩 Log payment</button>}
               <button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
               {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteSO(o);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
             </td>
@@ -30211,7 +30219,7 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
             {so.status==='cancelled' && so.void_reason && <div className="text-[11px] text-rose-600 mt-1">Void reason: {so.void_reason}{voidedByName?` — ${voidedByName}`:''}{so.voided_at?` · ${fmtDate(so.voided_at.slice(0,10))}`:''}</div>}
           </div>
           <div className="flex items-center gap-2">
-            {so.status!=='paid' && so.status!=='cancelled' && canLogSOPayment(profile) && <button onClick={()=>onPay(so)} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Log payment</button>}
+            {so.status!=='cancelled' && Number(so.balance_due||0) > 0.01 && canLogSOPayment(profile) && <button onClick={()=>onPay(so)} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600">📩 Log payment</button>}
             {isAdmin && so.status!=='cancelled' && <button disabled={busy} onClick={voidSO} className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-700 font-semibold hover:bg-rose-50 disabled:opacity-50" title="Void this Sales Order (admin only) — excludes it from sales & revenue">⊘ Void SO</button>}
             {isAdmin && so.status==='cancelled' && <button disabled={busy} onClick={unvoidSO} className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white font-semibold hover:bg-amber-600 disabled:opacity-50">↩ Reopen</button>}
           </div>
