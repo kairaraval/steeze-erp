@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 671 · New Home (My Workbench) for Sales Associates & Representatives: every techpack they made, grouped by In Production / In Sampling / Techpack ready / Delivered with live status, plus all their Sales Tickets grouped by status — one screen to manage their projects. It's their default landing page.";
+const BUILD = "Live build 672 · My Workbench Home now covers Sales Managers and Admins (Kaira & Miko) too, and adds a 'Delivered — awaiting payment' section: projects you own that are delivered but still carry a balance, with the outstanding amount and a jump straight to the SO to log payment.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5995,7 +5995,7 @@ function MaterialsBuyListView({ profile, requests, items, suppliers, orders, pro
    status of each, plus every Sales Ticket they raised or are assigned to,
    grouped by status. Lets them manage their projects at a glance.
 */
-function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJobs, onOpenTechpack, onOpenLead, navTo }){
+function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJobs, salesOrders, onOpenTechpack, onOpenLead, onOpenSO, navTo }){
   const [tickets,setTickets]=useState([]);
   const [tkLoading,setTkLoading]=useState(true);
   const [showDone,setShowDone]=useState(false);
@@ -6045,6 +6045,15 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const tkProg=tickets.filter(t=>t.status==='in_progress');
   const tkBlocked=tickets.filter(t=>t.status==='blocked');
   const tkDone=tickets.filter(t=>t.status==='done');
+
+  // Delivered projects still awaiting payment — the SO is delivered (or its
+  // production job is) yet still carries a balance. Scoped to orders I own.
+  const prodDeliveredForLead=(leadId)=>{ const js=(prodJobs||[]).filter(j=>j.lead_id===leadId); return js.length>0 && js.every(j=>PRODUCTION_DONE.includes(j.status)); };
+  const mySOs=(salesOrders||[]).filter(so=> so.status!=='cancelled' && (so.manager_id===profile.id || (prodJobs||[]).some(j=>j.lead_id===so.lead_id && j.sales_owner_id===profile.id)));
+  const needsPayment=mySOs
+    .filter(so=> Number(so.balance_due||0) > 0.01 && (!!so.delivered_at || prodDeliveredForLead(so.lead_id)))
+    .sort((a,b)=> Number(b.balance_due||0)-Number(a.balance_due||0));
+  const needsPaymentTotal=needsPayment.reduce((s,so)=>s+Number(so.balance_due||0),0);
 
   const hour=new Date().getHours();
   const greet=hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
@@ -6126,12 +6135,34 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Tile icon="🧵" label="In sampling" count={inSampling.length} color="emerald" />
         <Tile icon="⚙" label="In production" count={inProduction.length} color="indigo" />
+        <Tile icon="🧵" label="In sampling" count={inSampling.length} color="emerald" />
         <Tile icon="📋" label="Techpack ready" count={techpackOnly.length} color="amber" />
-        <Tile icon="✅" label="Delivered" count={delivered.length} color="slate" />
+        <Tile icon="💰" label="Needs payment" count={needsPayment.length} color="rose" urgent={needsPayment.length>0} />
         <Tile icon="🎫" label="Open tickets" count={tkOpen.length+tkProg.length+tkBlocked.length} color={tkBlocked.length?'rose':'blue'} urgent={tkBlocked.length>0} onClick={()=>navTo('sales-tickets')} />
       </div>
+
+      {needsPayment.length>0 && (
+        <div className="bg-white rounded-xl border overflow-hidden mb-6">
+          <div className="px-3 py-2 text-xs font-bold uppercase tracking-wide flex items-center justify-between bg-rose-50 text-rose-700">
+            <span>💰 Delivered — awaiting payment</span>
+            <span>{needsPayment.length} · {peso(needsPaymentTotal)} outstanding</span>
+          </div>
+          {needsPayment.map(so=>{ const l=(leads||[]).find(x=>x.id===so.lead_id); return (
+            <div key={so.id} className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-slate-800 truncate">{so.client_name||(l&&clientName(l))||'—'}</div>
+                <div className="text-xs text-slate-500 truncate font-mono">{so.number}{so.delivered_at?` · delivered ${fmtDate(so.delivered_at.slice(0,10))}`:''}</div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-[11px] text-slate-500">Bal <span className="font-bold text-rose-700">{peso(so.balance_due)}</span></div>
+                <div className="text-[10px] text-slate-400">of {peso(so.total)}</div>
+              </div>
+              <button onClick={()=>onOpenSO&&onOpenSO(so)} className="shrink-0 text-[11px] px-2 py-1 rounded bg-amber-500 text-white font-semibold hover:bg-amber-600">Open SO</button>
+            </div>
+          ); })}
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-4">
@@ -43311,9 +43342,9 @@ function App(){
       allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'rep-home';
     } else if(isManagerRole(profile.role)){
-      // Sales Manager — identical access, lands on the pipeline.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
-      fallback = 'pipeline';
+      // Sales Manager — identical access, lands on their Home (Workbench).
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      fallback = 'rep-home';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern','fabric-calc']);
       fallback = 'pattern';
@@ -43426,9 +43457,9 @@ function App(){
   useEffect(()=>{
     if(!profile || didLandRef.current) return;
     didLandRef.current = true;
-    // Sales associates + representatives open straight into their personal Home
-    // (Workbench) instead of the pipeline. They can still navigate anywhere.
-    if((profile.role==='assistant'||profile.role==='sales_representative') && view==='pipeline') setView('rep-home');
+    // Sales associates, representatives + managers open straight into their
+    // personal Home (Workbench) instead of the pipeline. They can still navigate anywhere.
+    if((profile.role==='assistant'||profile.role==='sales_representative'||profile.role==='manager') && view==='pipeline') setView('rep-home');
     // (Kaira's temporary Sourcing Trips landing removed — she now opens on the
     //  Sales Pipeline like the default.)
   },[profile]);
@@ -44131,7 +44162,7 @@ function App(){
   } else if(isManager){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
@@ -44144,7 +44175,7 @@ function App(){
     // For Approval sits right under Dashboard with an amber badge showing
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
-      { items:[ ['dashboard','Dashboard','📊'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['dashboard','Dashboard','📊'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
@@ -44364,7 +44395,7 @@ function App(){
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
-        {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} navTo={navTo} />}
+        {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
