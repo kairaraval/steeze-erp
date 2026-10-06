@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 675 · Workbench now shows techpacks you prepared even on a manager's lead (detected from your activity on the lead, and stamped on save going forward). Each project shows the account owner's photo + name so you know who to update. Graphic tickets you raised already appear in My Sales Tickets. Applies to associates, reps, managers and admins.";
+const BUILD = "Live build 676 · Workbench scope fix: Managers & Admins again see ONLY their own projects (no other managers' work) — the broad 'any lead I touched' matching is now limited to Sales Associates, who prepare techpacks on managers' leads. Account-owner photo and preparer stamp still apply to everyone.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5999,10 +5999,12 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const [tickets,setTickets]=useState([]);
   const [tkLoading,setTkLoading]=useState(true);
   const [showDone,setShowDone]=useState(false);
-  // Lead ids where I personally authored activity (e.g. "done techpack po, for
-  // your checking") — the reliable signal that I prepared/worked that project,
-  // even when the lead is owned by a manager. Captures historical techpacks that
-  // predate preparer-stamping.
+  // Sales associates PREPARE techpacks on leads a manager owns, so for them we
+  // also treat a lead they authored activity on (e.g. "done techpack po, for your
+  // checking") as theirs. Managers & admins own their deals directly and should
+  // see ONLY their own projects — never other managers' — so we skip this broad
+  // signal for them (keeps their view strictly ownership-scoped).
+  const useActivitySignal = profile.role==='assistant';
   const [myLeadIds,setMyLeadIds]=useState(()=>new Set());
   useEffect(()=>{ (async()=>{
     setTkLoading(true);
@@ -6014,6 +6016,7 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
       setTickets(data||[]);
     }catch(_){ setTickets([]); }
     setTkLoading(false);
+    if(!useActivitySignal){ setMyLeadIds(new Set()); return; }
     try{
       const { data:act }=await fetchAllRows('lead_activity','lead_id,actor_id');
       const mine=new Set((act||[]).filter(r=>r.actor_id===me && r.lead_id).map(r=>r.lead_id));
@@ -6025,13 +6028,13 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const ownerOf=(l)=> l.manager_id ? (profiles||[]).find(p=>p.id===l.manager_id) : null;
   const myName=(profile?.name||'').trim().toLowerCase();
   // A project/techpack is "mine" if I own the lead, I prepared its techpack, my
-  // name is on it as Sales Owner, I'm the sales owner on its production job, or I
-  // authored activity on that lead (e.g. an associate preparing it for a manager).
+  // name is on it as Sales Owner, or I'm the sales owner on its production job.
+  // (Associates additionally match leads they authored activity on — see above.)
   const isMine=(l)=> l.manager_id===profile.id
     || (l.techpack && l.techpack.preparedById===profile.id)
     || (!!myName && l.techpack && String(l.techpack.salesOwner||'').trim().toLowerCase()===myName)
     || (prodJobs||[]).some(j=>j.lead_id===l.id && j.sales_owner_id===profile.id)
-    || myLeadIds.has(l.id);
+    || (useActivitySignal && myLeadIds.has(l.id));
 
   // Classify each of my techpack leads by where it currently sits.
   const myTpLeads=(leads||[]).filter(l=>l.techpack).filter(isMine);
