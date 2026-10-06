@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 678 · Workbench project rows relaid out: client name and style on their own line (no more mid-word breaks or cramped columns), with the type/status/due and Techpack/Lead buttons on a second line that wraps cleanly. Fixes the squished layout in the narrow column.";
+const BUILD = "Live build 679 · Workbench now has a 'Graphic design requests' section showing the design tickets you raised, each with the assigned designer and live progress (Open / Assigned / In progress / Done). Applies to associates, reps, managers and admins.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6057,6 +6057,7 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const hideKey='steeze.workbench.hidden.'+profile.id;
   const [hiddenIds,setHiddenIds]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem(hideKey)||'[]')); }catch(_){ return new Set(); } });
   const [showHidden,setShowHidden]=useState(false);
+  const [showGfxDone,setShowGfxDone]=useState(false);
   function persistHidden(next){ try{ localStorage.setItem(hideKey, JSON.stringify(Array.from(next))); }catch(_){} }
   function hideProject(id){ setHiddenIds(prev=>{ const n=new Set(prev); n.add(id); persistHidden(n); return n; }); }
   function unhideProject(id){ setHiddenIds(prev=>{ const n=new Set(prev); n.delete(id); persistHidden(n); return n; }); }
@@ -6069,11 +6070,20 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const techpackOnly=classified.filter(c=>c.cat==='techpack');
   const delivered=classified.filter(c=>c.cat==='delivered');
 
-  // Tickets by status.
-  const tkOpen=tickets.filter(t=>t.status==='open');
-  const tkProg=tickets.filter(t=>t.status==='in_progress');
-  const tkBlocked=tickets.filter(t=>t.status==='blocked');
-  const tkDone=tickets.filter(t=>t.status==='done');
+  // Split graphic-design requests out from the other sales tickets — they use a
+  // different status set (open / assigned / in progress / done) and we show them
+  // with the assigned designer + progress in their own section.
+  const graphicTickets=tickets.filter(t=>t.department==='graphic');
+  const otherTickets=tickets.filter(t=>t.department!=='graphic');
+  // Sales tickets by status (non-graphic).
+  const tkOpen=otherTickets.filter(t=>t.status==='open');
+  const tkProg=otherTickets.filter(t=>t.status==='in_progress');
+  const tkBlocked=otherTickets.filter(t=>t.status==='blocked');
+  const tkDone=otherTickets.filter(t=>t.status==='done');
+  // Graphic tickets, sorted by progress (active first, done last).
+  const gfxOrder={ open:0, assigned:1, in_progress:2, done:3 };
+  const gfxActive=graphicTickets.filter(t=>t.status!=='done').sort((a,b)=>(gfxOrder[a.status]??9)-(gfxOrder[b.status]??9));
+  const gfxDone=graphicTickets.filter(t=>t.status==='done');
 
   // Delivered projects still awaiting payment — the SO is delivered (or its
   // production job is) yet still carries a balance. Scoped to orders I own.
@@ -6167,6 +6177,41 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
       </div>
     );
   }
+  // Graphic-design request rows — show the assigned designer + live progress.
+  function GraphicTicketRow({ t }){
+    const l=(leads||[]).find(x=>x.id===t.lead_id);
+    const designer=t.assignee_id ? (profiles||[]).find(p=>p.id===t.assignee_id) : null;
+    const meta=GRAPHIC_TICKET_STATUS.find(s=>s.key===t.status)||GRAPHIC_TICKET_STATUS[0];
+    return (
+      <button onClick={()=>navTo('sales-tickets')} className="w-full text-left flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
+        {designer ? <span title={`Designer: ${designer.name||designer.email||''}`} className="shrink-0"><Avatar profile={designer} size="sm" /></span>
+                  : <span className="shrink-0 w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-[10px] text-slate-400" title="Not yet assigned">🎨</span>}
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold text-slate-800 leading-snug">{t.title||t.task_type||'Design request'}</div>
+          <div className="text-xs text-slate-500 leading-snug">{t.number||''}{l?` · ${clientName(l)}`:''}{designer?` · ${(designer.name||'').split(' ')[0]}`:' · unassigned'}</div>
+        </div>
+        <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded ${meta.pill} ${meta.textColor}`}>{meta.label}</span>
+        {t.due_date && <span className={`shrink-0 text-[11px] ${dueCls(t.due_date)}`}>{fmtDate(t.due_date)}</span>}
+      </button>
+    );
+  }
+  function GraphicTicketSection(){
+    if(graphicTickets.length===0) return null;
+    return (
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="px-3 py-2 text-xs font-bold uppercase tracking-wide flex items-center justify-between bg-pink-50 text-pink-700">
+          <span>🎨 Graphic design requests</span><span className="opacity-70">{graphicTickets.length}</span>
+        </div>
+        {gfxActive.map(t=><GraphicTicketRow key={t.id} t={t} />)}
+        {gfxDone.length>0 && (
+          <div className="border-t">
+            <button onClick={()=>setShowGfxDone(s=>!s)} className="w-full text-left px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 font-semibold">{showGfxDone?'▾':'▸'} Done ({gfxDone.length})</button>
+            {showGfxDone && gfxDone.map(t=><GraphicTicketRow key={t.id} t={t} />)}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -6180,7 +6225,7 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
         <Tile icon="🧵" label="In sampling" count={inSampling.length} color="emerald" />
         <Tile icon="📋" label="Techpack ready" count={techpackOnly.length} color="amber" />
         <Tile icon="💰" label="Needs payment" count={needsPayment.length} color="rose" urgent={needsPayment.length>0} />
-        <Tile icon="🎫" label="Open tickets" count={tkOpen.length+tkProg.length+tkBlocked.length} color={tkBlocked.length?'rose':'blue'} urgent={tkBlocked.length>0} onClick={()=>navTo('sales-tickets')} />
+        <Tile icon="🎫" label="Open tickets" count={otherTickets.filter(t=>t.status!=='done').length+gfxActive.length} color={tkBlocked.length?'rose':'blue'} urgent={tkBlocked.length>0} onClick={()=>navTo('sales-tickets')} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
@@ -6218,6 +6263,7 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
           {tkLoading ? <div className="text-sm text-slate-400 py-6 text-center">Loading tickets…</div>
            : tickets.length===0 ? <div className="text-sm text-slate-400 border border-dashed rounded-xl p-8 text-center">No tickets raised by or assigned to you yet.</div>
            : (<>
+            <GraphicTicketSection />
             <TicketGroup title="In progress" rows={tkProg} pill="bg-blue-500" />
             <TicketGroup title="Blocked" rows={tkBlocked} pill="bg-rose-500" />
             <TicketGroup title="Open pool" rows={tkOpen} pill="bg-slate-400" />
