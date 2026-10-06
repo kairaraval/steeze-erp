@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 668 · Sales Orders: you can now Log a payment whenever there's a real balance, even if the order was previously marked Paid (the button was wrongly hidden by the status label). Also fixed the re-sum path that left an SO stuck on 'Paid' after its total went up, and corrected the one affected order.";
+const BUILD = "Live build 669 · Inbox: a Purchase Request mention now lands Sales on the actual lead (via the PR's linked lead, or through its sample job for sampling PRs) instead of the blank PR intake form. Purchasing still opens the PR itself.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43514,7 +43514,20 @@ function App(){
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
-    if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
+    if(m.source==='pr'){
+      const purch=['purchasing','purchasing_admin','admin'].includes(profile.role);
+      if(purch){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
+      // Non-purchasing (e.g. Sales): land on the linked lead's conversation —
+      // that's the context the mention belongs to, not the manual PR intake form.
+      // Prod PRs carry linked_lead_id directly; sampling PRs link through the
+      // sample job (linked_sample_id → sampling_jobs.lead_id).
+      const pr=(requests||[]).find(r=>r.id===m.pr_id);
+      let leadId = pr ? (pr.linked_lead_id||null) : null;
+      if(!leadId && pr && pr.linked_sample_id){ const sj=(sampleJobs||[]).find(s=>s.id===pr.linked_sample_id); if(sj) leadId=sj.lead_id||null; }
+      const l=leadId ? leads.find(x=>x.id===leadId) : null;
+      if(l){ setActivityLead(l); return; }
+      setView('pr-request'); setInboxPRId(m.pr_id||null); return;
+    }
     if(m.source==='lead'){ const l=leads.find(x=>x.id===m.lead_id); if(l) setActivityLead(l); return; }
     if(m.source==='sales_order'){
       // Open the SO directly — the Edit modal has the Activity tab built in.
@@ -43543,7 +43556,20 @@ function App(){
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
-    if(m.source==='pr'){ const purch=['purchasing','purchasing_admin','admin'].includes(profile.role); setView(purch?'requests':'pr-request'); setInboxPRId(m.pr_id||null); return; }
+    if(m.source==='pr'){
+      const purch=['purchasing','purchasing_admin','admin'].includes(profile.role);
+      if(purch){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
+      // Non-purchasing (e.g. Sales): open the linked lead detail instead of the
+      // PR intake form, so Clara lands on the actual lead she was tagged about.
+      // Prod PRs carry linked_lead_id directly; sampling PRs link through the
+      // sample job (linked_sample_id → sampling_jobs.lead_id).
+      const pr=(requests||[]).find(r=>r.id===m.pr_id);
+      let leadId = pr ? (pr.linked_lead_id||null) : null;
+      if(!leadId && pr && pr.linked_sample_id){ const sj=(sampleJobs||[]).find(s=>s.id===pr.linked_sample_id); if(sj) leadId=sj.lead_id||null; }
+      const l=leadId ? leads.find(x=>x.id===leadId) : null;
+      if(l){ setDetailLead(l); return; }
+      setView('pr-request'); setInboxPRId(m.pr_id||null); return;
+    }
     if(m.source==='marketing'){ setView('marketing'); setInboxMarketingId(m.content_id||null); return; }
     if(m.source==='delivery'){ setView('logistics'); setInboxDeliveryId(m.job_id); return; }
     if(m.source==='lead'){
