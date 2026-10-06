@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 676 · Workbench scope fix: Managers & Admins again see ONLY their own projects (no other managers' work) — the broad 'any lead I touched' matching is now limited to Sales Associates, who prepare techpacks on managers' leads. Account-owner photo and preparer stamp still apply to everyone.";
+const BUILD = "Live build 677 · Workbench tidy-up: the account-owner photo now shows only for Sales Associates (hidden for managers/admins since it's all their own work); client names show in full (no longer cut off); and each project has an ✕ to hide it from your board, with a 'Show hidden' toggle to bring it back.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6051,7 +6051,19 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
     const t=String(l.techpack?.techpackType||'');
     return { cat:'techpack', statusKey:null, meta:null, hint: /SAMPLE/i.test(t)?'Sample — not yet endorsed':/PRODUCTION/i.test(t)?'Production — not yet started':'Not yet started' };
   }
-  const classified=myTpLeads.map(l=>({ l, ...classify(l) }));
+  // Per-user "hide from my board" list — lets you dismiss projects you don't want
+  // to track anymore. Stored in this browser only; it never touches the actual
+  // project/lead, and can be un-hidden from the "Hidden" toggle.
+  const hideKey='steeze.workbench.hidden.'+profile.id;
+  const [hiddenIds,setHiddenIds]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem(hideKey)||'[]')); }catch(_){ return new Set(); } });
+  const [showHidden,setShowHidden]=useState(false);
+  function persistHidden(next){ try{ localStorage.setItem(hideKey, JSON.stringify(Array.from(next))); }catch(_){} }
+  function hideProject(id){ setHiddenIds(prev=>{ const n=new Set(prev); n.add(id); persistHidden(n); return n; }); }
+  function unhideProject(id){ setHiddenIds(prev=>{ const n=new Set(prev); n.delete(id); persistHidden(n); return n; }); }
+
+  const classifiedAll=myTpLeads.map(l=>({ l, ...classify(l) }));
+  const classified=classifiedAll.filter(c=>!hiddenIds.has(c.l.id));
+  const hiddenRows=classifiedAll.filter(c=>hiddenIds.has(c.l.id));
   const inSampling=classified.filter(c=>c.cat==='sampling');
   const inProduction=classified.filter(c=>c.cat==='production');
   const techpackOnly=classified.filter(c=>c.cat==='techpack');
@@ -6094,24 +6106,31 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
     const l=c.l; const tpNo=l.techpack?.prodFormNo||l.techpack_number||''; const tpType=l.techpack?.techpackType||'';
     const style=l.techpack?.styleName||l.title||'—'; const due=c.job?.due_date||l.techpack?.dueDate||'';
     const owner=ownerOf(l);
+    // The account-owner photo is only useful to associates (who prepare for a
+    // manager). Managers/admins see only their own projects, so it's just noise.
+    const showOwner = useActivitySignal;
+    const hidden = hiddenIds.has(l.id);
     return (
       <div className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
-        {/* Account owner (manager) — so the preparer knows who to update. */}
-        {owner ? <span title={`Account owner: ${owner.name||owner.email||''}`} className="shrink-0"><Avatar profile={owner} size="sm" /></span>
-               : <span className="shrink-0 w-7 h-7 rounded-full bg-slate-200" title="No account owner set" />}
+        {showOwner && (owner
+          ? <span title={`Account owner — update ${owner.name||owner.email||''}`} className="shrink-0"><Avatar profile={owner} size="sm" /></span>
+          : <span className="shrink-0 w-7 h-7 rounded-full bg-slate-200" title="No account owner set" />)}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-slate-800 truncate">{clientName(l)}</span>
+            <span className="font-semibold text-slate-800 break-words">{clientName(l)}</span>
             {tpType && <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tpColors[tpType]||'bg-slate-100 text-slate-600'}`}>{tpType}</span>}
           </div>
-          <div className="text-xs text-slate-500 truncate">{style}{tpNo?` · ${tpNo}`:''}{owner?` · 👤 ${(owner.name||'').split(' ')[0]}`:''}</div>
+          <div className="text-xs text-slate-500 break-words">{style}{tpNo?` · ${tpNo}`:''}{showOwner&&owner?` · 👤 ${(owner.name||'').split(' ')[0]}`:''}</div>
         </div>
         {c.meta ? <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded ${c.meta.color}`}>{c.meta.label}{c.via?` · ${c.via}`:''}</span>
                 : <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">{c.hint}</span>}
         {due && <span className={`shrink-0 text-[11px] ${dueCls(due)}`}>{fmtDate(due)}</span>}
-        <div className="shrink-0 flex gap-1">
+        <div className="shrink-0 flex gap-1 items-center">
           <button onClick={()=>onOpenTechpack(l)} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Techpack</button>
           <button onClick={()=>onOpenLead(l)} className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 hover:bg-slate-100">Lead</button>
+          {hidden
+            ? <button onClick={()=>unhideProject(l.id)} title="Show this project again" className="w-6 h-6 rounded-full text-emerald-600 hover:bg-emerald-50 flex items-center justify-center text-sm">↩</button>
+            : <button onClick={()=>hideProject(l.id)} title="Hide this project from my board" className="w-6 h-6 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-500 flex items-center justify-center text-sm">✕</button>}
         </div>
       </div>
     );
@@ -6167,8 +6186,14 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">My Projects &amp; Techpacks</h2>
-            <button onClick={()=>navTo('techpacks')} className="text-xs text-indigo-600 hover:underline">All techpacks →</button>
+            <div className="flex items-center gap-3">
+              {hiddenRows.length>0 && <button onClick={()=>setShowHidden(s=>!s)} className="text-xs text-slate-500 hover:text-slate-800">{showHidden?'Hide':'Show'} hidden ({hiddenRows.length})</button>}
+              <button onClick={()=>navTo('techpacks')} className="text-xs text-indigo-600 hover:underline">All techpacks →</button>
+            </div>
           </div>
+          {showHidden && hiddenRows.length>0 && (
+            <ProjectGroup icon="🙈" title="Hidden from my board" rows={hiddenRows} color="bg-slate-100 text-slate-500" />
+          )}
           {classified.length===0 ? (
             <div className="text-sm text-slate-400 border border-dashed rounded-xl p-8 text-center">No techpacks yet. Open a lead and create a techpack to see it here.</div>
           ) : (<>
@@ -6214,8 +6239,8 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
           {needsPayment.map(so=>{ const l=(leads||[]).find(x=>x.id===so.lead_id); return (
             <div key={so.id} className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
               <div className="min-w-0 flex-1">
-                <div className="font-semibold text-slate-800 truncate">{so.client_name||(l&&clientName(l))||'—'}</div>
-                <div className="text-xs text-slate-500 truncate font-mono">{so.number}{so.delivered_at?` · delivered ${fmtDate(so.delivered_at.slice(0,10))}`:''}</div>
+                <div className="font-semibold text-slate-800 break-words">{so.client_name||(l&&clientName(l))||'—'}</div>
+                <div className="text-xs text-slate-500 break-words font-mono">{so.number}{so.delivered_at?` · delivered ${fmtDate(so.delivered_at.slice(0,10))}`:''}</div>
               </div>
               <div className="shrink-0 text-right">
                 <div className="text-[11px] text-slate-500">Bal <span className="font-bold text-rose-700">{peso(so.balance_due)}</span></div>
