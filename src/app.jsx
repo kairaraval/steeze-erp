@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 677 · Workbench tidy-up: the account-owner photo now shows only for Sales Associates (hidden for managers/admins since it's all their own work); client names show in full (no longer cut off); and each project has an ✕ to hide it from your board, with a 'Show hidden' toggle to bring it back.";
+const BUILD = "Live build 678 · Workbench project rows relaid out: client name and style on their own line (no more mid-word breaks or cramped columns), with the type/status/due and Techpack/Lead buttons on a second line that wraps cleanly. Fixes the squished layout in the narrow column.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6111,26 +6111,27 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
     const showOwner = useActivitySignal;
     const hidden = hiddenIds.has(l.id);
     return (
-      <div className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
-        {showOwner && (owner
-          ? <span title={`Account owner — update ${owner.name||owner.email||''}`} className="shrink-0"><Avatar profile={owner} size="sm" /></span>
-          : <span className="shrink-0 w-7 h-7 rounded-full bg-slate-200" title="No account owner set" />)}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-slate-800 break-words">{clientName(l)}</span>
-            {tpType && <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tpColors[tpType]||'bg-slate-100 text-slate-600'}`}>{tpType}</span>}
+      <div className="px-3 py-2.5 border-t hover:bg-slate-50">
+        {/* Top line: owner (associates only) + client name + hide/X */}
+        <div className="flex items-start gap-2">
+          {showOwner && owner && <span title={`Account owner — update ${owner.name||owner.email||''}`} className="shrink-0 mt-0.5"><Avatar profile={owner} size="sm" /></span>}
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-slate-800 leading-snug">{clientName(l)}</div>
+            <div className="text-xs text-slate-500 leading-snug">{style}{tpNo?` · ${tpNo}`:''}{showOwner&&owner?` · 👤 ${(owner.name||'').split(' ')[0]}`:''}</div>
           </div>
-          <div className="text-xs text-slate-500 break-words">{style}{tpNo?` · ${tpNo}`:''}{showOwner&&owner?` · 👤 ${(owner.name||'').split(' ')[0]}`:''}</div>
+          {hidden
+            ? <button onClick={()=>unhideProject(l.id)} title="Show this project again" className="shrink-0 w-6 h-6 rounded-full text-emerald-600 hover:bg-emerald-50 flex items-center justify-center text-sm">↩</button>
+            : <button onClick={()=>hideProject(l.id)} title="Hide this project from my board" className="shrink-0 w-6 h-6 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-500 flex items-center justify-center text-sm">✕</button>}
         </div>
-        {c.meta ? <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded ${c.meta.color}`}>{c.meta.label}{c.via?` · ${c.via}`:''}</span>
-                : <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">{c.hint}</span>}
-        {due && <span className={`shrink-0 text-[11px] ${dueCls(due)}`}>{fmtDate(due)}</span>}
-        <div className="shrink-0 flex gap-1 items-center">
+        {/* Second line: type + status + due, then the action buttons — wraps cleanly */}
+        <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+          {tpType && <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tpColors[tpType]||'bg-slate-100 text-slate-600'}`}>{tpType}</span>}
+          {c.meta ? <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${c.meta.color}`}>{c.meta.label}{c.via?` · ${c.via}`:''}</span>
+                  : <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">{c.hint}</span>}
+          {due && <span className={`text-[11px] ${dueCls(due)}`}>{fmtDate(due)}</span>}
+          <span className="flex-1" />
           <button onClick={()=>onOpenTechpack(l)} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Techpack</button>
           <button onClick={()=>onOpenLead(l)} className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 hover:bg-slate-100">Lead</button>
-          {hidden
-            ? <button onClick={()=>unhideProject(l.id)} title="Show this project again" className="w-6 h-6 rounded-full text-emerald-600 hover:bg-emerald-50 flex items-center justify-center text-sm">↩</button>
-            : <button onClick={()=>hideProject(l.id)} title="Hide this project from my board" className="w-6 h-6 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-500 flex items-center justify-center text-sm">✕</button>}
         </div>
       </div>
     );
