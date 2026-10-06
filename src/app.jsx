@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 670 · HR cases: a new NTE can now name several employees at once — add people individually or add a whole department in one click. One case record is filed to each person's 201. Editing an existing case stays single-employee.";
+const BUILD = "Live build 671 · New Home (My Workbench) for Sales Associates & Representatives: every techpack they made, grouped by In Production / In Sampling / Techpack ready / Delivered with live status, plus all their Sales Tickets grouped by status — one screen to manage their projects. It's their default landing page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5988,6 +5988,196 @@ function MaterialsBuyListView({ profile, requests, items, suppliers, orders, pro
    queues across PRs, Materials Queue, POs, Stock Out, and Reorder alerts so
    the purchaser doesn't have to dig through 6 different views. Each tile is
    clickable and jumps to the relevant page (with a filter when applicable). */
+/* ─────────── SALES REP / ASSOCIATE HOME ───────────
+   One screen for a sales rep to monitor everything they're working on:
+   all techpacks they made, categorized by where the project currently sits
+   (In Sampling / In Production / Techpack ready / Delivered) with the live
+   status of each, plus every Sales Ticket they raised or are assigned to,
+   grouped by status. Lets them manage their projects at a glance.
+*/
+function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJobs, onOpenTechpack, onOpenLead, navTo }){
+  const [tickets,setTickets]=useState([]);
+  const [tkLoading,setTkLoading]=useState(true);
+  const [showDone,setShowDone]=useState(false);
+  useEffect(()=>{ (async()=>{
+    setTkLoading(true);
+    try{
+      const me=profile.id;
+      const { data }=await sb.from('sales_tickets').select('*').is('deleted_at',null)
+        .or(`created_by.eq.${me},requested_by.eq.${me},assignee_id.eq.${me}`)
+        .order('created_at',{ascending:false});
+      setTickets(data||[]);
+    }catch(_){ setTickets([]); }
+    setTkLoading(false);
+  })(); },[profile.id]);
+
+  const clientName=(l)=>{ const c=(clients||[]).find(x=>x.id===l.client_id); return c?.company||l.client_name||'—'; };
+  const myName=(profile?.name||'').trim().toLowerCase();
+  // A project/techpack is "mine" if I own the lead, my name is on the techpack as
+  // Sales Owner, or I'm the sales owner on its production job.
+  const isMine=(l)=> l.manager_id===profile.id
+    || (!!myName && l.techpack && String(l.techpack.salesOwner||'').trim().toLowerCase()===myName)
+    || (prodJobs||[]).some(j=>j.lead_id===l.id && j.sales_owner_id===profile.id);
+
+  // Classify each of my techpack leads by where it currently sits.
+  const myTpLeads=(leads||[]).filter(l=>l.techpack).filter(isMine);
+  function classify(l){
+    const prodJ=(prodJobs||[]).filter(j=>j.lead_id===l.id);
+    const sampJ=(sampleJobs||[]).filter(j=>j.lead_id===l.id);
+    const prodActive=prodJ.find(j=>!PRODUCTION_DONE.includes(j.status));
+    const sampActive=sampJ.find(j=>!SAMPLING_DONE.includes(j.status));
+    if(prodActive) return { cat:'production', statusKey:prodActive.status, meta:metaFrom(PRODUCTION_STATUSES,prodActive.status), job:prodActive };
+    if(sampActive) return { cat:'sampling', statusKey:sampActive.status, meta:metaFrom(SAMPLING_STATUSES,sampActive.status), job:sampActive };
+    if(prodJ.length) return { cat:'delivered', statusKey:'delivered', meta:metaFrom(PRODUCTION_STATUSES,'delivered'), job:prodJ[0], via:'Production' };
+    if(sampJ.length) return { cat:'delivered', statusKey:'delivered', meta:metaFrom(SAMPLING_STATUSES,'delivered'), job:sampJ[0], via:'Sampling' };
+    // No linked job yet — infer intent from the techpack type.
+    const t=String(l.techpack?.techpackType||'');
+    return { cat:'techpack', statusKey:null, meta:null, hint: /SAMPLE/i.test(t)?'Sample — not yet endorsed':/PRODUCTION/i.test(t)?'Production — not yet started':'Not yet started' };
+  }
+  const classified=myTpLeads.map(l=>({ l, ...classify(l) }));
+  const inSampling=classified.filter(c=>c.cat==='sampling');
+  const inProduction=classified.filter(c=>c.cat==='production');
+  const techpackOnly=classified.filter(c=>c.cat==='techpack');
+  const delivered=classified.filter(c=>c.cat==='delivered');
+
+  // Tickets by status.
+  const tkOpen=tickets.filter(t=>t.status==='open');
+  const tkProg=tickets.filter(t=>t.status==='in_progress');
+  const tkBlocked=tickets.filter(t=>t.status==='blocked');
+  const tkDone=tickets.filter(t=>t.status==='done');
+
+  const hour=new Date().getHours();
+  const greet=hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
+  const firstName=(profile?.name||profile?.email||'there').split(' ')[0].split('@')[0];
+  const today=todayManila();
+  const dueCls=(d)=> d&&d<today ? 'text-rose-600 font-semibold' : 'text-slate-500';
+
+  function Tile({ icon, label, count, color='indigo', onClick, urgent }){
+    const palette={ indigo:'border-indigo-200 hover:border-indigo-400 bg-white', emerald:'border-emerald-200 hover:border-emerald-400 bg-emerald-50/40', amber:'border-amber-200 hover:border-amber-400 bg-amber-50/40', rose:'border-rose-200 hover:border-rose-400 bg-rose-50/40', blue:'border-blue-200 hover:border-blue-400 bg-blue-50/40', slate:'border-slate-200 hover:border-slate-400 bg-white' };
+    const numColor=urgent&&count>0?'text-rose-700':count>0?'text-slate-900':'text-slate-300';
+    return (
+      <button onClick={onClick} className={`text-left rounded-xl border-2 p-4 transition shadow-sm hover:shadow-md ${palette[color]}`}>
+        <div className="text-2xl">{icon}</div>
+        <div className={`text-3xl font-extrabold mt-2 ${numColor}`}>{count}</div>
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mt-1">{label}</div>
+      </button>
+    );
+  }
+  const tpColors={ 'TRAD PRODUCTION':'bg-rose-100 text-rose-700','SUBLI PRODUCTION':'bg-purple-100 text-purple-700','TRAD SAMPLE':'bg-amber-100 text-amber-700','SUBLI SAMPLE':'bg-blue-100 text-blue-700' };
+  function ProjectRow({ c }){
+    const l=c.l; const tpNo=l.techpack?.prodFormNo||l.techpack_number||''; const tpType=l.techpack?.techpackType||'';
+    const style=l.techpack?.styleName||l.title||'—'; const due=c.job?.due_date||l.techpack?.dueDate||'';
+    return (
+      <div className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-800 truncate">{clientName(l)}</span>
+            {tpType && <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tpColors[tpType]||'bg-slate-100 text-slate-600'}`}>{tpType}</span>}
+          </div>
+          <div className="text-xs text-slate-500 truncate">{style}{tpNo?` · ${tpNo}`:''}</div>
+        </div>
+        {c.meta ? <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded ${c.meta.color}`}>{c.meta.label}{c.via?` · ${c.via}`:''}</span>
+                : <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">{c.hint}</span>}
+        {due && <span className={`shrink-0 text-[11px] ${dueCls(due)}`}>{fmtDate(due)}</span>}
+        <div className="shrink-0 flex gap-1">
+          <button onClick={()=>onOpenTechpack(l)} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Techpack</button>
+          <button onClick={()=>onOpenLead(l)} className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 hover:bg-slate-100">Lead</button>
+        </div>
+      </div>
+    );
+  }
+  function ProjectGroup({ icon, title, rows, color }){
+    if(!rows.length) return null;
+    return (
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className={`px-3 py-2 text-xs font-bold uppercase tracking-wide flex items-center justify-between ${color}`}>
+          <span>{icon} {title}</span><span className="opacity-70">{rows.length}</span>
+        </div>
+        {rows.map(c=><ProjectRow key={c.l.id} c={c} />)}
+      </div>
+    );
+  }
+  function TicketGroup({ title, rows, pill }){
+    if(!rows.length) return null;
+    return (
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="px-3 py-2 text-xs font-bold uppercase tracking-wide flex items-center justify-between bg-slate-50 text-slate-600">
+          <span><span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${pill}`}></span>{title}</span><span className="opacity-70">{rows.length}</span>
+        </div>
+        {rows.map(t=>{ const l=(leads||[]).find(x=>x.id===t.lead_id); return (
+          <button key={t.id} onClick={()=>navTo('sales-tickets')} className="w-full text-left flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-slate-800 truncate">{t.title||t.task_type||'Ticket'}</div>
+              <div className="text-xs text-slate-500 truncate">{t.number||''}{l?` · ${clientName(l)}`:''}{t.department?` · ${t.department}`:''}</div>
+            </div>
+            {t.priority && t.priority!=='normal' && <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded ${t.priority==='high'?'bg-rose-100 text-rose-700':'bg-slate-100 text-slate-500'}`}>{t.priority}</span>}
+            {t.due_date && <span className={`shrink-0 text-[11px] ${dueCls(t.due_date)}`}>{fmtDate(t.due_date)}</span>}
+          </button>
+        ); })}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">🏠 My Workbench</h1>
+        <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — every project and ticket you're working on, in one place.</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <Tile icon="🧵" label="In sampling" count={inSampling.length} color="emerald" />
+        <Tile icon="⚙" label="In production" count={inProduction.length} color="indigo" />
+        <Tile icon="📋" label="Techpack ready" count={techpackOnly.length} color="amber" />
+        <Tile icon="✅" label="Delivered" count={delivered.length} color="slate" />
+        <Tile icon="🎫" label="Open tickets" count={tkOpen.length+tkProg.length+tkBlocked.length} color={tkBlocked.length?'rose':'blue'} urgent={tkBlocked.length>0} onClick={()=>navTo('sales-tickets')} />
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">My Projects &amp; Techpacks</h2>
+            <button onClick={()=>navTo('techpacks')} className="text-xs text-indigo-600 hover:underline">All techpacks →</button>
+          </div>
+          {classified.length===0 ? (
+            <div className="text-sm text-slate-400 border border-dashed rounded-xl p-8 text-center">No techpacks yet. Open a lead and create a techpack to see it here.</div>
+          ) : (<>
+            <ProjectGroup icon="⚙" title="In Production" rows={inProduction} color="bg-indigo-50 text-indigo-700" />
+            <ProjectGroup icon="🧵" title="In Sampling" rows={inSampling} color="bg-emerald-50 text-emerald-700" />
+            <ProjectGroup icon="📋" title="Techpack ready — not yet started" rows={techpackOnly} color="bg-amber-50 text-amber-700" />
+            {delivered.length>0 && (
+              <div>
+                <button onClick={()=>setShowDone(s=>!s)} className="text-xs text-slate-500 hover:text-slate-800 font-semibold mb-2">{showDone?'▾':'▸'} Delivered / Done ({delivered.length})</button>
+                {showDone && <ProjectGroup icon="✅" title="Delivered / Done" rows={delivered} color="bg-slate-100 text-slate-600" />}
+              </div>
+            )}
+          </>)}
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">My Sales Tickets</h2>
+            <button onClick={()=>navTo('sales-tickets')} className="text-xs text-indigo-600 hover:underline">Ticket board →</button>
+          </div>
+          {tkLoading ? <div className="text-sm text-slate-400 py-6 text-center">Loading tickets…</div>
+           : tickets.length===0 ? <div className="text-sm text-slate-400 border border-dashed rounded-xl p-8 text-center">No tickets raised by or assigned to you yet.</div>
+           : (<>
+            <TicketGroup title="In progress" rows={tkProg} pill="bg-blue-500" />
+            <TicketGroup title="Blocked" rows={tkBlocked} pill="bg-rose-500" />
+            <TicketGroup title="Open pool" rows={tkOpen} pill="bg-slate-400" />
+            {tkDone.length>0 && (
+              <div>
+                <button onClick={()=>setShowDone(s=>!s)} className="text-xs text-slate-500 hover:text-slate-800 font-semibold mb-2">{showDone?'▾':'▸'} Done ({tkDone.length})</button>
+                {showDone && <TicketGroup title="Done" rows={tkDone} pill="bg-emerald-500" />}
+              </div>
+            )}
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────── PRODUCTION SUPERVISOR HOME ───────────
    Single-screen view of everything happening across the production floor —
    built for the supervisor who needs to know status at a glance without
@@ -43112,10 +43302,16 @@ function App(){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
-      allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
-      fallback = 'pipeline';
+      // Lands on their personal Home (Workbench) by default.
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
+      fallback = 'rep-home';
+    } else if(profile.role==='sales_representative'){
+      // Sales Representative — same access as Sales Manager, plus their own
+      // Home (Workbench) which is their default landing page.
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      fallback = 'rep-home';
     } else if(isManagerRole(profile.role)){
-      // Sales Manager (and Sales Representative — identical access).
+      // Sales Manager — identical access, lands on the pipeline.
       allowed = new Set(['inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
       fallback = 'pipeline';
     } else if(profile.role==='pattern_maker'){
@@ -43230,7 +43426,9 @@ function App(){
   useEffect(()=>{
     if(!profile || didLandRef.current) return;
     didLandRef.current = true;
-    if(profile.role==='assistant' && view==='pipeline') setView('sales-tickets');
+    // Sales associates + representatives open straight into their personal Home
+    // (Workbench) instead of the pipeline. They can still navigate anywhere.
+    if((profile.role==='assistant'||profile.role==='sales_representative') && view==='pipeline') setView('rep-home');
     // (Kaira's temporary Sourcing Trips landing removed — she now opens on the
     //  Sales Pipeline like the default.)
   },[profile]);
@@ -43914,9 +44112,9 @@ function App(){
       PERSONAL_GROUP,
     ];
   } else if(isAssistant){
-    // Sales Assistants — Sales + Production + Logistics + Budget Requests.
+    // Sales Assistants / Representatives — Sales + Production + Logistics + Budget Requests.
     NAV = [
-      { items: [ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
@@ -44166,6 +44364,7 @@ function App(){
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
+        {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
