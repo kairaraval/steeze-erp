@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 674 · Workbench Home: the 'Delivered — awaiting payment' list now sits below My Projects & Techpacks (and My Sales Tickets) instead of above them, so your active work shows first.";
+const BUILD = "Live build 675 · Workbench now shows techpacks you prepared even on a manager's lead (detected from your activity on the lead, and stamped on save going forward). Each project shows the account owner's photo + name so you know who to update. Graphic tickets you raised already appear in My Sales Tickets. Applies to associates, reps, managers and admins.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5999,25 +5999,39 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   const [tickets,setTickets]=useState([]);
   const [tkLoading,setTkLoading]=useState(true);
   const [showDone,setShowDone]=useState(false);
+  // Lead ids where I personally authored activity (e.g. "done techpack po, for
+  // your checking") — the reliable signal that I prepared/worked that project,
+  // even when the lead is owned by a manager. Captures historical techpacks that
+  // predate preparer-stamping.
+  const [myLeadIds,setMyLeadIds]=useState(()=>new Set());
   useEffect(()=>{ (async()=>{
     setTkLoading(true);
+    const me=profile.id;
     try{
-      const me=profile.id;
       const { data }=await sb.from('sales_tickets').select('*').is('deleted_at',null)
         .or(`created_by.eq.${me},requested_by.eq.${me},assignee_id.eq.${me}`)
         .order('created_at',{ascending:false});
       setTickets(data||[]);
     }catch(_){ setTickets([]); }
     setTkLoading(false);
+    try{
+      const { data:act }=await fetchAllRows('lead_activity','lead_id,actor_id');
+      const mine=new Set((act||[]).filter(r=>r.actor_id===me && r.lead_id).map(r=>r.lead_id));
+      setMyLeadIds(mine);
+    }catch(_){ setMyLeadIds(new Set()); }
   })(); },[profile.id]);
 
   const clientName=(l)=>{ const c=(clients||[]).find(x=>x.id===l.client_id); return c?.company||l.client_name||'—'; };
+  const ownerOf=(l)=> l.manager_id ? (profiles||[]).find(p=>p.id===l.manager_id) : null;
   const myName=(profile?.name||'').trim().toLowerCase();
-  // A project/techpack is "mine" if I own the lead, my name is on the techpack as
-  // Sales Owner, or I'm the sales owner on its production job.
+  // A project/techpack is "mine" if I own the lead, I prepared its techpack, my
+  // name is on it as Sales Owner, I'm the sales owner on its production job, or I
+  // authored activity on that lead (e.g. an associate preparing it for a manager).
   const isMine=(l)=> l.manager_id===profile.id
+    || (l.techpack && l.techpack.preparedById===profile.id)
     || (!!myName && l.techpack && String(l.techpack.salesOwner||'').trim().toLowerCase()===myName)
-    || (prodJobs||[]).some(j=>j.lead_id===l.id && j.sales_owner_id===profile.id);
+    || (prodJobs||[]).some(j=>j.lead_id===l.id && j.sales_owner_id===profile.id)
+    || myLeadIds.has(l.id);
 
   // Classify each of my techpack leads by where it currently sits.
   const myTpLeads=(leads||[]).filter(l=>l.techpack).filter(isMine);
@@ -6076,14 +6090,18 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   function ProjectRow({ c }){
     const l=c.l; const tpNo=l.techpack?.prodFormNo||l.techpack_number||''; const tpType=l.techpack?.techpackType||'';
     const style=l.techpack?.styleName||l.title||'—'; const due=c.job?.due_date||l.techpack?.dueDate||'';
+    const owner=ownerOf(l);
     return (
       <div className="flex items-center gap-3 px-3 py-2 border-t hover:bg-slate-50">
+        {/* Account owner (manager) — so the preparer knows who to update. */}
+        {owner ? <span title={`Account owner: ${owner.name||owner.email||''}`} className="shrink-0"><Avatar profile={owner} size="sm" /></span>
+               : <span className="shrink-0 w-7 h-7 rounded-full bg-slate-200" title="No account owner set" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 truncate">{clientName(l)}</span>
             {tpType && <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tpColors[tpType]||'bg-slate-100 text-slate-600'}`}>{tpType}</span>}
           </div>
-          <div className="text-xs text-slate-500 truncate">{style}{tpNo?` · ${tpNo}`:''}</div>
+          <div className="text-xs text-slate-500 truncate">{style}{tpNo?` · ${tpNo}`:''}{owner?` · 👤 ${(owner.name||'').split(' ')[0]}`:''}</div>
         </div>
         {c.meta ? <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded ${c.meta.color}`}>{c.meta.label}{c.via?` · ${c.via}`:''}</span>
                 : <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">{c.hint}</span>}
@@ -25093,7 +25111,14 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
   async function save(){
     if(ro){ alert("You're viewing this techpack in preview-only mode."); return; }
     setSaving(true);
-    const payload={...tp,updatedAt:todayISO()};
+    // Stamp the preparer the first time a techpack is saved (and never overwrite
+    // it) so the person who built it can find it on their Workbench, regardless
+    // of who owns the lead. Always record who last touched it.
+    const payload={ ...tp, updatedAt:todayISO(),
+      preparedById: tp.preparedById || profile?.id || null,
+      preparedByName: tp.preparedByName || profile?.name || profile?.email || '',
+      lastEditedById: profile?.id || null,
+      lastEditedByName: profile?.name || profile?.email || '' };
     // Save and also read back the updated row, so we can detect silent RLS failures
     // (when an update matches 0 rows because the policy filtered them out, Supabase returns no error).
     // Mobile users sign in the field on flaky connections, where a single request
@@ -25670,6 +25695,14 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
         <div className="min-w-0">
           <div className="font-bold text-slate-900 truncate">{overrideTechpack?'📌 Saved techpack':'Techpack'} — {tp.styleName||lead.title}</div>
           <div className="text-xs text-slate-500 truncate">{overrideTechpack ? `${snapshotMeta?.label||''}${snapshotMeta?.code?` · ${snapshotMeta.code}`:''}${snapshotMeta?.saved_at?` · saved ${fmtDate(String(snapshotMeta.saved_at).slice(0,10))}`:''}` : tp.clientName}</div>
+          {/* Account owner (the manager this techpack is prepared for) — so the
+              preparer knows who to tag/update when the techpack is ready. */}
+          {(()=>{ const owner=lead.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null; return owner ? (
+            <div className="flex items-center gap-1.5 mt-1" title={`Account owner — update ${owner.name||owner.email||''} when ready`}>
+              <Avatar profile={owner} size="sm" />
+              <span className="text-[11px] text-slate-600">For <span className="font-semibold">{owner.name||owner.email}</span></span>
+            </div>
+          ) : null; })()}
         </div>
         <div className="flex items-center gap-2">
           {!overrideTechpack && (
