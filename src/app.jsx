@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 669 · Inbox: a Purchase Request mention now lands Sales on the actual lead (via the PR's linked lead, or through its sample job for sampling PRs) instead of the blank PR intake form. Purchasing still opens the PR itself.";
+const BUILD = "Live build 670 · HR cases: a new NTE can now name several employees at once — add people individually or add a whole department in one click. One case record is filed to each person's 201. Editing an existing case stays single-employee.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17000,6 +17000,12 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
   const [reviewStatus,setReviewStatus]=useState(caseRow?.review_status||null);
   const isAdmin=profile.role==='admin';
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  // Multi-employee selection (NEW cases only). One case row is created per
+  // selected person so the NTE lands in each of their 201 records. Editing an
+  // existing case stays single-employee (one row = one person).
+  const [empIds,setEmpIds]=useState(isEdit ? (caseRow?.employee_id?[caseRow.employee_id]:[]) : []);
+  function addEmp(id){ if(id && !empIds.includes(id)) setEmpIds(p=>[...p,id]); }
+  function removeEmp(id){ setEmpIds(p=>p.filter(x=>x!==id)); }
   async function persistActivity(nextActivity, patch){
     if(!isEdit) return;
     setActivity(nextActivity);
@@ -17022,6 +17028,13 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
     await persistActivity([...activity, entry], { review_status:'checked' });
   }
   const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  // Distinct departments (for the "add whole department" picker).
+  const deptList=Array.from(new Set((employees||[]).map(e=>String(e.department||'').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  function addDept(dept){
+    if(!dept) return;
+    const ids=(employees||[]).filter(e=> String(e.department||'').trim()===dept && e.is_active!==false).map(e=>e.id);
+    setEmpIds(p=> Array.from(new Set([...p, ...ids])));
+  }
   async function uploadFiles(fileList){
     const files=Array.from(fileList||[]).filter(Boolean);
     if(!files.length) return;
@@ -17041,28 +17054,74 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
   function removeAtt(i){ setAttachments(prev=>prev.filter((_,x)=>x!==i)); }
   function attIcon(a){ const t=(a.type||'')+' '+(a.name||''); if(/image|png|jpe?g|gif|webp/i.test(t)) return '🖼'; if(/pdf/i.test(t)) return '📄'; if(/word|docx?/i.test(t)) return '📝'; if(/sheet|xlsx?|csv/i.test(t)) return '📊'; return '📎'; }
   async function save(){
-    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    const targetIds = isEdit ? (f.employee_id?[f.employee_id]:[]) : empIds;
+    if(!targetIds.length){ setMsg(isEdit?'Pick an employee.':'Pick at least one employee (or add a whole department).'); return; }
     if(!f.title?.trim()){ setMsg('Add a short title.'); return; }
     setBusy(true); setMsg('');
     const closed = f.status==='closed_case';
-    const payload={ employee_id:f.employee_id, case_type:f.case_type, title:f.title.trim(), client_name:f.client_name?.trim()||null, severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||todayManila()) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
-    if(!isEdit) payload.created_by=profile.id;
-    const { error } = isEdit ? await sb.from('hr_cases').update(payload).eq('id',caseRow.id) : await sb.from('hr_cases').insert(payload);
+    const base={ case_type:f.case_type, title:f.title.trim(), client_name:f.client_name?.trim()||null, severity:f.severity||null, sanction_type:f.sanction_type||null, status:f.status||'issuance_nte', opened_date:f.opened_date||null, closed_date: closed ? (f.closed_date||todayManila()) : null, description:f.description||null, remarks:f.remarks||null, resolution:f.resolution||null, attachments };
+    let error;
+    if(isEdit){
+      ({ error } = await sb.from('hr_cases').update({ ...base, employee_id:f.employee_id }).eq('id',caseRow.id));
+    } else {
+      // One case row per selected employee — each lands in that person's 201 file.
+      const rows = targetIds.map(id=>({ ...base, employee_id:id, created_by:profile.id }));
+      ({ error } = await sb.from('hr_cases').insert(rows));
+    }
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
   return (
     <Modal title={isEdit?'Case details':'New case'} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Employee *">
-            <select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}>
-              <option value="">— pick an employee —</option>
-              {activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
-            </select>
-          </TpLbl>
-          <TpLbl t="Case type"><select className="input" value={f.case_type} onChange={e=>up('case_type',e.target.value)}>{CASE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
-        </div>
+        {isEdit ? (
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Employee *">
+              <select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}>
+                <option value="">— pick an employee —</option>
+                {activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+              </select>
+            </TpLbl>
+            <TpLbl t="Case type"><select className="input" value={f.case_type} onChange={e=>up('case_type',e.target.value)}>{CASE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <TpLbl t="Add employee">
+                <select className="input" value="" onChange={e=>{ addEmp(e.target.value); e.target.value=''; }}>
+                  <option value="">＋ Add a person…</option>
+                  {activeEmps.filter(e=>!empIds.includes(e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
+                </select>
+              </TpLbl>
+              <TpLbl t="Add whole department">
+                <select className="input" value="" onChange={e=>{ addDept(e.target.value); e.target.value=''; }}>
+                  <option value="">＋ Add a department…</option>
+                  {deptList.map(d=>{ const n=(employees||[]).filter(x=>String(x.department||'').trim()===d && x.is_active!==false).length; return <option key={d} value={d}>{d} ({n})</option>; })}
+                </select>
+              </TpLbl>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-500">Employees involved * <span className="font-normal text-slate-400">· one NTE record is filed to each person's 201</span></label>
+                {empIds.length>0 && <button type="button" onClick={()=>setEmpIds([])} className="text-[11px] text-slate-400 hover:text-rose-500">Clear all</button>}
+              </div>
+              {empIds.length===0 ? (
+                <div className="mt-1 text-xs text-slate-400 border border-dashed rounded-lg px-3 py-3 text-center">No one selected yet. Add individuals or a whole department above.</div>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {empIds.map(id=>{ const e=(employees||[]).find(x=>x.id===id); return (
+                    <span key={id} className="inline-flex items-center gap-1 text-xs bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-full pl-2.5 pr-1 py-1">
+                      {e?fullName(e):'Unknown'}{e?.department?<span className="text-indigo-400">· {e.department}</span>:null}
+                      <button type="button" onClick={()=>removeEmp(id)} className="w-4 h-4 rounded-full hover:bg-indigo-200 flex items-center justify-center text-indigo-500">✕</button>
+                    </span>
+                  ); })}
+                  <span className="inline-flex items-center text-[11px] text-slate-500 ml-1">{empIds.length} selected</span>
+                </div>
+              )}
+            </div>
+            <TpLbl t="Case type"><select className="input" value={f.case_type} onChange={e=>up('case_type',e.target.value)}>{CASE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></TpLbl>
+          </>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="Title *"><input className="input" value={f.title||''} onChange={e=>up('title',e.target.value)} placeholder="e.g. Tardiness — 3rd offense" /></TpLbl>
           <TpLbl t="Client (if related)"><input className="input" value={f.client_name||''} onChange={e=>up('client_name',e.target.value)} placeholder="e.g. Sunrise Events PH — optional" /></TpLbl>
@@ -17127,7 +17186,7 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           {isEdit && onPrint && <button type="button" onClick={()=>onPrint(caseRow)} className="py-2 px-4 rounded-lg bg-white border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🖨 Print letter</button>}
-          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save case':'Log case')}</button>
+          <button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save case':(empIds.length>1?`Log case for ${empIds.length} people`:'Log case'))}</button>
         </div>
       </div>
     </Modal>
