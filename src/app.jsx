@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 672 · My Workbench Home now covers Sales Managers and Admins (Kaira & Miko) too, and adds a 'Delivered — awaiting payment' section: projects you own that are delivered but still carry a balance, with the outstanding amount and a jump straight to the SO to log payment.";
+const BUILD = "Live build 673 · The app version (build number) is now visible to everyone in the bottom-right corner, not just admins — so anyone can confirm which version they're on for support. Admins still see the full changelog.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -44539,7 +44539,11 @@ function App(){
         <TransmittalViewModal trn={trnViewing} transmittalItems={transmittalItems} clients={clients} profiles={profiles} salesOrders={salesOrders} profile={profile} onClose={()=>setTrnViewing(null)} onSaved={()=>{ setTrnViewing(null); loadAll(); }} />
       )}
 
-      {profile.role==='admin' && <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>}
+      {/* Admins see the full build changelog; everyone else sees a compact build
+          number so they (and support) can always verify which version they're on. */}
+      {profile.role==='admin'
+        ? <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
+        : <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800/70 text-white/80" title="App version — mention this number to support">Build {RUN_BUILD}</div>}
       {updateReady && (
         <div className="no-print fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-indigo-600 text-white rounded-full shadow-lg pl-4 pr-2 py-2 text-sm">
           <span>✨ New version available</span>
