@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 682 · Sales Orders: new '💰 Unpaid' filter shows only orders with an outstanding balance (open + partial), so fully-paid orders don't fill the page. Works alongside the month, Delivered, type and status filters.";
+const BUILD = "Live build 683 · Re-trigger deploy (builds 681–682 were pushed to GitHub but Vercel missed the webhook). Includes: faster startup (background-loaded heavy tables) and the Sales Orders '💰 Unpaid' balance filter.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
