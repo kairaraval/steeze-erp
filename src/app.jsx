@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 679 · Workbench now has a 'Graphic design requests' section showing the design tickets you raised, each with the assigned designer and live progress (Open / Assigned / In progress / Done). Applies to associates, reps, managers and admins.";
+const BUILD = "Live build 680 · Sales Pipeline (admin): the single manager dropdown is now a multi-select — tick your own leads plus any managers/reps you want to see, and the pipeline shows all of them together. Select all / Clear included.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -13144,21 +13144,25 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   const [dragOverStage,setDragOverStage]=useState(null);
   const isAdmin=profile.role==='admin';
   const isAssistant=isAssistantRole(profile.role);
-  // Admin-only: pick which manager's pipeline to view.
-  //   '' = use the mineOnly toggle behaviour (default)
-  //   'all' = every manager
-  //   <profile id> = that specific manager
-  const [managerFilter,setManagerFilter]=useState('');
-  const selectedMgr = managerFilter && managerFilter!=='all' ? profiles.find(p=>p.id===managerFilter) : null;
-  // Only sales managers + sales assistants own leads / appear in the pipeline
-  // filter (they're the only roles with a Sales Pipeline).
-  const salesPeople = profiles.filter(p=>['manager','sales_representative','assistant'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Admin-only: view your own pipeline PLUS any managers/reps you tick. Start
+  // with just your own leads (includeMine=true, nobody else selected).
+  const [includeMine,setIncludeMine]=useState(true);
+  const [selectedOwners,setSelectedOwners]=useState(()=>new Set());
+  const [pplOpen,setPplOpen]=useState(false);
+  function toggleOwner(id){ setSelectedOwners(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; }); }
+  // People whose pipeline the admin can fold in — managers, reps, assistants, and
+  // other admins who own leads (not themselves).
+  const pickablePeople = profiles.filter(p=> p.id!==profile.id && ['manager','sales_representative','assistant','admin'].includes(p.role)).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const salesPeople = pickablePeople; // (kept name for any downstream refs)
   const clientName=(id)=>clients.find(c=>c.id===id)?.company||'—';
   function ownerMatch(l){
-    if(isAdmin && managerFilter==='all') return true;
-    if(isAdmin && managerFilter) return l.manager_id===managerFilter;
-    return mineOnly ? l.manager_id===profile.id : true;
+    if(!isAdmin) return mineOnly ? l.manager_id===profile.id : true;
+    const anySel = selectedOwners.size>0;
+    // Nothing ticked and "my leads" off → show everything (safety net).
+    if(!anySel && !includeMine) return true;
+    return (includeMine && l.manager_id===profile.id) || selectedOwners.has(l.manager_id);
   }
+  const selPeopleList = pickablePeople.filter(p=>selectedOwners.has(p.id));
   const visible=leads.filter(l=>ownerMatch(l) && (!search || `${l.title} ${clientName(l.client_id)}`.toLowerCase().includes(search.toLowerCase())));
   async function move(l,st){
     // Gate: contact person + delivery address must be on the client before a
@@ -13242,11 +13246,13 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Sales Pipeline</h1>
             <p className="text-slate-500 text-sm">
-              {selectedMgr
-                ? <>Viewing <span className="font-semibold text-slate-700">{selectedMgr.name||selectedMgr.email}'s</span> pipeline</>
-                : (isAdmin && managerFilter==='all')
-                  ? 'Viewing all managers — every active lead, every stage.'
-                  : 'Active pipeline across all stages. Click a card to view client details.'}
+              {!isAdmin
+                ? 'Active pipeline across all stages. Click a card to view client details.'
+                : (()=>{ const names=[includeMine?'you':null, ...selPeopleList.map(p=>(p.name||p.email||'').split(' ')[0])].filter(Boolean);
+                    if(names.length===0) return 'Viewing everyone — every active lead, every stage.';
+                    if(includeMine && selPeopleList.length===0) return 'Your pipeline across all stages.';
+                    return <>Viewing <span className="font-semibold text-slate-700">{names.join(', ')}</span></>;
+                  })()}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -13256,12 +13262,35 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
               <button onClick={()=>changeLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button>
             </div>
             {isAdmin ? (
-              <select value={managerFilter} onChange={e=>setManagerFilter(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white whitespace-nowrap">
-                <option value="">My leads only</option>
-                <option value="all">All managers</option>
-                <option disabled>──────────</option>
-                {salesPeople.map(p=>(<option key={p.id} value={p.id}>{p.name||p.email}</option>))}
-              </select>
+              <div className="relative">
+                <button onClick={()=>setPplOpen(o=>!o)} className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white whitespace-nowrap hover:bg-slate-50 flex items-center gap-1.5">
+                  👥 {(()=>{ const n=(includeMine?1:0)+selectedOwners.size; if(includeMine&&selectedOwners.size===0) return 'My leads'; if(n===0) return 'Everyone'; return `${n} selected`; })()}
+                  <span className="text-slate-400">▾</span>
+                </button>
+                {pplOpen && (<>
+                  <div className="fixed inset-0 z-30" onClick={()=>setPplOpen(false)} />
+                  <div className="absolute right-0 mt-1 w-64 bg-white border rounded-xl shadow-lg z-40 max-h-96 overflow-y-auto">
+                    <div className="px-3 py-2 border-b flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Whose pipeline to show</span>
+                    </div>
+                    <label className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer border-b">
+                      <input type="checkbox" checked={includeMine} onChange={e=>setIncludeMine(e.target.checked)} />
+                      <span className="text-sm font-semibold text-indigo-700">⭐ My leads</span>
+                    </label>
+                    <div className="flex items-center justify-between px-3 py-1.5 text-[11px] border-b bg-slate-50">
+                      <button onClick={()=>setSelectedOwners(new Set(pickablePeople.map(p=>p.id)))} className="text-indigo-600 hover:underline font-semibold">Select all</button>
+                      <button onClick={()=>setSelectedOwners(new Set())} className="text-slate-500 hover:underline">Clear</button>
+                    </div>
+                    {pickablePeople.map(p=>(
+                      <label key={p.id} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                        <input type="checkbox" checked={selectedOwners.has(p.id)} onChange={()=>toggleOwner(p.id)} />
+                        <span className="text-sm text-slate-700 truncate">{p.name||p.email}</span>
+                        <span className="ml-auto text-[10px] text-slate-400">{p.role==='sales_representative'?'rep':p.role==='manager'?'mgr':p.role==='assistant'?'assoc':p.role==='admin'?'admin':p.role}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>)}
+              </div>
             ) : (
               <label className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border rounded-lg px-3 py-2 whitespace-nowrap"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> My leads only</label>
             )}
