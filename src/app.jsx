@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 681 · Faster startup on slow connections: the heaviest view-only tables (Stock Movements, Delivery-Receipt line items, Transmittal lines — ~600kB+) now load in the background instead of blocking the first screen, so the app becomes usable sooner. They fill in a moment later on their own pages.";
+const BUILD = "Live build 682 · Sales Orders: new '💰 Unpaid' filter shows only orders with an outstanding balance (open + partial), so fully-paid orders don't fill the page. Works alongside the month, Delivered, type and status filters.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30221,6 +30221,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   const [search,setSearch]=useState('');
   const [monthFilter,setMonthFilter]=useState(''); // '' = all months, else 'YYYY-MM'
   const [deliveredOnly,setDeliveredOnly]=useState(false); // show only delivered SOs
+  const [unpaidOnly,setUnpaidOnly]=useState(false); // show only SOs with an outstanding balance (open + partial)
   // Top-level sub-tab: 'orders' = the SO list (default), 'payments' = a flat
   // chronological feed of all sales_order_payments across visible SOs.
   // Admin + Accounting both get the Payments sub-view since they need it to
@@ -30319,9 +30320,12 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   });
   const monthLabel = (m)=> m ? new Date(m+'-01T00:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'}) : '';
   const deliveredCount = visibleSOs.filter(o=> o.delivered_at && o.status!=='cancelled').length;
+  const hasBalance=(o)=> o.status!=='paid' && o.status!=='cancelled' && Number(o.balance_due||0) > 0.01;
+  const unpaidCount = visibleSOs.filter(hasBalance).length;
   const rows = visibleSOs
     .filter(o=>kindFilter==='all' || (o.kind||'production')===kindFilter)
     .filter(o=>!deliveredOnly || !!o.delivered_at)
+    .filter(o=>!unpaidOnly || hasBalance(o))
     .filter(o=>!monthFilter || soMonth(o)===monthFilter)
     .filter(o=>!filter || o.status===filter)
     .filter(o=>!search || `${o.number} ${o.client_name}`.toLowerCase().includes(search.toLowerCase()));
@@ -30399,6 +30403,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
           {monthList.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
         </select>
         <button onClick={()=>setDeliveredOnly(v=>!v)} className={`px-3 py-2 text-sm rounded-lg border font-semibold ${deliveredOnly?'bg-emerald-600 text-white border-emerald-600':'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>✓ Delivered{deliveredCount>0?` (${deliveredCount})`:''}</button>
+        <button onClick={()=>setUnpaidOnly(v=>!v)} title="Show only orders with an outstanding balance (open + partial)" className={`px-3 py-2 text-sm rounded-lg border font-semibold ${unpaidOnly?'bg-rose-600 text-white border-rose-600':'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>💰 Unpaid{unpaidCount>0?` (${unpaidCount})`:''}</button>
         {monthFilter && (()=>{ const s=monthlySummary.find(x=>x.m===monthFilter); return s ? <span className="text-sm text-slate-600">{s.count} SO{s.count===1?'':'s'} · <strong className="text-slate-900">{peso(s.total)}</strong> total</span> : null; })()}
       </div>
 
