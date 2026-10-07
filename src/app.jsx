@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 680 · Sales Pipeline (admin): the single manager dropdown is now a multi-select — tick your own leads plus any managers/reps you want to see, and the pipeline shows all of them together. Select all / Clear included.";
+const BUILD = "Live build 681 · Faster startup on slow connections: the heaviest view-only tables (Stock Movements, Delivery-Receipt line items, Transmittal lines — ~600kB+) now load in the background instead of blocking the first screen, so the app becomes usable sooner. They fill in a moment later on their own pages.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43243,6 +43243,13 @@ function App(){
     fetchAll(()=>sb.from('leads').select('*').is('deleted_at', null).order('created_at',{ ascending:false })).then(r=>{ if(r.data) setLeads(r.data); }).catch(()=>{});
     fetchAll(()=>sb.from('sales_orders').select('*').is('deleted_at', null).order('created_at',{ ascending:false })).then(r=>{ if(r && !r.error && r.data) setSalesOrders(r.data); }).catch(()=>{});
     sb.from('bank_accounts').select('*').order('position').then(r=>{ if(r && !r.error && r.data) setBankAccounts(r.data); }).catch(()=>{});
+    // Heavy, view-specific tables (Stock Movements ~350kB, DR line items ~270kB,
+    // Transmittal lines) — stream them in the background instead of blocking the
+    // first paint. They're not needed on anyone's landing page, so loading them
+    // after the main data makes the app interactive much sooner on slow links.
+    fetchAllRows('stock_movements','*','created_at',false).then(r=>{ if(r && !r.error && r.data) setStockMovements(r.data); }).catch(()=>{});
+    fetchAllRows('dr_items','*','position',true).then(r=>{ if(r && !r.error && r.data) setDrItems(r.data); }).catch(()=>{});
+    fetchAllRows('transmittal_items','*','position',true).then(r=>{ if(r && !r.error && r.data) setTransmittalItems(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null)),
@@ -43277,7 +43284,7 @@ function App(){
       fetchAll(()=>sb.from('expenses').select('*').is('deleted_at', null).order('date',{ascending:false})),
       fetchAll(()=>sb.from('cash_advances').select('*').is('deleted_at', null).order('date',{ascending:false})),
       // Stock movements for the Stock Out view (Purchasing Layer 3).
-      fetchAllRows('stock_movements','*','created_at',false),
+      Promise.resolve({data:null}),  /* stock_movements — streamed in the background above */
       // Embroidery + Knitting boards (graceful empty if SQL not yet run)
       fetchAll(()=>sb.from('embroidery_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
       fetchAll(()=>sb.from('knitting_jobs').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
@@ -43299,13 +43306,10 @@ function App(){
       fetchAll(()=>sb.from('calendar_events').select('*').order('date',{ascending:true})),
       // Delivery Receipts + line items (graceful empty if SQL not yet run)
       fetchAll(()=>sb.from('delivery_receipts').select('*').is('deleted_at', null).order('created_at',{ascending:false})),
-      // Paginated past Supabase's 1000-row cap — otherwise the highest-position
-      // size lines across ALL DRs get dropped, making multi-size DRs under-count
-      // (e.g. a 13-line / 300pc DR showing only 9 lines / 240pc).
-      fetchAllRows('dr_items','*','position',true),
+      Promise.resolve({data:null}),  /* dr_items — streamed in the background above; skip the blocking download */
       // Transmittals (loaned items) + line items (graceful empty if SQL not yet run)
       fetchAll(()=>sb.from('transmittals').select('*').is('deleted_at', null).order('date_sent',{ascending:false})),
-      fetchAllRows('transmittal_items','*','position',true),
+      Promise.resolve({data:null}),  /* transmittal_items — streamed in the background above */
       // Subcon monitoring + weekly payroll (graceful empty if SQL not yet run)
       fetchAll(()=>sb.from('subcons').select('*').is('deleted_at', null).order('name')),
       fetchAll(()=>sb.from('subcon_sends').select('*').is('deleted_at', null).order('date_sent',{ascending:false})),
@@ -43419,12 +43423,12 @@ function App(){
     setExpenses(ex && !ex.error ? (ex.data||[]) : []);
     setCashAdvances(ca && !ca.error ? (ca.data||[]) : []);
     try { const pcr = await sb.from('petty_cash_replenishments').select('*').order('created_at',{ascending:false}); setPcReplenishments(pcr && !pcr.error ? (pcr.data||[]) : []); } catch(_){ setPcReplenishments([]); }
-    setStockMovements(sm && !sm.error ? (sm.data||[]) : []);
+    if(sm && sm.data) setStockMovements(sm.data);   /* else keep the streamed value (skipped in Promise.all) */
     setCalendarEvents(ce && !ce.error ? (ce.data||[]) : []);
     setDeliveryReceipts(dr && !dr.error ? (dr.data||[]) : []);
-    setDrItems(dri && !dri.error ? (dri.data||[]) : []);
+    if(dri && dri.data) setDrItems(dri.data);        /* else keep the streamed value */
     setTransmittals(trn && !trn.error ? (trn.data||[]) : []);
-    setTransmittalItems(trni && !trni.error ? (trni.data||[]) : []);
+    if(trni && trni.data) setTransmittalItems(trni.data); /* else keep the streamed value */
     setSubcons(sbc && !sbc.error ? (sbc.data||[]) : []);
     setSubconSends(sbs && !sbs.error ? (sbs.data||[]) : []);
     setSubconReturns(sbr && !sbr.error ? (sbr.data||[]) : []);
