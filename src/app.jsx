@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 683 · Re-trigger deploy (builds 681–682 were pushed to GitHub but Vercel missed the webhook). Includes: faster startup (background-loaded heavy tables) and the Sales Orders '💰 Unpaid' balance filter.";
+const BUILD = "Live build 684 · New Operations Command Center (admin, under Dashboard): company-wide GREEN/YELLOW/RED status tiles (production, quality, purchasing, sales/AR, people, approvals), the order flow, a needs-attention queue, a department scoreboard, and a one-click weekly management report for the CEO. Foundation for the AGM/GM role.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6299,6 +6299,244 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
         </div>
       )}
     </div>
+  );
+}
+
+/* ─────────── GM / CEO OPERATIONS COMMAND CENTER ───────────
+   Company-wide single-screen overview for the Assistant General Manager (Head
+   of People & Operations) and the CEO. Built around the AGM job description's
+   GREEN / YELLOW / RED weekly-report model: status tiles across every area,
+   the order flow (Sales→Sampling→Production→QC→Delivery), a consolidated
+   "needs attention" queue, a department scoreboard, and a one-click weekly
+   management report. Read-only company visibility; no fund release.
+*/
+function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJobs, graphicJobs, printingJobs, salesOrders, requests, orders, items, hrCases, hrLeaves, employees, hrReviews, rfps, budgetRequests, navTo }){
+  const [repl,setRepl]=useState([]);         // open replacement requests (quality/rework)
+  const [showReport,setShowReport]=useState(false);
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('replacement_requests').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setRepl(data||[]); }catch(_){ setRepl([]); } })(); },[]);
+
+  const today=todayManila();
+  const daysUntil=(d)=>{ if(!d) return null; const t=new Date(today+'T00:00:00'); return Math.round((new Date(d+'T00:00:00')-t)/86400000); };
+  const clientName=(l)=>{ const c=(clients||[]).find(x=>x.id===(l&&l.client_id)); return c?.company||l?.client_name||'—'; };
+
+  // ---- Production & delivery ----
+  const activeProd=(prodJobs||[]).filter(j=>!PRODUCTION_DONE.includes(j.status));
+  const overdueProd=activeProd.filter(j=>j.due_date && j.due_date<today);
+  const dueWeekProd=activeProd.filter(j=>{ const d=daysUntil(j.due_date); return d!==null && d>=0 && d<=7; });
+  const materialsPending=activeProd.filter(j=>j.status==='materials to purchase');
+  const readyDelivery=(prodJobs||[]).filter(j=>j.status==='ready for delivery');
+  const inQC=(prodJobs||[]).filter(j=>j.status==='quality check (qc)');
+
+  // ---- Quality / rework ----
+  const openRepl=(repl||[]).filter(r=> (r.status||'pending')!=='resolved' && (r.status||'')!=='done');
+
+  // ---- Purchasing / materials ----
+  const openPRs=(requests||[]).filter(r=> ['submitted','manual_request','draft'].includes(r.status));
+  const openPOs=(orders||[]).filter(o=> o.status && !['received','closed','cancelled'].includes(o.status));
+
+  // ---- Sampling ----
+  const activeSample=(sampleJobs||[]).filter(j=>!SAMPLING_DONE.includes(j.status));
+  const overdueSample=activeSample.filter(j=>j.due_date && j.due_date<today);
+
+  // ---- Sales & receivables ----
+  const liveSOs=(salesOrders||[]).filter(o=> o.status!=='cancelled');
+  const openSOs=liveSOs.filter(o=> o.status!=='paid');
+  const openAR=liveSOs.reduce((s,o)=> s + (o.status!=='paid' ? Number(o.balance_due||0) : 0), 0);
+  const overdueAR=liveSOs.filter(o=> Number(o.balance_due||0)>0.01 && (!!o.delivered_at || (o.expected_delivery && o.expected_delivery<today)));
+
+  // ---- People / HR ----
+  const onLeaveToday=(hrLeaves||[]).filter(l=> l.start_date && l.end_date && l.start_date<=today && l.end_date>=today);
+  const openCases=(hrCases||[]).filter(c=> !caseIsClosed(c));
+  const graveCases=openCases.filter(c=> c.severity==='grave');
+  const reviewsDue=(hrReviews||[]).filter(r=> r.status && !['completed','closed','acknowledged'].includes(r.status));
+  const headcount=(employees||[]).filter(e=> e.is_active!==false).length;
+
+  // ---- Approvals (within AGM authority) ----
+  const pendRFP=(rfps||[]).filter(r=> ['pending','for_approval','submitted'].includes(r.status));
+  const pendBudget=(budgetRequests||[]).filter(b=> ['pending','for_approval','submitted'].includes(b.status));
+  const pendApprovals=pendRFP.length+pendBudget.length;
+
+  // Status colour helper: 'red' | 'amber' | 'green'
+  const S={ red:{ bar:'border-rose-500', dot:'bg-rose-500', txt:'text-rose-700' }, amber:{ bar:'border-amber-500', dot:'bg-amber-500', txt:'text-amber-700' }, green:{ bar:'border-emerald-500', dot:'bg-emerald-500', txt:'text-emerald-700' } };
+  const prodStatus= overdueProd.length>0 ? 'red' : (dueWeekProd.length>6||materialsPending.length>0 ? 'amber' : 'green');
+  const qualStatus= openRepl.some(r=>r.status==='pending') ? 'red' : (openRepl.length>0 ? 'amber' : 'green');
+  const purStatus= materialsPending.length>0 ? 'red' : (openPRs.length>5 ? 'amber' : 'green');
+  const arStatus= overdueAR.length>5 ? 'red' : (overdueAR.length>0 ? 'amber' : 'green');
+  const hrStatus= graveCases.length>0 ? 'red' : (openCases.length>0||reviewsDue.length>0 ? 'amber' : 'green');
+  const apprStatus= pendApprovals>0 ? 'amber' : 'green';
+
+  const tiles=[
+    { key:'prod', icon:'⚙', label:'Production & delivery', big:`${overdueProd.length} overdue`, sub:`${activeProd.length} active · ${dueWeekProd.length} due this week`, st:prodStatus, go:'prod' },
+    { key:'qual', icon:'⚠', label:'Quality / rework', big:`${openRepl.length} open`, sub:'replacement requests', st:qualStatus, go:'replacements' },
+    { key:'pur', icon:'📦', label:'Purchasing / materials', big:`${materialsPending.length} shortages`, sub:`${openPRs.length} PRs · ${openPOs.length} POs open`, st:purStatus, go:'requests' },
+    { key:'ar', icon:'💰', label:'Sales & receivables', big:peso(openAR), sub:`open AR · ${overdueAR.length} overdue`, st:arStatus, go:'sales-orders' },
+    { key:'hr', icon:'👥', label:'People / HR', big:`${onLeaveToday.length} on leave`, sub:`${openCases.length} open cases · ${reviewsDue.length} reviews due`, st:hrStatus, go:'employees' },
+    { key:'appr', icon:'✅', label:'For approval', big:`${pendApprovals} waiting`, sub:'within ₱25k limit', st:apprStatus, go:'approvals' },
+  ];
+  const redCount=tiles.filter(t=>t.st==='red').length, amberCount=tiles.filter(t=>t.st==='amber').length, greenCount=tiles.filter(t=>t.st==='green').length;
+
+  // Order-flow funnel.
+  const flow=[
+    { n:openSOs.length, label:'Sales open', st:'green' },
+    { n:activeSample.length, label:'Sampling', st: overdueSample.length>0?'amber':'green' },
+    { n:activeProd.length, label:'Production', st:prodStatus },
+    { n:inQC.length, label:'QC', st:'green' },
+    { n:readyDelivery.length, label:'For delivery', st:'green' },
+  ];
+
+  // Needs-attention queue (red first, then amber), capped.
+  const attention=[];
+  overdueProd.slice().sort((a,b)=>String(a.due_date||'').localeCompare(String(b.due_date||''))).forEach(j=>{
+    const d=Math.abs(daysUntil(j.due_date)||0); attention.push({ sev:'red', title:`${j.client_name||'—'} — ${j.item||'job'}`, meta:`${d} day${d===1?'':'s'} overdue · ${metaFrom(PRODUCTION_STATUSES,j.status).label}`, go:'prod' });
+  });
+  materialsPending.forEach(j=> attention.push({ sev:'red', title:`Materials needed — ${j.item||j.client_name||'job'}`, meta:'production blocked', go:'requests' }));
+  openRepl.filter(r=>r.status==='pending').forEach(r=> attention.push({ sev:'amber', title:`Rework — ${r.item||r.client_name||'request'}`, meta:`${r.department||'QC'} · awaiting approval`, go:'replacements' }));
+  overdueAR.slice().sort((a,b)=>Number(b.balance_due||0)-Number(a.balance_due||0)).slice(0,3).forEach(o=> attention.push({ sev:'amber', title:`Unpaid — ${o.client_name||'client'}`, meta:`${peso(o.balance_due)} · ${o.number||''}`, go:'sales-orders' }));
+  const attnSorted=attention.sort((a,b)=> (a.sev==='red'?0:1)-(b.sev==='red'?0:1)).slice(0,7);
+
+  // Department scoreboard.
+  const activeGraphic=(graphicJobs||[]).filter(j=>!GRAPHIC_DONE.includes(j.status));
+  const activePrinting=(printingJobs||[]).filter(j=>!PRINTING_DONE.includes(j.status));
+  const scoreboard=[
+    { dept:'Production', val: overdueProd.length?`${overdueProd.length} overdue`:'on track', st:prodStatus, go:'prod' },
+    { dept:'Graphics', val:`${activeGraphic.length} in queue`, st:'green', go:'graphic' },
+    { dept:'Printing', val:`${activePrinting.length} active`, st:'green', go:'printing' },
+    { dept:'Sampling', val: overdueSample.length?`${overdueSample.length} overdue`:'on track', st: overdueSample.length?'amber':'green', go:'sampling' },
+    { dept:'QC / rework', val:`${openRepl.length} open`, st:qualStatus, go:'qc' },
+    { dept:'Purchasing', val: materialsPending.length?`${materialsPending.length} shortages`:`${openPRs.length} PRs`, st:purStatus, go:'requests' },
+    { dept:'People / HR', val:`${headcount} active · ${onLeaveToday.length} out`, st:hrStatus, go:'employees' },
+  ];
+
+  const hour=new Date().getHours();
+  const greet=hour<12?'Good morning':hour<18?'Good afternoon':'Good evening';
+  const firstName=(profile?.name||profile?.email||'there').split(' ')[0].split('@')[0];
+
+  function Tile({ t }){
+    const c=S[t.st];
+    return (
+      <button onClick={()=>navTo(t.go)} className={`text-left bg-white rounded-xl border-l-4 ${c.bar} shadow-sm hover:shadow-md transition p-3.5`} style={{borderTopLeftRadius:0,borderBottomLeftRadius:0}}>
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-500"><span>{t.icon}</span>{t.label}</div>
+        <div className="text-2xl font-extrabold text-slate-900 mt-1">{t.big}</div>
+        <div className="text-[11px] text-slate-500 mt-0.5">{t.sub}</div>
+      </button>
+    );
+  }
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">🧭 Operations Command Center</h1>
+          <p className="text-slate-500 text-sm mt-0.5">{greet}, {firstName} — the whole office at a glance, {fmtDate(today)}.</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold">{greenCount} green</span>
+          <span className="text-[11px] px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-semibold">{amberCount} yellow</span>
+          <span className="text-[11px] px-2.5 py-1 rounded-full bg-rose-100 text-rose-700 font-semibold">{redCount} red</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5">
+        {tiles.map(t=><Tile key={t.key} t={t} />)}
+      </div>
+
+      <div className="bg-white rounded-xl border p-3.5 mb-5">
+        <div className="text-[11px] text-slate-500 mb-2.5">Order flow — where everything sits today</div>
+        <div className="flex items-center gap-1 flex-wrap">
+          {flow.map((f,i)=>(<React.Fragment key={f.label}>
+            {i>0 && <span className="text-slate-300">›</span>}
+            <button onClick={()=>navTo(i===0?'sales-orders':i===1?'sampling':'prod')} className="flex-1 min-w-[72px] text-center hover:bg-slate-50 rounded-lg py-1">
+              <div className={`text-xl font-bold ${f.st==='red'?'text-rose-700':f.st==='amber'?'text-amber-700':'text-slate-900'}`}>{f.n}</div>
+              <div className="text-[11px] text-slate-500">{f.label}</div>
+            </button>
+          </React.Fragment>))}
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-5 mb-5">
+        <div>
+          <div className="text-sm font-bold text-slate-700 mb-2">Needs attention</div>
+          <div className="bg-white rounded-xl border overflow-hidden">
+            {attnSorted.length===0 ? <div className="text-sm text-slate-400 p-6 text-center">All clear — nothing flagged right now.</div>
+              : attnSorted.map((a,i)=>(
+                <button key={i} onClick={()=>navTo(a.go)} className="w-full text-left flex items-start gap-2.5 px-3 py-2.5 border-t first:border-t-0 hover:bg-slate-50">
+                  <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${a.sev==='red'?'bg-rose-500':'bg-amber-500'}`}></span>
+                  <div className="min-w-0"><div className="text-[13px] text-slate-800 leading-snug">{a.title}</div><div className="text-[11px] text-slate-500">{a.meta}</div></div>
+                </button>
+              ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-sm font-bold text-slate-700 mb-2">Department scoreboard</div>
+          <div className="bg-white rounded-xl border overflow-hidden text-[13px]">
+            {scoreboard.map((d,i)=>(
+              <button key={i} onClick={()=>navTo(d.go)} className="w-full flex items-center justify-between px-3 py-2.5 border-t first:border-t-0 hover:bg-slate-50">
+                <span className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${S[d.st].dot}`}></span>{d.dept}</span>
+                <span className={S[d.st].txt}>{d.val}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-center">
+        <button onClick={()=>setShowReport(true)} className="inline-flex items-center gap-2 bg-indigo-600 text-white text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-indigo-700">📋 Generate weekly report for CEO</button>
+      </div>
+
+      {showReport && <OpsWeeklyReport onClose={()=>setShowReport(false)} profile={profile} data={{ today, tiles, overdueProd, dueWeekProd, materialsPending, readyDelivery, openRepl, openPRs, openPOs, overdueAR, openAR, onLeaveToday, openCases, graveCases, reviewsDue, headcount, pendApprovals, activeProd, activeSample, attnSorted, scoreboard, redCount, amberCount, greenCount, clientName }} />}
+    </div>
+  );
+}
+
+/* Printable GREEN/YELLOW/RED weekly management report — the AGM's core CEO
+   deliverable (JD section 10), compiled from the same live numbers. */
+function OpsWeeklyReport({ onClose, profile, data }){
+  const d=data;
+  const Band=({ sev, children })=>{
+    const c=sev==='red'?'bg-rose-50 border-rose-200 text-rose-800':sev==='amber'?'bg-amber-50 border-amber-200 text-amber-800':'bg-emerald-50 border-emerald-200 text-emerald-800';
+    const lbl=sev==='red'?'RED — CEO decision':sev==='amber'?'YELLOW — needs attention':'GREEN — normal';
+    return <div className={`border rounded-lg px-3 py-2 ${c}`}><div className="text-[10px] font-bold uppercase tracking-wider mb-0.5">{lbl}</div><div className="text-[13px] text-slate-700">{children}</div></div>;
+  };
+  const prodSev=d.overdueProd.length?'red':(d.materialsPending.length||d.dueWeekProd.length>6?'amber':'green');
+  const qualSev=d.openRepl.some(r=>r.status==='pending')?'red':(d.openRepl.length?'amber':'green');
+  const purSev=d.materialsPending.length?'red':(d.openPRs.length>5?'amber':'green');
+  const hrSev=d.graveCases.length?'red':(d.openCases.length||d.reviewsDue.length?'amber':'green');
+  const arSev=d.overdueAR.length>5?'red':(d.overdueAR.length?'amber':'green');
+  return (
+    <Modal title="Weekly management report" onClose={onClose} wide>
+      <div className="bg-white p-6 text-sm" style={{fontFamily:'serif'}}>
+        <div className="text-center border-b-2 border-slate-800 pb-3 mb-4">
+          <div className="text-xl font-bold">STEEZE — WEEKLY OPERATIONS REPORT</div>
+          <div className="text-xs text-slate-500 mt-1">Week ending {fmtDate(d.today)} · Prepared by {profile?.name||profile?.email||'AGM'}</div>
+          <div className="flex justify-center gap-2 mt-2">
+            <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">{d.greenCount} green</span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">{d.amberCount} yellow</span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-rose-100 text-rose-700 font-bold">{d.redCount} red</span>
+          </div>
+        </div>
+        <div className="space-y-2.5">
+          <div className="font-bold text-slate-700 text-xs uppercase">Production &amp; delivery</div>
+          <Band sev={prodSev}>{d.activeProd.length} active jobs · {d.overdueProd.length} overdue · {d.dueWeekProd.length} due this week · {d.readyDelivery.length} ready for delivery.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Quality / rework</div>
+          <Band sev={qualSev}>{d.openRepl.length} open replacement/rework request{d.openRepl.length===1?'':'s'}.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Purchasing / materials</div>
+          <Band sev={purSev}>{d.materialsPending.length} material shortage{d.materialsPending.length===1?'':'s'} blocking production · {d.openPRs.length} PRs awaiting · {d.openPOs.length} POs open.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Sales &amp; receivables</div>
+          <Band sev={arSev}>{peso(d.openAR)} open AR · {d.overdueAR.length} order{d.overdueAR.length===1?'':'s'} delivered and unpaid.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Staffing &amp; people</div>
+          <Band sev={hrSev}>{d.headcount} active staff · {d.onLeaveToday.length} on leave today · {d.openCases.length} open case{d.openCases.length===1?'':'s'} ({d.graveCases.length} grave) · {d.reviewsDue.length} review{d.reviewsDue.length===1?'':'s'} due.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Decisions / approvals needed from ownership</div>
+          <Band sev={d.pendApprovals>0?'amber':'green'}>{d.pendApprovals} item{d.pendApprovals===1?'':'s'} awaiting approval.{d.redCount>0?` ${d.redCount} RED area${d.redCount===1?'':'s'} may require CEO decision.`:''}</Band>
+        </div>
+        {d.attnSorted.length>0 && (<div className="mt-4">
+          <div className="font-bold text-slate-700 text-xs uppercase mb-1.5">Major unresolved issues</div>
+          <ul className="list-disc pl-5 text-[13px] text-slate-700 space-y-0.5">{d.attnSorted.map((a,i)=><li key={i}>{a.title} — {a.meta}</li>)}</ul>
+        </div>)}
+      </div>
+      <div className="no-print flex gap-2 mt-3">
+        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print / save as PDF</button>
+        <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -44321,7 +44559,7 @@ function App(){
     // For Approval sits right under Dashboard with an amber badge showing
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
-      { items:[ ['dashboard','Dashboard','📊'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
@@ -44541,6 +44779,7 @@ function App(){
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
+        {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
