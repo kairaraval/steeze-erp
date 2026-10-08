@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Purchasing Operations &amp; Best Practice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Manrope:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#F6F5F2; --surface:#FFFFFF; --ink:#17181A; --muted:#66686C; --line:#DCDBD6; --line-soft:#ECEBE7;
+  --accent:#1F2D5A; --accent-ink:#FFFFFF; --wash:#E9ECF5; --wash-2:#F1F3F9;
+  --tip:#F3EFE3; --tip-ink:#5A4A1E; --warn:#F7E9E6; --warn-ink:#7A2E22; --ok:#E6F1EA; --ok-ink:#1F5A38;
+  --fig-fill:#EFEEEA; --fig-fill-2:#DDDCD6; --fig-stroke:#2A2B2E; --fig-accent:#1F2D5A;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121316; --surface:#1A1B1F; --ink:#ECEAE4; --muted:#9A9CA3; --line:#2C2E34; --line-soft:#232529;
+    --accent:#9DB0F0; --accent-ink:#0F172E; --wash:#1C2130; --wash-2:#181C27;
+    --tip:#2A2619; --tip-ink:#E3D3A0; --warn:#2E1B18; --warn-ink:#F0B3A8; --ok:#16281D; --ok-ink:#A9DDBB;
+    --fig-fill:#24262B; --fig-fill-2:#33363D; --fig-stroke:#E3E1DB; --fig-accent:#9DB0F0;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121316; --surface:#1A1B1F; --ink:#ECEAE4; --muted:#9A9CA3; --line:#2C2E34; --line-soft:#232529;
+  --accent:#9DB0F0; --accent-ink:#0F172E; --wash:#1C2130; --wash-2:#181C27;
+  --tip:#2A2619; --tip-ink:#E3D3A0; --warn:#2E1B18; --warn-ink:#F0B3A8; --ok:#16281D; --ok-ink:#A9DDBB;
+  --fig-fill:#24262B; --fig-fill-2:#33363D; --fig-stroke:#E3E1DB; --fig-accent:#9DB0F0;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Manrope",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+.page{display:grid;grid-template-columns:1fr;max-width:1180px;margin:0 auto;padding:0 20px 80px}
+@media (min-width:1024px){.page{grid-template-columns:240px minmax(0,1fr);gap:56px;padding:0 40px 120px}}
+.nav{display:none}
+@media (min-width:1024px){
+  .nav{display:block;position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:48px 0 40px;font-size:13px}
+  .nav .brand{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:28px}
+  .nav ol{list-style:none;margin:0;padding:0;border-left:1px solid var(--line)}
+  .nav li a{display:block;padding:6px 0 6px 16px;color:var(--muted);text-decoration:none;border-left:2px solid transparent;margin-left:-1px;line-height:1.35}
+  .nav li a:hover,.nav li a:focus-visible{color:var(--ink);border-left-color:var(--accent);outline:none}
+  .nav li.sub a{padding-left:28px;font-size:12px}
+}
+.hero{padding:64px 0 40px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);display:flex;gap:16px;align-items:center}
+.eyebrow b{color:var(--accent);font-weight:500}
+h1{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:clamp(40px,6vw,64px);line-height:1;letter-spacing:-.01em;margin:16px 0 20px;text-wrap:balance}
+.lede{font-size:18px;max-width:62ch;color:var(--muted);margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:28px;margin-top:28px;font-size:13px;color:var(--muted)}
+.meta span b{display:block;color:var(--ink);font-weight:600;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:13px}
+main{min-width:0}
+section{padding:48px 0 8px;border-bottom:1px solid var(--line-soft)}
+section:last-of-type{border-bottom:none}
+h2{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;font-size:36px;line-height:1.1;margin:0 0 6px;text-wrap:balance}
+.h2-kicker{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+h3{font-size:19px;font-weight:700;margin:36px 0 10px;letter-spacing:-.005em}
+h4{font-size:15px;font-weight:700;margin:24px 0 6px}
+p{max-width:68ch;margin:0 0 14px}
+p.wide{max-width:none}
+ul,ol{max-width:68ch;padding-left:22px;margin:0 0 14px}
+li{margin-bottom:6px}
+strong{font-weight:700}
+.term{font-weight:700;color:var(--ink)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.9em;background:var(--wash-2);padding:1px 5px;border-radius:3px}
+.callout{border-left:3px solid var(--accent);background:var(--wash);padding:14px 18px;margin:18px 0 22px;max-width:760px;border-radius:0 4px 4px 0}
+.callout .lbl{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.callout p{margin:0 0 6px;max-width:none}
+.callout p:last-child{margin:0}
+.callout.tip{background:var(--tip);border-left-color:var(--tip-ink)}
+.callout.tip .lbl{color:var(--tip-ink)}
+.callout.warn{background:var(--warn);border-left-color:var(--warn-ink)}
+.callout.warn .lbl{color:var(--warn-ink)}
+.callout.ok{background:var(--ok);border-left-color:var(--ok-ink)}
+.callout.ok .lbl{color:var(--ok-ink)}
+.tbl{overflow-x:auto;margin:16px 0 28px;border:1px solid var(--line);border-radius:4px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:560px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+th{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;background:var(--wash-2)}
+tr:last-child td{border-bottom:none}
+td.k{font-weight:700;white-space:nowrap}
+td .y{color:var(--ok-ink);background:var(--ok);padding:1px 7px;border-radius:3px;font-size:12px;font-weight:600;white-space:nowrap}
+td .n{color:var(--warn-ink);background:var(--warn);padding:1px 7px;border-radius:3px;font-size:12px;font-weight:600;white-space:nowrap}
+td .m{color:var(--tip-ink);background:var(--tip);padding:1px 7px;border-radius:3px;font-size:12px;font-weight:600;white-space:nowrap}
+.gloss{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px 28px;margin:16px 0 28px;padding:0;list-style:none;font-size:14px}
+.gloss li{margin:0;padding:8px 0;border-bottom:1px solid var(--line-soft)}
+.gloss li b{display:block;font-weight:700}
+.gloss li span{color:var(--muted)}
+.quiz{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:28px 28px 20px;margin-top:20px;max-width:820px}
+.quiz .q{padding:16px 0;border-bottom:1px solid var(--line-soft)}
+.quiz .q:last-of-type{border-bottom:none}
+.quiz .q p{font-weight:600;margin:0 0 10px}
+.quiz .q p small{font-family:"IBM Plex Mono",monospace;color:var(--muted);font-weight:500;margin-right:10px}
+.quiz label{display:flex;gap:10px;align-items:flex-start;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:14.5px}
+.quiz label:hover{background:var(--wash-2)}
+.quiz input{margin-top:4px;accent-color:var(--accent)}
+.quiz .q.right label.picked{background:var(--ok);color:var(--ok-ink)}
+.quiz .q.wrong label.picked{background:var(--warn);color:var(--warn-ink)}
+.quiz .q.wrong label.correct{outline:2px solid var(--ok-ink);outline-offset:-2px}
+.quiz .why{display:none;font-size:13px;color:var(--muted);margin:8px 10px 0}
+.quiz .q.right .why,.quiz .q.wrong .why{display:block}
+.quiz .bar{display:flex;align-items:center;gap:20px;margin-top:20px;flex-wrap:wrap}
+.btn{background:var(--accent);color:var(--accent-ink);border:none;padding:11px 20px;border-radius:4px;font:600 14px "Manrope",sans-serif;cursor:pointer;letter-spacing:.01em}
+.btn:hover{filter:brightness(1.1)}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.score{font-family:"IBM Plex Mono",monospace;font-size:14px}
+.check{list-style:none;padding:0;max-width:720px}
+.check li{display:grid;grid-template-columns:22px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:14.5px}
+.check li::before{content:"";width:14px;height:14px;border:1.5px solid var(--muted);border-radius:3px;margin-top:5px}
+.foot{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);font-family:"IBM Plex Mono",monospace;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.steps{counter-reset:s;list-style:none;padding:0;max-width:840px;margin:18px 0 28px}
+.steps>li{counter-increment:s;position:relative;padding:14px 18px 14px 58px;border:1px solid var(--line);border-radius:6px;background:var(--surface);margin-bottom:12px}
+.steps>li::before{content:counter(s);position:absolute;left:14px;top:14px;width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:center}
+.steps>li h4{margin:0 0 4px;font-size:15.5px}
+.steps>li p{margin:0 0 6px;font-size:14.5px;max-width:none}
+.steps>li p:last-child{margin:0}
+.steps>li .who{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--accent);letter-spacing:.04em;text-transform:uppercase}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:22px 0 30px}
+.flow .node{flex:1;min-width:116px;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px 10px;text-align:center}
+.flow .node b{display:block;font-size:13px;margin-bottom:3px}
+.flow .node small{color:var(--muted);font-size:11px;font-family:"IBM Plex Mono",monospace}
+.flow .arrow{align-self:center;color:var(--muted);font-size:18px}
+</style>
+</head>
+<body>
+<div class="page">
+<nav class="nav" aria-label="Module map">
+  <div class="brand">Steeze · Operations · Module 05</div>
+  <ol>
+    <li><a href="#intro">Why this module</a></li>
+    <li><a href="#suppliers">Supplier management</a></li>
+    <li><a href="#onboard" class="sub">Vetting a new supplier</a></li>
+    <li><a href="#receive">Receiving &amp; QC</a></li>
+    <li><a href="#reorder">Reorder points &amp; stock discipline</a></li>
+    <li><a href="#price">Price benchmarking &amp; negotiation</a></li>
+    <li><a href="#match">3-way match with Accounting</a></li>
+    <li><a href="#authority">Approval authority</a></li>
+    <li><a href="#trouble">Troubleshooting / FAQ</a></li>
+    <li><a href="#ethics">Conflict of interest</a></li>
+    <li><a href="#kpi">How the role is measured</a></li>
+    <li><a href="#gloss">Glossary</a></li>
+    <li><a href="#quiz">Knowledge check</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow"><span>Operations Training</span><b>Module 05</b><span>Purchasing · Part 2</span></div>
+  <h1>Purchasing Operations &amp; Best Practice</h1>
+  <p class="lede">Module 04 taught you how to run a request through to a received delivery. This one is the judgment around it — choosing and managing suppliers, checking what arrives, keeping stock honest, buying at the right price, and the discipline that keeps purchasing and accounting in lockstep.</p>
+  <div class="meta">
+    <span>Role<b>Purchasing Admin</b></span>
+    <span>Prerequisite<b>Module 04</b></span>
+    <span>Approvals go to<b>CEO</b></span>
+    <span>Read time<b>~22 min</b></span>
+  </div>
+</header>
+
+<section id="intro">
+  <p class="h2-kicker">00 — Orientation</p>
+  <h2>Knowing the steps isn't the job</h2>
+  <p>Module 04 showed you the mechanics: how a Purchase Request becomes a Purchase Order, how to receive it, and how the money is handed to Accounting. Anyone can click those buttons. What makes purchasing good — or expensive — is the judgment around each click: <em>Is this the right supplier? Is the price fair? Do we already have this in stock? Did what arrived actually match the order?</em></p>
+  <p>This module is that judgment. Read it once through, then keep it open as a reference for your first month. Every section ends with the habit it's trying to build.</p>
+  <div class="callout"><div class="lbl">The one-line summary</div><p>Buy the right thing, from the right supplier, at the right price, only when stock really needs it — and never let money move until the paperwork matches.</p></div>
+</section>
+
+<section id="suppliers">
+  <p class="h2-kicker">01 — Suppliers</p>
+  <h2>Supplier management</h2>
+  <p>You can't buy well without knowing your suppliers cold. The single most valuable thing you maintain is an up-to-date <span class="term">supplier directory</span> — not in your head, in the OS Suppliers list, so it survives when you're out or when you hand over.</p>
+  <p>For every supplier we buy from regularly, you should know:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>What to track</th><th>Why it matters</th></tr></thead>
+    <tbody>
+      <tr><td class="k">What they supply</td><td>So you request from the right one without asking around. Group by material — fabric, thread, trims, sublimation paper, ink, packaging.</td></tr>
+      <tr><td class="k">Lead time</td><td>Days from PO to delivery. This is what tells you how early to order. A 7-day lead time on a fabric means the stockout warning has to fire 7+ days before the cut date.</td></tr>
+      <tr><td class="k">MOQ</td><td>Minimum order quantity. If the MOQ is one roll but the job needs half, you need to know before you promise the margin.</td></tr>
+      <tr><td class="k">Price list</td><td>Current unit price per item, and the date you last confirmed it. Prices move — an old price in your head loses money.</td></tr>
+      <tr><td class="k">Payment terms</td><td>COD, 50% down, 15/30 days. This drives cashflow and what Accounting has to prepare.</td></tr>
+      <tr><td class="k">Reliability notes</td><td>Who delivers on time, who short-ships, who sends the wrong color. Honest notes here save future projects.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout tip"><div class="lbl">Habit</div><p>Every critical material should have a <strong>backup supplier</strong> on file. The day your main fabric supplier is out of stock mid-rush is the wrong day to start searching for a second source.</p></div>
+
+  <h3 id="onboard">Vetting a new supplier</h3>
+  <p>Don't send a real order to a supplier you've never used. Qualify them first:</p>
+  <ol class="steps">
+    <li><h4>Get a quotation and a sample</h4><p>Price in writing, plus a physical sample of the exact material. For fabric, confirm composition and GSM. For ink or paper, confirm it's compatible with our printers.</p></li>
+    <li><h4>Confirm the commercials</h4><p>MOQ, lead time, and payment terms in writing. A great price with a 30-day lead time may be useless for our turnaround.</p></li>
+    <li><h4>Check they're a real, registered business</h4><p>Ask for their business details and the ability to issue an official receipt / invoice — Accounting needs this to pay them and to file it correctly.</p></li>
+    <li><h4>Start small</h4><p>First order should be a small, non-urgent one. Prove they deliver on time and on spec before you route a rush production order through them.</p></li>
+    <li><h4>Add them to the OS</h4><p>Only after they've passed do they go into the Suppliers list with all their details, so the next PO to them is one click.</p></li>
+  </ol>
+  <div class="callout warn"><div class="lbl">Watch out</div><p>A new supplier with an unusually low price is a reason to be more careful, not less. Cheap-but-wrong GSM, cheap-but-late, or cheap-but-can't-issue-a-receipt all cost more than they save.</p></div>
+</section>
+
+<section id="receive">
+  <p class="h2-kicker">02 — Receiving</p>
+  <h2>Receiving &amp; quality check</h2>
+  <p>Receiving is not "the box arrived." It's the checkpoint where bad stock gets caught <em>before</em> it reaches production and before we pay for it. Every delivery is checked against two documents: the <span class="term">PO</span> (what we ordered) and the supplier's <span class="term">delivery receipt / invoice</span> (what they say they sent).</p>
+  <ol class="steps">
+    <li><h4>Count it</h4><p>Physical count against the PO quantity. Rolls, pieces, kilos — whatever the unit is. Don't sign for 50 because the DR says 50; count to 50.</p></li>
+    <li><h4>Inspect quality</h4><p>Right material, right color, right GSM, no damage or defects. For fabric, check the dye lot is consistent. For sublimation paper and ink, check it's the correct type for our machines.</p></li>
+    <li><h4>Match to the PO in the OS</h4><p>Receive against the Purchase Order so stock goes up by exactly what arrived — not what was ordered. If 8 of 10 rolls came, receive 8.</p></li>
+    <li><h4>Handle the gap</h4><p>Short delivery, wrong item, or damaged goods: note it on the DR, tell the supplier the same day, and don't let Accounting pay for what we didn't get or can't use.</p></li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Situation</th><th>What you do</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Exact match</td><td><span class="y">Receive full</span> Count = PO = DR. Receive, update stock, pass to Accounting for payment.</td></tr>
+      <tr><td class="k">Partial delivery</td><td><span class="m">Receive partial</span> Receive what came. Keep the PO open for the balance, or close and re-order if the supplier can't complete.</td></tr>
+      <tr><td class="k">Wrong / defective</td><td><span class="n">Reject</span> Don't receive into stock. Document it, return to supplier, and hold payment for that portion.</td></tr>
+      <tr><td class="k">Over-delivery</td><td><span class="m">Confirm first</span> Don't just absorb extra. Confirm with the supplier whether it's billed before accepting it into stock.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout ok"><div class="lbl">Why this is strict</div><p>Once stock is received in the OS, production plans against it and Accounting pays for it. A sloppy receive creates a phantom roll that production expects and a payment for goods we never used. Catch it at the door.</p></div>
+</section>
+
+<section id="reorder">
+  <p class="h2-kicker">03 — Stock discipline</p>
+  <h2>Reorder points &amp; keeping stock honest</h2>
+  <p>Most stockouts aren't bad luck — they're a reorder that happened too late. The fix is to decide, in advance, the stock level at which you buy again.</p>
+  <h3>Par levels &amp; safety stock</h3>
+  <p>For materials we use on almost every job — common fabric bases, staple thread colors, standard packaging — set a <span class="term">par level</span>: the minimum quantity that should always be on hand. When stock drops to the par level, you reorder, even if no specific project is asking yet. The <span class="term">safety stock</span> buried in that par level covers the supplier's lead time plus a buffer for surprises.</p>
+  <div class="callout"><div class="lbl">Rule of thumb</div><p>Reorder point ≈ (how much we use per day × supplier lead time in days) + a safety buffer. The longer or less reliable the lead time, the bigger the buffer.</p></div>
+  <h3>FIFO — first in, first out</h3>
+  <p>Use the oldest stock first. Fabric can yellow, crease, or gather dust; dye lots drift over time. Issuing newest-first leaves old rolls aging in the corner until they're unusable. Store and label so the oldest is the easiest to reach.</p>
+  <h3>Label &amp; store so stock = reality</h3>
+  <p>Every item findable, every roll labeled with what it is and when it arrived. The OS stock number is only useful if it matches the shelf. A monthly or rolling <span class="term">cycle count</span> — physically counting a slice of inventory and reconciling it against the OS — keeps the two honest.</p>
+  <h3>Dead stock</h3>
+  <p>Flag materials that haven't moved in a long time — leftover specialty fabric from a one-off order, a discontinued color. Dead stock is money sitting on a shelf. Surface it so we can use it on a future job, return it, or stop reordering it.</p>
+  <div class="callout tip"><div class="lbl">Habit</div><p>Walk the stock room weekly, not just when something runs out. You'll catch low par levels, mislabeled rolls, and dead stock before they become a problem on a live project.</p></div>
+</section>
+
+<section id="price">
+  <p class="h2-kicker">04 — Price</p>
+  <h2>Price benchmarking &amp; negotiation</h2>
+  <p>Buying well isn't paying the lowest sticker price — it's paying a fair price for the right spec, delivered on time. But you can't know what's fair without comparison.</p>
+  <ul>
+    <li><strong>Get more than one quote on anything significant.</strong> For a big fabric buy or a new material, two or three quotes tell you the market. One quote tells you nothing.</li>
+    <li><strong>Track price history.</strong> Keep the last confirmed price per item. When a supplier quotes higher than last time, you'll see it — and you can ask why instead of just paying it.</li>
+    <li><strong>Negotiate the whole deal, not just the unit price.</strong> Payment terms, free or cheaper delivery, a price break at a slightly higher quantity, holding a price for the quarter — these are all worth as much as a few pesos off the unit.</li>
+    <li><strong>Consolidate orders.</strong> Buying a month of a staple material in one PO often beats the price — and the delivery hassle — of five small ones. Balance this against cashflow and storage.</li>
+    <li><strong>Don't single-source by habit.</strong> Having a second qualified supplier for key materials keeps the main one honest on price and protects you when they're out.</li>
+  </ul>
+  <div class="callout warn"><div class="lbl">Watch out</div><p>A low price that forces a big MOQ you can't use, long lead times, or poor quality isn't a saving. Compare the <strong>total</strong> cost to the job — spec, timing, waste, and cash tied up — not just the number on the quote.</p></div>
+</section>
+
+<section id="match">
+  <p class="h2-kicker">05 — Money</p>
+  <h2>The 3-way match with Accounting</h2>
+  <p>This is the discipline that protects the company from overpaying, double-paying, or paying for goods we never got. Before any supplier is paid, three documents must agree:</p>
+  <div class="flow">
+    <div class="node"><b>Purchase Order</b><small>what we ordered</small></div>
+    <div class="arrow">=</div>
+    <div class="node"><b>Delivery Receipt</b><small>what arrived</small></div>
+    <div class="arrow">=</div>
+    <div class="node"><b>Supplier Invoice</b><small>what they bill</small></div>
+    <div class="arrow">→</div>
+    <div class="node"><b>Pay</b><small>only if all match</small></div>
+  </div>
+  <p>If the PO says 10 rolls at ₱X, the DR confirms 10 rolls arrived, and the invoice bills 10 rolls at ₱X — pay it. If any of the three disagree, payment waits until it's resolved. Your job is to be the one who notices the mismatch before the money leaves.</p>
+  <h3>Terms &amp; cashflow</h3>
+  <p>Payment terms aren't just a number — they shape the company's cash. COD and large down-payments drain cash immediately; 15- or 30-day terms give breathing room. When you set up a PO, record the terms and expected pay date so Accounting can plan, and so nothing slips into "overdue" and sours a supplier relationship.</p>
+  <div class="callout ok"><div class="lbl">Where you hand off</div><p>Purchasing proves <em>what</em> is owed and that it's correct (the match). Accounting handles <em>paying</em> it. A clean handoff is a complete PO, a received DR, and the supplier invoice attached — so Accounting never has to chase you for a document.</p></div>
+</section>
+
+<section id="authority">
+  <p class="h2-kicker">06 — Authority</p>
+  <h2>Approval authority — who can say yes</h2>
+  <p>Purchasing spends the company's money, so spending is controlled. The rule at Steeze is simple and absolute:</p>
+  <div class="callout warn"><div class="lbl">The rule</div><p>Every purchase that commits money is approved by the <strong>CEO</strong>. There is no amount — however small — that anyone else, including the AGM, decides on their own. Purchasing prepares and recommends; the CEO approves the spend.</p></div>
+  <p>In practice that means you build the Purchase Request with the right quantities, the right supplier, and the right price, and route it for approval. You don't raise a PO or commit a supplier until the approval is in. "I was sure it would be approved" is not approval.</p>
+  <h3>When it's urgent</h3>
+  <p>Rush jobs happen. The escalation path is still through the CEO — you just flag it clearly as time-critical with the deadline and why, so it can be approved quickly. Speed comes from making the request easy to say yes to, not from skipping the approval.</p>
+</section>
+
+<section id="trouble">
+  <p class="h2-kicker">07 — When things go wrong</p>
+  <h2>Troubleshooting / FAQ</h2>
+  <p>The page you'll use most in your first month. These are the real situations and the right first move.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>What happened</th><th>First move</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Stockout mid-production</td><td>Check all stock buckets first (including blocks and remnants for sublimation). If truly short, raise an urgent PR flagged with the deadline, contact the supplier for the fastest option, and tell Production and the owner immediately so they can replan.</td></tr>
+      <tr><td class="k">Supplier is delayed</td><td>Confirm the new date in writing. If it misses the cut date, switch to the backup supplier or escalate. Never let a supplier's silence become your surprise — chase proactively.</td></tr>
+      <tr><td class="k">Wrong item delivered</td><td>Don't receive it into stock. Document on the DR, notify the supplier same day, arrange a return/replacement, and hold payment for that portion.</td></tr>
+      <tr><td class="k">Shortfall flagged on a PR</td><td>The OS is telling you stock won't cover the job. Confirm the real on-hand count, then buy exactly the gap — not the whole requirement again.</td></tr>
+      <tr><td class="k">Price came in higher than quoted</td><td>Pause. Query the supplier against your price history before raising the PO. If it's a real increase, flag it in the approval so the CEO decides with eyes open.</td></tr>
+      <tr><td class="k">Invoice doesn't match the PO/DR</td><td>Don't pass it to Accounting to pay. Resolve the mismatch with the supplier first — corrected invoice, credit, or adjustment.</td></tr>
+      <tr><td class="k">Two projects need the same scarce stock</td><td>Don't quietly take from one. Surface it to the owners/AGM so the call is made on which project has priority.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="ethics">
+  <p class="h2-kicker">08 — Integrity</p>
+  <h2>Conflict of interest</h2>
+  <p>Purchasing is a position of trust — you decide where the company's money goes. A few lines that protect both you and Steeze:</p>
+  <ul>
+    <li><strong>No kickbacks or personal gifts</strong> in exchange for giving a supplier business. Choose suppliers on price, quality, and reliability — nothing else.</li>
+    <li><strong>Disclose any relationship.</strong> If a supplier is a friend or relative, say so up front. They can still be used if they're genuinely the best option — but the decision has to be transparent, not hidden.</li>
+    <li><strong>Don't steer orders</strong> to a single supplier for personal reasons, or split orders to stay under anyone's notice.</li>
+    <li><strong>Keep the trail clean.</strong> Quotes, POs, DRs, and invoices all recorded. If every decision can be explained later, you're doing it right.</li>
+  </ul>
+  <div class="callout tip"><div class="lbl">The test</div><p>If you'd be uncomfortable explaining a purchasing decision to the CEO out loud, don't make it that way. Transparency is the whole job.</p></div>
+</section>
+
+<section id="kpi">
+  <p class="h2-kicker">09 — Measurement</p>
+  <h2>How the role is measured</h2>
+  <p>You'll know you're doing the job well when these stay healthy. None of them is about buying the cheapest — they're about keeping production fed, money controlled, and stock honest.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Measure</th><th>What good looks like</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Material availability</td><td>Production rarely or never waits on materials you were responsible for ordering. Stockouts are the headline number.</td></tr>
+      <tr><td class="k">On-time ordering</td><td>POs raised early enough to beat lead times — not firefighting at the deadline.</td></tr>
+      <tr><td class="k">Price &amp; savings</td><td>Fair prices confirmed against the market; price creep caught and queried.</td></tr>
+      <tr><td class="k">Inventory accuracy</td><td>OS stock matches the shelf at cycle counts. Few surprises, little dead stock.</td></tr>
+      <tr><td class="k">Clean paperwork</td><td>Every payment backed by a matching PO, DR, and invoice. Accounting doesn't chase you.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout ok"><div class="lbl">The mindset</div><p>Good purchasing is quiet. When it's working, nobody notices — production never stops, money is controlled, and stock is always right. That invisibility <em>is</em> the win.</p></div>
+</section>
+
+<section id="gloss">
+  <p class="h2-kicker">10 — Reference</p>
+  <h2>Glossary</h2>
+  <ul class="gloss">
+    <li><b>Supplier directory</b><span>The maintained list of who we buy from and all their details.</span></li>
+    <li><b>Lead time</b><span>Days from raising a PO to the goods arriving.</span></li>
+    <li><b>MOQ</b><span>Minimum order quantity a supplier will sell.</span></li>
+    <li><b>Par level</b><span>The minimum stock that should always be on hand.</span></li>
+    <li><b>Safety stock</b><span>Buffer stock that covers lead time and surprises.</span></li>
+    <li><b>Reorder point</b><span>The stock level that triggers buying again.</span></li>
+    <li><b>FIFO</b><span>First in, first out — use oldest stock first.</span></li>
+    <li><b>Cycle count</b><span>Regularly counting part of inventory to reconcile with the OS.</span></li>
+    <li><b>Dead stock</b><span>Material that hasn't moved and may never be used.</span></li>
+    <li><b>3-way match</b><span>PO = DR = invoice, all agreeing before payment.</span></li>
+    <li><b>DR</b><span>Delivery receipt — the supplier's record of what they sent.</span></li>
+    <li><b>Payment terms</b><span>When and how a supplier is paid (COD, 15/30 days, etc.).</span></li>
+    <li><b>Backup supplier</b><span>A second qualified source for a critical material.</span></li>
+    <li><b>GSM</b><span>Grams per square meter — fabric weight/thickness.</span></li>
+  </ul>
+</section>
+
+<section id="quiz">
+  <p class="h2-kicker">11 — Check yourself</p>
+  <h2>Knowledge check</h2>
+  <p>Eight questions. 80% to pass. If you miss one, the correct answer and the reason show — review that section and retake.</p>
+  <div class="quiz">
+    <div class="q" data-answer="b">
+      <p><small>Q1</small>A supplier quotes a price much lower than anyone else. What's the right instinct?</p>
+      <label><input type="radio" name="q1" value="a"> Order immediately — it's the best price.</label>
+      <label><input type="radio" name="q1" value="b"> Be more careful — check spec, lead time, and that they can issue a receipt.</label>
+      <label><input type="radio" name="q1" value="c"> Ignore them; cheap always means bad.</label>
+      <div class="why">A low price is a reason for more diligence, not less. Wrong spec, long lead time, or no official receipt can cost far more than the saving.</div>
+    </div>
+    <div class="q" data-answer="c">
+      <p><small>Q2</small>The DR says 10 rolls; you count 8. What do you receive in the OS?</p>
+      <label><input type="radio" name="q2" value="a"> 10 — trust the paperwork.</label>
+      <label><input type="radio" name="q2" value="b"> 10, and fix it later.</label>
+      <label><input type="radio" name="q2" value="c"> 8 — receive what actually arrived, and flag the short delivery.</label>
+      <div class="why">Always receive the real count. Receiving 10 creates a phantom roll production expects and a payment for goods we never got.</div>
+    </div>
+    <div class="q" data-answer="b">
+      <p><small>Q3</small>What triggers a reorder for a staple material?</p>
+      <label><input type="radio" name="q3" value="a"> Only when a project asks for it.</label>
+      <label><input type="radio" name="q3" value="b"> When stock drops to its par / reorder point.</label>
+      <label><input type="radio" name="q3" value="c"> When the shelf is completely empty.</label>
+      <div class="why">Par levels let you reorder before a stockout, covering the supplier's lead time. Waiting for empty guarantees production waits.</div>
+    </div>
+    <div class="q" data-answer="a">
+      <p><small>Q4</small>Before a supplier is paid, which three documents must agree?</p>
+      <label><input type="radio" name="q4" value="a"> Purchase Order, Delivery Receipt, Supplier Invoice.</label>
+      <label><input type="radio" name="q4" value="b"> Quotation, Techpack, Sales Order.</label>
+      <label><input type="radio" name="q4" value="c"> PR, PO, and the owner's approval.</label>
+      <div class="why">The 3-way match — PO = DR = invoice — protects against overpaying, double-paying, or paying for goods we never received.</div>
+    </div>
+    <div class="q" data-answer="c">
+      <p><small>Q5</small>The AGM asks you to buy ₱3,000 of trims for a rush job. Who approves the spend?</p>
+      <label><input type="radio" name="q5" value="a"> The AGM — it's small.</label>
+      <label><input type="radio" name="q5" value="b"> You — just raise the PO.</label>
+      <label><input type="radio" name="q5" value="c"> The CEO — all spending is approved by the CEO, regardless of amount.</label>
+      <div class="why">There is no amount anyone else decides alone. Flag it as urgent so it's approved fast, but the approval still comes from the CEO.</div>
+    </div>
+    <div class="q" data-answer="b">
+      <p><small>Q6</small>A relative owns a supplier that's genuinely a good option. What do you do?</p>
+      <label><input type="radio" name="q6" value="a"> Use them quietly; the price is fine.</label>
+      <label><input type="radio" name="q6" value="b"> Disclose the relationship up front, then let the decision be made openly.</label>
+      <label><input type="radio" name="q6" value="c"> Never use them under any circumstances.</label>
+      <div class="why">They can be used if they're truly the best option — but only with full disclosure. The decision has to be transparent, not hidden.</div>
+    </div>
+    <div class="q" data-answer="a">
+      <p><small>Q7</small>Why use FIFO for fabric?</p>
+      <label><input type="radio" name="q7" value="a"> Older stock ages, yellows, and dye lots drift — use it first so nothing goes to waste.</label>
+      <label><input type="radio" name="q7" value="b"> Newer stock is always lower quality.</label>
+      <label><input type="radio" name="q7" value="c"> It makes counting faster.</label>
+      <div class="why">First in, first out stops old rolls aging in the corner until they're unusable.</div>
+    </div>
+    <div class="q" data-answer="c">
+      <p><small>Q8</small>A PR shows a shortfall of 20 meters on a job. What do you buy?</p>
+      <label><input type="radio" name="q8" value="a"> The full requirement again, to be safe.</label>
+      <label><input type="radio" name="q8" value="b"> Nothing — wait and see.</label>
+      <label><input type="radio" name="q8" value="c"> Confirm the real on-hand count, then buy exactly the 20-meter gap.</label>
+      <div class="why">Buy the gap, not the whole requirement — over-buying ties up cash and shelf space and is how double-ordering happens.</div>
+    </div>
+    <div class="bar">
+      <button class="btn" data-check>Check answers</button>
+      <button class="btn ghost" data-reset>Reset</button>
+      <span class="score"></span>
+    </div>
+  </div>
+</section>
+
+<div class="foot">
+  <span>Steeze · Operations Training · Module 05 — Purchasing Operations &amp; Best Practice</span>
+  <span>Read with Module 04 before taking over the Purchasing role</span>
+</div>
+</main>
+</div>
+
+<script>
+(function(){
+  var quiz=document.querySelector('.quiz'); if(!quiz) return;
+  var btn=quiz.querySelector('[data-check]'), reset=quiz.querySelector('[data-reset]'), out=quiz.querySelector('.score');
+  btn.addEventListener('click',function(){
+    var qs=quiz.querySelectorAll('.q'), right=0, answered=0;
+    qs.forEach(function(q){
+      q.classList.remove('right','wrong');
+      q.querySelectorAll('label').forEach(function(l){l.classList.remove('picked','correct');});
+      var picked=q.querySelector('input:checked'); if(!picked) return;
+      answered++;
+      var lab=picked.closest('label'); lab.classList.add('picked');
+      var ok=picked.value===q.getAttribute('data-answer');
+      if(ok){right++;q.classList.add('right');}
+      else{q.classList.add('wrong');var c=q.querySelector('input[value="'+q.getAttribute('data-answer')+'"]');if(c)c.closest('label').classList.add('correct');}
+    });
+    if(answered<qs.length){out.textContent='Answer all '+qs.length+' questions ('+(qs.length-answered)+' left).';return;}
+    var pct=Math.round(right/qs.length*100);
+    out.textContent='Score: '+right+' / '+qs.length+' ('+pct+'%) — '+(pct>=80?'Passed. Ready to take over.':'Below 80%. Review the marked sections and retake.');
+  });
+  reset.addEventListener('click',function(){
+    quiz.querySelectorAll('input').forEach(function(i){i.checked=false;});
+    quiz.querySelectorAll('.q').forEach(function(q){q.classList.remove('right','wrong');});
+    quiz.querySelectorAll('label').forEach(function(l){l.classList.remove('picked','correct');});
+    out.textContent='';
+  });
+})();
+</script>
+</body>
+</html>
