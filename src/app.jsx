@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 692 · Production & Sampling boards: the sales-owner filter now lists only the managers who actually own projects on that board (cleaner dropdown), alongside the existing search bar. Filter by any manager, 'My jobs', or Unassigned.";
+const BUILD = "Live build 693 · Budget Requests: the requester now gets an inbox notification when their request is approved or rejected (rejections include the reason).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36368,11 +36368,17 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
+  async function notifyRequester(text){
+    const rid = existing.requested_by;
+    if(!rid || rid===profile.id) return;
+    try{ await sb.from('notifications').insert({ recipient_id:rid, actor_id:profile.id, text, link_view:'budgets', ref_type:'budget_request', ref_id:existing.id, type:'system' }); }catch(_){}
+  }
   async function approve(){
     if(!confirm('Approve this budget request?')) return;
     setBusy(true);
     const { error } = await sb.from('budget_requests').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id', existing.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    await notifyRequester(`✅ Your budget request "${(existing.purpose||'').slice(0,50)}" (${peso(existing.amount||0)}) was approved.`);
     onSaved();
   }
   async function reject(){
@@ -36380,6 +36386,7 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     setBusy(true);
     const { error } = await sb.from('budget_requests').update({ status:'rejected', approved_by:profile.id, approved_at:new Date().toISOString(), notes:(existing.notes||'')+'\n[Rejected: '+reason+']' }).eq('id', existing.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    await notifyRequester(`✕ Your budget request "${(existing.purpose||'').slice(0,50)}" was rejected${reason?`: ${reason}`:''}.`);
     onSaved();
   }
   async function markSpent(){
