@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 695 · Purchase Request / PO stock check now also shows the cut BLOCKS available for a sublimation fabric line (count by size), not just the roll kilos — so you can see whether blocks already cover the job before buying more roll.";
+const BUILD = "Live build 696 · Training is now organized into per-department TRACKS. Each module has a track (e.g. Purchasing, Sales, General), and in Manage access you enroll people per track — so the purchasing person sees only the Purchasing modules (plus General), not everyone's sales training. Admins/trainers still see all tracks.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3885,16 +3885,17 @@ function TrainingHtmlLessonModal({ profile, lesson, onClose, onSaved }){
   </div></Modal>);
 }
 function trainingCanEdit(p){ return p?.role==='admin' || isManagerRole(p?.role); }
-function TrainingModuleModal({ profile, existing, nextPos, onClose, onSaved }){
-  const [f,setF]=useState({ title:existing?.title||'', description:existing?.description||'', icon:existing?.icon||'🎓' });
+function TrainingModuleModal({ profile, existing, nextPos, tracks, onClose, onSaved }){
+  const [f,setF]=useState({ title:existing?.title||'', description:existing?.description||'', icon:existing?.icon||'🎓', track:existing?.track||'General' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function save(){ if(!f.title.trim()){ setMsg('Title required.'); return; } setBusy(true);
-    try{ const payload={ title:f.title.trim(), description:f.description||null, icon:f.icon||'🎓' };
+    try{ const payload={ title:f.title.trim(), description:f.description||null, icon:f.icon||'🎓', track:(f.track||'General').trim()||'General' };
       if(existing){ await sb.from('training_modules').update({...payload, updated_at:new Date().toISOString()}).eq('id',existing.id); }
       else { await sb.from('training_modules').insert({...payload, position:nextPos||0, created_by:profile.id}); }
       setBusy(false); onSaved&&onSaved(); }catch(e){ setBusy(false); setMsg(e.message||String(e)); } }
   return (<Modal title={existing?'Edit module':'+ New module'} onClose={onClose}><div className="space-y-3 text-sm">
     <div className="flex gap-2"><div className="w-16"><label className="text-xs font-semibold text-slate-500">Icon</label><input value={f.icon} onChange={e=>setF({...f,icon:e.target.value})} className="w-full border rounded px-2 py-1.5 text-center" /></div><div className="flex-1"><label className="text-xs font-semibold text-slate-500">Title *</label><input value={f.title} onChange={e=>setF({...f,title:e.target.value})} className="w-full border rounded px-2 py-1.5" placeholder="e.g. How to Build a Techpack" /></div></div>
+    <div><label className="text-xs font-semibold text-slate-500">Track / department <span className="font-normal text-slate-400">· groups the module; who sees it is set in Manage access</span></label><input list="tp-tracks" value={f.track} onChange={e=>setF({...f,track:e.target.value})} className="w-full border rounded px-2 py-1.5" placeholder="e.g. Purchasing, Sales, General" /><datalist id="tp-tracks">{(tracks||['General','Sales','Purchasing']).map(t=><option key={t} value={t} />)}</datalist></div>
     <div><label className="text-xs font-semibold text-slate-500">Description</label><textarea value={f.description} onChange={e=>setF({...f,description:e.target.value})} rows={2} className="w-full border rounded px-2 py-1.5" /></div>
     {msg&&<div className="text-xs text-rose-600">{msg}</div>}
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
@@ -3934,29 +3935,49 @@ function TrainingLessonModal({ profile, moduleId, existing, nextPos, onClose, on
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy||imgBusy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
-function TrainingAccessModal({ profile, profiles, participants, reloadParticipants, onClose }){
+function TrainingAccessModal({ profile, profiles, tracks, reloadParticipants, onClose }){
   const [busy,setBusy]=useState('');
-  const [local,setLocal]=useState(()=>new Set(participants||[]));
+  const [rows,setRows]=useState([]);      // all {user_id, track} enrollments
+  const [track,setTrack]=useState((tracks&&tracks[0])||'General');
+  const [newTrack,setNewTrack]=useState('');
   const [search,setSearch]=useState('');
+  async function load(){ try{ const { data }=await sb.from('training_participants').select('user_id,track'); setRows(data||[]); }catch(_){ setRows([]); } }
+  useEffect(()=>{ load(); },[]);
+  const trackOpts = Array.from(new Set([...(tracks||[]), 'General', ...(newTrack.trim()?[newTrack.trim()]:[])])).sort();
+  const enrolledFor=(id,tr)=> rows.some(r=>r.user_id===id && r.track===tr);
+  const hasAll=(id)=> rows.some(r=>r.user_id===id && r.track==='*');
   async function toggle(id){
     setBusy(id);
-    const on=local.has(id);
+    const on=enrolledFor(id,track);
     try{
-      if(on){ await sb.from('training_participants').delete().eq('user_id',id); const n=new Set(local); n.delete(id); setLocal(n); }
-      else { await sb.from('training_participants').upsert({ user_id:id, added_by:profile.id }, { onConflict:'user_id' }); const n=new Set(local); n.add(id); setLocal(n); }
+      if(on){ await sb.from('training_participants').delete().eq('user_id',id).eq('track',track); setRows(rs=>rs.filter(r=>!(r.user_id===id&&r.track===track))); }
+      else { await sb.from('training_participants').upsert({ user_id:id, track, added_by:profile.id }, { onConflict:'user_id,track' }); setRows(rs=>[...rs,{user_id:id,track}]); }
       reloadParticipants && reloadParticipants();
     }catch(e){ alert(e.message||String(e)); }
     setBusy('');
   }
   const q=search.toLowerCase();
   const people=(profiles||[]).filter(p=>p.role!=='admin').filter(p=> !q || `${p.name||''} ${p.email||''}`.toLowerCase().includes(q)).sort((a,b)=>String(a.name||a.email).localeCompare(String(b.name||b.email)));
+  const enrolledCount=rows.filter(r=>r.track===track).length;
   return (<Modal title="Manage Training access" onClose={onClose} wide><div className="space-y-3 text-sm">
-    <div className="text-xs text-slate-500">Training is hidden from everyone by default. Toggle a person on to let them see and take the training. (Admins always have access.)</div>
+    <div className="text-xs text-slate-500">Training is hidden by default. Pick a <strong>track</strong> (department), then enroll the people who should take it. A person sees only the tracks they're enrolled in, plus any <strong>General</strong> modules. "All tracks" gives full access. (Admins + trainers always see everything.)</div>
+    <div className="flex items-end gap-2 flex-wrap">
+      <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Track</label>
+        <select value={track} onChange={e=>setTrack(e.target.value)} className="border rounded px-2 py-1.5 block">
+          {trackOpts.map(t=><option key={t} value={t}>{t}</option>)}
+          <option value="*">★ All tracks (full access)</option>
+        </select>
+      </div>
+      <div><label className="text-[10px] uppercase text-slate-400 font-semibold">…or type a new track</label>
+        <div className="flex gap-1"><input value={newTrack} onChange={e=>setNewTrack(e.target.value)} placeholder="e.g. Production" className="border rounded px-2 py-1.5" /><button type="button" onClick={()=>{ if(newTrack.trim()){ setTrack(newTrack.trim()); } }} className="px-2 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">Use</button></div>
+      </div>
+      <span className="text-[11px] text-slate-500 ml-auto">{enrolledCount} enrolled in <strong>{track==='*'?'All tracks':track}</strong></span>
+    </div>
     <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search people…" className="w-full border rounded px-2 py-1.5" />
-    <div className="border rounded-lg divide-y max-h-96 overflow-auto">
-      {people.map(p=>{ const on=local.has(p.id); return (
+    <div className="border rounded-lg divide-y max-h-80 overflow-auto">
+      {people.map(p=>{ const on=enrolledFor(p.id,track); const all=hasAll(p.id); return (
         <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
-          <div className="min-w-0"><div className="font-medium text-slate-800 truncate">{p.name||p.email}</div><div className="text-[11px] text-slate-400">{roleLabel(p.role)}</div></div>
+          <div className="min-w-0"><div className="font-medium text-slate-800 truncate">{p.name||p.email}</div><div className="text-[11px] text-slate-400">{roleLabel(p.role)}{all&&track!=='*'?' · has full access':''}</div></div>
           <button onClick={()=>toggle(p.id)} disabled={busy===p.id} className={`text-xs px-3 py-1.5 rounded-lg font-semibold shrink-0 ${on?'bg-emerald-100 text-emerald-700 hover:bg-emerald-200':'bg-slate-100 text-slate-600 hover:bg-slate-200'} disabled:opacity-50`}>{busy===p.id?'…':(on?'✓ Enrolled':'+ Add')}</button>
         </div>
       ); })}
@@ -3981,7 +4002,11 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
   const [editLesson,setEditLesson]=useState(null); const [creatingLesson,setCreatingLesson]=useState(false);
   const [editHtmlLesson,setEditHtmlLesson]=useState(null);
   const [showTeam,setShowTeam]=useState(false);
-  async function loadModules(){ setLoading(true); const { data }=await sb.from('training_modules').select('*').is('deleted_at',null).order('position').order('created_at'); const mods=data||[]; setModules(mods); setLoading(false); if(mods.length && !activeMod) selectModule(mods[0]); }
+  const [myTracks,setMyTracks]=useState(()=>new Set());
+  async function loadModules(){ setLoading(true);
+    try{ const { data:en }=await sb.from('training_participants').select('track').eq('user_id',me); setMyTracks(new Set((en||[]).map(r=>r.track))); }catch(_){ setMyTracks(new Set()); }
+    const { data }=await sb.from('training_modules').select('*').is('deleted_at',null).order('position').order('created_at'); const mods=data||[]; setModules(mods); setLoading(false);
+  }
   async function selectModule(m){ setActiveMod(m); setActiveLesson(null); setShowTeam(false);
     const { data:ls }=await sb.from('training_lessons').select('*').eq('module_id',m.id).is('deleted_at',null).order('position').order('created_at');
     const lessonRows=ls||[]; setLessons(lessonRows);
@@ -4000,6 +4025,14 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
   async function moveLesson(l,dir){ const idx=lessons.findIndex(x=>x.id===l.id); const j=idx+dir; if(j<0||j>=lessons.length) return; const a=lessons[idx], b=lessons[j]; await sb.from('training_lessons').update({position:j}).eq('id',a.id); await sb.from('training_lessons').update({position:idx}).eq('id',b.id); selectModule(activeMod); }
   const total=lessons.length; const done=lessons.filter(l=>myDone.has(l.id)).length; const pct=total?Math.round(done/total*100):0;
   const teamRoster=(()=>{ const m={}; teamProg.forEach(p=>{ m[p.user_id]=(m[p.user_id]||0)+1; }); return (profiles||[]).map(pf=>({ pf, n:m[pf.id]||0 })).filter(r=>r.n>0||canEdit).sort((a,b)=>b.n-a.n); })();
+  // Per-track grouping. Editors (admin/trainers) see all tracks; everyone else
+  // sees only tracks they're enrolled in, plus any General modules.
+  const trackOf=(m)=>m.track||'General';
+  const allTracks=Array.from(new Set(modules.map(trackOf))).sort((a,b)=> a==='General'?-1:b==='General'?1:a.localeCompare(b));
+  const visibleModules = canEdit ? modules : modules.filter(m=> trackOf(m)==='General' || myTracks.has(trackOf(m)) || myTracks.has('*'));
+  const visibleTracks = Array.from(new Set(visibleModules.map(trackOf))).sort((a,b)=> a==='General'?-1:b==='General'?1:a.localeCompare(b));
+  // Auto-select the first visible module once things load.
+  useEffect(()=>{ if(!loading && !activeMod && visibleModules.length) selectModule(visibleModules[0]); },[loading, modules, myTracks]);
   return (
     <div className="p-6">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
@@ -4009,20 +4042,29 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
           {canEdit && <button onClick={()=>setCreatingMod(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New module</button>}
         </div>
       </div>
-      {showAccess && <TrainingAccessModal profile={profile} profiles={profiles} participants={participants} reloadParticipants={reloadParticipants} onClose={()=>setShowAccess(false)} />}
-      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : modules.length===0 ? (
-        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No training modules yet.{canEdit?' Click "+ New module" to create one.':''}</div>
+      {showAccess && <TrainingAccessModal profile={profile} profiles={profiles} tracks={allTracks} reloadParticipants={reloadParticipants} onClose={()=>setShowAccess(false)} />}
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : visibleModules.length===0 ? (
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">{modules.length===0?`No training modules yet.${canEdit?' Click "+ New module" to create one.':''}`:'No modules assigned to you yet. Ask your manager for access.'}</div>
       ) : (
         <div className="grid md:grid-cols-[280px_1fr] gap-4">
           {/* Left: modules + lessons */}
           <div className="space-y-3">
             <div className="bg-white border rounded-xl overflow-hidden">
-              {modules.map(m=>(
-                <button key={m.id} onClick={()=>selectModule(m)} className={`w-full text-left px-3 py-2.5 border-b last:border-0 hover:bg-slate-50 ${activeMod&&activeMod.id===m.id?'bg-indigo-50':''}`}>
-                  <div className="font-semibold text-sm text-slate-800">{m.icon} {m.title}</div>
-                  {m.description && <div className="text-[11px] text-slate-500 line-clamp-2">{m.description}</div>}
-                </button>
-              ))}
+              {visibleTracks.map(tr=>{
+                const mods = visibleModules.filter(m=>trackOf(m)===tr);
+                if(!mods.length) return null;
+                return (
+                  <div key={tr} className="border-b last:border-0">
+                    {visibleTracks.length>1 && <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400 bg-slate-50">{tr}</div>}
+                    {mods.map(m=>(
+                      <button key={m.id} onClick={()=>selectModule(m)} className={`w-full text-left px-3 py-2.5 border-t first:border-t-0 hover:bg-slate-50 ${activeMod&&activeMod.id===m.id?'bg-indigo-50':''}`}>
+                        <div className="font-semibold text-sm text-slate-800">{m.icon} {m.title}</div>
+                        {m.description && <div className="text-[11px] text-slate-500 line-clamp-2">{m.description}</div>}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
             {activeMod && (
               <div className="bg-white border rounded-xl p-3">
@@ -4078,8 +4120,8 @@ function TrainingView({ profile, profiles, leads, onOpenTechpack, participants, 
           </div>
         </div>
       )}
-      {creatingMod && <TrainingModuleModal profile={profile} nextPos={modules.length} onClose={()=>setCreatingMod(false)} onSaved={()=>{ setCreatingMod(false); loadModules(); }} />}
-      {editMod && <TrainingModuleModal profile={profile} existing={editMod} onClose={()=>setEditMod(null)} onSaved={()=>{ setEditMod(null); loadModules(); }} />}
+      {creatingMod && <TrainingModuleModal profile={profile} nextPos={modules.length} tracks={allTracks} onClose={()=>setCreatingMod(false)} onSaved={()=>{ setCreatingMod(false); loadModules(); }} />}
+      {editMod && <TrainingModuleModal profile={profile} existing={editMod} tracks={allTracks} onClose={()=>setEditMod(null)} onSaved={()=>{ setEditMod(null); loadModules(); }} />}
       {creatingLesson && activeMod && <TrainingLessonModal profile={profile} moduleId={activeMod.id} nextPos={lessons.length} onClose={()=>setCreatingLesson(false)} onSaved={()=>{ setCreatingLesson(false); selectModule(activeMod); }} />}
       {editLesson && <TrainingLessonModal profile={profile} moduleId={activeMod.id} existing={editLesson} onClose={()=>setEditLesson(null)} onSaved={()=>{ setEditLesson(null); selectModule(activeMod); if(activeLesson&&activeLesson.id===editLesson.id) setActiveLesson({...activeLesson}); }} />}
       {editHtmlLesson && <TrainingHtmlLessonModal profile={profile} lesson={editHtmlLesson} onClose={()=>setEditHtmlLesson(null)} onSaved={async ()=>{ const id=editHtmlLesson.id; setEditHtmlLesson(null); await selectModule(activeMod); const { data:fresh }=await sb.from('training_lessons').select('*').eq('id',id).maybeSingle(); if(fresh) setActiveLesson(fresh); }} />}
