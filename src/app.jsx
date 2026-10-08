@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 691 · Command Center: 'Materials needed' items in the Needs-attention queue now show the client name alongside the item.";
+const BUILD = "Live build 692 · Production & Sampling boards: the sales-owner filter now lists only the managers who actually own projects on that board (cleaner dropdown), alongside the existing search bar. Filter by any manager, 'My jobs', or Unassigned.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9471,7 +9471,10 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   // Production board delete is now admin-only. Managers can still edit /
   // move jobs, but only admin can send to Trash. Recover from Settings → Trash.
   const canDelete=isAdmin;
-  const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Owner filter lists only the sales managers/owners who actually have jobs on
+  // this board (derived from each job's sales owner or its lead's manager), so
+  // the dropdown isn't cluttered with every non-sales staff member.
+  const salesPeople = (()=>{ const ids=new Set((jobs||[]).map(j=>{ const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null; return j.sales_owner_id || lead?.manager_id || null; }).filter(Boolean)); return Array.from(ids).map(id=>(profiles||[]).find(p=>p.id===id)).filter(Boolean).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))); })();
   async function changeOwner(j, ownerId){ const { error } = await sb.from('production_jobs').update({ sales_owner_id: ownerId||null }).eq('id', j.id); if(error){ alert(error.message); return; } reload(); }
   // Inline deadline editor: saves to production_jobs.due_date so the
   // production team can adjust deadlines without leaving the board.
@@ -12396,9 +12399,10 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
     if(error){ alert(error.message); return; }
     reload();
   }
-  const salesPeople = (profiles||[]).filter(p=>p.role!=='assistant').sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   // Sampling jobs don't carry their own sales_owner_id — derive it from the linked lead.
   const ownerIdFor=(j)=>{ const lead=j.lead_id?leads.find(l=>l.id===j.lead_id):null; return lead?lead.manager_id||null:null; };
+  // Owner filter lists only the sales managers who actually own samples here.
+  const salesPeople = (()=>{ const ids=new Set((jobs||[]).map(j=>ownerIdFor(j)).filter(Boolean)); return Array.from(ids).map(id=>(profiles||[]).find(p=>p.id===id)).filter(Boolean).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))); })();
   const daysUntil=(due)=>{ if(!due) return null; const t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(due+'T00:00:00')-t)/86400000); };
   // Sampling targets the Sample Due Date (lead.delivery_date), falling back
   // to the client's Due Date (lead.expected_close). Mirrors what the deadline
