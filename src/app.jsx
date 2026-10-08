@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 686 · Management Scorecard (Executive): per-department KPIs vs targets for this week / this month — sales, collections, on-time delivery, overdue jobs, QC rework, graphics turnaround — computed live and coloured green/yellow/red. Admin taps a target to edit it. Linked from the Command Center.";
+const BUILD = "Live build 687 · New Assistant General Manager (AGM) role — company-wide visibility across every department, lands on the Operations Command Center, full use of the HR module, finance *visibility* (sales, AR, cash, reports). No banking, no fund release, no monetary approval (those stay with the CEO). Assign it from Team → role dropdown AFTER this build is live.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -22234,6 +22234,7 @@ function isManagerRole(r){ return r==='manager' || r==='sales_representative'; }
 function isAssistantRole(r){ return r==='assistant' || r==='sales_representative'; }
 function roleLabel(r){
   return r==='admin'                  ? 'Administrator' :
+         r==='agm'                    ? 'Assistant General Manager' :
          r==='sales_representative'   ? 'Sales Representative' :
          r==='assistant'              ? 'Sales Assistant' :
          r==='production'             ? 'Production Team' :
@@ -22544,7 +22545,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
+  const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -22577,6 +22578,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
           <div className="md:col-span-3"><label className="text-[10px] uppercase tracking-wide text-slate-500">Role</label>
             <select className="input" value={inviteRole} onChange={e=>setInviteRole(e.target.value)}>
               <option value="admin">Administrator</option>
+              <option value="agm">Assistant General Manager</option>
               <option value="manager">Sales Manager</option>
               <option value="sales_representative">Sales Representative</option>
               <option value="assistant">Sales Assistant</option>
@@ -22688,6 +22690,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <td className="px-3 py-2">
                 <select value={p.role||'manager'} onChange={e=>changeRole(p,e.target.value)} className="text-xs border rounded-md px-2 py-1 bg-white">
                   <option value="admin">Administrator</option>
+                  <option value="agm">Assistant General Manager</option>
                   <option value="manager">Sales Manager</option>
                   <option value="sales_representative">Sales Representative</option>
                   <option value="assistant">Sales Assistant</option>
@@ -43982,7 +43985,19 @@ function App(){
   useEffect(()=>{
     if(!profile) return;
     let allowed, fallback;
-    if(profile.role==='assistant'){
+    if(profile.role==='agm'){
+      // Assistant General Manager — company-wide visibility. Lands on the
+      // Operations Command Center. Can open everything operational + HR + finance
+      // visibility; money-write/banking/approval views are gated inside each view.
+      allowed = new Set(['ops-command','scorecard','checkin','goals','inbox','my-tasks','profile',
+        'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
+        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing',
+        'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources',
+        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
+        'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
+        'logistics','trip-tickets','delivery-receipts','payroll']);
+      fallback = 'ops-command';
+    } else if(profile.role==='assistant'){
       // Sales assistant now also has access to Sales Orders (filtered to their
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
@@ -44116,6 +44131,8 @@ function App(){
     // Sales associates, representatives + managers open straight into their
     // personal Home (Workbench) instead of the pipeline. They can still navigate anywhere.
     if((profile.role==='assistant'||profile.role==='sales_representative'||profile.role==='manager') && view==='pipeline') setView('rep-home');
+    // The AGM lands on the Operations Command Center.
+    if(profile.role==='agm' && view==='pipeline') setView('ops-command');
     // (Kaira's temporary Sourcing Trips landing removed — she now opens on the
     //  Sales Pipeline like the default.)
   },[profile]);
@@ -44571,6 +44588,7 @@ function App(){
   const isProdSupervisor=profile.role==='production_supervisor';
   const isProdAssistant=profile.role==='production_assistant';
   const isHR=profile.role==='hr';
+  const isAGM=profile.role==='agm';
   const isLogistics=profile.role==='logistics';
   const isVideoEditor=profile.role==='video_editor';
   // Admins always see Training (to manage it); everyone else only if enrolled.
@@ -44640,7 +44658,26 @@ function App(){
   const PERSONAL_GROUP = { group:'Personal', items:[
     ['profile','My Profile','⭐'],
   ] };
-  if(isLogistics){
+  if(isAGM){
+    // Assistant General Manager (Head of People & Operations) — company-wide
+    // visibility across every department, landing on the Operations Command
+    // Center. Read/oversight across Sales, Production, Purchasing, Logistics and
+    // Finance *visibility*; full use of the HR module she oversees. No banking /
+    // fund release and no monetary approval authority (those stay with the CEO).
+    NAV = [
+      { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['goals','Vision & Goals','🎯'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'] ] },
+      { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
+      { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      PERSONAL_GROUP,
+    ];
+  } else if(isLogistics){
     // Logistics Team — Daily Schedule + their Trip Tickets.
     NAV = [
       { items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'] ] },
