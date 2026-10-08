@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 694 · Sublimation blocks inventory: 'Cut rolls to blocks' now uses an editable standard block-size catalog, auto-creates the block stock item, and records side-cut remnants into a Remnants stock — so rolls (kg), blocks (pcs) and remnants are all tracked separately. New Fabric Blocks + Remnants tabs in Inventory; stock out from block stock as usual.";
+const BUILD = "Live build 695 · Purchase Request / PO stock check now also shows the cut BLOCKS available for a sublimation fabric line (count by size), not just the roll kilos — so you can see whether blocks already cover the job before buying more roll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28788,10 +28788,23 @@ async function issuePRFromStock(pr, items, profile){
 // Reusable stock-visibility strip that renders under a PR/PO line item.
 // Shows On-hand · Reserved · Available with color coding. If `onPullFromStock`
 // is provided, also renders a "Pull from stock" button when there's stock to grab.
-function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, mode='pr' }){
+function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, mode='pr', items }){
   if(!item) return <div className="text-[10px] text-slate-400 px-2 py-1">No inventory link — stock info unavailable.</div>;
+  // For a sublimation fabric, also surface the cut BLOCKS available (what
+  // production actually uses), matched by block item name starting with the
+  // fabric's name. Purchasing sees both the roll kg and the block count.
+  const blocks = ['fabrics','remnants'].includes((item.bucket||'').toLowerCase())
+    ? (items||[]).filter(i=>(i.bucket||'').toLowerCase()==='blocks' && Number(i.qty||0)>0 && String(i.name||'').toLowerCase().startsWith(String(item.name||'').toLowerCase()))
+    : [];
+  const blocksTotal = blocks.reduce((s,b)=>s+Number(b.qty||0),0);
+  const blocksStrip = blocks.length>0 ? (
+    <div className="text-[10px] border border-indigo-200 bg-indigo-50 text-indigo-900 rounded px-2 py-1 mt-1">
+      <strong>🧱 Blocks available:</strong> {blocksTotal} pcs
+      <span className="text-indigo-600 ml-1">· {blocks.map(b=>{ const sz=String(b.name||'').split('·').pop().trim(); return `${sz}: ${Math.round(Number(b.qty||0))}`; }).join(' · ')}</span>
+    </div>
+  ) : null;
   const cov = lineCoverage(line, item, reservations);
-  if(!cov) return null;
+  if(!cov) return blocksStrip;
   const { snap, allocated } = cov;
   // Color choice based on coverage state.
   const colorMap = {
@@ -28808,6 +28821,7 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
   };
   // For PO mode, this is informational only (no pull-from-stock button).
   return (
+    <>
     <div className={`text-[10px] border rounded px-2 py-1 mt-1 flex items-center justify-between gap-2 flex-wrap ${colorMap[cov.state]||colorMap.partial}`}>
       <div className="flex items-center gap-3">
         <span><strong>📦 On-hand:</strong> {snap.onHand}</span>
@@ -28824,6 +28838,8 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
         )}
       </div>
     </div>
+    {blocksStrip}
+    </>
   );
 }
 
@@ -29517,7 +29533,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                 </div>
                 {/* Stock visibility strip — Layer 1. Shows On-hand / Reserved / Available
                     with color-coded coverage and a "Pull from stock" split button. */}
-                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={readOnly} mode="pr" onPullFromStock={()=>pullFromStock(i)} />}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={readOnly} mode="pr" items={items} onPullFromStock={()=>pullFromStock(i)} />}
                 {allocated > 0 && !readOnly && (
                   <div className="text-[10px] mt-1 px-2 py-1 bg-emerald-50 border border-emerald-200 rounded flex items-center justify-between">
                     <span>⤓ <strong>{allocated}</strong> being pulled from stock for this line. Buy qty above is the remainder.</span>
@@ -30254,7 +30270,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
                   <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
                 </div>
                 {/* Stock visibility strip — informational only on POs (no pull-from-stock action) */}
-                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={true} mode="po" />}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={true} mode="po" items={items} />}
               </div>
             );
           })}</div>
