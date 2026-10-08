@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 685 · Daily department check-in: each department head submits an end-of-day status (output, blockers, tomorrow's plan) with a green/yellow/red rating. Rolls up into the Operations Command Center and the weekly report so the GM/CEO see who's on track. (All monetary approvals stay with the CEO — no spend authority delegated.)";
+const BUILD = "Live build 686 · Management Scorecard (Executive): per-department KPIs vs targets for this week / this month — sales, collections, on-time delivery, overdue jobs, QC rework, graphics turnaround — computed live and coloured green/yellow/red. Admin taps a target to edit it. Linked from the Command Center.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6420,6 +6420,132 @@ function DailyCheckinView({ profile, profiles, reload }){
   );
 }
 
+/* ─────────── KPI MANAGEMENT SCORECARD ───────────
+   Company management scorecard (JD KPI section). Each department's KPIs are
+   computed from live OS data for the selected period (this week / this month),
+   compared against an editable target, and coloured green/yellow/red. Admin
+   sets the targets; everyone with access reads it. */
+const KPI_DEFS = [
+  { key:'sales_total',         dept:'Sales',            label:'Sales',            unit:'peso', dir:'up',   def:{week:2000000, month:9000000} },
+  { key:'collections',         dept:'Sales',            label:'Collections',      unit:'peso', dir:'up',   def:{week:1500000, month:7000000} },
+  { key:'delivery_ontime',     dept:'Production',       label:'On-time delivery', unit:'pct',  dir:'up',   def:{week:95, month:95} },
+  { key:'prod_overdue',        dept:'Production',       label:'Overdue jobs',     unit:'num',  dir:'down', snapshot:true, def:{week:0, month:0} },
+  { key:'qc_rework',           dept:'Quality control',  label:'Rework incidents', unit:'num',  dir:'down', def:{week:3, month:10} },
+  { key:'graphics_turnaround', dept:'Graphics',         label:'Avg turnaround',   unit:'days', dir:'down', def:{week:1.5, month:1.5} },
+];
+function kpiFmt(unit, v){ if(v==null||isNaN(v)) return '—'; if(unit==='peso') return peso(v); if(unit==='pct') return Math.round(v)+'%'; if(unit==='days') return (Math.round(v*10)/10)+'d'; return String(Math.round(v)); }
+function kpiStatus(def, val, target){
+  if(val==null||isNaN(val)) return 'none';
+  if(def.dir==='up'){ if(val>=target) return 'green'; if(val>=target*0.9) return 'amber'; return 'red'; }
+  // dir down (lower is better)
+  if(target<=0){ if(val<=0) return 'green'; if(val<=3) return 'amber'; return 'red'; }
+  if(val<=target) return 'green'; if(val<=target*1.15) return 'amber'; return 'red';
+}
+function KpiScorecardView({ profile, salesOrders, soPayments, deliveryReceipts, prodJobs, navTo }){
+  const isAdmin=profile.role==='admin';
+  const [period,setPeriod]=useState('month');
+  const [targets,setTargets]=useState({});      // key -> {week, month}
+  const [repl,setRepl]=useState([]); const [gfx,setGfx]=useState([]);
+  const [editing,setEditing]=useState(null);     // kpi_key being edited
+  const [draft,setDraft]=useState('');
+  async function loadAux(){
+    try{ const { data }=await sb.from('kpi_targets').select('*'); const m={}; (data||[]).forEach(r=>{ (m[r.kpi_key]=m[r.kpi_key]||{})[r.period]=Number(r.target); }); setTargets(m); }catch(_){ setTargets({}); }
+    try{ const { data }=await sb.from('replacement_requests').select('created_at').is('deleted_at',null); setRepl(data||[]); }catch(_){ setRepl([]); }
+    try{ const { data }=await sb.from('sales_tickets').select('created_at,done_at,status').eq('department','graphic').is('deleted_at',null); setGfx(data||[]); }catch(_){ setGfx([]); }
+  }
+  useEffect(()=>{ loadAux(); },[]);
+
+  const today=todayManila();
+  const monthStart=today.slice(0,8)+'01';
+  const weekStart=(()=>{ const d=new Date(today+'T00:00:00'); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d.toISOString().slice(0,10); })();
+  const start = period==='week'?weekStart:monthStart;
+  const inRange=(s)=>{ if(!s) return false; const d=String(s).slice(0,10); return d>=start && d<=today; };
+
+  // ---- compute each KPI ----
+  const liveSOs=(salesOrders||[]).filter(o=>o.status!=='cancelled');
+  function compute(key){
+    if(key==='sales_total') return liveSOs.filter(o=>inRange(o.date)).reduce((s,o)=>s+Number(o.total||0),0);
+    if(key==='collections') return (soPayments||[]).filter(p=>p.status==='verified' && inRange(p.date)).reduce((s,p)=>s+Number(p.amount||0),0);
+    if(key==='delivery_ontime'){ const drs=(deliveryReceipts||[]).filter(dr=>inRange(dr.date) && dr.status!=='void'); let withDue=0, ok=0; drs.forEach(dr=>{ const so=(salesOrders||[]).find(s=>s.id===dr.sales_order_id); if(so && so.expected_delivery){ withDue++; if(String(dr.date).slice(0,10) <= String(so.expected_delivery).slice(0,10)) ok++; } }); return withDue? (ok/withDue*100) : null; }
+    if(key==='prod_overdue') return (prodJobs||[]).filter(j=>!PRODUCTION_DONE.includes(j.status) && j.due_date && j.due_date<today).length;
+    if(key==='qc_rework') return (repl||[]).filter(r=>inRange(r.created_at)).length;
+    if(key==='graphics_turnaround'){ const done=(gfx||[]).filter(t=>t.done_at && inRange(t.done_at) && t.created_at); if(!done.length) return null; const days=done.map(t=>(new Date(t.done_at)-new Date(t.created_at))/86400000); return days.reduce((a,b)=>a+b,0)/days.length; }
+    return null;
+  }
+  const targetOf=(def)=>{ const t=targets[def.key]; const v=t && t[period]!=null ? t[period] : def.def[period]; return Number(v); };
+  const rows=KPI_DEFS.map(def=>{ const val=compute(def.key); const target=targetOf(def); return { def, val, target, st:kpiStatus(def,val,target) }; });
+
+  async function saveTarget(def){
+    const v=Number(draft); if(isNaN(v)){ setEditing(null); return; }
+    setTargets(prev=>({ ...prev, [def.key]:{ ...(prev[def.key]||{}), [period]:v } }));
+    setEditing(null);
+    try{ await sb.from('kpi_targets').upsert({ kpi_key:def.key, period, target:v, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'kpi_key,period' }); }catch(e){ alert('Save failed: '+(e.message||e)); }
+  }
+
+  const St={ green:{dot:'bg-emerald-500', txt:'text-emerald-700', lbl:'on target'}, amber:{dot:'bg-amber-500', txt:'text-amber-700', lbl:'watch'}, red:{dot:'bg-rose-500', txt:'text-rose-700', lbl:'off target'}, none:{dot:'bg-slate-300', txt:'text-slate-400', lbl:'no data'} };
+  const g=redAmberGreen=>rows.filter(r=>r.st===redAmberGreen).length;
+  // Headline = the four most watched.
+  const headline=['delivery_ontime','collections','qc_rework','sales_total'].map(k=>rows.find(r=>r.def.key===k)).filter(Boolean);
+  const byDept={}; rows.forEach(r=>{ (byDept[r.def.dept]=byDept[r.def.dept]||[]).push(r); });
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">📊 Management scorecard</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Department KPIs vs targets · {period==='week'?`week of ${fmtDate(weekStart)}`:fmtDate(monthStart).replace(/\d+,/,'')} to {fmtDate(today)}.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+            <button onClick={()=>setPeriod('week')} className={`px-3 py-1.5 rounded-md ${period==='week'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>This week</button>
+            <button onClick={()=>setPeriod('month')} className={`px-3 py-1.5 rounded-md ${period==='month'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>This month</button>
+          </div>
+          <div className="flex gap-1">
+            <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold">{g('green')} on</span>
+            <span className="text-[11px] px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-semibold">{g('amber')} watch</span>
+            <span className="text-[11px] px-2 py-1 rounded-full bg-rose-100 text-rose-700 font-semibold">{g('red')} off</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        {headline.map(r=>(
+          <div key={r.def.key} className="bg-slate-50 rounded-lg p-3">
+            <div className="text-[12px] text-slate-500">{r.def.label}</div>
+            <div className={`text-2xl font-extrabold ${St[r.st].txt}`}>{kpiFmt(r.def.unit, r.val)}</div>
+            <div className="text-[11px] text-slate-400">target {kpiFmt(r.def.unit, r.target)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="grid grid-cols-[1.6fr_0.9fr_0.9fr_1fr] gap-2 px-4 py-2 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+          <span>Department · KPI</span><span className="text-right">Target</span><span className="text-right">Actual</span><span>Status</span>
+        </div>
+        {Object.keys(byDept).map(dept=>(
+          <div key={dept}>
+            <div className="px-4 py-1.5 bg-slate-50/70 border-t text-[12px] font-semibold text-slate-600">{dept}</div>
+            {byDept[dept].map(r=>(
+              <div key={r.def.key} className="grid grid-cols-[1.6fr_0.9fr_0.9fr_1fr] gap-2 px-4 py-2.5 border-t items-center text-[13px]">
+                <span className="text-slate-800">{r.def.label}{r.def.snapshot && <span className="text-[10px] text-slate-400"> · now</span>}</span>
+                <span className="text-right text-slate-500">
+                  {isAdmin ? (editing===r.def.key
+                    ? <input autoFocus defaultValue={r.target} onChange={e=>setDraft(e.target.value)} onBlur={()=>saveTarget(r.def)} onKeyDown={e=>{ if(e.key==='Enter') saveTarget(r.def); }} className="w-20 text-right text-[13px] px-1.5 py-0.5 rounded border border-indigo-300" />
+                    : <button onClick={()=>{ setDraft(String(r.target)); setEditing(r.def.key); }} className="hover:underline decoration-dotted">{kpiFmt(r.def.unit, r.target)}</button>)
+                  : kpiFmt(r.def.unit, r.target)}
+                </span>
+                <span className="text-right font-semibold text-slate-900">{kpiFmt(r.def.unit, r.val)}</span>
+                <span className="flex items-center gap-1.5"><span className={`w-2 h-2 rounded-full ${St[r.st].dot}`}></span><span className={St[r.st].txt}>{St[r.st].lbl}</span></span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="text-[11px] text-slate-400 mt-2">{isAdmin?'Tap a target to edit it. ':''}Targets are per period (this week / this month). Computed live from Sales, Delivery Receipts, Production, QC and Graphics data.</div>
+    </div>
+  );
+}
+
 /* ─────────── GM / CEO OPERATIONS COMMAND CENTER ───────────
    Company-wide single-screen overview for the Assistant General Manager (Head
    of People & Operations) and the CEO. Built around the AGM job description's
@@ -6615,7 +6741,8 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
         </div>
       </div>
 
-      <div className="flex justify-center">
+      <div className="flex justify-center gap-2 flex-wrap">
+        <button onClick={()=>navTo('scorecard')} className="inline-flex items-center gap-2 bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-slate-50">📊 Management scorecard</button>
         <button onClick={()=>setShowReport(true)} className="inline-flex items-center gap-2 bg-indigo-600 text-white text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-indigo-700">📋 Generate weekly report for CEO</button>
       </div>
 
@@ -44705,7 +44832,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Executive', items:[ ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
+      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
@@ -44931,6 +45058,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
+        {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
