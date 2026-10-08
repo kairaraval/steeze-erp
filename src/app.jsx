@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 684 · New Operations Command Center (admin, under Dashboard): company-wide GREEN/YELLOW/RED status tiles (production, quality, purchasing, sales/AR, people, approvals), the order flow, a needs-attention queue, a department scoreboard, and a one-click weekly management report for the CEO. Foundation for the AGM/GM role.";
+const BUILD = "Live build 685 · Daily department check-in: each department head submits an end-of-day status (output, blockers, tomorrow's plan) with a green/yellow/red rating. Rolls up into the Operations Command Center and the weekly report so the GM/CEO see who's on track. (All monetary approvals stay with the CEO — no spend authority delegated.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6302,6 +6302,124 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
   );
 }
 
+/* ─────────── DAILY DEPARTMENT CHECK-IN ───────────
+   Each department head submits a short end-of-day status (today's output,
+   blockers, tomorrow's plan) with a GREEN/YELLOW/RED self-rating. These roll
+   up into the Operations Command Center and the weekly report so the GM/CEO
+   can see who's on track and who needs attention — without chasing everyone. */
+const CHECKIN_DEPTS = [
+  { key:'production',  label:'Production',             roles:['production_supervisor','production_assistant'] },
+  { key:'qc',          label:'Quality Control',        roles:['qc_leader','qc_personnel','qc'] },
+  { key:'graphics',    label:'Graphic Design',         roles:['graphic'] },
+  { key:'printing',    label:'Printing',               roles:['printing'] },
+  { key:'sewing',      label:'Sewing',                 roles:['sewing_lead'] },
+  { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
+  { key:'packing',     label:'Packing',                roles:['packing_head'] },
+  { key:'purchasing',  label:'Purchasing',             roles:['purchasing_admin','purchasing'] },
+  { key:'sales',       label:'Sales',                  roles:['manager','sales_representative','assistant'] },
+  { key:'hr',          label:'HR / People',            roles:['hr'] },
+  { key:'accounting',  label:'Accounting',             roles:['accounting','accounting_officer'] },
+  { key:'logistics',   label:'Logistics',              roles:['logistics'] },
+];
+function checkinDeptForRole(role){ return CHECKIN_DEPTS.find(d=>d.roles.includes(role))||null; }
+function checkinDeptLabel(key){ return (CHECKIN_DEPTS.find(d=>d.key===key)||{}).label||key; }
+const CHECKIN_STATUS = { green:{ label:'On track', dot:'bg-emerald-500', pill:'bg-emerald-100 text-emerald-700' }, yellow:{ label:'Needs attention', dot:'bg-amber-500', pill:'bg-amber-100 text-amber-700' }, red:{ label:'Problem', dot:'bg-rose-500', pill:'bg-rose-100 text-rose-700' } };
+
+function DailyCheckinView({ profile, profiles, reload }){
+  const isAdmin=profile.role==='admin';
+  const myDept=checkinDeptForRole(profile.role);
+  const canSubmit=!!myDept || isAdmin;
+  const [deptKey,setDeptKey]=useState(myDept?myDept.key:(isAdmin?'production':''));
+  const today=todayManila();
+  const [status,setStatus]=useState('green');
+  const [output,setOutput]=useState(''); const [blockers,setBlockers]=useState(''); const [plan,setPlan]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [todayRows,setTodayRows]=useState([]); const [mine,setMine]=useState([]);
+  async function load(){
+    try{ const { data:t }=await sb.from('daily_checkins').select('*').eq('checkin_date',today); setTodayRows(t||[]); }catch(_){ setTodayRows([]); }
+    try{ const { data:m }=await sb.from('daily_checkins').select('*').eq('submitted_by',profile.id).order('checkin_date',{ascending:false}).limit(14); setMine(m||[]); }catch(_){ setMine([]); }
+  }
+  useEffect(()=>{ load(); },[]);
+  useEffect(()=>{ const ex=(todayRows||[]).find(r=>r.submitted_by===profile.id && r.department===deptKey); if(ex){ setStatus(ex.status||'green'); setOutput(ex.output||''); setBlockers(ex.blockers||''); setPlan(ex.plan||''); } else { setStatus('green'); setOutput(''); setBlockers(''); setPlan(''); } },[deptKey, todayRows]);
+  async function submit(){
+    if(!deptKey){ setMsg('Pick a department.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ department:deptKey, checkin_date:today, status, output:output.trim()||null, blockers:blockers.trim()||null, plan:plan.trim()||null, submitted_by:profile.id, submitted_by_name:profile.name||profile.email, updated_at:new Date().toISOString() };
+    const { error }=await sb.from('daily_checkins').upsert(payload,{ onConflict:'submitted_by,department,checkin_date' });
+    setBusy(false);
+    if(error){ setMsg('Save failed: '+error.message); return; }
+    setMsg('Saved ✓'); await load(); reload && reload();
+  }
+  const submittedDeptKeys=new Set((todayRows||[]).map(r=>r.department));
+  const name=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold text-slate-900">📝 Daily department check-in</h1>
+        <p className="text-slate-500 text-sm mt-0.5">A quick end-of-day status so management sees where each team stands — {fmtDate(today)}.</p>
+      </div>
+
+      {canSubmit ? (
+        <div className="bg-white rounded-xl border p-4 mb-6">
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <div className="font-semibold text-slate-700 text-sm">Today's check-in</div>
+            {isAdmin ? (
+              <select value={deptKey} onChange={e=>setDeptKey(e.target.value)} className="input text-sm" style={{width:'auto'}}>
+                {CHECKIN_DEPTS.map(d=><option key={d.key} value={d.key}>{d.label}</option>)}
+              </select>
+            ) : <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-600 font-semibold">{myDept?.label}</span>}
+          </div>
+          <div className="flex gap-2 mb-3">
+            {['green','yellow','red'].map(s=>{ const m=CHECKIN_STATUS[s]; return (
+              <button key={s} onClick={()=>setStatus(s)} className={`flex-1 py-2 rounded-lg border text-sm font-semibold flex items-center justify-center gap-1.5 ${status===s?m.pill+' border-transparent ring-2 ring-offset-1':'bg-white text-slate-500 hover:bg-slate-50'}`}><span className={`w-2 h-2 rounded-full ${m.dot}`}></span>{m.label}</button>
+            ); })}
+          </div>
+          <label className="text-xs font-semibold text-slate-500">What got done today</label>
+          <textarea value={output} onChange={e=>setOutput(e.target.value)} rows={2} className="input w-full mb-2" placeholder="Key output / accomplishments today…" />
+          <label className="text-xs font-semibold text-slate-500">Blockers / issues</label>
+          <textarea value={blockers} onChange={e=>setBlockers(e.target.value)} rows={2} className="input w-full mb-2" placeholder="Anything slowing you down, needs help, or needs a decision…" />
+          <label className="text-xs font-semibold text-slate-500">Plan for tomorrow</label>
+          <textarea value={plan} onChange={e=>setPlan(e.target.value)} rows={2} className="input w-full mb-3" placeholder="Priorities for tomorrow…" />
+          {msg && <div className={`text-xs mb-2 ${msg.startsWith('Saved')?'text-emerald-600':'text-rose-600'}`}>{msg}</div>}
+          <button onClick={submit} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(submittedDeptKeys.has(deptKey)&&(todayRows||[]).some(r=>r.submitted_by===profile.id&&r.department===deptKey)?'Update today\'s check-in':'Submit today\'s check-in')}</button>
+        </div>
+      ) : (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 mb-6">Your role isn't set up to submit a department check-in. You can still see everyone's status below.</div>
+      )}
+
+      <div className="mb-6">
+        <div className="text-sm font-bold text-slate-700 mb-2">Today across departments ({submittedDeptKeys.size}/{CHECKIN_DEPTS.length} in)</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {CHECKIN_DEPTS.map(d=>{ const rows=(todayRows||[]).filter(r=>r.department===d.key); const r=rows[0]; const m=r?CHECKIN_STATUS[r.status]||CHECKIN_STATUS.green:null; return (
+            <div key={d.key} className={`rounded-lg border p-2.5 ${r?'bg-white':'bg-slate-50 border-dashed'}`}>
+              <div className="flex items-center gap-1.5 text-[13px] font-medium text-slate-800">{m?<span className={`w-2 h-2 rounded-full ${m.dot}`}></span>:<span className="w-2 h-2 rounded-full bg-slate-300"></span>}{d.label}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{r?`${m.label} · ${name(r.submitted_by).split(' ')[0]}`:'not in yet'}</div>
+            </div>
+          ); })}
+        </div>
+      </div>
+
+      {mine.length>0 && (
+        <div>
+          <div className="text-sm font-bold text-slate-700 mb-2">My recent check-ins</div>
+          <div className="bg-white rounded-xl border overflow-hidden">
+            {mine.map(r=>{ const m=CHECKIN_STATUS[r.status]||CHECKIN_STATUS.green; return (
+              <div key={r.id} className="flex items-start gap-2.5 px-3 py-2 border-t first:border-t-0">
+                <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${m.dot}`}></span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-slate-800">{checkinDeptLabel(r.department)} · {fmtDate(r.checkin_date)}</div>
+                  {r.output && <div className="text-[11px] text-slate-500 truncate">✓ {r.output}</div>}
+                  {r.blockers && <div className="text-[11px] text-rose-600 truncate">⚠ {r.blockers}</div>}
+                </div>
+              </div>
+            ); })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────── GM / CEO OPERATIONS COMMAND CENTER ───────────
    Company-wide single-screen overview for the Assistant General Manager (Head
    of People & Operations) and the CEO. Built around the AGM job description's
@@ -6310,7 +6428,7 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
    "needs attention" queue, a department scoreboard, and a one-click weekly
    management report. Read-only company visibility; no fund release.
 */
-function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJobs, graphicJobs, printingJobs, salesOrders, requests, orders, items, hrCases, hrLeaves, employees, hrReviews, rfps, budgetRequests, navTo }){
+function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJobs, graphicJobs, printingJobs, salesOrders, requests, orders, items, hrCases, hrLeaves, employees, hrReviews, rfps, budgetRequests, dailyCheckins, navTo }){
   const [repl,setRepl]=useState([]);         // open replacement requests (quality/rework)
   const [showReport,setShowReport]=useState(false);
   useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('replacement_requests').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setRepl(data||[]); }catch(_){ setRepl([]); } })(); },[]);
@@ -6371,7 +6489,7 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
     { key:'pur', icon:'📦', label:'Purchasing / materials', big:`${materialsPending.length} shortages`, sub:`${openPRs.length} PRs · ${openPOs.length} POs open`, st:purStatus, go:'requests' },
     { key:'ar', icon:'💰', label:'Sales & receivables', big:peso(openAR), sub:`open AR · ${overdueAR.length} overdue`, st:arStatus, go:'sales-orders' },
     { key:'hr', icon:'👥', label:'People / HR', big:`${onLeaveToday.length} on leave`, sub:`${openCases.length} open cases · ${reviewsDue.length} reviews due`, st:hrStatus, go:'employees' },
-    { key:'appr', icon:'✅', label:'For approval', big:`${pendApprovals} waiting`, sub:'within ₱25k limit', st:apprStatus, go:'approvals' },
+    { key:'appr', icon:'✅', label:'For approval', big:`${pendApprovals} waiting`, sub:'awaiting CEO approval', st:apprStatus, go:'approvals' },
   ];
   const redCount=tiles.filter(t=>t.st==='red').length, amberCount=tiles.filter(t=>t.st==='amber').length, greenCount=tiles.filter(t=>t.st==='green').length;
 
@@ -6384,8 +6502,15 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
     { n:readyDelivery.length, label:'For delivery', st:'green' },
   ];
 
+  // Today's department check-ins.
+  const todayCheckins=(dailyCheckins||[]).filter(c=> c.checkin_date===today);
+  const checkinByDept={}; todayCheckins.forEach(c=>{ if(!checkinByDept[c.department]) checkinByDept[c.department]=c; });
+  const checkinsIn=Object.keys(checkinByDept).length;
+  const checkinRed=todayCheckins.filter(c=>c.status==='red');
+  // Red/yellow check-in blockers feed the attention queue too.
   // Needs-attention queue (red first, then amber), capped.
   const attention=[];
+  todayCheckins.filter(c=>c.status==='red').forEach(c=> attention.push({ sev:'red', title:`${checkinDeptLabel(c.department)} flagged a problem`, meta:(c.blockers||'see daily check-in').slice(0,60), go:'checkin' }));
   overdueProd.slice().sort((a,b)=>String(a.due_date||'').localeCompare(String(b.due_date||''))).forEach(j=>{
     const d=Math.abs(daysUntil(j.due_date)||0); attention.push({ sev:'red', title:`${j.client_name||'—'} — ${j.item||'job'}`, meta:`${d} day${d===1?'':'s'} overdue · ${metaFrom(PRODUCTION_STATUSES,j.status).label}`, go:'prod' });
   });
@@ -6452,6 +6577,18 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
         </div>
       </div>
 
+      <button onClick={()=>navTo('checkin')} className="w-full text-left bg-white rounded-xl border p-3.5 mb-5 hover:bg-slate-50">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[11px] text-slate-500">Today's department check-ins</div>
+          <div className="text-[11px] font-semibold text-slate-600">{checkinsIn}/{CHECKIN_DEPTS.length} in{checkinRed.length>0?` · ${checkinRed.length} flagged`:''}</div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {CHECKIN_DEPTS.map(d=>{ const c=checkinByDept[d.key]; const m=c?(CHECKIN_STATUS[c.status]||CHECKIN_STATUS.green):null; return (
+            <span key={d.key} className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${c?(m.pill):'bg-slate-100 text-slate-400'}`}><span className={`w-1.5 h-1.5 rounded-full ${m?m.dot:'bg-slate-300'}`}></span>{d.label}</span>
+          ); })}
+        </div>
+      </button>
+
       <div className="grid md:grid-cols-2 gap-5 mb-5">
         <div>
           <div className="text-sm font-bold text-slate-700 mb-2">Needs attention</div>
@@ -6482,7 +6619,7 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
         <button onClick={()=>setShowReport(true)} className="inline-flex items-center gap-2 bg-indigo-600 text-white text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-indigo-700">📋 Generate weekly report for CEO</button>
       </div>
 
-      {showReport && <OpsWeeklyReport onClose={()=>setShowReport(false)} profile={profile} data={{ today, tiles, overdueProd, dueWeekProd, materialsPending, readyDelivery, openRepl, openPRs, openPOs, overdueAR, openAR, onLeaveToday, openCases, graveCases, reviewsDue, headcount, pendApprovals, activeProd, activeSample, attnSorted, scoreboard, redCount, amberCount, greenCount, clientName }} />}
+      {showReport && <OpsWeeklyReport onClose={()=>setShowReport(false)} profile={profile} data={{ today, tiles, overdueProd, dueWeekProd, materialsPending, readyDelivery, openRepl, openPRs, openPOs, overdueAR, openAR, onLeaveToday, openCases, graveCases, reviewsDue, headcount, pendApprovals, activeProd, activeSample, attnSorted, scoreboard, redCount, amberCount, greenCount, clientName, checkinsIn, checkinTotal:CHECKIN_DEPTS.length, checkinRed:checkinRed.length }} />}
     </div>
   );
 }
@@ -6524,6 +6661,8 @@ function OpsWeeklyReport({ onClose, profile, data }){
           <Band sev={arSev}>{peso(d.openAR)} open AR · {d.overdueAR.length} order{d.overdueAR.length===1?'':'s'} delivered and unpaid.</Band>
           <div className="font-bold text-slate-700 text-xs uppercase pt-1">Staffing &amp; people</div>
           <Band sev={hrSev}>{d.headcount} active staff · {d.onLeaveToday.length} on leave today · {d.openCases.length} open case{d.openCases.length===1?'':'s'} ({d.graveCases.length} grave) · {d.reviewsDue.length} review{d.reviewsDue.length===1?'':'s'} due.</Band>
+          <div className="font-bold text-slate-700 text-xs uppercase pt-1">Department check-ins</div>
+          <Band sev={d.checkinRed>0?'red':(d.checkinsIn<d.checkinTotal?'amber':'green')}>{d.checkinsIn} of {d.checkinTotal} departments reported today{d.checkinRed>0?` · ${d.checkinRed} flagged a problem`:''}.</Band>
           <div className="font-bold text-slate-700 text-xs uppercase pt-1">Decisions / approvals needed from ownership</div>
           <Band sev={d.pendApprovals>0?'amber':'green'}>{d.pendApprovals} item{d.pendApprovals===1?'':'s'} awaiting approval.{d.redCount>0?` ${d.redCount} RED area${d.redCount===1?'':'s'} may require CEO decision.`:''}</Band>
         </div>
@@ -43271,6 +43410,7 @@ function App(){
   const [evalTemplates,setEvalTemplates]=useState([]); const [evalReviews,setEvalReviews]=useState([]);
   const [hrJobs,setHrJobs]=useState([]); const [hrApplicants,setHrApplicants]=useState([]);
   const [hrMemos,setHrMemos]=useState([]); const [hrLeaves,setHrLeaves]=useState([]);
+  const [dailyCheckins,setDailyCheckins]=useState([]);
   const [leaveBalances,setLeaveBalances]=useState([]); const [leaveCashouts,setLeaveCashouts]=useState([]);
   const [hrCases,setHrCases]=useState([]); const [hrMovements,setHrMovements]=useState([]); const [hrEngagements,setHrEngagements]=useState([]);
   const [hrEscalations,setHrEscalations]=useState([]); const [inboxEscalationId,setInboxEscalationId]=useState(null);
@@ -43493,6 +43633,8 @@ function App(){
     fetchAllRows('stock_movements','*','created_at',false).then(r=>{ if(r && !r.error && r.data) setStockMovements(r.data); }).catch(()=>{});
     fetchAllRows('dr_items','*','position',true).then(r=>{ if(r && !r.error && r.data) setDrItems(r.data); }).catch(()=>{});
     fetchAllRows('transmittal_items','*','position',true).then(r=>{ if(r && !r.error && r.data) setTransmittalItems(r.data); }).catch(()=>{});
+    // Daily department check-ins (small) — recent window for the Command Center + weekly report.
+    sb.from('daily_checkins').select('*').gte('checkin_date', new Date(Date.now()-21*86400000).toISOString().slice(0,10)).order('checkin_date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setDailyCheckins(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null)),
@@ -43826,6 +43968,9 @@ function App(){
     if(allowed.has('logistics')) allowed.add('trip-tickets');
     // Anyone can open the evaluations HR assigned to them to rate.
     allowed.add('my-evals');
+    // Every staff member can open the Daily Check-in page (to submit their
+    // department's status). The nav link only shows for department-head roles.
+    allowed.add('checkin');
     // Training is invite-only — grant it only to enrolled participants.
     if((trainingParticipants||[]).includes(profile.id)) allowed.add('training');
     // Manual Purchase Request intake lives in the Sales module — only sales
@@ -44603,6 +44748,11 @@ function App(){
     const already = NAV.some(g=>Array.isArray(g.items)&&g.items.some(it=>it[0]==='my-evals'));
     if(!already) NAV = [ NAV[0], { items:[['my-evals','My Evaluations','📋']] }, ...NAV.slice(1) ];
   }
+  // Department heads get a "Daily Check-in" link in their first nav group so
+  // they can submit their team's end-of-day status (rolls up to the GM/CEO).
+  if(Array.isArray(NAV) && NAV.length && NAV[0] && Array.isArray(NAV[0].items) && checkinDeptForRole(profile.role)){
+    if(!NAV.some(g=>Array.isArray(g.items)&&g.items.some(it=>it[0]==='checkin'))) NAV[0].items.push(['checkin','Daily Check-in','📝']);
+  }
   function NavBtn([k,lbl,icon], keyPrefix){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
     // not error) so it stands out from inbox @mentions (which are rose).
@@ -44779,7 +44929,8 @@ function App(){
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
-        {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} navTo={navTo} />}
+        {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
+        {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
