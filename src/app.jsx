@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 687 · New Assistant General Manager (AGM) role — company-wide visibility across every department, lands on the Operations Command Center, full use of the HR module, finance *visibility* (sales, AR, cash, reports). No banking, no fund release, no monetary approval (those stay with the CEO). Assign it from Team → role dropdown AFTER this build is live.";
+const BUILD = "Live build 688 · Dashboard: added a 'Won this year (YTD)' sales figure next to Won this month, so the full-year total is visible at a glance.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21359,6 +21359,8 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   const _now=new Date();
   const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===_now.getMonth()&&d.getFullYear()===_now.getFullYear(); });
   const wonMonthVal=wonThisMonth.reduce((s,l)=>s+(Number(l.value)||0),0);
+  const wonThisYear=won.filter(l=>{ if(!l.won_at) return false; return new Date(l.won_at+'T00:00:00').getFullYear()===_now.getFullYear(); });
+  const wonYearVal=wonThisYear.reduce((s,l)=>s+(Number(l.value)||0),0);
   const activeProd=(prodJobs||[]).filter(j=>j.status!=='delivered').length;
   // Per sales owner — won deals this month
   const ownerAgg={};
@@ -21375,6 +21377,7 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   const tiles=[
     { label:'Open pipeline value', value:peso(openVal), sub:`${open.length} active leads` },
     { label:'Won this month', value:peso(wonMonthVal), sub:`${wonThisMonth.length} deal${wonThisMonth.length===1?'':'s'} · ${won.length} won all-time` },
+    { label:`Won this year (${_now.getFullYear()})`, value:peso(wonYearVal), sub:`${wonThisYear.length} deal${wonThisYear.length===1?'':'s'} YTD` },
     { label:'My leads', value:mine.length, sub:`${mine.filter(l=>!CLOSED_STAGES.includes(l.stage)).length} still open` },
     { label:'In production', value:activeProd, sub:'active jobs' },
   ];
@@ -21412,7 +21415,7 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
           )}
         </div>
       )}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">{tiles.map((t,i)=>(
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">{tiles.map((t,i)=>(
         <div key={i} className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase tracking-wide text-slate-400">{t.label}</div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub}</div></div>
       ))}</div>
       <div className="grid md:grid-cols-2 gap-4">
