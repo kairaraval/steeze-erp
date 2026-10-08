@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 693 · Budget Requests: the requester now gets an inbox notification when their request is approved or rejected (rejections include the reason).";
+const BUILD = "Live build 694 · Sublimation blocks inventory: 'Cut rolls to blocks' now uses an editable standard block-size catalog, auto-creates the block stock item, and records side-cut remnants into a Remnants stock — so rolls (kg), blocks (pcs) and remnants are all tracked separately. New Fabric Blocks + Remnants tabs in Inventory; stock out from block stock as usual.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8378,48 +8378,92 @@ function PackingReport({ jobs, replacements }){
 // blocks). Records a stock-out of the source and a stock-in of the product.
 function ConvertStockModal({ profile, items, onClose, onSaved }){
   const [srcId,setSrcId]=useState(''); const [srcQty,setSrcQty]=useState('');
-  const [dstId,setDstId]=useState(''); const [dstQty,setDstQty]=useState('');
-  const [waste,setWaste]=useState('');
+  const [sizeId,setSizeId]=useState(''); const [dstQty,setDstQty]=useState('');
+  const [remnant,setRemnant]=useState(''); const [waste,setWaste]=useState('');
+  const [sizes,setSizes]=useState([]); const [addingSize,setAddingSize]=useState(false);
+  const [newSize,setNewSize]=useState({ name:'', w:'', l:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const itemOpts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(i=>({ value:i.id, label:`${i.name}${i.color?' · '+i.color:''}  (on-hand ${i.qty??0} ${i.unit||''})` }));
+  const canEditSizes=['admin','purchasing','purchasing_admin','production_supervisor'].includes(profile?.role);
+  async function loadSizes(){ try{ const { data }=await sb.from('block_sizes').select('*').eq('active',true).order('name'); setSizes(data||[]); }catch(_){ setSizes([]); } }
+  useEffect(()=>{ loadSizes(); },[]);
+  // Source = rolls/fabric only (you cut fabric into blocks).
+  const itemOpts=(items||[]).filter(i=>['fabrics','remnants'].includes((i.bucket||'').toLowerCase())).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(i=>({ value:i.id, label:`${i.name}${i.color?' · '+i.color:''}  (on-hand ${i.qty??0} ${i.unit||''})` }));
   const itemOf=(id)=>(items||[]).find(x=>x.id===id);
-  const src=itemOf(srcId), dst=itemOf(dstId);
+  const src=itemOf(srcId); const size=sizes.find(s=>s.id===sizeId);
+  async function addSize(){
+    if(!newSize.name.trim()){ return; }
+    const payload={ name:newSize.name.trim(), width_cm:newSize.w?Number(newSize.w):null, length_cm:newSize.l?Number(newSize.l):null, created_by:profile.id };
+    const { data, error }=await sb.from('block_sizes').insert(payload).select('*').single();
+    if(error){ setMsg(error.message); return; }
+    setNewSize({ name:'', w:'', l:'' }); setAddingSize(false); await loadSizes(); if(data) setSizeId(data.id);
+  }
+  // Find an existing inventory row by (name, bucket), or create it. Returns id.
+  async function findOrCreateItem({ name, bucket, unit, color, supplier_id }){
+    const { data:found }=await sb.from('items').select('id').eq('bucket',bucket).ilike('name',name).limit(1);
+    if(found && found.length) return found[0].id;
+    const { data:ins, error }=await sb.from('items').insert({ name, bucket, unit, color:color||null, supplier_id:supplier_id||null, qty:0 }).select('id').single();
+    if(error) throw error;
+    return ins.id;
+  }
   async function save(){
-    if(!srcId||!(Number(srcQty)>0)){ setMsg('Pick the source material and how much is consumed.'); return; }
-    if(!dstId||!(Number(dstQty)>0)){ setMsg('Pick the product (e.g. blocks) and how many are produced.'); return; }
-    if(srcId===dstId){ setMsg('Source and product must be different items.'); return; }
+    if(!srcId||!(Number(srcQty)>0)){ setMsg('Pick the roll/fabric and how many kilos are consumed.'); return; }
+    if(!sizeId){ setMsg('Pick the block size (or add one).'); return; }
+    if(!(Number(dstQty)>0)){ setMsg('Enter how many blocks were produced.'); return; }
     setBusy(true); setMsg('');
     try{
       const date=todayManila();
-      const wastePart = Number(waste)>0 ? ` · ${Number(waste)}% waste` : '';
+      const blockName=`${src.name}${src.color?' · '+src.color:''} · ${size.name}`;
+      const blockId=await findOrCreateItem({ name:blockName, bucket:'blocks', unit:'block', color:src.color, supplier_id:src.supplier_id });
       const movs=[
-        { item_id:srcId, type:'out', qty:Number(srcQty), reason:`convert → ${dst?.name||'product'}${wastePart}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
-        { item_id:dstId, type:'in',  qty:Number(dstQty), reason:`convert ← ${src?.name||'source'}${wastePart}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+        { item_id:srcId, type:'out', qty:Number(srcQty), reason:`cut → ${size.name} blocks`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
+        { item_id:blockId, type:'in', qty:Number(dstQty), reason:`cut ← ${src.name}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date },
       ];
+      if(Number(remnant)>0){
+        const remName=`${src.name}${src.color?' · '+src.color:''} · Remnant`;
+        const remId=await findOrCreateItem({ name:remName, bucket:'remnants', unit:(src.unit||'kg'), color:src.color, supplier_id:src.supplier_id });
+        movs.push({ item_id:remId, type:'in', qty:Number(remnant), reason:`side cuts from ${src.name}`.slice(0,120), ref_type:'convert', ref_id:null, actor_id:profile.id, date });
+      }
       const { error }=await sb.from('stock_movements').insert(movs);
       if(error){ const stripped=movs.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
-      // Both on-hand quantities update automatically via the stock_movements trigger.
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
   return (
-    <Modal title="✂ Cut / convert to blocks" onClose={onClose}>
+    <Modal title="✂ Cut rolls to blocks" onClose={onClose}>
       <div className="space-y-3">
-        <div className="text-xs text-slate-500">Cut fabric rolls into ready blocks (or any conversion). The source is stocked out and the product stocked in, so on-hand stays accurate. Create the block item first in Inventory if it doesn't exist.</div>
+        <div className="text-xs text-slate-500">Cut a fabric roll into standard blocks. The roll is stocked out (kg), the blocks are stocked in by the piece, and any side-cut remnants are added to stock — so inventory stays accurate at every level.</div>
         <div className="rounded-lg border p-3 bg-rose-50/40 border-rose-100 space-y-2">
-          <div className="text-[10px] uppercase text-rose-600 font-semibold">Consume (source)</div>
+          <div className="text-[10px] uppercase text-rose-600 font-semibold">Consume — roll / fabric</div>
           <SearchSelect value={srcId} onChange={setSrcId} options={itemOpts} placeholder="Search roll / fabric…" />
-          <input type="number" min="0" step="0.01" className="input" value={srcQty} onChange={e=>setSrcQty(e.target.value)} placeholder={`Qty used ${src?`(on-hand ${src.qty??0} ${src.unit||''})`:''}`} />
+          <input type="number" min="0" step="0.01" className="input" value={srcQty} onChange={e=>setSrcQty(e.target.value)} placeholder={`Kilos used ${src?`(on-hand ${src.qty??0} ${src.unit||''})`:''}`} />
         </div>
         <div className="text-center text-slate-400">↓</div>
         <div className="rounded-lg border p-3 bg-emerald-50/40 border-emerald-100 space-y-2">
-          <div className="text-[10px] uppercase text-emerald-600 font-semibold">Produce (blocks / product)</div>
-          <SearchSelect value={dstId} onChange={setDstId} options={itemOpts} placeholder="Search block item…" />
-          <input type="number" min="0" step="0.01" className="input" value={dstQty} onChange={e=>setDstQty(e.target.value)} placeholder="Qty produced (e.g. 120 blocks)" />
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase text-emerald-600 font-semibold">Produce — blocks (general stock)</div>
+            {canEditSizes && <button type="button" onClick={()=>setAddingSize(v=>!v)} className="text-[11px] text-indigo-600 hover:underline">{addingSize?'Cancel':'+ New size'}</button>}
+          </div>
+          {addingSize && (
+            <div className="flex items-end gap-1.5 bg-white border rounded-lg p-2">
+              <div className="flex-1"><label className="text-[9px] uppercase text-slate-400">Size name</label><input className="input" value={newSize.name} onChange={e=>setNewSize(s=>({...s,name:e.target.value}))} placeholder="e.g. Body block 60×90" /></div>
+              <div className="w-16"><label className="text-[9px] uppercase text-slate-400">W cm</label><input type="number" className="input" value={newSize.w} onChange={e=>setNewSize(s=>({...s,w:e.target.value}))} /></div>
+              <div className="w-16"><label className="text-[9px] uppercase text-slate-400">L cm</label><input type="number" className="input" value={newSize.l} onChange={e=>setNewSize(s=>({...s,l:e.target.value}))} /></div>
+              <button type="button" onClick={addSize} className="px-2.5 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Add</button>
+            </div>
+          )}
+          <select className="input" value={sizeId} onChange={e=>setSizeId(e.target.value)}>
+            <option value="">— pick block size —</option>
+            {sizes.map(s=><option key={s.id} value={s.id}>{s.name}{(s.width_cm&&s.length_cm)?` (${s.width_cm}×${s.length_cm}cm)`:''}</option>)}
+          </select>
+          <input type="number" min="0" step="1" className="input" value={dstQty} onChange={e=>setDstQty(e.target.value)} placeholder="Blocks produced (e.g. 120)" />
         </div>
-        <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Waste % <span className="text-slate-300 normal-case">· optional — recorded for costing</span></label><input type="number" min="0" max="100" step="0.1" className="input mt-0.5" value={waste} onChange={e=>setWaste(e.target.value)} placeholder="e.g. 8" /></div>
+        <div className="rounded-lg border p-3 bg-amber-50/40 border-amber-100">
+          <label className="text-[10px] uppercase text-amber-700 font-semibold">Remnant / side cuts <span className="text-slate-400 normal-case">· added to remnant stock so leftovers are tracked</span></label>
+          <input type="number" min="0" step="0.01" className="input mt-1" value={remnant} onChange={e=>setRemnant(e.target.value)} placeholder={`Leftover ${src?.unit||'kg'} (optional)`} />
+        </div>
+        <div><label className="text-[10px] uppercase text-slate-400 font-semibold">Waste % <span className="text-slate-300 normal-case">· optional, for costing only</span></label><input type="number" min="0" max="100" step="0.1" className="input mt-0.5" value={waste} onChange={e=>setWaste(e.target.value)} placeholder="e.g. 8" /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-4 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-40" onClick={save}>{busy?'Converting…':'✂ Convert'}</button></div>
+        <div className="flex justify-end gap-2 pt-1"><button className="px-3 py-1.5 text-sm rounded-lg border" onClick={onClose}>Cancel</button><button disabled={busy} className="px-4 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-40" onClick={save}>{busy?'Cutting…':'✂ Cut to blocks'}</button></div>
       </div>
     </Modal>
   );
@@ -26633,6 +26677,8 @@ function TechpacksList({ profile, profiles, leads, clients, onOpen }){
 // an item came from a legacy import without a bucket assigned.
 const INV_BUCKETS = [
   { key:'fabrics',    label:'Fabrics',           icon:'🧵' },
+  { key:'blocks',     label:'Fabric Blocks',     icon:'🧱' },
+  { key:'remnants',   label:'Remnants',          icon:'🧩' },
   { key:'ready_made', label:'Ready Made Items',  icon:'👕' },
   { key:'trims',      label:'Trims',             icon:'🔗' },
   { key:'printing',   label:'Printing Supplies', icon:'🖨' },
