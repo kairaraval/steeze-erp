@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 688 · Dashboard: added a 'Won this year (YTD)' sales figure next to Won this month, so the full-year total is visible at a glance.";
+const BUILD = "Live build 689 · Dashboard 'Sales YTD' tile now blends your manually-entered monthly sales (from the Annual Sales panel) with OS sales orders — same number you see there — so the year total reflects the manual figures too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21352,6 +21352,10 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   // Accounting/Admin: payments logged by the team that still need verifying.
   const canVerify = canVerifySOPayment(profile);
   const pendingPayments = canVerify ? (soPayments||[]).filter(p=>p.status==='pending') : [];
+  // Manual monthly sales (pre-OS months you typed into the Annual Sales panel),
+  // blended with OS sales orders so the Dashboard year figure matches that panel.
+  const [manualYear,setManualYear]=useState({});
+  useEffect(()=>{ (async()=>{ try{ const yr=new Date().getFullYear(); const { data }=await sb.from('annual_sales_manual').select('*').like('ym',`${yr}-%`); const m={}; (data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; }); setManualYear(m); }catch(_){ setManualYear({}); } })(); },[]);
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const open=leads.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
@@ -21359,8 +21363,13 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   const _now=new Date();
   const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===_now.getMonth()&&d.getFullYear()===_now.getFullYear(); });
   const wonMonthVal=wonThisMonth.reduce((s,l)=>s+(Number(l.value)||0),0);
-  const wonThisYear=won.filter(l=>{ if(!l.won_at) return false; return new Date(l.won_at+'T00:00:00').getFullYear()===_now.getFullYear(); });
-  const wonYearVal=wonThisYear.reduce((s,l)=>s+(Number(l.value)||0),0);
+  // Blended year-to-date sales = manual month overrides (if typed) else OS sales
+  // orders booked that month. Matches the Annual Sales panel.
+  const _yr=_now.getFullYear(); const _curIdx=_now.getMonth();
+  const osBookedByMonth={};
+  (salesOrders||[]).forEach(o=>{ if(o.status==='cancelled'||o.deleted_at) return; const ym=String(o.date||'').slice(0,7); if(!ym.startsWith(String(_yr))) return; osBookedByMonth[ym]=(osBookedByMonth[ym]||0)+Number(o.total||0); });
+  let salesYtd=0, monthsManual=0;
+  for(let i=0;i<=_curIdx;i++){ const k=`${_yr}-${String(i+1).padStart(2,'0')}`; const man=manualYear[k]; if(man!=null){ salesYtd+=man; monthsManual++; } else { salesYtd+=(osBookedByMonth[k]||0); } }
   const activeProd=(prodJobs||[]).filter(j=>j.status!=='delivered').length;
   // Per sales owner — won deals this month
   const ownerAgg={};
@@ -21377,7 +21386,7 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   const tiles=[
     { label:'Open pipeline value', value:peso(openVal), sub:`${open.length} active leads` },
     { label:'Won this month', value:peso(wonMonthVal), sub:`${wonThisMonth.length} deal${wonThisMonth.length===1?'':'s'} · ${won.length} won all-time` },
-    { label:`Won this year (${_now.getFullYear()})`, value:peso(wonYearVal), sub:`${wonThisYear.length} deal${wonThisYear.length===1?'':'s'} YTD` },
+    { label:`Sales YTD (${_yr})`, value:peso(salesYtd), sub:`OS orders${monthsManual>0?` + ${monthsManual} manual month${monthsManual===1?'':'s'}`:''}` },
     { label:'My leads', value:mine.length, sub:`${mine.filter(l=>!CLOSED_STAGES.includes(l.stage)).length} still open` },
     { label:'In production', value:activeProd, sub:'active jobs' },
   ];
