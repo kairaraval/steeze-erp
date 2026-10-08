@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 689 · Dashboard 'Sales YTD' tile now blends your manually-entered monthly sales (from the Annual Sales panel) with OS sales orders — same number you see there — so the year total reflects the manual figures too.";
+const BUILD = "Live build 690 · Production Board: new 📅 Calendar view — see every project by its deadline on a month grid, with month navigation. Red = overdue; click a job to open its activity. Respects the search, status and owner filters.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9461,6 +9461,8 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   function changeSort(v){ setSortBy(v); try{ localStorage.setItem('prodSort',v); }catch(e){} }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('prodLayout')||'table'; }catch(e){ return 'table'; } });
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('prodLayout',v); }catch(e){} }
+  const [calMonth,setCalMonth]=useState(()=>{ const d=new Date(); return { y:d.getFullYear(), m:d.getMonth() }; });
+  function shiftMonth(delta){ setCalMonth(c=>{ const d=new Date(c.y, c.m+delta, 1); return { y:d.getFullYear(), m:d.getMonth() }; }); }
   const [planning,setPlanning]=useState(null); // production job whose planning board is open
   const [collapsed,setCollapsed]=useState({}); // status.key -> true if collapsed
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
@@ -9633,6 +9635,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm" title="View style">
           <button onClick={()=>changeLayout('table')} className={`px-3 py-1.5 rounded-md ${layout==='table'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ Table</button>
           <button onClick={()=>changeLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>≡ Group by status</button>
+          <button onClick={()=>changeLayout('calendar')} className={`px-3 py-1.5 rounded-md ${layout==='calendar'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📅 Calendar</button>
         </div>
       </div>
 
@@ -9764,6 +9767,55 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
         );
       })}</div>
       )}
+
+      {layout==='calendar' && (()=>{
+        const y=calMonth.y, m=calMonth.m;
+        const monthLabel=new Date(y,m,1).toLocaleString('en-PH',{ month:'long', year:'numeric' });
+        const firstDow=new Date(y,m,1).getDay();
+        const daysInMonth=new Date(y,m+1,0).getDate();
+        const todayStr=todayManila();
+        const byDay={};
+        shown.forEach(j=>{ const due=effectiveDueOf(j); if(!due) return; const d=new Date(String(due).slice(0,10)+'T00:00:00'); if(d.getFullYear()===y && d.getMonth()===m){ (byDay[d.getDate()]=byDay[d.getDate()]||[]).push(j); } });
+        const totalThisMonth=Object.values(byDay).reduce((s,a)=>s+a.length,0);
+        const cells=[]; for(let i=0;i<firstDow;i++) cells.push(null); for(let d=1;d<=daysInMonth;d++) cells.push(d);
+        const weekdays=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        return (
+          <div className="bg-white rounded-xl border overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b">
+              <div className="font-semibold text-slate-800">{monthLabel} <span className="text-slate-400 font-normal text-sm">· {totalThisMonth} due</span></div>
+              <div className="flex items-center gap-1">
+                <button onClick={()=>shiftMonth(-1)} className="px-2.5 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">‹</button>
+                <button onClick={()=>{ const d=new Date(); setCalMonth({ y:d.getFullYear(), m:d.getMonth() }); }} className="px-2.5 py-1 rounded-lg border text-xs text-slate-600 hover:bg-slate-50">Today</button>
+                <button onClick={()=>shiftMonth(1)} className="px-2.5 py-1 rounded-lg border text-slate-600 hover:bg-slate-50">›</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 text-[10px] uppercase text-slate-400 font-semibold border-b">{weekdays.map(w=><div key={w} className="px-2 py-1.5 text-center">{w}</div>)}</div>
+            <div className="grid grid-cols-7">
+              {cells.map((d,i)=>{
+                if(d===null) return <div key={'b'+i} className="border-r border-b border-slate-100 bg-slate-50/40 min-h-[104px]"></div>;
+                const dateStr=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const isToday=dateStr===todayStr;
+                const jobsD=(byDay[d]||[]);
+                return (
+                  <div key={d} className={`border-r border-b border-slate-100 p-1 min-h-[104px] ${isToday?'bg-indigo-50/50':''}`}>
+                    <div className={`text-[11px] font-semibold mb-1 px-1 ${isToday?'text-indigo-700':'text-slate-500'}`}>{d}</div>
+                    <div className="space-y-0.5">
+                      {jobsD.slice(0,4).map(j=>{ const meta=metaFrom(PRODUCTION_STATUSES,j.status); const od=deadlineInfo(effectiveDueOf(j), PRODUCTION_DONE.includes(j.status)).overdue; return (
+                        <button key={j.id} onClick={()=>openActivity({ job:j, jobType:'production', title:`${j.item} · ${j.client_name}` })} title={`${j.client_name||''} · ${j.item||''} · ${meta.label}${od?' · OVERDUE':''}`} className={`block w-full text-left text-[10px] leading-tight px-1 py-0.5 rounded truncate ${od?'bg-rose-100 text-rose-700':meta.color}`}>
+                          {j.client_name||j.item||j.number}
+                        </button>
+                      ); })}
+                      {jobsD.length>4 && <div className="text-[9px] text-slate-400 px-1">+{jobsD.length-4} more</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-4 py-2 text-[11px] text-slate-400 border-t">Each tile is a job due that day — click to open its activity. Red = overdue. Respects the search, status and owner filters above.</div>
+          </div>
+        );
+      })()}
+
       {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
     </div>
   );
