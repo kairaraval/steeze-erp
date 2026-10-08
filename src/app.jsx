@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 690 · Production Board: new 📅 Calendar view — see every project by its deadline on a month grid, with month navigation. Red = overdue; click a job to open its activity. Respects the search, status and owner filters.";
+const BUILD = "Live build 691 · Command Center: 'Materials needed' items in the Needs-attention queue now show the client name alongside the item.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6640,7 +6640,7 @@ function OpsCommandView({ profile, profiles, leads, clients, prodJobs, sampleJob
   overdueProd.slice().sort((a,b)=>String(a.due_date||'').localeCompare(String(b.due_date||''))).forEach(j=>{
     const d=Math.abs(daysUntil(j.due_date)||0); attention.push({ sev:'red', title:`${j.client_name||'—'} — ${j.item||'job'}`, meta:`${d} day${d===1?'':'s'} overdue · ${metaFrom(PRODUCTION_STATUSES,j.status).label}`, go:'prod' });
   });
-  materialsPending.forEach(j=> attention.push({ sev:'red', title:`Materials needed — ${j.item||j.client_name||'job'}`, meta:'production blocked', go:'requests' }));
+  materialsPending.forEach(j=> attention.push({ sev:'red', title:`Materials needed — ${j.client_name||'—'}${j.item?` · ${j.item}`:''}`, meta:'production blocked', go:'requests' }));
   openRepl.filter(r=>r.status==='pending').forEach(r=> attention.push({ sev:'amber', title:`Rework — ${r.item||r.client_name||'request'}`, meta:`${r.department||'QC'} · awaiting approval`, go:'replacements' }));
   overdueAR.slice().sort((a,b)=>Number(b.balance_due||0)-Number(a.balance_due||0)).slice(0,3).forEach(o=> attention.push({ sev:'amber', title:`Unpaid — ${o.client_name||'client'}`, meta:`${peso(o.balance_due)} · ${o.number||''}`, go:'sales-orders' }));
   const attnSorted=attention.sort((a,b)=> (a.sev==='red'?0:1)-(b.sev==='red'?0:1)).slice(0,7);
