@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 702 · Material tag now lets you pick the colour for that roll (shows the colour big + its swatch photo), and prints on ¼ bond paper (5.5×4.25in) inside the OS. Pick 'All colours' for a general shelf tag, or a specific colour for an incoming roll.";
+const BUILD = "Live build 703 · AGM Production menu now shows every process board — Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing + Fabric Calculator — so the AGM has full access to the whole production module (she had permission but the menu items were missing).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -45155,7 +45155,7 @@ function App(){
       { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
