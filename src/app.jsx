@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 699 · Materials Library swatches are now a multi-photo COLOUR GALLERY — purchasing uploads one photo per colour (with a colour name), the card shows a '🎨 N colours' badge, and anyone can click a material to see every colour swatch. Makes it easy for sales & the floor to check what colours a fabric actually comes in.";
+const BUILD = "Live build 700 · Materials Library now has a '🏷 Print tags' button — prints identification tags (name, GSM, composition, width, colours, supplier, code) for whatever fabrics/trims are shown, for shelf-tagging and so Cutting can ID a fabric without asking Purchasing. Plus a new Purchasing SOP module (Module 06) with the full materials/inventory/tagging setup checklist.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4594,6 +4594,20 @@ function MaterialsLibraryView({ profile, suppliers }){
   });
   const spec=(c)=>{ const p=[]; if(c.composition) p.push(c.composition); if(c.gsm) p.push(`${c.gsm} GSM`); if(c.width_in) p.push(`${c.width_in}" wide`); if(c.yield_ypk) p.push(`${c.yield_ypk} yd/kg`); return p.join(' · '); };
   const priceText=(c)=>{ if(c.unit_price!=null) return peso(c.unit_price)+(c.unit?`/${c.unit}`:''); if(c.invMin!=null){ const u=c.unit?`/${c.unit}`:''; return (c.invMin===c.invMax?peso(c.invMin):`${peso(c.invMin)}–${peso(c.invMax)}`)+u; } return ''; };
+  // Build & print a sheet of identification tags for the materials currently
+  // shown (one tag per fabric/trim) — for shelf tagging and so cutting can ID a
+  // fabric without asking Purchasing. Opens a clean print window.
+  function printTags(){
+    const esc=(s)=> String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const codeOf=(c)=>{ const ini=String(c.name||'').split(/\s+/).filter(Boolean).map(w=>(w.replace(/[^A-Za-z0-9]/g,'')[0]||'')).join('').toUpperCase().slice(0,4); return ini + (c.gsm?('-'+c.gsm):''); };
+    const tags=list.map(c=>{
+      const sp=[]; if(c.composition) sp.push(esc(c.composition)); if(c.gsm) sp.push(esc(c.gsm)+' GSM'); if(c.width_in) sp.push(esc(c.width_in)+'&quot; wide');
+      return `<div class="tag"><div class="code">${esc(codeOf(c))}</div><div class="nm">${esc(c.name)}</div>${sp.length?`<div class="sp">${sp.join(' · ')}</div>`:''}${c.colors?`<div class="row"><b>Colours:</b> ${esc(c.colors)}</div>`:''}${c.supplier?`<div class="row"><b>Supplier:</b> ${esc(c.supplier)}</div>`:''}<div class="brand">STEEZE · ${c.kind==='trim'?'TRIM':'FABRIC'}</div></div>`;
+    }).join('');
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Material Tags</title><style>*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;margin:12px;color:#000}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.tag{border:1.5px solid #000;border-radius:6px;padding:10px 12px;page-break-inside:avoid;min-height:118px}.code{font-family:monospace;font-size:12px;letter-spacing:1px;color:#444}.nm{font-size:20px;font-weight:800;line-height:1.1;margin:2px 0 4px}.sp{font-size:13px;font-weight:600;margin-bottom:4px}.row{font-size:12px;margin:1px 0}.brand{margin-top:6px;font-size:10px;letter-spacing:2px;color:#666;border-top:1px solid #ccc;padding-top:4px}.bar{margin-bottom:10px}.btn{font:600 13px Arial;padding:8px 16px;border:none;border-radius:4px;background:#1f2d5a;color:#fff;cursor:pointer}@media print{.noprint{display:none}@page{margin:10mm}}</style></head><body><div class="bar noprint"><button class="btn" onclick="window.print()">🖨 Print ${list.length} tags</button> &nbsp; <span style="font:12px Arial;color:#666">${list.length} ${kind==='trim'?'trims':'fabrics'} shown</span></div><div class="grid">${tags}</div></body></html>`;
+    const w=window.open('','_blank'); if(!w){ alert('Please allow pop-ups so tags can open in a new window to print.'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }
   useEffect(()=>{ setFType(''); setFSupplier(''); },[kind]);
   return (
     <div className="p-6">
@@ -4602,6 +4616,7 @@ function MaterialsLibraryView({ profile, suppliers }){
           <div><h1 className="text-2xl font-bold">🧵 Materials Library</h1><p className="text-slate-500 text-sm">Every fabric &amp; trim — live from inventory, enriched with specs, colours, supplier, price &amp; MOQ</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search materials…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-52" />
+            <button onClick={printTags} disabled={!list.length} title="Print identification tags for the materials shown" className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40">🏷 Print tags</button>
             {canEdit && <button onClick={()=>setEditing({new:true})} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add material</button>}
           </div>
         </div>
