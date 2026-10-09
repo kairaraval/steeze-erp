@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 696 · Training is now organized into per-department TRACKS. Each module has a track (e.g. Purchasing, Sales, General), and in Manage access you enroll people per track — so the purchasing person sees only the Purchasing modules (plus General), not everyone's sales training. Admins/trainers still see all tracks.";
+const BUILD = "Live build 697 · New MATERIALS LIBRARY — a reference catalogue of every fabric & trim (swatch photo, type, GSM/width/yield, colours, supplier, price, MOQ, lead time). Purchasing & managers maintain the cards; sales and purchasing both get a searchable, filterable picker. Standalone for now; stock + techpack links come next.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4405,6 +4405,169 @@ function PurchasingResourceForm({ profile, category, existing, onClose, onSaved 
   );
 }
 
+// ─── Materials Library ──────────────────────────────────────────────────────
+// A standalone reference catalogue of fabrics and trims — one card per material,
+// holding its identity + specs (independent of live stock). Purchasing maintains
+// the cards; Sales uses it as a picker/reference when quoting and building
+// techpacks. Editable by purchasing/managers/admin; read-only for everyone else.
+function matLibCanEdit(profile){ return ['admin','agm','purchasing','purchasing_admin','manager','sales_representative'].includes(profile?.role); }
+function MatLibEditModal({ profile, suppliers, kind, existing, onClose, onSaved }){
+  const [f,setF]=useState(()=>({
+    kind: existing?.kind || kind || 'fabric',
+    name: existing?.name||'', material_type: existing?.material_type||'', composition: existing?.composition||'',
+    gsm: existing?.gsm??'', width_in: existing?.width_in??'', yield_ypk: existing?.yield_ypk??'',
+    colors: existing?.colors||'', swatch_path: existing?.swatch_path||'',
+    supplier_id: existing?.supplier_id||'', supplier_name: existing?.supplier_name||'',
+    unit: existing?.unit||(existing?.kind==='trim'?'pc':'kg'), unit_price: existing?.unit_price??'', moq: existing?.moq??'',
+    lead_time_days: existing?.lead_time_days??'', typical_use: existing?.typical_use||'', care: existing?.care||'', notes: existing?.notes||'',
+  }));
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const isFabric = f.kind==='fabric';
+  const supOpts=(suppliers||[]).map(s=>({ value:s.id, label:s.company||s.name||'—' }));
+  const num=(v)=> v===''||v===null||v===undefined ? null : Number(v);
+  async function save(){
+    if(!f.name.trim()){ setMsg('Name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={
+      kind:f.kind, name:f.name.trim(), material_type:f.material_type||null, composition:f.composition||null,
+      gsm:isFabric?num(f.gsm):null, width_in:isFabric?num(f.width_in):null, yield_ypk:isFabric?num(f.yield_ypk):null,
+      colors:f.colors||null, swatch_path:f.swatch_path||null,
+      supplier_id:f.supplier_id||null, supplier_name:f.supplier_name||null,
+      unit:f.unit||null, unit_price:num(f.unit_price), moq:num(f.moq), lead_time_days:num(f.lead_time_days)===null?null:parseInt(f.lead_time_days,10),
+      typical_use:f.typical_use||null, care:f.care||null, notes:f.notes||null,
+    };
+    try{
+      if(existing){ const { error }=await sb.from('materials_library').update({...payload, updated_at:new Date().toISOString()}).eq('id',existing.id); if(error) throw error; }
+      else { const { error }=await sb.from('materials_library').insert({...payload, created_by:profile.id}); if(error) throw error; }
+      setBusy(false); onSaved&&onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const L=(t)=> <label className="text-[10px] uppercase text-slate-400 font-semibold">{t}</label>;
+  return (<Modal title={existing?'Edit material':'+ New material'} onClose={onClose} wide><div className="space-y-3 text-sm">
+    <div className="grid grid-cols-[120px_1fr] gap-3">
+      <div>{L('Type')}<select value={f.kind} onChange={e=>setF({...f,kind:e.target.value})} className="input w-full"><option value="fabric">Fabric</option><option value="trim">Trim</option></select></div>
+      <div>{L('Name *')}<input value={f.name} onChange={e=>setF({...f,name:e.target.value})} className="input w-full" placeholder={isFabric?'e.g. Honeycomb Interlock':'e.g. #5 Metal Zipper'} /></div>
+    </div>
+    <div className="grid md:grid-cols-[180px_1fr] gap-3">
+      <TpImage scope="materials-library" value={f.swatch_path} onChange={v=>setF({...f,swatch_path:v})} label="Swatch / photo" h="h-40" />
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>{L(isFabric?'Material type':'Trim type')}<input value={f.material_type} onChange={e=>setF({...f,material_type:e.target.value})} className="input w-full" placeholder={isFabric?'Interlock, Drifit…':'Zipper, Drawcord, Ribbing…'} /></div>
+          <div>{L('Available colours')}<input value={f.colors} onChange={e=>setF({...f,colors:e.target.value})} className="input w-full" placeholder="White, Black, Navy…" /></div>
+        </div>
+        {isFabric ? (
+          <div className="grid grid-cols-4 gap-3">
+            <div>{L('Composition')}<input value={f.composition} onChange={e=>setF({...f,composition:e.target.value})} className="input w-full" placeholder="100% Poly" /></div>
+            <div>{L('GSM')}<input type="number" value={f.gsm} onChange={e=>setF({...f,gsm:e.target.value})} className="input w-full" /></div>
+            <div>{L('Width (in)')}<input type="number" value={f.width_in} onChange={e=>setF({...f,width_in:e.target.value})} className="input w-full" /></div>
+            <div>{L('Yield (yd/kg)')}<input type="number" value={f.yield_ypk} onChange={e=>setF({...f,yield_ypk:e.target.value})} className="input w-full" /></div>
+          </div>
+        ) : (
+          <div>{L('Spec / size')}<input value={f.composition} onChange={e=>setF({...f,composition:e.target.value})} className="input w-full" placeholder="e.g. 20cm, 3mm, 2x2 rib" /></div>
+        )}
+      </div>
+    </div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div>{L('Supplier')}<SearchSelect value={f.supplier_id} onChange={v=>setF({...f,supplier_id:v})} options={supOpts} placeholder="Pick supplier…" allowClear /></div>
+      <div>{L('…or supplier name')}<input value={f.supplier_name} onChange={e=>setF({...f,supplier_name:e.target.value})} className="input w-full" placeholder="If not in list" /></div>
+      <div>{L('Unit')}<input value={f.unit} onChange={e=>setF({...f,unit:e.target.value})} className="input w-full" placeholder={isFabric?'kg':'pc'} /></div>
+      <div>{L('Unit price (₱)')}<input type="number" value={f.unit_price} onChange={e=>setF({...f,unit_price:e.target.value})} className="input w-full" /></div>
+    </div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div>{L('MOQ')}<input type="number" value={f.moq} onChange={e=>setF({...f,moq:e.target.value})} className="input w-full" /></div>
+      <div>{L('Lead time (days)')}<input type="number" value={f.lead_time_days} onChange={e=>setF({...f,lead_time_days:e.target.value})} className="input w-full" /></div>
+      <div className="md:col-span-2">{L('Typical use')}<input value={f.typical_use} onChange={e=>setF({...f,typical_use:e.target.value})} className="input w-full" placeholder="Jerseys, hoodies…" /></div>
+    </div>
+    <div className="grid md:grid-cols-2 gap-3">
+      <div>{L('Care / handling')}<input value={f.care} onChange={e=>setF({...f,care:e.target.value})} className="input w-full" /></div>
+      <div>{L('Notes')}<input value={f.notes} onChange={e=>setF({...f,notes:e.target.value})} className="input w-full" /></div>
+    </div>
+    {msg&&<div className="text-xs text-rose-600">{msg}</div>}
+    <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
+  </div></Modal>);
+}
+function MaterialsLibraryView({ profile, suppliers }){
+  const [kind,setKind]=useState('fabric');
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState('');
+  const [fType,setFType]=useState('');
+  const [fSupplier,setFSupplier]=useState('');
+  const [editing,setEditing]=useState(null);   // row or {new:true}
+  const [lightbox,setLightbox]=useState('');
+  const canEdit=matLibCanEdit(profile);
+  const supName=(r)=>{ if(r.supplier_name) return r.supplier_name; const s=(suppliers||[]).find(x=>x.id===r.supplier_id); return s?(s.company||s.name||''):''; };
+  async function load(){ setLoading(true); const { data }=await sb.from('materials_library').select('*').is('deleted_at',null).order('name'); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  async function del(r){ if(!confirm(`Delete "${r.name}" from the library?`)) return; const { error }=await sb.from('materials_library').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id); if(error){ alert(error.message); return; } load(); }
+  const ofKind=rows.filter(r=>(r.kind||'fabric')===kind);
+  const typeOpts=Array.from(new Set(ofKind.map(r=>r.material_type).filter(Boolean))).sort();
+  const q=search.toLowerCase();
+  const list=ofKind.filter(r=>{
+    if(fType && r.material_type!==fType) return false;
+    if(fSupplier && supName(r)!==fSupplier) return false;
+    if(q && !`${r.name||''} ${r.material_type||''} ${r.composition||''} ${r.colors||''} ${supName(r)} ${r.typical_use||''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const supFilterOpts=Array.from(new Set(ofKind.map(supName).filter(Boolean))).sort();
+  const spec=(r)=>{ const p=[]; if(r.composition) p.push(r.composition); if(r.gsm) p.push(`${r.gsm} GSM`); if(r.width_in) p.push(`${r.width_in}" wide`); if(r.yield_ypk) p.push(`${r.yield_ypk} yd/kg`); return p.join(' · '); };
+  useEffect(()=>{ setFType(''); setFSupplier(''); },[kind]);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🧵 Materials Library</h1><p className="text-slate-500 text-sm">Reference catalogue of every fabric &amp; trim — specs, colours, supplier, price &amp; MOQ</p></div>
+          <div className="flex items-center gap-2">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search materials…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-52" />
+            {canEdit && <button onClick={()=>setEditing({new:true})} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add material</button>}
+          </div>
+        </div>
+        <div className="flex gap-1 mt-3 flex-wrap items-center">
+          {[['fabric','🧵 Fabrics'],['trim','🔗 Trims']].map(([k,lbl])=>(
+            <button key={k} onClick={()=>setKind(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${kind===k?'bg-slate-900 text-white':'bg-white border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>{lbl} <span className="opacity-60">{rows.filter(r=>(r.kind||'fabric')===k).length}</span></button>
+          ))}
+          <span className="w-px h-5 bg-slate-300 mx-1"></span>
+          <select value={fType} onChange={e=>setFType(e.target.value)} className="px-2 py-1.5 text-sm rounded-lg border border-slate-300 bg-white"><option value="">All types</option>{typeOpts.map(t=><option key={t} value={t}>{t}</option>)}</select>
+          <select value={fSupplier} onChange={e=>setFSupplier(e.target.value)} className="px-2 py-1.5 text-sm rounded-lg border border-slate-300 bg-white"><option value="">All suppliers</option>{supFilterOpts.map(s=><option key={s} value={s}>{s}</option>)}</select>
+          {(fType||fSupplier||search)&&<button onClick={()=>{setFType('');setFSupplier('');setSearch('');}} className="text-xs text-slate-500 hover:underline">Clear</button>}
+        </div>
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : list.length===0 ? (
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No {kind==='fabric'?'fabrics':'trims'} yet.{canEdit?` Click "+ Add material" to add one.`:''}</div>
+      ) : (
+        <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))'}}>
+          {list.map(r=>(
+            <div key={r.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+              <button onClick={()=> r.swatch_path && setLightbox(r.swatch_path)} className="h-36 bg-slate-100 flex items-center justify-center overflow-hidden" title={r.swatch_path?'View swatch':''}>
+                {r.swatch_path ? <TImg path={r.swatch_path} thumb={300} maxH="144px" /> : <span className="text-4xl opacity-30">{kind==='fabric'?'🧵':'🔗'}</span>}
+              </button>
+              <div className="p-3 flex-1 flex flex-col">
+                <div className="font-bold text-slate-800 leading-tight">{r.name}</div>
+                {r.material_type && <div className="text-[11px] text-indigo-600 font-semibold uppercase tracking-wide mt-0.5">{r.material_type}</div>}
+                {spec(r) && <div className="text-xs text-slate-500 mt-1">{spec(r)}</div>}
+                {(kind==='trim' && r.composition) && <div className="text-xs text-slate-500 mt-1">{r.composition}</div>}
+                {r.colors && <div className="text-xs text-slate-600 mt-1"><span className="text-slate-400">Colours:</span> {r.colors}</div>}
+                <div className="mt-2 text-xs space-y-0.5">
+                  {supName(r) && <div><span className="text-slate-400">Supplier:</span> {supName(r)}</div>}
+                  <div className="flex flex-wrap gap-x-3">
+                    {(r.unit_price!=null) && <span className="font-semibold text-slate-800">{peso(r.unit_price)}{r.unit?`/${r.unit}`:''}</span>}
+                    {(r.moq!=null) && <span className="text-slate-500">MOQ {r.moq}{r.unit?` ${r.unit}`:''}</span>}
+                    {(r.lead_time_days!=null) && <span className="text-slate-500">{r.lead_time_days}d lead</span>}
+                  </div>
+                  {r.typical_use && <div className="text-slate-500"><span className="text-slate-400">Use:</span> {r.typical_use}</div>}
+                  {r.notes && <div className="text-slate-400 italic">{r.notes}</div>}
+                </div>
+                {canEdit && <div className="flex gap-2 mt-auto pt-2"><button onClick={()=>setEditing(r)} className="text-[11px] text-indigo-600 hover:underline">Edit</button><button onClick={()=>del(r)} className="text-[11px] text-rose-500 hover:underline ml-auto">Delete</button></div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.new?null:editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
+      {lightbox && <Modal title="Swatch" onClose={()=>setLightbox('')} wide><div className="flex items-center justify-center bg-slate-100 rounded-lg p-2"><TImg path={lightbox} maxH="70vh" /></div></Modal>}
+    </div>
+  );
+}
 function PurchasingResourcesView({ profile }){
   const [tab,setTab]=useState('pricelist');
   const [folder,setFolder]=useState('Fabrics');
@@ -44171,7 +44334,7 @@ function App(){
       allowed = new Set(['ops-command','scorecard','checkin','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing',
-        'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources',
+        'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll']);
@@ -44181,16 +44344,16 @@ function App(){
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
       // Lands on their personal Home (Workbench) by default.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','materials-library','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='sales_representative'){
       // Sales Representative — same access as Sales Manager, plus their own
       // Home (Workbench) which is their default landing page.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(isManagerRole(profile.role)){
       // Sales Manager — identical access, lands on their Home (Workbench).
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern','fabric-calc']);
@@ -44246,11 +44409,11 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -44846,10 +45009,10 @@ function App(){
     NAV = [
       { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['goals','Vision & Goals','🎯'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
@@ -44961,7 +45124,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -44973,7 +45136,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -45018,7 +45181,7 @@ function App(){
     // Sales Assistants / Representatives — Sales + Production + Logistics + Budget Requests.
     NAV = [
       { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -45035,7 +45198,7 @@ function App(){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
       { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['pr-request','Request for Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
       FINANCE_SALES,
@@ -45049,11 +45212,11 @@ function App(){
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
-      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
+      { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -45243,6 +45406,7 @@ function App(){
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pricing' && <PricingView profile={profile} />}
         {view==='pur-resources' && <PurchasingResourcesView profile={profile} />}
+        {view==='materials-library' && <MaterialsLibraryView profile={profile} suppliers={suppliers} />}
         {view==='costing' && profile.role==='admin' && <CostingCalculatorView profile={profile} />}
         {view==='fabric-calc' && <FabricCalculatorView profile={profile} />}
         {view==='marketing' && <MarketingHub profile={profile} profiles={profiles} openContentId={inboxMarketingId} />}
