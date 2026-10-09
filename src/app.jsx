@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 703 · AGM Production menu now shows every process board — Trad Sorting, Subli Sorting, DTF Pressing, Subli Pressing + Fabric Calculator — so the AGM has full access to the whole production module (she had permission but the menu items were missing).";
+const BUILD = "Live build 704 · Admins can now edit the default NOTES printed on Invoices and Delivery Receipts — Settings → Document Notes. Set a standard footer once and it prints on every invoice / DR (admins only).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26,6 +26,17 @@ function SteezeBolt({ className, fill }){
 // Company info constants — single source of truth for printables.
 const STEEZE_ADDRESS = 'Lot 25 Blk 26 Marcos Alvarez Ext. Road, Talon Singko, Las Piñas City, NCR 1747';
 const STEEZE_TIN     = '008-794-398-000';
+
+// Admin-editable default notes printed on documents (set in Settings → Document
+// Notes). Loaded once at app start into this module-level store so the print
+// views can read them; defaults match the previous hardcoded text.
+const DR_NOTE_DEFAULT = 'Goods received in good order and condition. Any discrepancy must be reported within 24 hours of receipt.';
+const DOC_NOTES = { invoice:'', dr:DR_NOTE_DEFAULT };
+async function loadDocNotes(){
+  try{ const { data }=await sb.from('app_settings').select('value').eq('key','doc_notes').maybeSingle();
+    if(data&&data.value){ DOC_NOTES.invoice = data.value.invoice||''; DOC_NOTES.dr = (data.value.dr!=null?data.value.dr:DR_NOTE_DEFAULT); }
+  }catch(_){}
+}
 
 // Shared printable letterhead — lightning logo on the left, company name +
 // address + TIN in the middle, optional document-type label on the right.
@@ -2595,6 +2606,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
               </tfoot>
             </table>
             {notes && (<div className="mt-3 border border-slate-400 p-2"><div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Notes</div><div className="text-[10px] whitespace-pre-line">{notes}</div></div>)}
+            {(DOC_NOTES.invoice||'').trim() && (<div className="mt-3 text-[9px] text-slate-600 whitespace-pre-line">{DOC_NOTES.invoice}</div>)}
             <div className="grid grid-cols-2 gap-4 mt-6">
               <SignatureBox role="Prepared by" name={profile?.name} />
               <SignatureBox role="Received by (Client)" />
@@ -22904,6 +22916,48 @@ function TeamOverview({ profile, profiles, leads, clients, salesTargets, reload 
   );
 }
 
+// Admin-editable default notes that print on Invoices and Delivery Receipts.
+// Stored in app_settings('doc_notes'); printables read the module-level DOC_NOTES.
+function DocNotesSettings({ profile }){
+  const [invoice,setInvoice]=useState('');
+  const [dr,setDr]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  useEffect(()=>{ let on=true; (async()=>{
+    const { data }=await sb.from('app_settings').select('value').eq('key','doc_notes').maybeSingle();
+    if(on){ const v=(data&&data.value)||{}; setInvoice(v.invoice||''); setDr(v.dr!=null?v.dr:DR_NOTE_DEFAULT); setLoading(false); }
+  })(); return ()=>{on=false;}; },[]);
+  async function save(){
+    setBusy(true); setMsg('');
+    const value={ invoice:invoice||'', dr:dr||'' };
+    const { error }=await sb.from('app_settings').upsert({ key:'doc_notes', value, updated_at:new Date().toISOString(), updated_by:profile.id }, { onConflict:'key' });
+    setBusy(false);
+    if(error){ setMsg(error.message); return; }
+    DOC_NOTES.invoice=value.invoice; DOC_NOTES.dr=value.dr;  // live-update printables
+    setMsg('Saved. New invoices & delivery receipts will show these notes.');
+  }
+  if(loading) return <div className="text-slate-400 text-sm py-10">Loading…</div>;
+  return (
+    <div className="bg-white border rounded-xl p-5 max-w-3xl space-y-5">
+      <div>
+        <div className="font-semibold text-slate-900">Default document notes</div>
+        <p className="text-xs text-slate-500">These notes print at the bottom of every <strong>Invoice</strong> and <strong>Delivery Receipt</strong>. Edit them here any time — changes apply to documents opened/printed after saving. Admins only.</p>
+      </div>
+      <div>
+        <label className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">🧾 Invoice note / footer</label>
+        <textarea value={invoice} onChange={e=>setInvoice(e.target.value)} rows={4} className="input w-full mt-1" placeholder="e.g. Please make checks payable to Steeze Corporation. Thank you for your business." />
+        <div className="text-[10px] text-slate-400 mt-0.5">Leave blank to print no extra note on invoices.</div>
+      </div>
+      <div>
+        <label className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">📄 Delivery Receipt note / footer</label>
+        <textarea value={dr} onChange={e=>setDr(e.target.value)} rows={4} className="input w-full mt-1" placeholder="e.g. Goods received in good order and condition…" />
+      </div>
+      {msg && <div className={`text-xs ${msg.startsWith('Saved')?'text-emerald-600':'text-rose-600'}`}>{msg}</div>}
+      <div className="flex justify-end"><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'Save notes'}</button></div>
+    </div>
+  );
+}
 /* Settings — admin-only team management. Lists every member regardless of role,
    plus the invite form + pending invites. */
 function SettingsView({ profile, profiles, pendingInvites, reload }){
@@ -23024,10 +23078,12 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
       {/* Top tabs */}
       <div className="flex gap-1 border-b">
         <button onClick={()=>setTab('team')} className={`px-4 py-2 text-sm rounded-t-lg ${tab==='team'?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>👥 Team</button>
+        <button onClick={()=>setTab('docnotes')} className={`px-4 py-2 text-sm rounded-t-lg ${tab==='docnotes'?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>📄 Document Notes</button>
         <button onClick={()=>setTab('trash')} className={`px-4 py-2 text-sm rounded-t-lg ${tab==='trash'?'border border-b-0 bg-white font-semibold text-indigo-700':'text-slate-500 hover:text-slate-800'}`}>🗑 Trash</button>
       </div>
 
       {tab==='trash' && <TrashView profile={profile} profiles={profiles} reload={reload} />}
+      {tab==='docnotes' && <DocNotesSettings profile={profile} />}
 
       {tab==='team' && <>
 
@@ -40492,9 +40548,9 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
           </div>
         </div>
 
-        <div className="mt-6 text-[10px] text-slate-500 text-center border-t pt-2">
-          Goods received in good order and condition. Any discrepancy must be reported within 24 hours of receipt.
-        </div>
+        {(DOC_NOTES.dr||'').trim() && <div className="mt-6 text-[10px] text-slate-500 text-center border-t pt-2 whitespace-pre-line">
+          {DOC_NOTES.dr}
+        </div>}
       </div>
 
       <div className="no-print flex gap-2 mt-3">
@@ -44212,6 +44268,7 @@ function App(){
   async function loadAll(){
     if(!session) return;
     lastLoadAt.current = Date.now();
+    loadDocNotes();  // admin-editable default notes for Invoice / DR printables
     // Coalesce: never run two full reloads concurrently. If one is already in
     // flight, just flag it to run once more when the current one finishes.
     if(loadAllBusy.current){ loadAllAgain.current = true; return; }
