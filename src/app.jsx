@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 700 · Materials Library now has a '🏷 Print tags' button — prints identification tags (name, GSM, composition, width, colours, supplier, code) for whatever fabrics/trims are shown, for shelf-tagging and so Cutting can ID a fabric without asking Purchasing. Plus a new Purchasing SOP module (Module 06) with the full materials/inventory/tagging setup checklist.";
+const BUILD = "Live build 701 · Material tags are now PER-MATERIAL and print inside the OS (no new browser tab) — each card has a '🏷 Print tag' button that opens a clean label (name, GSM, composition, width, colours, supplier, code) and prints like the packing labels. Everyone can print; purchasing/admin still curate.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4518,6 +4518,7 @@ function MaterialsLibraryView({ profile, suppliers }){
   const [fSupplier,setFSupplier]=useState('');
   const [editing,setEditing]=useState(null);    // {new:true} | {raw} | {prefill}
   const [lightbox,setLightbox]=useState('');
+  const [tagCard,setTagCard]=useState(null);    // material card to print a tag for
   const canEdit=matLibCanEdit(profile);
   const supName=(r)=>{ if(r.supplier_name) return r.supplier_name; const s=(suppliers||[]).find(x=>x.id===r.supplier_id); return s?(s.company||s.name||''):''; };
   async function load(){ setLoading(true); const { data }=await sb.from('materials_library').select('*').is('deleted_at',null).order('name'); setRows(data||[]); setLoading(false); }
@@ -4594,20 +4595,7 @@ function MaterialsLibraryView({ profile, suppliers }){
   });
   const spec=(c)=>{ const p=[]; if(c.composition) p.push(c.composition); if(c.gsm) p.push(`${c.gsm} GSM`); if(c.width_in) p.push(`${c.width_in}" wide`); if(c.yield_ypk) p.push(`${c.yield_ypk} yd/kg`); return p.join(' · '); };
   const priceText=(c)=>{ if(c.unit_price!=null) return peso(c.unit_price)+(c.unit?`/${c.unit}`:''); if(c.invMin!=null){ const u=c.unit?`/${c.unit}`:''; return (c.invMin===c.invMax?peso(c.invMin):`${peso(c.invMin)}–${peso(c.invMax)}`)+u; } return ''; };
-  // Build & print a sheet of identification tags for the materials currently
-  // shown (one tag per fabric/trim) — for shelf tagging and so cutting can ID a
-  // fabric without asking Purchasing. Opens a clean print window.
-  function printTags(){
-    const esc=(s)=> String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    const codeOf=(c)=>{ const ini=String(c.name||'').split(/\s+/).filter(Boolean).map(w=>(w.replace(/[^A-Za-z0-9]/g,'')[0]||'')).join('').toUpperCase().slice(0,4); return ini + (c.gsm?('-'+c.gsm):''); };
-    const tags=list.map(c=>{
-      const sp=[]; if(c.composition) sp.push(esc(c.composition)); if(c.gsm) sp.push(esc(c.gsm)+' GSM'); if(c.width_in) sp.push(esc(c.width_in)+'&quot; wide');
-      return `<div class="tag"><div class="code">${esc(codeOf(c))}</div><div class="nm">${esc(c.name)}</div>${sp.length?`<div class="sp">${sp.join(' · ')}</div>`:''}${c.colors?`<div class="row"><b>Colours:</b> ${esc(c.colors)}</div>`:''}${c.supplier?`<div class="row"><b>Supplier:</b> ${esc(c.supplier)}</div>`:''}<div class="brand">STEEZE · ${c.kind==='trim'?'TRIM':'FABRIC'}</div></div>`;
-    }).join('');
-    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Material Tags</title><style>*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;margin:12px;color:#000}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.tag{border:1.5px solid #000;border-radius:6px;padding:10px 12px;page-break-inside:avoid;min-height:118px}.code{font-family:monospace;font-size:12px;letter-spacing:1px;color:#444}.nm{font-size:20px;font-weight:800;line-height:1.1;margin:2px 0 4px}.sp{font-size:13px;font-weight:600;margin-bottom:4px}.row{font-size:12px;margin:1px 0}.brand{margin-top:6px;font-size:10px;letter-spacing:2px;color:#666;border-top:1px solid #ccc;padding-top:4px}.bar{margin-bottom:10px}.btn{font:600 13px Arial;padding:8px 16px;border:none;border-radius:4px;background:#1f2d5a;color:#fff;cursor:pointer}@media print{.noprint{display:none}@page{margin:10mm}}</style></head><body><div class="bar noprint"><button class="btn" onclick="window.print()">🖨 Print ${list.length} tags</button> &nbsp; <span style="font:12px Arial;color:#666">${list.length} ${kind==='trim'?'trims':'fabrics'} shown</span></div><div class="grid">${tags}</div></body></html>`;
-    const w=window.open('','_blank'); if(!w){ alert('Please allow pop-ups so tags can open in a new window to print.'); return; }
-    w.document.open(); w.document.write(html); w.document.close();
-  }
+  const codeOf=(c)=>{ const ini=String(c.name||'').split(/\s+/).filter(Boolean).map(w=>(w.replace(/[^A-Za-z0-9]/g,'')[0]||'')).join('').toUpperCase().slice(0,4); return ini + (c.gsm?('-'+c.gsm):''); };
   useEffect(()=>{ setFType(''); setFSupplier(''); },[kind]);
   return (
     <div className="p-6">
@@ -4616,7 +4604,6 @@ function MaterialsLibraryView({ profile, suppliers }){
           <div><h1 className="text-2xl font-bold">🧵 Materials Library</h1><p className="text-slate-500 text-sm">Every fabric &amp; trim — live from inventory, enriched with specs, colours, supplier, price &amp; MOQ</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search materials…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-52" />
-            <button onClick={printTags} disabled={!list.length} title="Print identification tags for the materials shown" className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40">🏷 Print tags</button>
             {canEdit && <button onClick={()=>setEditing({new:true})} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add material</button>}
           </div>
         </div>
@@ -4658,17 +4645,35 @@ function MaterialsLibraryView({ profile, suppliers }){
                   {c.typical_use && <div className="text-slate-500"><span className="text-slate-400">Use:</span> {c.typical_use}</div>}
                   {c.notes && <div className="text-slate-400 italic">{c.notes}</div>}
                 </div>
-                {canEdit && <div className="flex gap-2 mt-auto pt-2">
-                  {c.curated
-                    ? (<><button onClick={()=>setEditing({raw:c.raw})} className="text-[11px] text-indigo-600 hover:underline">Edit</button><button onClick={()=>del(c.raw)} className="text-[11px] text-rose-500 hover:underline ml-auto">Delete</button></>)
-                    : (<button onClick={()=>setEditing({prefill:c.prefill})} className="text-[11px] text-indigo-600 hover:underline font-semibold">✎ Add specs</button>)}
-                </div>}
+                <div className="flex gap-3 items-center mt-auto pt-2">
+                  <button onClick={()=>setTagCard(c)} className="text-[11px] text-slate-600 hover:underline font-semibold">🏷 Print tag</button>
+                  {canEdit && (c.curated
+                    ? (<><button onClick={()=>setEditing({raw:c.raw})} className="text-[11px] text-indigo-600 hover:underline ml-auto">Edit</button><button onClick={()=>del(c.raw)} className="text-[11px] text-rose-500 hover:underline">Delete</button></>)
+                    : (<button onClick={()=>setEditing({prefill:c.prefill})} className="text-[11px] text-indigo-600 hover:underline ml-auto font-semibold">✎ Add specs</button>))}
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
       {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.raw||null} prefill={editing.raw?null:(editing.prefill||null)} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
+      {tagCard && (()=>{ const c=tagCard; const sp=[]; if(c.composition)sp.push(c.composition); if(c.gsm)sp.push(c.gsm+' GSM'); if(c.width_in)sp.push(c.width_in+'" wide'); return (
+        <Modal title={`Material tag · ${c.name}`} onClose={()=>setTagCard(null)}>
+          <style>{`@media print{ @page{size:8.5in 11in;margin:0.5in;} body *{visibility:hidden !important;} .mat-tag-sheet,.mat-tag-sheet *{visibility:visible !important;} .mat-tag-sheet{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
+          <div className="space-y-4">
+            <div className="no-print flex items-center justify-between"><div className="text-xs text-slate-500">One tag for this material. Print, cut, and attach.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+            <div className="mat-tag-sheet flex justify-center">
+              <div style={{border:'2px solid #000',borderRadius:'8px',padding:'20px 24px',width:'4.5in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
+                <div style={{fontFamily:'monospace',fontSize:'13px',letterSpacing:'1px',color:'#444'}}>{codeOf(c)}</div>
+                <div style={{fontSize:'30px',fontWeight:800,lineHeight:1.05,margin:'4px 0 8px'}}>{c.name}</div>
+                {sp.length>0 && <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>{sp.join(' · ')}</div>}
+                {c.colors && <div style={{fontSize:'14px',margin:'3px 0'}}><b>Colours:</b> {c.colors}</div>}
+                {c.supplier && <div style={{fontSize:'14px',margin:'3px 0'}}><b>Supplier:</b> {c.supplier}</div>}
+                <div style={{marginTop:'14px',fontSize:'11px',letterSpacing:'2px',color:'#666',borderTop:'1px solid #ccc',paddingTop:'6px'}}>STEEZE · {c.kind==='trim'?'TRIM':'FABRIC'}</div>
+              </div>
+            </div>
+          </div>
+        </Modal>); })()}
       {lightbox && <Modal title={`Colour swatches · ${lightbox.name}`} onClose={()=>setLightbox('')} wide><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
         {lightbox.swatches.map((s,i)=>(
           <div key={i} className="border rounded-lg overflow-hidden bg-slate-50">
