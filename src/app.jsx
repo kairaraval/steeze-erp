@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 704 · Admins can now edit the default NOTES printed on Invoices and Delivery Receipts — Settings → Document Notes. Set a standard footer once and it prints on every invoice / DR (admins only).";
+const BUILD = "Live build 705 · HR NPA upgrades: (1) HR can 'Send for approval' and Admin 'Approve & sign' — the admin's e-signature prints on the NPA, with notifications both ways. (2) New employee movement now supports multiple employees / a whole department in one go (like NTE), auto-pulling each person's previous position, department, salary and NPA 'from' values.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17889,7 +17889,7 @@ function caseSeverityMeta(k){ return CASE_SEVERITIES.find(s=>s.key===k); }
 // Disciplinary sanctions (stored as the label string)
 const SANCTION_TYPES = ['Verbal Warning','Written Reprimand','Final Warning','1-Day Suspension','2–3 Days Suspension','4–5 Days Suspension','6–10 Days Suspension','Preventive Suspension','Dismissal'];
 
-function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalations, openEscalationId, onEscalationOpened, reload }){
+function HRRelationsView({ profile, profiles, employees, hrCases, hrMovements, hrEscalations, openEscalationId, onEscalationOpened, reload }){
   const [section,setSection]=useState('disciplinary'); // 'disciplinary' | 'movement' | 'escalation'
   const [escSearch,setEscSearch]=useState('');
   const [highlightEsc,setHighlightEsc]=useState(null);
@@ -17924,6 +17924,26 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalatio
   const movements=(hrMovements||[]).slice().sort((a,b)=>String(b.effective_date||'').localeCompare(String(a.effective_date||'')));
   const movShown=movements.filter(m=> !movSearch || `${empName(m.employee_id)} ${m.movement_type||''} ${m.new_position||''} ${m.new_department||''} ${m.reason||''}`.toLowerCase().includes(movSearch.toLowerCase()));
   async function delMov(m){ if(!confirm('Delete this movement record?')) return; const { error }=await sb.from('hr_movements').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',m.id); if(error){ alert(error.message); return; } reload(); }
+  const isAdmin = profile.role==='admin';
+  // HR sends an NPA to Admin for approval + signature.
+  async function sendMovForApproval(m){
+    if(!confirm(`Send this NPA for ${empName(m.employee_id)} to Admin for approval and signature?`)) return;
+    const { error }=await sb.from('hr_movements').update({ status:'for_approval' }).eq('id',m.id);
+    if(error){ alert(error.message); return; }
+    try{
+      const admins=(profiles||[]).filter(p=>p.role==='admin' && !p.deleted_at);
+      if(admins.length){ await sb.from('notifications').insert(admins.map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'npa_approval', text:`NPA for approval: ${m.movement_type} — ${empName(m.employee_id)}`, link_view:'hr-relations', ref_type:'hr_movement', ref_id:m.id }))); }
+    }catch(_){}
+    reload();
+  }
+  // Admin approves + applies their e-signature to the NPA.
+  async function approveMov(m){
+    if(!confirm(`Approve and sign this NPA for ${empName(m.employee_id)}?`)) return;
+    const { error }=await sb.from('hr_movements').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',m.id);
+    if(error){ alert(error.message); return; }
+    try{ if(m.created_by && m.created_by!==profile.id){ await sb.from('notifications').insert({ recipient_id:m.created_by, actor_id:profile.id, type:'npa_approved', text:`NPA approved & signed: ${m.movement_type} — ${empName(m.employee_id)}`, link_view:'hr-relations', ref_type:'hr_movement', ref_id:m.id }); } }catch(_){}
+    reload();
+  }
   const shown=(tab==='active'?active:tab==='closed'?closed:all)
     .filter(c=> !search || `${empName(c.employee_id)} ${c.title} ${c.client_name||''} ${c.case_type} ${c.sanction_type||''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>String(b.opened_date||'').localeCompare(String(a.opened_date||'')));
@@ -18022,8 +18042,11 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalatio
                 <td className="px-3 py-2 text-xs text-slate-600">{posChange}{posChange&&deptChange?<br/>:''}{deptChange}{!posChange&&!deptChange?'—':''}</td>
                 <td className="px-3 py-2 text-right text-xs">{(m.previous_salary!=null||m.new_salary!=null) ? <span>{m.previous_salary!=null?peso(m.previous_salary):'—'} → <strong className="text-emerald-700">{m.new_salary!=null?peso(m.new_salary):'—'}</strong></span> : '—'}</td>
                 <td className="px-3 py-2 text-xs">{m.effective_date?fmtDate(m.effective_date):'—'}{atts.length>0 && <span className="ml-1 text-slate-400" title={`${atts.length} attachment(s)`}>📎{atts.length}</span>}</td>
-                <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span></td>
+                <td className="px-3 py-2 text-center"><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${sm.color}`}>{sm.label}</span>{m.approved_by && <span className="ml-1" title={`Approved & signed${m.approved_at?' · '+fmtDate(String(m.approved_at).slice(0,10)):''}`}>✅</span>}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
+                  {(m.status==='proposed'||!m.status) && <button onClick={()=>sendMovForApproval(m)} className="text-xs text-purple-600 hover:underline mr-2" title="Send to Admin for approval & signature">Send for approval</button>}
+                  {m.status==='for_approval' && isAdmin && <button onClick={()=>approveMov(m)} className="text-xs font-semibold text-emerald-600 hover:underline mr-2" title="Approve and apply your e-signature">Approve &amp; sign</button>}
+                  {m.status==='for_approval' && !isAdmin && <span className="text-[10px] text-purple-500 mr-2" title="Waiting for Admin approval">⏳ with Admin</span>}
                   <button onClick={()=>setPrintingMov(m)} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print Notice of Personnel Action (NPA)">🖨</button>
                   <button onClick={()=>setMovEditing(m)} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>
                   <button onClick={()=>delMov(m)} className="text-xs text-rose-500 hover:underline">Delete</button>
@@ -18074,16 +18097,17 @@ function HRRelationsView({ profile, employees, hrCases, hrMovements, hrEscalatio
       {(creating||editing) && <CaseFormModal caseRow={editing} employees={employees} profile={profile} onPrint={(c)=>{ setEditing(null); setPrinting(c); }} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {printing && <CaseNTEPrintView caseRow={printing} employees={employees} profile={profile} onClose={()=>setPrinting(null)} />}
       {(movCreating||movEditing) && <MovementFormModal movement={movEditing} employees={employees} profile={profile} onPrint={(m)=>{ setMovEditing(null); setMovCreating(false); setPrintingMov(m); }} onClose={()=>{ setMovCreating(false); setMovEditing(null); }} onSaved={()=>{ setMovCreating(false); setMovEditing(null); reload(); }} />}
-      {printingMov && <NPAPrintView movement={printingMov} employees={employees} profile={profile} onClose={()=>setPrintingMov(null)} />}
+      {printingMov && <NPAPrintView movement={printingMov} employees={employees} profiles={profiles} profile={profile} onClose={()=>setPrintingMov(null)} />}
     </div>
   );
 }
 
 const MOVEMENT_TYPES = ['Promotion','Salary Increase','Salary Adjustment','Merit Increase','Regularization','Transfer','Reassignment','Demotion','Contract Renewal','Separation','Other'];
 const MOVEMENT_STATUSES = [
-  { key:'proposed',  label:'Proposed',  color:'bg-amber-100 text-amber-700' },
-  { key:'approved',  label:'Approved',  color:'bg-blue-100 text-blue-700' },
-  { key:'effective', label:'Effective', color:'bg-emerald-100 text-emerald-700' },
+  { key:'proposed',     label:'Proposed',     color:'bg-amber-100 text-amber-700' },
+  { key:'for_approval', label:'For Approval', color:'bg-purple-100 text-purple-700' },
+  { key:'approved',     label:'Approved',     color:'bg-blue-100 text-blue-700' },
+  { key:'effective',    label:'Effective',    color:'bg-emerald-100 text-emerald-700' },
 ];
 function movStatusMeta(k){ return MOVEMENT_STATUSES.find(s=>s.key===k) || MOVEMENT_STATUSES[0]; }
 function movTypeMeta(t){
@@ -18104,6 +18128,22 @@ function MovementFormModal({ movement, employees, profile, onPrint, onClose, onS
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
   const upN=(k,v)=>setNpa(p=>({...p,[k]:v}));
   const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  // Multi-employee / whole-department NPA (new records only) — mirrors the NTE
+  // flow. One NPA record is filed per selected employee, each pulling their own
+  // "previous" values + NPA "from" fields automatically.
+  const [empIds,setEmpIds]=useState(movement?.employee_id?[movement.employee_id]:[]);
+  const deptList=Array.from(new Set((employees||[]).map(e=>String(e.department||'').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  function addEmp(id){ if(id) setEmpIds(p=> p.includes(id)?p:[...p,id]); }
+  function removeEmp(id){ setEmpIds(p=>p.filter(x=>x!==id)); }
+  function addDept(dept){ if(!dept) return; const ids=(employees||[]).filter(e=> String(e.department||'').trim()===dept && e.is_active!==false).map(e=>e.id); setEmpIds(p=>Array.from(new Set([...p,...ids]))); }
+  const single = empIds.length===1;
+  // Live preview of pulled values when exactly one person is selected.
+  useEffect(()=>{ if(isEdit) return;
+    if(single){ const e=(employees||[]).find(x=>x.id===empIds[0]); if(e){
+      setF(p=>({ ...p, previous_position:e.position||'', previous_department:e.department||'', previous_salary:(e.basic_salary??'') }));
+      setNpa(p=>({ ...p, rank_from:e.rank||'', status_from:e.status||'', monthly_from:(e.basic_salary!=null?String(e.basic_salary):'') }));
+    } }
+  },[empIds]);
   // When an employee is picked on a NEW record, pre-fill "previous" from their
   // current record so HR only fills the new values.
   function pickEmp(id){
@@ -18131,19 +18171,36 @@ function MovementFormModal({ movement, employees, profile, onPrint, onClose, onS
     setUploading(false);
   }
   async function save(){
-    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
     if(!f.movement_type){ setMsg('Pick a movement type.'); return; }
-    setBusy(true); setMsg('');
     const num=(v)=> v===''||v==null ? null : Number(v);
-    const payload={ employee_id:f.employee_id, movement_type:f.movement_type, effective_date:f.effective_date||null, date_prepared:f.date_prepared||null,
-      previous_position:f.previous_position||null, new_position:f.new_position||null,
-      previous_department:f.previous_department||null, new_department:f.new_department||null,
-      previous_salary:num(f.previous_salary), new_salary:num(f.new_salary),
-      reason:f.reason||null, remarks:f.remarks||null, status:f.status||'proposed', npa_details:npa, attachments };
-    if(!isEdit) payload.created_by=profile.id;
-    const { error } = isEdit ? await sb.from('hr_movements').update(payload).eq('id',movement.id) : await sb.from('hr_movements').insert(payload);
-    setBusy(false); if(error){ setMsg(error.message); return; }
-    onSaved();
+    // Shared fields across every selected employee.
+    const shared={ movement_type:f.movement_type, effective_date:f.effective_date||null, date_prepared:f.date_prepared||null,
+      new_position:f.new_position||null, new_department:f.new_department||null, new_salary:num(f.new_salary),
+      reason:f.reason||null, remarks:f.remarks||null, status:f.status||'proposed', attachments };
+    if(isEdit){
+      if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+      setBusy(true); setMsg('');
+      const payload={ ...shared, employee_id:f.employee_id,
+        previous_position:f.previous_position||null, previous_department:f.previous_department||null, previous_salary:num(f.previous_salary),
+        npa_details:npa };
+      const { error }=await sb.from('hr_movements').update(payload).eq('id',movement.id);
+      setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); return;
+    }
+    // New — one record per selected employee, each with its own "previous" +
+    // NPA "from" pulled from that person's record.
+    if(!empIds.length){ setMsg('Pick at least one employee (or add a whole department).'); return; }
+    setBusy(true); setMsg('');
+    const rows=empIds.map(id=>{ const e=(employees||[]).find(x=>x.id===id)||{};
+      return { ...shared, employee_id:id, created_by:profile.id,
+        previous_position:e.position||null, previous_department:e.department||null, previous_salary:(e.basic_salary??null),
+        npa_details:{ ...npa,
+          rank_from: single ? (npa.rank_from||e.rank||'') : (e.rank||''),
+          status_from: single ? (npa.status_from||e.status||'') : (e.status||''),
+          monthly_from: single ? (npa.monthly_from|| (e.basic_salary!=null?String(e.basic_salary):'')) : (e.basic_salary!=null?String(e.basic_salary):''),
+        } };
+    });
+    const { error }=await sb.from('hr_movements').insert(rows);
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
   }
   const npaRows=[
     ['rank','Rank'],['status','Employment status'],['work','Work schedule'],
@@ -18155,25 +18212,39 @@ function MovementFormModal({ movement, employees, profile, onPrint, onClose, onS
   return (
     <Modal title={isEdit?'Employee movement':'+ New employee movement'} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Employee *"><select className="input" value={f.employee_id} onChange={e=>pickEmp(e.target.value)}><option value="">— select —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select></TpLbl>
+        {isEdit ? (
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Employee *"><select className="input" value={f.employee_id} onChange={e=>pickEmp(e.target.value)}><option value="">— select —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}</option>)}</select></TpLbl>
+            <TpLbl t="Movement type *"><select className="input" value={f.movement_type} onChange={e=>up('movement_type',e.target.value)}>{MOVEMENT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
+          </div>
+        ) : (<>
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Add employee"><select className="input" value="" onChange={e=>{ addEmp(e.target.value); e.target.value=''; }}><option value="">＋ Add a person…</option>{activeEmps.filter(e=>!empIds.includes(e.id)).map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}</select></TpLbl>
+            <TpLbl t="Add whole department"><select className="input" value="" onChange={e=>{ addDept(e.target.value); e.target.value=''; }}><option value="">＋ Add a department…</option>{deptList.map(d=>{ const n=(employees||[]).filter(x=>String(x.department||'').trim()===d && x.is_active!==false).length; return <option key={d} value={d}>{d} ({n})</option>; })}</select></TpLbl>
+          </div>
+          <div>
+            <div className="flex items-center justify-between"><label className="text-xs font-semibold text-slate-500">Employees * <span className="font-normal text-slate-400">· one NPA is filed to each person's 201</span></label>{empIds.length>0 && <button type="button" onClick={()=>setEmpIds([])} className="text-[11px] text-slate-400 hover:text-rose-500">Clear all</button>}</div>
+            {empIds.length===0 ? <div className="mt-1 text-xs text-slate-400 border border-dashed rounded-lg px-3 py-3 text-center">No one selected yet. Add individuals or a whole department above.</div>
+              : <div className="mt-1 flex flex-wrap gap-1.5">{empIds.map(id=>{ const e=(employees||[]).find(x=>x.id===id); return (<span key={id} className="inline-flex items-center gap-1 text-xs bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-full pl-2.5 pr-1 py-1">{e?fullName(e):'Unknown'}{e?.department?<span className="text-indigo-400">· {e.department}</span>:null}<button type="button" onClick={()=>removeEmp(id)} className="w-4 h-4 rounded-full hover:bg-indigo-200 flex items-center justify-center text-indigo-500">✕</button></span>); })}</div>}
+          </div>
           <TpLbl t="Movement type *"><select className="input" value={f.movement_type} onChange={e=>up('movement_type',e.target.value)}>{MOVEMENT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
-        </div>
+        </>)}
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Effective date"><input type="date" className="input" value={f.effective_date||''} onChange={e=>up('effective_date',e.target.value)} /></TpLbl>
           <TpLbl t="Date prepared"><input type="date" className="input" value={f.date_prepared||''} onChange={e=>up('date_prepared',e.target.value)} /></TpLbl>
           <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{MOVEMENT_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
         </div>
+        {!isEdit && empIds.length>1 && <div className="text-[11px] text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Previous position, department, salary and NPA “from” values are pulled automatically from each of the {empIds.length} selected employees. Fill only the new/“to” values below.</div>}
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Previous position"><input className="input" value={f.previous_position} onChange={e=>up('previous_position',e.target.value)} placeholder="e.g. Sewer" /></TpLbl>
+          {(isEdit||empIds.length<=1) && <TpLbl t="Previous position"><input className="input" value={f.previous_position} onChange={e=>up('previous_position',e.target.value)} placeholder="e.g. Sewer" /></TpLbl>}
           <TpLbl t="New position"><input className="input" value={f.new_position} onChange={e=>up('new_position',e.target.value)} placeholder="e.g. Line Leader" /></TpLbl>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Previous department"><input className="input" value={f.previous_department} onChange={e=>up('previous_department',e.target.value)} /></TpLbl>
+          {(isEdit||empIds.length<=1) && <TpLbl t="Previous department"><input className="input" value={f.previous_department} onChange={e=>up('previous_department',e.target.value)} /></TpLbl>}
           <TpLbl t="New department"><input className="input" value={f.new_department} onChange={e=>up('new_department',e.target.value)} /></TpLbl>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Previous salary"><input type="number" className="input" value={f.previous_salary} onChange={e=>up('previous_salary',e.target.value)} placeholder="₱" /></TpLbl>
+          {(isEdit||empIds.length<=1) && <TpLbl t="Previous salary"><input type="number" className="input" value={f.previous_salary} onChange={e=>up('previous_salary',e.target.value)} placeholder="₱" /></TpLbl>}
           <TpLbl t="New salary"><input type="number" className="input" value={f.new_salary} onChange={e=>up('new_salary',e.target.value)} placeholder="₱" /></TpLbl>
         </div>
         {isSalary && diff!=null && <div className={`text-xs rounded p-2 ${diff>=0?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-rose-50 text-rose-700 border border-rose-200'}`}>{diff>=0?'Increase':'Decrease'} of <strong>{peso(Math.abs(diff))}</strong>{f.previous_salary>0?` (${((diff/Number(f.previous_salary))*100).toFixed(1)}%)`:''}</div>}
@@ -18215,8 +18286,10 @@ function MovementFormModal({ movement, employees, profile, onPrint, onClose, onS
 }
 
 // Notice of Personnel Action — printable letter generated from a movement record.
-function NPAPrintView({ movement, employees, profile, onClose }){
+function NPAPrintView({ movement, employees, profiles, profile, onClose }){
   const emp=(employees||[]).find(e=>e.id===movement.employee_id);
+  const preparer=(profiles||[]).find(p=>p.id===movement.created_by);
+  const approver=(profiles||[]).find(p=>p.id===movement.approved_by);
   const npa=movement.npa_details||{};
   const cell=(v)=> (v===null||v===undefined||v==='') ? 'N/A' : (typeof v==='number' ? peso(v) : String(v));
   // Which "Employment Action" box to tick, based on movement type.
@@ -18282,10 +18355,12 @@ function NPAPrintView({ movement, employees, profile, onClose }){
         </table>
         {movement.reason && <div className="mt-3 text-[12px]"><strong>Reason / Justification:</strong> {movement.reason}</div>}
         {movement.remarks && <div className="mt-1 text-[12px]"><strong>Remarks:</strong> {movement.remarks}</div>}
-        <div className="grid grid-cols-3 gap-6 mt-10 text-center text-[11px]">
-          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Prepared by</div></div>
-          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Approved by</div></div>
-          <div><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Conforme (Employee)</div></div>
+        <div className="grid grid-cols-3 gap-6 mt-10 text-[11px]">
+          {preparer ? <ApprovedSignature signerProfile={preparer} signedAt={movement.date_prepared} role="Prepared by" sizeClass="h-10" />
+            : <div className="text-center"><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Prepared by</div></div>}
+          {approver ? <ApprovedSignature signerProfile={approver} signedAt={movement.approved_at} role="Approved by" sizeClass="h-10" />
+            : <div className="text-center"><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Approved by</div></div>}
+          <div className="text-center"><div className="border-b border-slate-800 h-10"></div><div className="mt-1">Conforme (Employee)</div></div>
         </div>
       </div>
       <div className="no-print flex gap-2 mt-3">
@@ -45578,7 +45653,7 @@ function App(){
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} profiles={profiles} employees={employees} hrLeaves={hrLeaves} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} rfps={rfps} reload={loadAll} />}
-        {view==='hr-relations' && <HRRelationsView profile={profile} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
+        {view==='hr-relations' && <HRRelationsView profile={profile} profiles={profiles} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='gov-loans' && <GovLoansView profile={profile} employees={employees} govLoans={govLoans} govLoanInstallments={govLoanInstallments} reload={loadAll} />}
