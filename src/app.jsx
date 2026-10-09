@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 698 · Materials Library now auto-populates LIVE from your fabric/trim inventory (97 fabrics + 154 trims) — each shows colours, supplier & price range with an 'In stock' badge. Purchasing can 'Add specs' (GSM, width, yield, swatch) on top of any material. Editing is now restricted to Purchasing + Admin; everyone else gets a read-only picker.";
+const BUILD = "Live build 699 · Materials Library swatches are now a multi-photo COLOUR GALLERY — purchasing uploads one photo per colour (with a colour name), the card shows a '🎨 N colours' badge, and anyone can click a material to see every colour swatch. Makes it easy for sales & the floor to check what colours a fabric actually comes in.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4411,6 +4411,27 @@ function PurchasingResourceForm({ profile, category, existing, onClose, onSaved 
 // the cards; Sales uses it as a picker/reference when quoting and building
 // techpacks. Editable by purchasing/managers/admin; read-only for everyone else.
 function matLibCanEdit(profile){ return ['admin','purchasing','purchasing_admin'].includes(profile?.role); }
+// Multi-photo swatch editor — one photo per colour so everyone can see the
+// actual colours a fabric/trim comes in.
+function MatLibSwatchesEditor({ value, onChange }){
+  const list = Array.isArray(value) ? value : [];
+  const set=(i,patch)=> onChange(list.map((x,j)=> j===i?{...x,...patch}:x));
+  const add=()=> onChange([...list, {path:'',color:''}]);
+  const remove=(i)=> onChange(list.filter((_,j)=>j!==i));
+  return (<div>
+    <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Colour swatches <span className="font-normal normal-case text-slate-400">· one photo per colour — these show to everyone</span></div>
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+      {list.map((s,i)=>(
+        <div key={i} className="border rounded-lg p-2 bg-slate-50">
+          <TpImage scope="materials-library" value={s.path} onChange={v=>set(i,{path:v})} h="h-24" />
+          <input value={s.color||''} onChange={e=>set(i,{color:e.target.value})} placeholder="Colour name" className="input w-full mt-1 text-xs" />
+          <button type="button" onClick={()=>remove(i)} className="text-[10px] text-rose-500 hover:underline mt-0.5">Remove</button>
+        </div>
+      ))}
+      <button type="button" onClick={add} className="border-2 border-dashed border-slate-300 rounded-lg min-h-[112px] flex flex-col items-center justify-center text-slate-400 hover:bg-slate-50 text-sm">＋<span className="text-xs">Add colour</span></button>
+    </div>
+  </div>);
+}
 function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose, onSaved }){
   const base = existing || prefill || {};
   const [f,setF]=useState(()=>({
@@ -4418,6 +4439,7 @@ function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose,
     name: base.name||'', material_type: base.material_type||'', composition: base.composition||'',
     gsm: base.gsm??'', width_in: base.width_in??'', yield_ypk: base.yield_ypk??'',
     colors: base.colors||'', swatch_path: base.swatch_path||'',
+    swatches: (Array.isArray(base.swatches)&&base.swatches.length) ? base.swatches : (base.swatch_path?[{path:base.swatch_path,color:''}]:[]),
     supplier_id: base.supplier_id||'', supplier_name: base.supplier_name||'',
     unit: base.unit||(base.kind==='trim'?'pc':'kg'), unit_price: base.unit_price??'', moq: base.moq??'',
     lead_time_days: base.lead_time_days??'', typical_use: base.typical_use||'', care: base.care||'', notes: base.notes||'',
@@ -4429,10 +4451,11 @@ function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose,
   async function save(){
     if(!f.name.trim()){ setMsg('Name is required.'); return; }
     setBusy(true); setMsg('');
+    const cleanSwatches=(f.swatches||[]).filter(s=>s&&s.path).map(s=>({path:s.path, color:(s.color||'').trim()}));
     const payload={
       kind:f.kind, name:f.name.trim(), material_type:f.material_type||null, composition:f.composition||null,
       gsm:isFabric?num(f.gsm):null, width_in:isFabric?num(f.width_in):null, yield_ypk:isFabric?num(f.yield_ypk):null,
-      colors:f.colors||null, swatch_path:f.swatch_path||null,
+      colors:f.colors||null, swatches:cleanSwatches, swatch_path:(cleanSwatches[0]&&cleanSwatches[0].path)||null,
       supplier_id:f.supplier_id||null, supplier_name:f.supplier_name||null,
       unit:f.unit||null, unit_price:num(f.unit_price), moq:num(f.moq), lead_time_days:num(f.lead_time_days)===null?null:parseInt(f.lead_time_days,10),
       typical_use:f.typical_use||null, care:f.care||null, notes:f.notes||null,
@@ -4449,12 +4472,10 @@ function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose,
       <div>{L('Type')}<select value={f.kind} onChange={e=>setF({...f,kind:e.target.value})} className="input w-full"><option value="fabric">Fabric</option><option value="trim">Trim</option></select></div>
       <div>{L('Name *')}<input value={f.name} onChange={e=>setF({...f,name:e.target.value})} className="input w-full" placeholder={isFabric?'e.g. Honeycomb Interlock':'e.g. #5 Metal Zipper'} /></div>
     </div>
-    <div className="grid md:grid-cols-[180px_1fr] gap-3">
-      <TpImage scope="materials-library" value={f.swatch_path} onChange={v=>setF({...f,swatch_path:v})} label="Swatch / photo" h="h-40" />
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
           <div>{L(isFabric?'Material type':'Trim type')}<input value={f.material_type} onChange={e=>setF({...f,material_type:e.target.value})} className="input w-full" placeholder={isFabric?'Interlock, Drifit…':'Zipper, Drawcord, Ribbing…'} /></div>
-          <div>{L('Available colours')}<input value={f.colors} onChange={e=>setF({...f,colors:e.target.value})} className="input w-full" placeholder="White, Black, Navy…" /></div>
+          <div>{L('Available colours (text)')}<input value={f.colors} onChange={e=>setF({...f,colors:e.target.value})} className="input w-full" placeholder="White, Black, Navy…" /></div>
         </div>
         {isFabric ? (
           <div className="grid grid-cols-4 gap-3">
@@ -4466,7 +4487,7 @@ function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose,
         ) : (
           <div>{L('Spec / size')}<input value={f.composition} onChange={e=>setF({...f,composition:e.target.value})} className="input w-full" placeholder="e.g. 20cm, 3mm, 2x2 rib" /></div>
         )}
-      </div>
+      <MatLibSwatchesEditor value={f.swatches} onChange={v=>setF({...f,swatches:v})} />
     </div>
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       <div>{L('Supplier')}<SearchSelect value={f.supplier_id} onChange={v=>setF({...f,supplier_id:v})} options={supOpts} placeholder="Pick supplier…" allowClear /></div>
@@ -4541,6 +4562,7 @@ function MaterialsLibraryView({ profile, suppliers }){
       gsm:cur?.gsm, width_in:cur?.width_in, yield_ypk:cur?.yield_ypk,
       colors: (cur&&cur.colors) || invColors.join(', '),
       swatch_path: cur?.swatch_path||'',
+      swatches: (cur&&Array.isArray(cur.swatches))?cur.swatches.filter(s=>s&&s.path):[],
       supplier: cur ? (supName(cur)||invSup) : invSup,
       unit: (cur&&cur.unit) || invUnit,
       unit_price: (cur && cur.unit_price!=null) ? Number(cur.unit_price) : null,
@@ -4599,9 +4621,10 @@ function MaterialsLibraryView({ profile, suppliers }){
         <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))'}}>
           {list.map(c=>(
             <div key={c.key} className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
-              <button onClick={()=> c.swatch_path && setLightbox(c.swatch_path)} className="h-36 bg-slate-100 flex items-center justify-center overflow-hidden relative" title={c.swatch_path?'View swatch':''}>
+              <button onClick={()=>{ const sw=(c.swatches&&c.swatches.length)?c.swatches:(c.swatch_path?[{path:c.swatch_path,color:''}]:[]); if(sw.length) setLightbox({name:c.name, swatches:sw}); }} className="h-36 bg-slate-100 flex items-center justify-center overflow-hidden relative" title={c.swatch_path?'View colour swatches':''}>
                 {c.swatch_path ? <TImg path={c.swatch_path} thumb={300} maxH="144px" /> : <span className="text-4xl opacity-30">{kind==='fabric'?'🧵':'🔗'}</span>}
                 {c.inStock && <span className="absolute top-1.5 right-1.5 text-[9px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">📦 In stock</span>}
+                {c.swatches&&c.swatches.length>1 && <span className="absolute bottom-1.5 right-1.5 text-[9px] font-bold bg-slate-900/70 text-white px-1.5 py-0.5 rounded">🎨 {c.swatches.length} colours</span>}
                 {!c.curated && <span className="absolute bottom-1.5 left-1.5 text-[9px] font-semibold bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded">needs specs</span>}
               </button>
               <div className="p-3 flex-1 flex flex-col">
@@ -4631,7 +4654,14 @@ function MaterialsLibraryView({ profile, suppliers }){
         </div>
       )}
       {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.raw||null} prefill={editing.raw?null:(editing.prefill||null)} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
-      {lightbox && <Modal title="Swatch" onClose={()=>setLightbox('')} wide><div className="flex items-center justify-center bg-slate-100 rounded-lg p-2"><TImg path={lightbox} maxH="70vh" /></div></Modal>}
+      {lightbox && <Modal title={`Colour swatches · ${lightbox.name}`} onClose={()=>setLightbox('')} wide><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+        {lightbox.swatches.map((s,i)=>(
+          <div key={i} className="border rounded-lg overflow-hidden bg-slate-50">
+            <div className="h-36 bg-white flex items-center justify-center overflow-hidden"><TImg path={s.path} thumb={400} maxH="144px" /></div>
+            {s.color && <div className="text-center text-xs font-semibold text-slate-700 py-1.5">{s.color}</div>}
+          </div>
+        ))}
+      </div></Modal>}
     </div>
   );
 }
