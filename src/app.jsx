@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 697 · New MATERIALS LIBRARY — a reference catalogue of every fabric & trim (swatch photo, type, GSM/width/yield, colours, supplier, price, MOQ, lead time). Purchasing & managers maintain the cards; sales and purchasing both get a searchable, filterable picker. Standalone for now; stock + techpack links come next.";
+const BUILD = "Live build 698 · Materials Library now auto-populates LIVE from your fabric/trim inventory (97 fabrics + 154 trims) — each shows colours, supplier & price range with an 'In stock' badge. Purchasing can 'Add specs' (GSM, width, yield, swatch) on top of any material. Editing is now restricted to Purchasing + Admin; everyone else gets a read-only picker.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4410,16 +4410,17 @@ function PurchasingResourceForm({ profile, category, existing, onClose, onSaved 
 // holding its identity + specs (independent of live stock). Purchasing maintains
 // the cards; Sales uses it as a picker/reference when quoting and building
 // techpacks. Editable by purchasing/managers/admin; read-only for everyone else.
-function matLibCanEdit(profile){ return ['admin','agm','purchasing','purchasing_admin','manager','sales_representative'].includes(profile?.role); }
-function MatLibEditModal({ profile, suppliers, kind, existing, onClose, onSaved }){
+function matLibCanEdit(profile){ return ['admin','purchasing','purchasing_admin'].includes(profile?.role); }
+function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose, onSaved }){
+  const base = existing || prefill || {};
   const [f,setF]=useState(()=>({
-    kind: existing?.kind || kind || 'fabric',
-    name: existing?.name||'', material_type: existing?.material_type||'', composition: existing?.composition||'',
-    gsm: existing?.gsm??'', width_in: existing?.width_in??'', yield_ypk: existing?.yield_ypk??'',
-    colors: existing?.colors||'', swatch_path: existing?.swatch_path||'',
-    supplier_id: existing?.supplier_id||'', supplier_name: existing?.supplier_name||'',
-    unit: existing?.unit||(existing?.kind==='trim'?'pc':'kg'), unit_price: existing?.unit_price??'', moq: existing?.moq??'',
-    lead_time_days: existing?.lead_time_days??'', typical_use: existing?.typical_use||'', care: existing?.care||'', notes: existing?.notes||'',
+    kind: base.kind || kind || 'fabric',
+    name: base.name||'', material_type: base.material_type||'', composition: base.composition||'',
+    gsm: base.gsm??'', width_in: base.width_in??'', yield_ypk: base.yield_ypk??'',
+    colors: base.colors||'', swatch_path: base.swatch_path||'',
+    supplier_id: base.supplier_id||'', supplier_name: base.supplier_name||'',
+    unit: base.unit||(base.kind==='trim'?'pc':'kg'), unit_price: base.unit_price??'', moq: base.moq??'',
+    lead_time_days: base.lead_time_days??'', typical_use: base.typical_use||'', care: base.care||'', notes: base.notes||'',
   }));
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const isFabric = f.kind==='fabric';
@@ -4488,35 +4489,95 @@ function MatLibEditModal({ profile, suppliers, kind, existing, onClose, onSaved 
 }
 function MaterialsLibraryView({ profile, suppliers }){
   const [kind,setKind]=useState('fabric');
-  const [rows,setRows]=useState([]);
+  const [rows,setRows]=useState([]);            // curated library rows
+  const [invItems,setInvItems]=useState([]);    // live inventory (fabrics + trims)
   const [loading,setLoading]=useState(true);
   const [search,setSearch]=useState('');
   const [fType,setFType]=useState('');
   const [fSupplier,setFSupplier]=useState('');
-  const [editing,setEditing]=useState(null);   // row or {new:true}
+  const [editing,setEditing]=useState(null);    // {new:true} | {raw} | {prefill}
   const [lightbox,setLightbox]=useState('');
   const canEdit=matLibCanEdit(profile);
   const supName=(r)=>{ if(r.supplier_name) return r.supplier_name; const s=(suppliers||[]).find(x=>x.id===r.supplier_id); return s?(s.company||s.name||''):''; };
   async function load(){ setLoading(true); const { data }=await sb.from('materials_library').select('*').is('deleted_at',null).order('name'); setRows(data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
-  async function del(r){ if(!confirm(`Delete "${r.name}" from the library?`)) return; const { error }=await sb.from('materials_library').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id); if(error){ alert(error.message); return; } load(); }
-  const ofKind=rows.filter(r=>(r.kind||'fabric')===kind);
-  const typeOpts=Array.from(new Set(ofKind.map(r=>r.material_type).filter(Boolean))).sort();
+  // Pull the existing fabric/trim inventory so the library is populated live from
+  // what we already stock — no manual re-entry. Grouped by name below.
+  useEffect(()=>{ let alive=true; (async()=>{
+    const { data }=await fetchAll(()=>sb.from('items').select('name,color,category,unit,cost,bucket,supplier_id').in('bucket',['fabrics','trims']));
+    if(alive) setInvItems(data||[]);
+  })(); return ()=>{ alive=false; }; },[]);
+  async function del(r){ if(!confirm(`Delete "${r.name}" from the library? (This removes the spec card — it does not touch inventory stock.)`)) return; const { error }=await sb.from('materials_library').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id); if(error){ alert(error.message); return; } load(); }
+  const invKindOf=(b)=> String(b).toLowerCase()==='trims' ? 'trim' : 'fabric';
+  // Aggregate inventory into one group per (kind + name): colours, cost range,
+  // unit, suppliers.
+  const invGroups=useMemo(()=>{
+    const m=new Map();
+    for(const it of (invItems||[])){
+      const nm=String(it.name||'').trim(); if(!nm) continue;
+      const k=invKindOf(it.bucket)+'|'+nm.toLowerCase();
+      if(!m.has(k)) m.set(k,{ kind:invKindOf(it.bucket), name:nm, colors:new Set(), costs:[], units:new Set(), sups:new Set(), category:'' });
+      const g=m.get(k);
+      if(it.color) g.colors.add(String(it.color).trim());
+      const c=Number(it.cost); if(isFinite(c)&&c>0) g.costs.push(c);
+      if(it.unit) g.units.add(String(it.unit).trim());
+      if(it.category && !g.category) g.category=String(it.category).trim();
+      const s=(suppliers||[]).find(x=>x.id===it.supplier_id); if(s&&(s.company||s.name)) g.sups.add(s.company||s.name);
+    }
+    return m;
+  },[invItems,suppliers]);
+  const buildCard=(cur,g,key)=>{
+    const invColors = g ? [...g.colors].filter(Boolean).sort() : [];
+    const invSup = g ? [...g.sups].filter(Boolean).join(', ') : '';
+    const invMin = g&&g.costs.length ? Math.min(...g.costs) : null;
+    const invMax = g&&g.costs.length ? Math.max(...g.costs) : null;
+    const invUnit = g ? ([...g.units][0]||'') : '';
+    return {
+      key, id: cur?cur.id:('inv:'+key), curated:!!cur, inStock:!!g, raw:cur||null,
+      kind: cur?(cur.kind||'fabric'):g.kind,
+      name: cur?cur.name:g.name,
+      material_type: (cur&&cur.material_type) || (g?g.category:'') || '',
+      composition: cur?.composition||'',
+      gsm:cur?.gsm, width_in:cur?.width_in, yield_ypk:cur?.yield_ypk,
+      colors: (cur&&cur.colors) || invColors.join(', '),
+      swatch_path: cur?.swatch_path||'',
+      supplier: cur ? (supName(cur)||invSup) : invSup,
+      unit: (cur&&cur.unit) || invUnit,
+      unit_price: (cur && cur.unit_price!=null) ? Number(cur.unit_price) : null,
+      invMin, invMax,
+      moq: cur?.moq, lead_time_days: cur?.lead_time_days,
+      typical_use: cur?.typical_use||'', notes: cur?.notes||'',
+      prefill: g ? { kind:g.kind, name:g.name, material_type:g.category||'', colors:invColors.join(', '), supplier_name:(invSup.split(',')[0]||'').trim(), unit:invUnit, unit_price: invMin!=null?invMin:'' } : null,
+    };
+  };
+  // Merge curated cards with inventory-only groups (curated wins / augments).
+  const merged=useMemo(()=>{
+    const out=[]; const seen=new Set();
+    rows.filter(r=>(r.kind||'fabric')===kind).forEach(r=>{
+      const key=(r.kind||'fabric')+'|'+String(r.name||'').trim().toLowerCase();
+      seen.add(key); out.push(buildCard(r, invGroups.get(key), key));
+    });
+    for(const [key,g] of invGroups){ if(g.kind!==kind||seen.has(key)) continue; out.push(buildCard(null,g,key)); }
+    return out.sort((a,b)=> String(a.name).localeCompare(String(b.name)));
+  },[rows,invGroups,kind,suppliers]);
+  const kindCount=(k)=>{ const s=new Set(); rows.forEach(r=>{ if((r.kind||'fabric')===k) s.add((r.kind||'fabric')+'|'+String(r.name||'').trim().toLowerCase()); }); for(const [key,g] of invGroups){ if(g.kind===k) s.add(key); } return s.size; };
+  const typeOpts=Array.from(new Set(merged.map(c=>c.material_type).filter(Boolean))).sort();
+  const supFilterOpts=Array.from(new Set(merged.map(c=>c.supplier).filter(Boolean))).sort();
   const q=search.toLowerCase();
-  const list=ofKind.filter(r=>{
-    if(fType && r.material_type!==fType) return false;
-    if(fSupplier && supName(r)!==fSupplier) return false;
-    if(q && !`${r.name||''} ${r.material_type||''} ${r.composition||''} ${r.colors||''} ${supName(r)} ${r.typical_use||''}`.toLowerCase().includes(q)) return false;
+  const list=merged.filter(c=>{
+    if(fType && c.material_type!==fType) return false;
+    if(fSupplier && c.supplier!==fSupplier) return false;
+    if(q && !`${c.name||''} ${c.material_type||''} ${c.composition||''} ${c.colors||''} ${c.supplier||''} ${c.typical_use||''}`.toLowerCase().includes(q)) return false;
     return true;
   });
-  const supFilterOpts=Array.from(new Set(ofKind.map(supName).filter(Boolean))).sort();
-  const spec=(r)=>{ const p=[]; if(r.composition) p.push(r.composition); if(r.gsm) p.push(`${r.gsm} GSM`); if(r.width_in) p.push(`${r.width_in}" wide`); if(r.yield_ypk) p.push(`${r.yield_ypk} yd/kg`); return p.join(' · '); };
+  const spec=(c)=>{ const p=[]; if(c.composition) p.push(c.composition); if(c.gsm) p.push(`${c.gsm} GSM`); if(c.width_in) p.push(`${c.width_in}" wide`); if(c.yield_ypk) p.push(`${c.yield_ypk} yd/kg`); return p.join(' · '); };
+  const priceText=(c)=>{ if(c.unit_price!=null) return peso(c.unit_price)+(c.unit?`/${c.unit}`:''); if(c.invMin!=null){ const u=c.unit?`/${c.unit}`:''; return (c.invMin===c.invMax?peso(c.invMin):`${peso(c.invMin)}–${peso(c.invMax)}`)+u; } return ''; };
   useEffect(()=>{ setFType(''); setFSupplier(''); },[kind]);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">🧵 Materials Library</h1><p className="text-slate-500 text-sm">Reference catalogue of every fabric &amp; trim — specs, colours, supplier, price &amp; MOQ</p></div>
+          <div><h1 className="text-2xl font-bold">🧵 Materials Library</h1><p className="text-slate-500 text-sm">Every fabric &amp; trim — live from inventory, enriched with specs, colours, supplier, price &amp; MOQ</p></div>
           <div className="flex items-center gap-2">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search materials…" className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-52" />
             {canEdit && <button onClick={()=>setEditing({new:true})} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add material</button>}
@@ -4524,46 +4585,52 @@ function MaterialsLibraryView({ profile, suppliers }){
         </div>
         <div className="flex gap-1 mt-3 flex-wrap items-center">
           {[['fabric','🧵 Fabrics'],['trim','🔗 Trims']].map(([k,lbl])=>(
-            <button key={k} onClick={()=>setKind(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${kind===k?'bg-slate-900 text-white':'bg-white border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>{lbl} <span className="opacity-60">{rows.filter(r=>(r.kind||'fabric')===k).length}</span></button>
+            <button key={k} onClick={()=>setKind(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${kind===k?'bg-slate-900 text-white':'bg-white border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>{lbl} <span className="opacity-60">{kindCount(k)}</span></button>
           ))}
           <span className="w-px h-5 bg-slate-300 mx-1"></span>
           <select value={fType} onChange={e=>setFType(e.target.value)} className="px-2 py-1.5 text-sm rounded-lg border border-slate-300 bg-white"><option value="">All types</option>{typeOpts.map(t=><option key={t} value={t}>{t}</option>)}</select>
-          <select value={fSupplier} onChange={e=>setFSupplier(e.target.value)} className="px-2 py-1.5 text-sm rounded-lg border border-slate-300 bg-white"><option value="">All suppliers</option>{supFilterOpts.map(s=><option key={s} value={s}>{s}</option>)}</select>
+          <select value={fSupplier} onChange={e=>setFSupplier(e.target.value)} className="px-2 py-1.5 text-sm rounded-lg border border-slate-300 bg-white max-w-[180px]"><option value="">All suppliers</option>{supFilterOpts.map(s=><option key={s} value={s}>{s}</option>)}</select>
           {(fType||fSupplier||search)&&<button onClick={()=>{setFType('');setFSupplier('');setSearch('');}} className="text-xs text-slate-500 hover:underline">Clear</button>}
         </div>
       </div>
       {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : list.length===0 ? (
-        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No {kind==='fabric'?'fabrics':'trims'} yet.{canEdit?` Click "+ Add material" to add one.`:''}</div>
+        <div className="bg-white border rounded-xl p-10 text-center text-slate-400 text-sm">No {kind==='fabric'?'fabrics':'trims'} found.{canEdit?` Add one, or they'll appear here automatically from inventory.`:''}</div>
       ) : (
         <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))'}}>
-          {list.map(r=>(
-            <div key={r.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
-              <button onClick={()=> r.swatch_path && setLightbox(r.swatch_path)} className="h-36 bg-slate-100 flex items-center justify-center overflow-hidden" title={r.swatch_path?'View swatch':''}>
-                {r.swatch_path ? <TImg path={r.swatch_path} thumb={300} maxH="144px" /> : <span className="text-4xl opacity-30">{kind==='fabric'?'🧵':'🔗'}</span>}
+          {list.map(c=>(
+            <div key={c.key} className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+              <button onClick={()=> c.swatch_path && setLightbox(c.swatch_path)} className="h-36 bg-slate-100 flex items-center justify-center overflow-hidden relative" title={c.swatch_path?'View swatch':''}>
+                {c.swatch_path ? <TImg path={c.swatch_path} thumb={300} maxH="144px" /> : <span className="text-4xl opacity-30">{kind==='fabric'?'🧵':'🔗'}</span>}
+                {c.inStock && <span className="absolute top-1.5 right-1.5 text-[9px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">📦 In stock</span>}
+                {!c.curated && <span className="absolute bottom-1.5 left-1.5 text-[9px] font-semibold bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded">needs specs</span>}
               </button>
               <div className="p-3 flex-1 flex flex-col">
-                <div className="font-bold text-slate-800 leading-tight">{r.name}</div>
-                {r.material_type && <div className="text-[11px] text-indigo-600 font-semibold uppercase tracking-wide mt-0.5">{r.material_type}</div>}
-                {spec(r) && <div className="text-xs text-slate-500 mt-1">{spec(r)}</div>}
-                {(kind==='trim' && r.composition) && <div className="text-xs text-slate-500 mt-1">{r.composition}</div>}
-                {r.colors && <div className="text-xs text-slate-600 mt-1"><span className="text-slate-400">Colours:</span> {r.colors}</div>}
+                <div className="font-bold text-slate-800 leading-tight">{c.name}</div>
+                {c.material_type && <div className="text-[11px] text-indigo-600 font-semibold uppercase tracking-wide mt-0.5">{c.material_type}</div>}
+                {spec(c) && <div className="text-xs text-slate-500 mt-1">{spec(c)}</div>}
+                {(kind==='trim' && c.composition) && <div className="text-xs text-slate-500 mt-1">{c.composition}</div>}
+                {c.colors && <div className="text-xs text-slate-600 mt-1"><span className="text-slate-400">Colours:</span> {c.colors}</div>}
                 <div className="mt-2 text-xs space-y-0.5">
-                  {supName(r) && <div><span className="text-slate-400">Supplier:</span> {supName(r)}</div>}
+                  {c.supplier && <div><span className="text-slate-400">Supplier:</span> {c.supplier}</div>}
                   <div className="flex flex-wrap gap-x-3">
-                    {(r.unit_price!=null) && <span className="font-semibold text-slate-800">{peso(r.unit_price)}{r.unit?`/${r.unit}`:''}</span>}
-                    {(r.moq!=null) && <span className="text-slate-500">MOQ {r.moq}{r.unit?` ${r.unit}`:''}</span>}
-                    {(r.lead_time_days!=null) && <span className="text-slate-500">{r.lead_time_days}d lead</span>}
+                    {priceText(c) && <span className="font-semibold text-slate-800">{priceText(c)}</span>}
+                    {(c.moq!=null) && <span className="text-slate-500">MOQ {c.moq}{c.unit?` ${c.unit}`:''}</span>}
+                    {(c.lead_time_days!=null) && <span className="text-slate-500">{c.lead_time_days}d lead</span>}
                   </div>
-                  {r.typical_use && <div className="text-slate-500"><span className="text-slate-400">Use:</span> {r.typical_use}</div>}
-                  {r.notes && <div className="text-slate-400 italic">{r.notes}</div>}
+                  {c.typical_use && <div className="text-slate-500"><span className="text-slate-400">Use:</span> {c.typical_use}</div>}
+                  {c.notes && <div className="text-slate-400 italic">{c.notes}</div>}
                 </div>
-                {canEdit && <div className="flex gap-2 mt-auto pt-2"><button onClick={()=>setEditing(r)} className="text-[11px] text-indigo-600 hover:underline">Edit</button><button onClick={()=>del(r)} className="text-[11px] text-rose-500 hover:underline ml-auto">Delete</button></div>}
+                {canEdit && <div className="flex gap-2 mt-auto pt-2">
+                  {c.curated
+                    ? (<><button onClick={()=>setEditing({raw:c.raw})} className="text-[11px] text-indigo-600 hover:underline">Edit</button><button onClick={()=>del(c.raw)} className="text-[11px] text-rose-500 hover:underline ml-auto">Delete</button></>)
+                    : (<button onClick={()=>setEditing({prefill:c.prefill})} className="text-[11px] text-indigo-600 hover:underline font-semibold">✎ Add specs</button>)}
+                </div>}
               </div>
             </div>
           ))}
         </div>
       )}
-      {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.new?null:editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
+      {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.raw||null} prefill={editing.raw?null:(editing.prefill||null)} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
       {lightbox && <Modal title="Swatch" onClose={()=>setLightbox('')} wide><div className="flex items-center justify-center bg-slate-100 rounded-lg p-2"><TImg path={lightbox} maxH="70vh" /></div></Modal>}
     </div>
   );
