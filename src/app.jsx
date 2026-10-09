@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 701 · Material tags are now PER-MATERIAL and print inside the OS (no new browser tab) — each card has a '🏷 Print tag' button that opens a clean label (name, GSM, composition, width, colours, supplier, code) and prints like the packing labels. Everyone can print; purchasing/admin still curate.";
+const BUILD = "Live build 702 · Material tag now lets you pick the colour for that roll (shows the colour big + its swatch photo), and prints on ¼ bond paper (5.5×4.25in) inside the OS. Pick 'All colours' for a general shelf tag, or a specific colour for an incoming roll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4508,6 +4508,51 @@ function MatLibEditModal({ profile, suppliers, kind, existing, prefill, onClose,
     <div className="flex justify-end gap-2 pt-2 border-t"><button onClick={onClose} className="px-3 py-1.5 rounded-lg border text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button></div>
   </div></Modal>);
 }
+// Printable identification tag for a single material. Lets the user pick which
+// colour the tag is for (that roll), and prints on 1/4 bond paper inside the OS.
+function MatLibTagModal({ card, onClose }){
+  const c=card;
+  const codeOf=(x)=>{ const ini=String(x.name||'').split(/\s+/).filter(Boolean).map(w=>(w.replace(/[^A-Za-z0-9]/g,'')[0]||'')).join('').toUpperCase().slice(0,4); return ini + (x.gsm?('-'+x.gsm):''); };
+  const swatches=Array.isArray(c.swatches)?c.swatches.filter(s=>s&&s.path):[];
+  const colors=Array.from(new Set([
+    ...swatches.map(s=>(s.color||'').trim()).filter(Boolean),
+    ...String(c.colors||'').split(',').map(s=>s.trim()).filter(Boolean),
+  ]));
+  const [color,setColor]=useState('');  // '' = all colours
+  const chosenSwatch = color ? (swatches.find(s=>(s.color||'').toLowerCase()===color.toLowerCase())||null) : null;
+  const sp=[]; if(c.composition)sp.push(c.composition); if(c.gsm)sp.push(c.gsm+' GSM'); if(c.width_in)sp.push(c.width_in+'" wide');
+  const chip=(on)=> `text-[11px] px-2 py-1 rounded-full border ${on?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-300 hover:border-indigo-300'}`;
+  return (<Modal title={`Material tag · ${c.name}`} onClose={onClose}>
+    <style>{`@media print{ @page{size:5.5in 4.25in;margin:0.2in;} body *{visibility:hidden !important;} .mat-tag-sheet,.mat-tag-sheet *{visibility:visible !important;} .mat-tag-sheet{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
+    <div className="space-y-3">
+      {colors.length>0 && <div className="no-print">
+        <div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Colour for this tag <span className="normal-case font-normal text-slate-400">· pick the roll's colour, or all</span></div>
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={()=>setColor('')} className={chip(color==='')}>All colours</button>
+          {colors.map(cl=><button key={cl} onClick={()=>setColor(cl)} className={chip(color===cl)}>{cl}</button>)}
+        </div>
+      </div>}
+      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Prints on ¼ bond paper (5.5 × 4.25 in).</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+      <div className="mat-tag-sheet flex justify-center">
+        <div style={{border:'2px solid #000',borderRadius:'8px',padding:'16px 20px',width:'5in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'10px'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:'monospace',fontSize:'12px',letterSpacing:'1px',color:'#444'}}>{codeOf(c)}</div>
+              <div style={{fontSize:'28px',fontWeight:800,lineHeight:1.05,margin:'3px 0 6px'}}>{c.name}</div>
+            </div>
+            {chosenSwatch && <div style={{width:'0.95in',height:'0.95in',border:'1px solid #000',overflow:'hidden',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}><TImg path={chosenSwatch.path} thumb={220} maxH="0.95in" /></div>}
+          </div>
+          {sp.length>0 && <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{sp.join(' · ')}</div>}
+          {color
+            ? <div style={{fontSize:'21px',fontWeight:800,margin:'4px 0'}}>COLOUR: {color}</div>
+            : (c.colors && <div style={{fontSize:'14px',margin:'2px 0'}}><b>Colours:</b> {c.colors}</div>)}
+          {c.supplier && <div style={{fontSize:'13px',margin:'2px 0'}}><b>Supplier:</b> {c.supplier}</div>}
+          <div style={{marginTop:'10px',fontSize:'10px',letterSpacing:'2px',color:'#666',borderTop:'1px solid #ccc',paddingTop:'5px'}}>STEEZE · {c.kind==='trim'?'TRIM':'FABRIC'}</div>
+        </div>
+      </div>
+    </div>
+  </Modal>);
+}
 function MaterialsLibraryView({ profile, suppliers }){
   const [kind,setKind]=useState('fabric');
   const [rows,setRows]=useState([]);            // curated library rows
@@ -4595,7 +4640,6 @@ function MaterialsLibraryView({ profile, suppliers }){
   });
   const spec=(c)=>{ const p=[]; if(c.composition) p.push(c.composition); if(c.gsm) p.push(`${c.gsm} GSM`); if(c.width_in) p.push(`${c.width_in}" wide`); if(c.yield_ypk) p.push(`${c.yield_ypk} yd/kg`); return p.join(' · '); };
   const priceText=(c)=>{ if(c.unit_price!=null) return peso(c.unit_price)+(c.unit?`/${c.unit}`:''); if(c.invMin!=null){ const u=c.unit?`/${c.unit}`:''; return (c.invMin===c.invMax?peso(c.invMin):`${peso(c.invMin)}–${peso(c.invMax)}`)+u; } return ''; };
-  const codeOf=(c)=>{ const ini=String(c.name||'').split(/\s+/).filter(Boolean).map(w=>(w.replace(/[^A-Za-z0-9]/g,'')[0]||'')).join('').toUpperCase().slice(0,4); return ini + (c.gsm?('-'+c.gsm):''); };
   useEffect(()=>{ setFType(''); setFSupplier(''); },[kind]);
   return (
     <div className="p-6">
@@ -4657,23 +4701,7 @@ function MaterialsLibraryView({ profile, suppliers }){
         </div>
       )}
       {editing && <MatLibEditModal profile={profile} suppliers={suppliers} kind={kind} existing={editing.raw||null} prefill={editing.raw?null:(editing.prefill||null)} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); }} />}
-      {tagCard && (()=>{ const c=tagCard; const sp=[]; if(c.composition)sp.push(c.composition); if(c.gsm)sp.push(c.gsm+' GSM'); if(c.width_in)sp.push(c.width_in+'" wide'); return (
-        <Modal title={`Material tag · ${c.name}`} onClose={()=>setTagCard(null)}>
-          <style>{`@media print{ @page{size:8.5in 11in;margin:0.5in;} body *{visibility:hidden !important;} .mat-tag-sheet,.mat-tag-sheet *{visibility:visible !important;} .mat-tag-sheet{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
-          <div className="space-y-4">
-            <div className="no-print flex items-center justify-between"><div className="text-xs text-slate-500">One tag for this material. Print, cut, and attach.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
-            <div className="mat-tag-sheet flex justify-center">
-              <div style={{border:'2px solid #000',borderRadius:'8px',padding:'20px 24px',width:'4.5in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
-                <div style={{fontFamily:'monospace',fontSize:'13px',letterSpacing:'1px',color:'#444'}}>{codeOf(c)}</div>
-                <div style={{fontSize:'30px',fontWeight:800,lineHeight:1.05,margin:'4px 0 8px'}}>{c.name}</div>
-                {sp.length>0 && <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>{sp.join(' · ')}</div>}
-                {c.colors && <div style={{fontSize:'14px',margin:'3px 0'}}><b>Colours:</b> {c.colors}</div>}
-                {c.supplier && <div style={{fontSize:'14px',margin:'3px 0'}}><b>Supplier:</b> {c.supplier}</div>}
-                <div style={{marginTop:'14px',fontSize:'11px',letterSpacing:'2px',color:'#666',borderTop:'1px solid #ccc',paddingTop:'6px'}}>STEEZE · {c.kind==='trim'?'TRIM':'FABRIC'}</div>
-              </div>
-            </div>
-          </div>
-        </Modal>); })()}
+      {tagCard && <MatLibTagModal card={tagCard} onClose={()=>setTagCard(null)} />}
       {lightbox && <Modal title={`Colour swatches · ${lightbox.name}`} onClose={()=>setLightbox('')} wide><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
         {lightbox.swatches.map((s,i)=>(
           <div key={i} className="border rounded-lg overflow-hidden bg-slate-50">
