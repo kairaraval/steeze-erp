@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 706 · NPAs sent for approval now land in the admin's 'For Approval' page (📄 section) where you can open the document and Approve & sign — not just a blind inbox notification. The inbox alert also links straight there, and the sidebar For Approval badge counts pending NPAs.";
+const BUILD = "Live build 707 · On a Request for Payment you can now '↩ Return with question' to Purchasing (type the question in Notes) instead of only Approve/Reject. The RFP moves to a new 'Returned' status, Purchasing + the requester get notified, and after they fix it they re-submit for your approval. Returned RFPs are tracked as their own status in the RFP list + Purchasing home.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7569,7 +7569,7 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
     return need.size;
   })();
   // 6. RFPs in finance pipeline (Purchasing wants to know which they sent)
-  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_purchasing' || r.status==='pending_finance' || r.status==='pending_admin' || r.status==='approved');
+  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_purchasing' || r.status==='pending_finance' || r.status==='pending_admin' || r.status==='returned' || r.status==='approved');
   // 7. Active production jobs needing materials
   const activeProdJobs = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
   // 8. Stock issuances today (out movements, created_at = today)
@@ -33489,6 +33489,7 @@ const RFP_STATUSES = [
   { key:'pending_purchasing', label:'Needs Proof',    color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'pending_finance', label:'Pending Finance',  color:'bg-amber-100 text-amber-700' },
   { key:'pending_admin',   label:'Pending Admin',    color:'bg-orange-100 text-orange-700' },
+  { key:'returned',        label:'Returned',         color:'bg-purple-100 text-purple-700' },
   { key:'approved',        label:'Approved (Pay)',   color:'bg-blue-100 text-blue-700' },
   { key:'partial',         label:'Partially Paid',   color:'bg-amber-100 text-amber-800' },
   { key:'paid',            label:'Paid',             color:'bg-emerald-100 text-emerald-700' },
@@ -33776,6 +33777,38 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
   }
+  // Return the RFP to Purchasing with a question (NOT a rejection) — they fix it
+  // and re-submit. Tracked under the "Returned" status so it stays monitored.
+  async function returnToPurchasing(){
+    if(!isAdmin){ setMsg('Only Admin can return an RFP.'); return; }
+    if(!notes.trim()){ setMsg('Type your question/note first (in Notes above) so Purchasing knows what to fix.'); return; }
+    if(!confirm('Return this RFP to Purchasing with your question? They will fix it and re-submit for your approval.')) return;
+    setBusy(true);
+    const { error } = await sb.from('rfps').update({ status:'returned', returned_by:profile.id, returned_at:new Date().toISOString(), return_note:notes.trim() }).eq('id', rfp.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try{
+      const recips=new Set();
+      if(rfp.requested_by) recips.add(rfp.requested_by);
+      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
+      recips.delete(profile.id);
+      const rows=[...recips].map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_returned', text:`RFP ${rfp.number} returned with a question — please review & re-submit`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }));
+      if(rows.length) await sb.from('notifications').insert(rows);
+    }catch(_){}
+    setBusy(false); onSaved();
+  }
+  // Purchasing fixes a returned RFP and re-submits it back into the approval chain.
+  async function resubmitReturned(){
+    if(!isPurchasing && !isAdmin){ setMsg('Only Purchasing can re-submit.'); return; }
+    if(!confirm('Re-submit this RFP for approval? It goes back to Admin for sign-off.')) return;
+    setBusy(true);
+    const { error } = await sb.from('rfps').update({ status:'pending_admin' }).eq('id', rfp.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try{
+      const admins=(profiles||[]).filter(p=>p.role==='admin' && !p.deleted_at).map(p=>p.id).filter(id=>id!==profile.id);
+      if(admins.length) await sb.from('notifications').insert(admins.map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_resubmitted', text:`RFP ${rfp.number} fixed & re-submitted for your approval`, link_view:'approvals', ref_type:'rfp', ref_id:rfp.id })));
+    }catch(_){}
+    setBusy(false); onSaved();
+  }
   return (
     <Modal title={`RFP ${rfp.number}`} onClose={onClose}>
       <div className="space-y-3">
@@ -33897,13 +33930,14 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <div className="text-xs"><span className="font-semibold">Requested:</span> {requestedBy?(requestedBy.name||requestedBy.email):'—'} · {fmtTime(rfp.requested_at)}</div>
           <div className="text-xs"><span className="font-semibold">Finance approved:</span> {financeBy?(financeBy.name||financeBy.email)+' · '+fmtTime(rfp.finance_approved_at):<span className="text-slate-400">pending</span>}{rfp.finance_notes?' · '+rfp.finance_notes:''}</div>
           <div className="text-xs"><span className="font-semibold">Admin approved:</span> {adminBy?(adminBy.name||adminBy.email)+' · '+fmtTime(rfp.admin_approved_at):<span className="text-slate-400">pending</span>}{rfp.admin_notes?' · '+rfp.admin_notes:''}</div>
+          {status==='returned' && <div className="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-2"><span className="font-semibold">↩ Returned with a question{rfp.returned_at?' · '+fmtTime(rfp.returned_at):''}:</span> {rfp.return_note||'—'}</div>}
           {rfp.status==='rejected' && <div className="text-xs text-rose-700"><span className="font-semibold">Rejected:</span> {fmtTime(rfp.rejected_at)} · {rfp.rejected_reason}</div>}
           {rfp.status==='paid' && rfp.paid_at && <div className="text-xs text-emerald-700"><span className="font-semibold">Paid:</span> {fmtTime(rfp.paid_at)}</div>}
           {rfp.status==='partial' && <div className="text-xs text-amber-700"><span className="font-semibold">Partially paid:</span> {peso(rfp.amount_paid)} of {peso(rfp.amount)} · Balance {peso(rfpBalance(rfp))}</div>}
         </div>
 
         {(rfp.status==='pending_finance' || rfp.status==='pending_admin') && (isAdmin||isAccounting) && (
-          <TpLbl t="Notes / Reason (required if rejecting)"><textarea className="input min-h-[60px]" value={notes} onChange={e=>setNotes(e.target.value)} /></TpLbl>
+          <TpLbl t="Notes / Question (required if rejecting or returning)"><textarea className="input min-h-[60px]" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. Why is the amount ₱157,559? Please attach the breakdown." /></TpLbl>
         )}
 
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -33925,8 +33959,12 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           {status==='pending_admin' && isAdmin && (
             <>
               <button onClick={approveAdmin} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">✓ Admin approve</button>
+              <button onClick={returnToPurchasing} disabled={busy} className="py-2 px-4 rounded-lg border border-purple-300 text-purple-700 font-semibold hover:bg-purple-50 disabled:opacity-50" title="Send back to Purchasing with a question — they fix & re-submit">↩ Return with question</button>
               <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
             </>
+          )}
+          {status==='returned' && (isPurchasing||isAdmin) && (
+            <button onClick={resubmitReturned} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">✓ Fixed — re-submit for approval</button>
           )}
           {(status==='approved'||status==='partial') && (isAccounting||isAdmin) && (
             <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 {rfp.status==='partial'?`Pay balance (${peso(rfpBalance(rfp))})`:'Create Voucher & Pay'}</button>
