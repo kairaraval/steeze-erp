@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 708 · RFP 'Return with question' loop: Admin returns an RFP to Purchasing with a note; after Purchasing fixes it, re-submitting routes it back through FINANCE to re-verify the amount, then to Admin for final sign-off. Returned RFPs are tracked as their own status in the RFP list + Purchasing home, with notifications at each hop.";
+const BUILD = "Live build 709 · Returned RFPs now surface clearly for Purchasing: a notification in their Inbox (opens the RFP list) + a prominent purple banner on the Purchasing Home listing each returned RFP (number + amount). Opening the RFP shows the admin's question and lets them view/print the linked PO, then re-submit (→ Finance → Admin).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7569,7 +7569,9 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
     return need.size;
   })();
   // 6. RFPs in finance pipeline (Purchasing wants to know which they sent)
-  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_purchasing' || r.status==='pending_finance' || r.status==='pending_admin' || r.status==='returned' || r.status==='approved');
+  const rfpsInPipeline = (rfps||[]).filter(r => r.status==='pending_purchasing' || r.status==='pending_finance' || r.status==='pending_admin' || r.status==='approved');
+  // RFPs the admin returned with a question — Purchasing must fix & re-submit.
+  const returnedRfps = (rfps||[]).filter(r => r.status==='returned' && !r.deleted_at);
   // 7. Active production jobs needing materials
   const activeProdJobs = (prodJobs||[]).filter(j => !PRODUCTION_DONE.includes(j.status));
   // 8. Stock issuances today (out movements, created_at = today)
@@ -7662,6 +7664,20 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
         <KPI icon="⚠️" label="Low Stock Items" value={lowStock.length} color="bg-rose-100" />
         <KPI icon="🚚" label="Incoming This Week" value={incomingThisWeek} color="bg-teal-100" />
       </div>
+
+      {/* Returned RFPs — admin sent these back with a question. Prominent so
+          Purchasing fixes & re-submits them. */}
+      {returnedRfps.length>0 && (
+        <button onClick={()=>navTo('rfps')} className="w-full text-left mb-5 rounded-xl border-2 border-purple-300 bg-purple-50 hover:bg-purple-100 transition p-4 flex items-start gap-3">
+          <div className="text-2xl shrink-0">↩</div>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-purple-900">{returnedRfps.length} RFP{returnedRfps.length===1?'':'s'} returned with a question — needs your fix</div>
+            <div className="text-xs text-purple-700 mt-0.5">Open each one, read the admin's note, fix it, then re-submit (it re-routes to Finance, then Admin).</div>
+            <div className="flex flex-wrap gap-1.5 mt-2">{returnedRfps.slice(0,6).map(r=>(<span key={r.id} className="text-[11px] font-mono bg-white border border-purple-200 text-purple-800 rounded px-1.5 py-0.5">{r.number} · {peso(r.amount)}</span>))}{returnedRfps.length>6 && <span className="text-[11px] text-purple-600">+{returnedRfps.length-6} more</span>}</div>
+          </div>
+          <span className="text-purple-700 text-sm font-semibold shrink-0 self-center">Review ›</span>
+        </button>
+      )}
 
       {/* Action queue tiles — PRs coming in, queue, drafts, receiving. */}
       <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">▸ Your action queue</div>
