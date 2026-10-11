@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 709 · Returned RFPs now surface clearly for Purchasing: a notification in their Inbox (opens the RFP list) + a prominent purple banner on the Purchasing Home listing each returned RFP (number + amount). Opening the RFP shows the admin's question and lets them view/print the linked PO, then re-submit (→ Finance → Admin).";
+const BUILD = "Live build 710 · Returned RFP is now a two-way conversation: the Inbox alert and Home banner open the exact RFP, which shows the admin's question as a thread where Purchasing can REPLY back (and admin can reply again). A '✎ Fix the linked PO' button jumps to the PO to edit it before re-submitting. Everyone gets notified on each reply.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7524,7 +7524,7 @@ function FinanceHomeView({ profile, profiles, rfps, vouchers, salesOrders, soPay
   );
 }
 
-function PurchasingHomeView({ profile, profiles, requests, orders, items, suppliers, prodJobs, leads, rfps, stockMovements, navTo }){
+function PurchasingHomeView({ profile, profiles, requests, orders, items, suppliers, prodJobs, leads, rfps, stockMovements, navTo, onOpenRfp }){
   // ---- Tile counts ----
   // 1. PRs awaiting approval — status='submitted', not deleted
   const prsToApprove = (requests||[]).filter(r => (r.status==='submitted' || r.status==='manual_request') && !r.deleted_at);
@@ -7668,15 +7668,14 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
       {/* Returned RFPs — admin sent these back with a question. Prominent so
           Purchasing fixes & re-submits them. */}
       {returnedRfps.length>0 && (
-        <button onClick={()=>navTo('rfps')} className="w-full text-left mb-5 rounded-xl border-2 border-purple-300 bg-purple-50 hover:bg-purple-100 transition p-4 flex items-start gap-3">
+        <div className="w-full mb-5 rounded-xl border-2 border-purple-300 bg-purple-50 p-4 flex items-start gap-3">
           <div className="text-2xl shrink-0">↩</div>
           <div className="flex-1 min-w-0">
             <div className="font-bold text-purple-900">{returnedRfps.length} RFP{returnedRfps.length===1?'':'s'} returned with a question — needs your fix</div>
-            <div className="text-xs text-purple-700 mt-0.5">Open each one, read the admin's note, fix it, then re-submit (it re-routes to Finance, then Admin).</div>
-            <div className="flex flex-wrap gap-1.5 mt-2">{returnedRfps.slice(0,6).map(r=>(<span key={r.id} className="text-[11px] font-mono bg-white border border-purple-200 text-purple-800 rounded px-1.5 py-0.5">{r.number} · {peso(r.amount)}</span>))}{returnedRfps.length>6 && <span className="text-[11px] text-purple-600">+{returnedRfps.length-6} more</span>}</div>
+            <div className="text-xs text-purple-700 mt-0.5">Click an RFP to open it, read the admin's note, reply or fix it, then re-submit (re-routes to Finance, then Admin).</div>
+            <div className="flex flex-wrap gap-1.5 mt-2">{returnedRfps.slice(0,8).map(r=>(<button key={r.id} onClick={()=>onOpenRfp?onOpenRfp(r.id):navTo('rfps')} className="text-[11px] font-mono bg-white border border-purple-200 text-purple-800 rounded px-1.5 py-0.5 hover:bg-purple-100 hover:border-purple-400">{r.number} · {peso(r.amount)} ›</button>))}{returnedRfps.length>8 && <button onClick={()=>navTo('rfps')} className="text-[11px] text-purple-600 hover:underline">+{returnedRfps.length-8} more</button>}</div>
           </div>
-          <span className="text-purple-700 text-sm font-semibold shrink-0 self-center">Review ›</span>
-        </button>
+        </div>
       )}
 
       {/* Action queue tiles — PRs coming in, queue, drafts, receiving. */}
@@ -33515,8 +33514,10 @@ const RFP_STATUSES = [
 function rfpBalance(r){ return Math.max(0, Number(r?.amount||0) - Number(r?.amount_paid||0)); }
 function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 
-function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, costCenters, chartAccounts, reload }){
+function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, costCenters, chartAccounts, reload, navTo, openRfpId, onOpenConsumed }){
   const [editing,setEditing]=useState(null);
+  // Deep-link: open a specific RFP (from the Inbox notification or Home banner).
+  useEffect(()=>{ if(openRfpId){ const r=(rfps||[]).find(x=>x.id===openRfpId); if(r) setEditing(r); onOpenConsumed&&onOpenConsumed(); } },[openRfpId, rfps]);
   const [paying,setPaying]=useState(null);   // RFP to disburse via voucher
   const [viewingAp,setViewingAp]=useState(null); // A/P voucher preview
   const [batchPaying,setBatchPaying]=useState(null); // array of RFPs → one voucher
@@ -33679,7 +33680,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <button disabled={!sameSupplier} onClick={()=>setBatchPaying(selectedRfps)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">💰 Pay together as one check</button>
         </div>
       )}
-      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} />}
+      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} onEditPO={(po)=>{ setEditing(null); if(navTo) navTo('orders'); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
       {viewingAp && <APVoucherModal ap={viewingAp} profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setViewingAp(null)} />}
@@ -33687,7 +33688,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   );
 }
 
-function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, onClose, onSaved, onPay }){
+function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, onClose, onSaved, onPay, onEditPO }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const [showPO,setShowPO]=useState(false);
@@ -33800,7 +33801,9 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     if(!notes.trim()){ setMsg('Type your question/note first (in Notes above) so Purchasing knows what to fix.'); return; }
     if(!confirm('Return this RFP to Purchasing with your question? They will fix it and re-submit for your approval.')) return;
     setBusy(true);
-    const { error } = await sb.from('rfps').update({ status:'returned', returned_by:profile.id, returned_at:new Date().toISOString(), return_note:notes.trim() }).eq('id', rfp.id);
+    const nowIso=new Date().toISOString();
+    const thread=[...(Array.isArray(rfp.return_thread)?rfp.return_thread:[]), { by:profile.id, name:profile.name||profile.email, role:profile.role, at:nowIso, text:notes.trim() }];
+    const { error } = await sb.from('rfps').update({ status:'returned', returned_by:profile.id, returned_at:nowIso, return_note:notes.trim(), return_thread:thread }).eq('id', rfp.id);
     if(error){ setBusy(false); setMsg(error.message); return; }
     try{
       const recips=new Set();
@@ -33825,6 +33828,28 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       if(fin.length) await sb.from('notifications').insert(fin.map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_resubmitted', text:`RFP ${rfp.number} fixed & re-submitted — please re-verify the amount`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id })));
     }catch(_){}
     setBusy(false); onSaved();
+  }
+  // Reply on the return conversation (Purchasing ⇄ Admin) without changing status.
+  const [reply,setReply]=useState('');
+  const [thread,setThread]=useState(()=> (Array.isArray(rfp.return_thread)&&rfp.return_thread.length) ? rfp.return_thread : (rfp.return_note?[{ name:'Admin', at:rfp.returned_at, text:rfp.return_note, role:'admin' }]:[]));
+  async function postReply(){
+    if(!reply.trim()) return;
+    setBusy(true);
+    const nowIso=new Date().toISOString();
+    const next=[...thread, { by:profile.id, name:profile.name||profile.email, role:profile.role, at:nowIso, text:reply.trim() }];
+    const { error }=await sb.from('rfps').update({ return_thread:next }).eq('id', rfp.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    setThread(next); setReply('');
+    try{
+      const recips=new Set();
+      if(rfp.returned_by) recips.add(rfp.returned_by);
+      if(rfp.requested_by) recips.add(rfp.requested_by);
+      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
+      recips.delete(profile.id);
+      const rows=[...recips].map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_reply', text:`Reply on RFP ${rfp.number}: ${reply.trim().slice(0,80)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }));
+      if(rows.length) await sb.from('notifications').insert(rows);
+    }catch(_){}
+    setBusy(false);  // keep the modal open so the conversation continues
   }
   return (
     <Modal title={`RFP ${rfp.number}`} onClose={onClose}>
@@ -33947,7 +33972,30 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <div className="text-xs"><span className="font-semibold">Requested:</span> {requestedBy?(requestedBy.name||requestedBy.email):'—'} · {fmtTime(rfp.requested_at)}</div>
           <div className="text-xs"><span className="font-semibold">Finance approved:</span> {financeBy?(financeBy.name||financeBy.email)+' · '+fmtTime(rfp.finance_approved_at):<span className="text-slate-400">pending</span>}{rfp.finance_notes?' · '+rfp.finance_notes:''}</div>
           <div className="text-xs"><span className="font-semibold">Admin approved:</span> {adminBy?(adminBy.name||adminBy.email)+' · '+fmtTime(rfp.admin_approved_at):<span className="text-slate-400">pending</span>}{rfp.admin_notes?' · '+rfp.admin_notes:''}</div>
-          {status==='returned' && <div className="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-2"><span className="font-semibold">↩ Returned with a question{rfp.returned_at?' · '+fmtTime(rfp.returned_at):''}:</span> {rfp.return_note||'—'}</div>}
+          {(status==='returned' || thread.length>0) && (()=>{
+            const msgs = thread;
+            return (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-2">
+              <div className="text-[11px] font-bold uppercase text-purple-700 flex items-center justify-between gap-2">
+                <span>↩ Returned — conversation</span>
+                {po && (isPurchasing||isAdmin) && <button onClick={()=> onEditPO ? onEditPO(po) : setShowPO(true)} className="text-[11px] px-2 py-0.5 rounded bg-purple-600 text-white font-semibold hover:bg-purple-700" title="Open the linked PO to fix it">✎ Fix the linked PO</button>}
+              </div>
+              <div className="space-y-1.5 max-h-52 overflow-auto">
+                {msgs.map((m,i)=>{ const isAdminMsg=m.role==='admin'; return (
+                  <div key={i} className={`text-xs rounded-lg px-2.5 py-1.5 ${isAdminMsg?'bg-white border border-purple-200':'bg-indigo-50 border border-indigo-200'}`}>
+                    <div className="flex items-center gap-2"><span className="font-semibold text-slate-700">{m.name||(isAdminMsg?'Admin':'Purchasing')}</span>{isAdminMsg && <span className="text-[9px] uppercase bg-purple-100 text-purple-700 px-1 rounded">asked</span>}<span className="text-[10px] text-slate-400 ml-auto">{m.at?fmtTime(m.at):''}</span></div>
+                    <div className="text-slate-700 mt-0.5 whitespace-pre-line">{m.text}</div>
+                  </div>
+                ); })}
+              </div>
+              {status==='returned' && (
+                <div className="flex gap-2">
+                  <input value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); postReply(); } }} placeholder="Reply to the question…" className="input flex-1 text-sm" />
+                  <button onClick={postReply} disabled={busy||!reply.trim()} className="px-3 py-1.5 rounded-lg bg-purple-600 text-white text-sm font-semibold disabled:opacity-50">Send</button>
+                </div>
+              )}
+            </div>
+            ); })()}
           {rfp.status==='rejected' && <div className="text-xs text-rose-700"><span className="font-semibold">Rejected:</span> {fmtTime(rfp.rejected_at)} · {rfp.rejected_reason}</div>}
           {rfp.status==='paid' && rfp.paid_at && <div className="text-xs text-emerald-700"><span className="font-semibold">Paid:</span> {fmtTime(rfp.paid_at)}</div>}
           {rfp.status==='partial' && <div className="text-xs text-amber-700"><span className="font-semibold">Partially paid:</span> {peso(rfp.amount_paid)} of {peso(rfp.amount)} · Balance {peso(rfpBalance(rfp))}</div>}
@@ -44285,6 +44333,7 @@ function App(){
   const [inboxOpenSO,setInboxOpenSO]=useState(null);
   const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
   const [inboxPRId,setInboxPRId]=useState(null);
+  const [inboxRfpId,setInboxRfpId]=useState(null);
   const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
@@ -45190,6 +45239,7 @@ function App(){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setActivityLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
@@ -45232,6 +45282,7 @@ function App(){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setDetailLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
       if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
@@ -45804,7 +45855,7 @@ function App(){
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
-        {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} />}
+        {view==='pur-home' && <PurchasingHomeView profile={profile} profiles={profiles} requests={requests} orders={orders} items={items} suppliers={suppliers} prodJobs={prodJobs} leads={leads} rfps={rfps} stockMovements={stockMovements} navTo={navTo} onOpenRfp={(id)=>{ setView('rfps'); setInboxRfpId(id); }} />}
         {view==='payroll' && <SewingPayroll profile={profile} bankAccounts={bankAccounts} />}
         {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
@@ -45838,7 +45889,7 @@ function App(){
         {view==='client-orders' && <ClientOrdersInbox profile={profile} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reloadApp={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} onOpenSO={(so)=>setInboxOpenSO(so)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
+        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
