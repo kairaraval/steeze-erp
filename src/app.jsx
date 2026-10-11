@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 712 · On a draft PO, each material with on-hand now has a '⤓ Reserve … · buy shortfall' button — Purchasing can earmark existing stock to the project and the quantity to buy drops to just the shortfall (with an Undo). Reserved stock is counted everywhere (inventory, queue, other POs) so it can't be double-bought, and the PO print notes the reserved-from-stock portion.";
+const BUILD = "Live build 713 · In-House Cutting board redesigned: KPI strip (Active/To Do/In Progress/Done), board cards with Pattern-approved / Fabric-ready badges + cut-progress bar, and a right detail panel (pattern, tech pack, cut progress, size breakdown, fabric lay/marker, Log cutting output, Mark done). The Start/Pause timer + hours tracking is removed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11496,6 +11496,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   const [search,setSearch]=useState('');
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
+  const [selId,setSelId]=useState(null);     // job selected for the right detail panel
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   // Order quantity for a cutting item — from its production job, else the lead's items.
   function qtyForWork(w){ const j=w.source_job_id?(prodJobs||[]).find(x=>x.id===w.source_job_id):null; if(j && Number(j.quantity)>0) return Number(j.quantity); const l=leadFor(w.lead_id); if(l) return (l.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0); return 0; }
@@ -11534,6 +11535,52 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
+  // ── Cutting board helpers (new look) ──
+  const selected=(cuttingWorklist||[]).find(w=>w.id===selId)||null;
+  function patternApproved(w){ if(!w.pattern_number) return false; return !!(patSrc||[]).find(x=>(x.pattern_code||'').trim().toLowerCase()===String(w.pattern_number).trim().toLowerCase() && !x.deleted_at); }
+  function fabricReady(w){ return (Array.isArray(w.fabrics)&&w.fabrics.length>0) || Number(w.total_consumption||0)>0; }
+  async function logOutput(w){ const target=qtyForWork(w); const cur=Number(w.cut_qty||0); const val=prompt(`Pieces cut so far for "${w.item||w.title||''}"${target?` (target ${target})`:''}:`, String(cur)); if(val===null) return; const n=Math.max(0, Number(val)||0); const patch={ cut_qty:n }; if((w.status==='open'||!w.status)){ patch.status='in_progress'; if(!w.start_date) patch.start_date=todayManila(); } const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
+  const CutBadge=({ok,okText,noText})=> <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ok?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{ok?('✓ '+okText):('◷ '+noText)}</span>;
+  function PRow({label,value,ok,okText,action,actionText}){ return (<div className="flex items-center gap-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold w-24 shrink-0">{label}</span><span className="font-medium text-slate-800 flex-1 min-w-0 truncate">{value}{ok && <span className="ml-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">✓ {okText}</span>}</span>{action && <button onClick={action} className="text-[11px] text-indigo-600 font-semibold hover:underline shrink-0">{actionText} ↗</button>}</div>); }
+  function renderPanel(w){
+    if(!w) return <div className="bg-white border rounded-xl p-8 text-sm text-slate-400 text-center">Select a cutting job on the left to see its details.</div>;
+    const lead=leadFor(w.lead_id); const qty=qtyForWork(w); const cut=Number(w.cut_qty||0); const pct=qty>0?Math.min(100,Math.round(cut/qty*100)):0;
+    const sizes=Array.isArray(w.size_consumption)?w.size_consumption:[]; const fabNames=(Array.isArray(w.fabrics)?w.fabrics:[]).map(f=>f.fabric).filter(Boolean).join(', ');
+    const stat = w.status==='done'?['Done','bg-emerald-100 text-emerald-700']: w.status==='in_progress'?['In progress','bg-amber-100 text-amber-700']:['To do','bg-slate-100 text-slate-600'];
+    return (<div className="bg-white border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b flex items-start justify-between gap-2">
+        <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">Cutting Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty} pcs`:''}</div></div>
+        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded shrink-0 ${stat[1]}`}>{stat[0]}</span>
+      </div>
+      <div className="p-4 space-y-4 text-sm">
+        <div className="space-y-1.5">
+          <PRow label="Pattern" value={w.pattern_number||'—'} ok={patternApproved(w)} okText="Approved" />
+          <PRow label="Tech pack" value={lead?.techpack?'Attached':'—'} action={lead&&lead.techpack&&openTechpack?()=>openTechpack(lead):null} actionText="View" />
+          <PRow label="Assigned" value={w.assigned_to||'Unassigned'} />
+          <PRow label="Cutting due" value={workDue(w)?fmtDate(workDue(w)):'—'} />
+        </div>
+        <div>
+          <div className="flex items-center justify-between text-xs mb-1"><span className="font-semibold text-slate-600">Cut progress</span><span className="text-slate-500">{cut} of {qty||'—'} cut · {pct}%</span></div>
+          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div>
+        </div>
+        {sizes.length>0 && <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">Size breakdown</div>
+          <table className="w-full text-xs"><thead><tr className="text-slate-400 uppercase text-[10px]"><th className="text-left py-0.5">Size</th><th className="text-right">Target</th></tr></thead>
+          <tbody>{sizes.map((s,i)=>(<tr key={i} className="border-t"><td className="py-0.5">{s.size||'—'}</td><td className="text-right">{s.qty??'—'}</td></tr>))}
+          <tr className="border-t font-semibold bg-slate-50"><td className="py-0.5">Total</td><td className="text-right">{sizes.reduce((a,s)=>a+(Number(s.qty)||0),0)||'—'}</td></tr></tbody></table>
+        </div>}
+        <div className="rounded-lg bg-slate-50 border p-2.5">
+          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-600">🧵 Fabric</div><button onClick={()=>setDetail(w)} className="text-[11px] text-indigo-600 font-semibold hover:underline">View lay &amp; marker ↗</button></div>
+          <div className="text-xs text-slate-500 mt-1">{fabNames||'—'}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}</div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          {w.status!=='done' && <button onClick={()=>logOutput(w)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🧾 Log cutting output</button>}
+          {w.status!=='done' ? <button onClick={()=>markDone(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">✓ Mark done</button> : <button onClick={()=>reopenItem(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">↺ Reopen</button>}
+        </div>
+        <div className="text-[11px] text-slate-400 flex items-center gap-1"><span>ℹ️</span> Complete after cutting count is confirmed.</div>
+      </div>
+    </div>);
+  }
 
   const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; const qty=qtyForWork(w); return (
     <div key={w.id} className="border-t px-3 py-2.5">
@@ -11585,27 +11632,53 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
       {tab==='replacements' && <ForReplacementPanel profile={profile} department="Cutting" />}
       {tab==='reports' && <ProgressReport rows={(cuttingWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Cut" />}
 
-      {tab==='worklist' && (
-        <div className="space-y-3">
-          <KanbanBoard items={boardItems} onMove={moveStatus}
-            renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const qty=qtyForWork(w); const nSizes=(Array.isArray(w.size_consumption)?w.size_consumption:[]).length; const due=workDue(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
-              <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
-              <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
-              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty.toLocaleString('en-PH')} pcs`:''}{w.pattern_number?` · Pat ${w.pattern_number}`:''}{nSizes>0?` · ${nSizes} sizes`:''}</div>
-              {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
-              {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
-              <StartFinishBar row={w} table="cutting_worklist" reload={reload} />
-            </div>); }}
-            extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open">Open ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
-          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
-            <div className="p-2 flex gap-1.5">
-              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add something to cut…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+      {tab==='worklist' && (()=>{
+        const act=boardItems.filter(w=>w.status!=='done');
+        const nTodo=boardItems.filter(w=>(w.status||'open')==='open').length;
+        const nProg=boardItems.filter(w=>w.status==='in_progress').length;
+        const nDone=done.length;
+        const Kpi=({icon,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{icon}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
+        return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Kpi icon="📄" label="Active Jobs" value={act.length} color="bg-blue-100" />
+            <Kpi icon="📋" label="To Do" value={nTodo} color="bg-slate-100" />
+            <Kpi icon="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
+            <Kpi icon="✓" label="Done" value={nDone} color="bg-emerald-100" />
+          </div>
+          <div className="flex gap-4 items-start">
+            <div className="flex-1 min-w-0 space-y-3">
+              <KanbanBoard items={boardItems} onMove={moveStatus}
+                renderCard={(w)=>{ const lead=leadFor(w.lead_id); const qty=qtyForWork(w); const cut=Number(w.cut_qty||0); const pct=qty>0?Math.min(100,Math.round(cut/qty*100)):0; const due=workDue(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; return (<div className={isSel?'ring-2 ring-indigo-400 rounded-md -m-0.5 p-0.5':''}>
+                  <button onClick={()=>setSelId(w.id)} className="text-left w-full">
+                    <div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div>
+                    <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty.toLocaleString('en-PH')} pcs`:''}</div>
+                  </button>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    <CutBadge ok={patternApproved(w)} okText="Pattern approved" noText="Pattern pending" />
+                    <CutBadge ok={fabricReady(w)} okText="Fabric ready" noText="Awaiting fabric" />
+                  </div>
+                  {due && <div className={`text-[11px] mt-1 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
+                  {w.status==='in_progress' && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>Cut</span><span>{cut}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
+                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                    {(w.status==='open'||!w.status) && <button onClick={()=>moveStatus(w,'in_progress')} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">▶ Start cutting</button>}
+                    {w.status==='in_progress' && <button onClick={()=>logOutput(w)} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">🧾 Log output</button>}
+                    {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[11px] text-teal-700 hover:underline" title="Techpack">📋</button>}
+                  </div>
+                </div>); }}
+                extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
+              <div className="bg-white border rounded-xl overflow-hidden max-w-md">
+                <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
+                <div className="p-2 flex gap-1.5">
+                  <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add something to cut…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
+                  <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+                </div>
+              </div>
             </div>
+            <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
           </div>
         </div>
-      )}
+        ); })()}
 
       {tab==='patterns' && (
         <div>
