@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 711 · PO print now shows a '↳ For:' line under each material — the client, project, and quantity it's being bought for — so you can verify at a glance which project each item is for before ordering. (Pulled from the linked PR/project; the material description itself is kept clean.)";
+const BUILD = "Live build 712 · On a draft PO, each material with on-hand now has a '⤓ Reserve … · buy shortfall' button — Purchasing can earmark existing stock to the project and the quantity to buy drops to just the shortfall (with an Undo). Reserved stock is counted everywhere (inventory, queue, other POs) so it can't be double-bought, and the PO print notes the reserved-from-stock portion.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7578,7 +7578,7 @@ function PurchasingHomeView({ profile, profiles, requests, orders, items, suppli
   const today = todayManila();
   const stockOutToday = (stockMovements||[]).filter(s => s.type==='out' && (s.created_at||'').startsWith(today));
   // 9. Total reserved stock value (for Layer 2 visibility)
-  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  const reservations = useMemo(()=>computeStockReservations(requests||[], orders||[]), [requests, orders]);
   const reservedValue = (items||[]).reduce((s,it)=>{ const r = reservations.get(it.id)||0; return s + r * Number(it.cost||0); }, 0);
   // 10. Recent activity (last 5 PR/PO/Issuance events). Build cheaply from existing arrays.
   const recentEvents = (()=>{
@@ -20904,7 +20904,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
   }
 
   // ───── Inventory report ─────
-  const invReservations = computeStockReservations(requests||[]);
+  const invReservations = computeStockReservations(requests||[], orders||[]);
   // Total inventory value = sum of (qty × cost) across all items
   const allItems = items||[];
   const totalInventoryValue = allItems.reduce((s,it)=>s + Number(it.qty||0) * Number(it.cost||0), 0);
@@ -28360,6 +28360,7 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
                     <td className="border border-slate-400 px-2 py-1.5 align-top">
                       <div>{l.description||'—'}</div>
                       {(l.client_name||l.project_title) && <div className="text-[8pt] text-slate-500 mt-0.5">↳ For: <strong className="text-slate-700">{l.client_name||'—'}</strong>{l.project_title?` · ${l.project_title}`:''}{l.qty?` · ${l.qty} ${l.unit||''}`.trimEnd():''}</div>}
+                      {Number(l.stock_allocated||0)>0 && <div className="text-[8pt] text-emerald-700 mt-0.5">↳ + {l.stock_allocated} reserved from existing stock (not purchased)</div>}
                     </td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right align-top">{l.qty||0}</td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right align-top">{peso(l.unit_cost)}</td>
@@ -29186,7 +29187,7 @@ async function cascadeDueDatesFromLead(lead){
 //   • The materials are actually pulled from stock (Layer 3 — future)
 //
 // Returns a Map<item_id, totalReservedQty>.
-function computeStockReservations(requests){
+function computeStockReservations(requests, orders){
   const map = new Map();
   (requests||[]).forEach(pr => {
     // Only APPROVED PRs reserve stock. Once a PR is "Fulfilled from Stock" the
@@ -29200,6 +29201,19 @@ function computeStockReservations(requests){
       if(allocated <= 0) return;
       const prev = map.get(line.item_id) || 0;
       map.set(line.item_id, prev + allocated);
+    });
+  });
+  // PO-side reservations: Purchasing can reserve on-hand against a PO line
+  // (stock_allocated) so only the shortfall is bought. Active POs (not cancelled/
+  // received/deleted) hold that stock earmarked for their project.
+  (orders||[]).forEach(po => {
+    if(!po || po.deleted_at) return;
+    if(['cancelled','received'].includes(po.status)) return;
+    (po.lines||[]).forEach(line => {
+      if(!line.item_id) return;
+      const allocated = Number(line.stock_allocated||0);
+      if(allocated <= 0) return;
+      map.set(line.item_id, (map.get(line.item_id)||0) + allocated);
     });
   });
   return map;
@@ -29287,7 +29301,7 @@ async function issuePRFromStock(pr, items, profile){
 // Reusable stock-visibility strip that renders under a PR/PO line item.
 // Shows On-hand · Reserved · Available with color coding. If `onPullFromStock`
 // is provided, also renders a "Pull from stock" button when there's stock to grab.
-function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, mode='pr', items }){
+function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, onUnreserve, readOnly, mode='pr', items }){
   if(!item) return <div className="text-[10px] text-slate-400 px-2 py-1">No inventory link — stock info unavailable.</div>;
   // For a sublimation fabric, also surface the cut BLOCKS available (what
   // production actually uses), matched by block item name starting with the
@@ -29334,6 +29348,14 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, readOnly, m
           <button onClick={onPullFromStock} className="text-[10px] px-2 py-0.5 rounded bg-white border border-emerald-400 text-emerald-700 font-bold hover:bg-emerald-100">
             ⤓ Pull {Math.min(snap.available, Number(line.qty||0)).toFixed(1)} from stock
           </button>
+        )}
+        {mode==='po' && !readOnly && onReserve && (snap.available - allocated) > 0 && Number(line.qty||0) > 0 && (
+          <button onClick={onReserve} className="text-[10px] px-2 py-0.5 rounded bg-white border border-emerald-400 text-emerald-700 font-bold hover:bg-emerald-100" title="Earmark on-hand to this project and buy only the shortfall">
+            ⤓ Reserve {Math.min(snap.available - allocated, Number(line.qty||0)).toFixed(1)} · buy shortfall
+          </button>
+        )}
+        {mode==='po' && !readOnly && onUnreserve && allocated > 0 && (
+          <button onClick={onUnreserve} className="text-[10px] px-2 py-0.5 rounded bg-white border border-slate-300 text-slate-500 font-semibold hover:bg-slate-100" title="Undo the reservation — buy the full quantity again">↺ Undo reserve</button>
         )}
       </div>
     </div>
@@ -30110,13 +30132,13 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
      stamped flip to status='ordered' automatically.
    ============================================================ */
 
-function MaterialsQueueView({ profile, requests, items, suppliers, leads, clients, reload, onOpenPO }){
+function MaterialsQueueView({ profile, requests, items, suppliers, leads, clients, orders, reload, onOpenPO }){
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
   const isAdmin = profile.role === 'admin';
   const canDelete = isAdmin || profile.role==='purchasing_admin';
   // Stock reservations so we can tell which lines are already covered on-hand.
-  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  const reservations = useMemo(()=>computeStockReservations(requests||[], orders||[]), [requests, orders]);
   // Admin-only: remove a single line from a PR right inside the Materials
   // Queue. Useful when finance / admin decides a line shouldn't be bought
   // (cancelled order, mis-typed quantity, etc.) without opening the PR.
@@ -30464,9 +30486,9 @@ const PO_PAYMENT_METHODS = [
   { key:'others',        label:'Others' },
 ];
 function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, items, suppliers, requests, leads, clients, onClose, onSaved, onPrint }){
-  // Same reservations map the PR form uses — POs are informational only
-  // (no Pull-from-Stock since the buy decision is already made).
-  const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
+  // Reservations from PRs + OTHER POs (exclude this PO so its own reserved lines
+  // don't reduce their own available). Purchasing can reserve on-hand here.
+  const reservations = useMemo(()=>computeStockReservations(requests||[], (allOrders||[]).filter(o=> !existing || o.id!==existing.id)), [requests, allOrders, existing]);
   const isEdit=!!existing;
   // From a single PR: seed the lines and, when the PR is tied to a project,
   // append the project + client to each line's description (skip if the line
@@ -30521,6 +30543,26 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   const finalizedBy = existing && existing.finalized_by ? (profiles||[]).find(p=>p.id===existing.finalized_by) : null;
   function up(k,v){ if(locked && !['payment_method','payment_method_detail','payment_terms','vat_enabled','withholding_tax_enabled','withholding_tax_rate'].includes(k)) return; setF(p=>({...p,[k]:v})); }
   function setLine(i,patch){ if(locked) return; setF(p=>({...p,lines:p.lines.map((l,j)=>j===i?{...l,...patch}:l)})); }
+  // Reserve available on-hand against this line → buy only the shortfall. Records
+  // the reserved qty on the line (stock_allocated) so it's earmarked for this
+  // PO's project and reduces the quantity to purchase.
+  function reserveFromStock(i){
+    if(locked) return;
+    const l=f.lines[i]; const it=(items||[]).find(x=>x.id===l.item_id); if(!it) return;
+    const snap=stockSnapshot(it, reservations);   // reservations excludes this PO
+    const already=Number(l.stock_allocated||0);
+    const reserveAmt=Math.min(Math.max(0, snap.available - already), Number(l.qty||0));
+    if(reserveAmt<=0){ setMsg('No available on-hand to reserve for this line.'); return; }
+    const round=(n)=> Math.round(n*1000)/1000;
+    setLine(i,{ qty: round(Number(l.qty||0)-reserveAmt), stock_allocated: round(already+reserveAmt) });
+  }
+  // Undo a reservation on a line (give the reserved qty back to "to buy").
+  function unreserveLine(i){
+    if(locked) return;
+    const l=f.lines[i]; const a=Number(l.stock_allocated||0); if(a<=0) return;
+    const round=(n)=> Math.round(n*1000)/1000;
+    setLine(i,{ qty: round(Number(l.qty||0)+a), stock_allocated: 0 });
+  }
   function addLine(){ if(locked) return; setF(p=>({...p,lines:[...p.lines,{item_id:null, description:'', qty:1, qty_received:0, unit_cost:0}]})); }
   function removeLine(i){ if(locked) return; setF(p=>({...p,lines:p.lines.filter((_,j)=>j!==i)})); }
   // Total math:
@@ -30768,7 +30810,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
                   <div className="col-span-1 text-right">{!locked && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
                 </div>
                 {/* Stock visibility strip — informational only on POs (no pull-from-stock action) */}
-                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={true} mode="po" items={items} />}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={locked} mode="po" items={items} onReserve={()=>reserveFromStock(i)} onUnreserve={()=>unreserveLine(i)} />}
               </div>
             );
           })}</div>
@@ -45852,7 +45894,7 @@ function App(){
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} onOpenQueue={()=>setView('queue')} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} openPRId={inboxPRId} />}
-        {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} reload={loadAll} onOpenPO={()=>setView('orders')} />}
+        {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} orders={orders} reload={loadAll} onOpenPO={()=>setView('orders')} />}
         {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
