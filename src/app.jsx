@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 715 · In-House Cutting: every job card has an 'Open ▸' button and the detail panel has 'Open full details' — reopening the full pattern/fabric/sizes/notes view like before, so nothing is hidden.";
+const BUILD = "Live build 716 · Fabric availability now links Purchasing → Cutting: when Purchasing stock-outs fabric/blocks to a job, the Cutting board shows '✓ Fabric issued' on that card (and the detail panel shows when it was issued), and the Cutting team gets a notification that the fabric is ready to cut.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7971,6 +7971,17 @@ function ManualStockOutModal({ profile, items, prodJobs, onClose, onSaved }){
       const { error } = await sb.from('stock_movements').insert(movements);
       if(error){ const stripped=movements.map(({date,...rest})=>rest); const { error:retry }=await sb.from('stock_movements').insert(stripped); if(retry) throw retry; }
       // On-hand updates automatically via the stock_movements trigger.
+      // If fabric/blocks were issued to a specific job, tell the Cutting team the
+      // material is now available so their board lights up.
+      try{
+        if(job){
+          const issuedFabric=valid.some(r=>{ const it=itemOf(r.item_id); return it && ['fabrics','blocks','remnants'].includes(String(it.bucket||'').toLowerCase()); });
+          if(issuedFabric){
+            const cutters=(profiles||[]).filter(p=>['cutting_dept','production_supervisor','production'].includes(p.role) && !p.deleted_at).map(p=>p.id).filter(id=>id!==profile.id);
+            if(cutters.length) await sb.from('notifications').insert(cutters.map(id=>({ recipient_id:id, actor_id:profile.id, type:'fabric_issued', text:`🧵 Fabric issued for ${job.client_name||''}${job.item?` · ${job.item}`:''} — ready to cut`, link_view:'cutting', ref_type:'production_job', ref_id:job.id })));
+          }
+        }
+      }catch(_){}
       onSaved();
     }catch(e){ setMsg(e.message||String(e)); setBusy(false); }
   }
@@ -11491,7 +11502,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   );
 }
 
-function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, leads, openTechpack, reload }){
+function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, leads, items, stockMovements, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
@@ -11540,6 +11551,17 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   // ── Cutting board helpers (new look) ──
   const selected=(cuttingWorklist||[]).find(w=>w.id===selId)||null;
   function patternApproved(w){ if(!w.pattern_number) return false; return !!(patSrc||[]).find(x=>(x.pattern_code||'').trim().toLowerCase()===String(w.pattern_number).trim().toLowerCase() && !x.deleted_at); }
+  // Fabric is "available" for cutting when Purchasing has actually ISSUED fabric/
+  // blocks to this job (a stock-out tagged to the production job).
+  const fabricIssuedJobs=useMemo(()=>{
+    const s=new Set();
+    const isFab=(id)=>{ const it=(items||[]).find(x=>x.id===id); return it && ['fabrics','blocks','remnants'].includes(String(it.bucket||'').toLowerCase()); };
+    (stockMovements||[]).forEach(m=>{ if(m.type==='out' && m.ref_type==='production_job' && m.ref_id && isFab(m.item_id)) s.add(m.ref_id); });
+    return s;
+  },[stockMovements, items]);
+  function fabricAvailable(w){ return !!(w.source_job_id && fabricIssuedJobs.has(w.source_job_id)); }
+  // When fabric was issued for a job — latest issuance date, for the detail panel.
+  function fabricIssuedInfo(w){ if(!w.source_job_id) return null; const ms=(stockMovements||[]).filter(m=>m.type==='out'&&m.ref_type==='production_job'&&m.ref_id===w.source_job_id).sort((a,b)=>String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||''))); return ms[0]||null; }
   function fabricReady(w){ return (Array.isArray(w.fabrics)&&w.fabrics.length>0) || Number(w.total_consumption||0)>0; }
   async function logOutput(w){ const target=qtyForWork(w); const cur=Number(w.cut_qty||0); const val=prompt(`Pieces cut so far for "${w.item||w.title||''}"${target?` (target ${target})`:''}:`, String(cur)); if(val===null) return; const n=Math.max(0, Number(val)||0); const patch={ cut_qty:n }; if((w.status==='open'||!w.status)){ patch.status='in_progress'; if(!w.start_date) patch.start_date=todayManila(); } const { error }=await sb.from('cutting_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   const CutBadge=({ok,okText,noText})=> <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ok?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{ok?('✓ '+okText):('◷ '+noText)}</span>;
@@ -11575,6 +11597,9 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
         <div className="rounded-lg bg-slate-50 border p-2.5">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-600">🧵 Fabric</div><button onClick={()=>setDetail(w)} className="text-[11px] text-indigo-600 font-semibold hover:underline">View lay &amp; marker ↗</button></div>
           <div className="text-xs text-slate-500 mt-1">{fabNames||'—'}{w.total_consumption!=null?` · ${w.total_consumption} total`:''}</div>
+          {(()=>{ const mi=fabricIssuedInfo(w); return fabricAvailable(w)
+            ? <div className="text-[11px] text-emerald-700 font-semibold mt-1.5 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">✓ Fabric issued by Purchasing{mi&&mi.date?` · ${fmtDate(mi.date)}`:''} — ready to cut</div>
+            : <div className="text-[11px] text-amber-700 mt-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1">◷ Awaiting fabric from Purchasing</div>; })()}
         </div>
         <div className="flex gap-2 pt-1">
           {w.status!=='done' && <button onClick={()=>logOutput(w)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🧾 Log cutting output</button>}
@@ -11662,7 +11687,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                   </button>
                   <div className="flex flex-wrap gap-1 mt-1">
                     <CutBadge ok={patternApproved(w)} okText="Pattern approved" noText="Pattern pending" />
-                    <CutBadge ok={fabricReady(w)} okText="Fabric ready" noText="Awaiting fabric" />
+                    <CutBadge ok={fabricAvailable(w)} okText="Fabric issued" noText="Awaiting fabric" />
                   </div>
                   {due && <div className={`text-[11px] mt-1 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
                   {w.status==='in_progress' && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>Cut</span><span>{cut}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
@@ -45948,7 +45973,7 @@ function App(){
         {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
-        {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
         {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
