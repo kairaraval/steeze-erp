@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 710 · Returned RFP is now a two-way conversation: the Inbox alert and Home banner open the exact RFP, which shows the admin's question as a thread where Purchasing can REPLY back (and admin can reply again). A '✎ Fix the linked PO' button jumps to the PO to edit it before re-submitting. Everyone gets notified on each reply.";
+const BUILD = "Live build 711 · PO print now shows a '↳ For:' line under each material — the client, project, and quantity it's being bought for — so you can verify at a glance which project each item is for before ordering. (Pulled from the linked PR/project; the material description itself is kept clean.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28356,11 +28356,14 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
               <tbody>
                 {(po.lines||[]).map((l,i) => (
                   <tr key={i}>
-                    <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500">{i+1}</td>
-                    <td className="border border-slate-400 px-2 py-1.5">{l.description||'—'}</td>
-                    <td className="border border-slate-400 px-2 py-1.5 text-right">{l.qty||0}</td>
-                    <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(l.unit_cost)}</td>
-                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold">{peso(Number(l.qty||0) * Number(l.unit_cost||0))}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500 align-top">{i+1}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 align-top">
+                      <div>{l.description||'—'}</div>
+                      {(l.client_name||l.project_title) && <div className="text-[8pt] text-slate-500 mt-0.5">↳ For: <strong className="text-slate-700">{l.client_name||'—'}</strong>{l.project_title?` · ${l.project_title}`:''}{l.qty?` · ${l.qty} ${l.unit||''}`.trimEnd():''}</div>}
+                    </td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right align-top">{l.qty||0}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right align-top">{peso(l.unit_cost)}</td>
+                    <td className="border border-slate-400 px-2 py-1.5 text-right font-semibold align-top">{peso(Number(l.qty||0) * Number(l.unit_cost||0))}</td>
                   </tr>
                 ))}
                 {/* Fill remaining rows with blanks so the table looks tidy
@@ -30202,10 +30205,9 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
 
       const lines = bucket.items.map(({ pr, lineIdx, line, lead })=>{
         const company = lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company||'') : '';
-        const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
         return {
           item_id: line.item_id || null,
-          description: line.description + forPart,
+          description: line.description,
           qty: Number(line.qty)||0,
           qty_received: 0,
           qty_issued: 0,
