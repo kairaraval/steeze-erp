@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 707 · On a Request for Payment you can now '↩ Return with question' to Purchasing (type the question in Notes) instead of only Approve/Reject. The RFP moves to a new 'Returned' status, Purchasing + the requester get notified, and after they fix it they re-submit for your approval. Returned RFPs are tracked as their own status in the RFP list + Purchasing home.";
+const BUILD = "Live build 708 · RFP 'Return with question' loop: Admin returns an RFP to Purchasing with a note; after Purchasing fixes it, re-submitting routes it back through FINANCE to re-verify the amount, then to Admin for final sign-off. Returned RFPs are tracked as their own status in the RFP list + Purchasing home, with notifications at each hop.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33796,16 +33796,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     }catch(_){}
     setBusy(false); onSaved();
   }
-  // Purchasing fixes a returned RFP and re-submits it back into the approval chain.
+  // Purchasing fixes a returned RFP and re-submits it. It routes back to Finance
+  // first to re-verify the amount, then Finance sends it on to Admin for sign-off.
   async function resubmitReturned(){
     if(!isPurchasing && !isAdmin){ setMsg('Only Purchasing can re-submit.'); return; }
-    if(!confirm('Re-submit this RFP for approval? It goes back to Admin for sign-off.')) return;
+    if(!confirm('Re-submit this RFP? It goes back to Finance to re-verify the amount, then to Admin for final approval.')) return;
     setBusy(true);
-    const { error } = await sb.from('rfps').update({ status:'pending_admin' }).eq('id', rfp.id);
+    const { error } = await sb.from('rfps').update({ status:'pending_finance', finance_approved_by:null, finance_approved_at:null }).eq('id', rfp.id);
     if(error){ setBusy(false); setMsg(error.message); return; }
     try{
-      const admins=(profiles||[]).filter(p=>p.role==='admin' && !p.deleted_at).map(p=>p.id).filter(id=>id!==profile.id);
-      if(admins.length) await sb.from('notifications').insert(admins.map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_resubmitted', text:`RFP ${rfp.number} fixed & re-submitted for your approval`, link_view:'approvals', ref_type:'rfp', ref_id:rfp.id })));
+      const fin=(profiles||[]).filter(p=>['accounting','accounting_officer'].includes(p.role) && !p.deleted_at).map(p=>p.id).filter(id=>id!==profile.id);
+      if(fin.length) await sb.from('notifications').insert(fin.map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_resubmitted', text:`RFP ${rfp.number} fixed & re-submitted — please re-verify the amount`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id })));
     }catch(_){}
     setBusy(false); onSaved();
   }
@@ -33964,7 +33965,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
             </>
           )}
           {status==='returned' && (isPurchasing||isAdmin) && (
-            <button onClick={resubmitReturned} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">✓ Fixed — re-submit for approval</button>
+            <button onClick={resubmitReturned} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50" title="Routes back to Finance to re-verify, then to Admin">✓ Fixed — re-submit (re-verify by Finance)</button>
           )}
           {(status==='approved'||status==='partial') && (isAccounting||isAdmin) && (
             <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 {rfp.status==='partial'?`Pay balance (${peso(rfpBalance(rfp))})`:'Create Voucher & Pay'}</button>
