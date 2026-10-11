@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 713 · In-House Cutting board redesigned: KPI strip (Active/To Do/In Progress/Done), board cards with Pattern-approved / Fabric-ready badges + cut-progress bar, and a right detail panel (pattern, tech pack, cut progress, size breakdown, fabric lay/marker, Log cutting output, Mark done). The Start/Pause timer + hours tracking is removed.";
+const BUILD = "Live build 714 · In-House Cutting board now hides Done jobs by default — the Done column is tucked away and a 'Show done (N)' checkbox reveals it when needed, keeping the board focused on active work.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10694,10 +10694,11 @@ function PatternFormModal({ pattern, prefill, profile, sizeCharts, onClose, onSa
 // of 'open' | 'in_progress' | 'done'; onMove(w, status) persists the change.
 const KANBAN_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
 function kbStatusOf(w){ return w.status==='done'?'done':w.status==='in_progress'?'in_progress':'open'; }
-function KanbanBoard({ items, onMove, renderCard, extraActions }){
+function KanbanBoard({ items, onMove, renderCard, extraActions, hideDone }){
+  const cols = hideDone ? KANBAN_COLS.filter(([k])=>k!=='done') : KANBAN_COLS;
   return (
     <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
-      {KANBAN_COLS.map(([key,label,color])=>{ const col=(items||[]).filter(w=>kbStatusOf(w)===key); return (
+      {cols.map(([key,label,color])=>{ const col=(items||[]).filter(w=>kbStatusOf(w)===key); return (
         <div key={key} className="flex-shrink-0 w-72 flex flex-col">
           <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
           <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
@@ -11497,6 +11498,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const [selId,setSelId]=useState(null);     // job selected for the right detail panel
+  const [showDone,setShowDone]=useState(false); // hide Done column unless toggled
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   // Order quantity for a cutting item — from its production job, else the lead's items.
   function qtyForWork(w){ const j=w.source_job_id?(prodJobs||[]).find(x=>x.id===w.source_job_id):null; if(j && Number(j.quantity)>0) return Number(j.quantity); const l=leadFor(w.lead_id); if(l) return (l.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0); return 0; }
@@ -11646,9 +11648,12 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
             <Kpi icon="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
             <Kpi icon="✓" label="Done" value={nDone} color="bg-emerald-100" />
           </div>
+          <div className="flex items-center justify-end">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
+          </div>
           <div className="flex gap-4 items-start">
             <div className="flex-1 min-w-0 space-y-3">
-              <KanbanBoard items={boardItems} onMove={moveStatus}
+              <KanbanBoard items={showDone?boardItems:boardItems.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
                 renderCard={(w)=>{ const lead=leadFor(w.lead_id); const qty=qtyForWork(w); const cut=Number(w.cut_qty||0); const pct=qty>0?Math.min(100,Math.round(cut/qty*100)):0; const due=workDue(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; return (<div className={isSel?'ring-2 ring-indigo-400 rounded-md -m-0.5 p-0.5':''}>
                   <button onClick={()=>setSelId(w.id)} className="text-left w-full">
                     <div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div>
