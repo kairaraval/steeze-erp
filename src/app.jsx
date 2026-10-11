@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 705 · HR NPA upgrades: (1) HR can 'Send for approval' and Admin 'Approve & sign' — the admin's e-signature prints on the NPA, with notifications both ways. (2) New employee movement now supports multiple employees / a whole department in one go (like NTE), auto-pulling each person's previous position, department, salary and NPA 'from' values.";
+const BUILD = "Live build 706 · NPAs sent for approval now land in the admin's 'For Approval' page (📄 section) where you can open the document and Approve & sign — not just a blind inbox notification. The inbox alert also links straight there, and the sidebar For Approval badge counts pending NPAs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17932,7 +17932,7 @@ function HRRelationsView({ profile, profiles, employees, hrCases, hrMovements, h
     if(error){ alert(error.message); return; }
     try{
       const admins=(profiles||[]).filter(p=>p.role==='admin' && !p.deleted_at);
-      if(admins.length){ await sb.from('notifications').insert(admins.map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'npa_approval', text:`NPA for approval: ${m.movement_type} — ${empName(m.employee_id)}`, link_view:'hr-relations', ref_type:'hr_movement', ref_id:m.id }))); }
+      if(admins.length){ await sb.from('notifications').insert(admins.map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'npa_approval', text:`NPA for approval: ${m.movement_type} — ${empName(m.employee_id)}`, link_view:'approvals', ref_type:'hr_movement', ref_id:m.id }))); }
     }catch(_){}
     reload();
   }
@@ -35334,11 +35334,29 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
-function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, costCenters, reload }){
+function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
   const [openMemo,setOpenMemo]=useState(null);
+  const [openMov,setOpenMov]=useState(null);
+  // NPAs (employee movements) HR sent for Admin approval + signature.
+  const pendingMovements = profile.role==='admin' ? (hrMovements||[]).filter(m=> m.status==='for_approval' && !m.deleted_at) : [];
+  const movEmpName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
+  async function approveMovement(m){
+    if(!profile?.signature_data){ if(!confirm("You don't have an e-signature on file yet. Approve without one? Set one up via My Profile to sign.")) return; }
+    const { error }=await sb.from('hr_movements').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',m.id);
+    if(error){ alert(error.message); return; }
+    try{ if(m.created_by && m.created_by!==profile.id){ await sb.from('notifications').insert({ recipient_id:m.created_by, actor_id:profile.id, type:'npa_approved', text:`NPA approved & signed: ${m.movement_type} — ${movEmpName(m.employee_id)}`, link_view:'hr-relations', ref_type:'hr_movement', ref_id:m.id }); } }catch(_){}
+    reload && reload();
+  }
+  async function returnMovement(m){
+    if(!confirm('Return this NPA to HR for checking? It goes back to Proposed.')) return;
+    const { error }=await sb.from('hr_movements').update({ status:'proposed' }).eq('id',m.id);
+    if(error){ alert(error.message); return; }
+    try{ if(m.created_by && m.created_by!==profile.id){ await sb.from('notifications').insert({ recipient_id:m.created_by, actor_id:profile.id, type:'npa_returned', text:`NPA returned for checking: ${m.movement_type} — ${movEmpName(m.employee_id)}`, link_view:'hr-relations', ref_type:'hr_movement', ref_id:m.id }); } }catch(_){}
+    reload && reload();
+  }
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment to verify (accounting/admin)
   const pendingMemos = (hrMemos||[]).filter(m => m.status==='pending');
   // Employee loans awaiting Admin approval → routes to Accounting for release.
@@ -35377,7 +35395,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   // (approved_at IS NULL). Cash / Check / Bank-Transfer all route here so
   // every disbursement goes through Admin sign-off.
   const pendingVouchers = (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at);
-  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length;
+  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length;
   // One-click FULL admin approval + signature. This advances the money-approval
   // (approval_status → 'approved'), posts the bank transaction for officer drafts
   // that haven't posted yet, and stamps the admin signature — so an approved
@@ -35440,6 +35458,30 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
                 <button onClick={()=>returnMemo(m)} className="text-xs px-2.5 py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200" title="Send back to HR for checking">↩ Return to HR</button>
                 <button onClick={()=>cancelMemo(m)} className="text-xs px-2.5 py-1 rounded bg-rose-50 text-rose-600 font-semibold hover:bg-rose-100" title="Cancel this memo">✕ Cancel</button>
                 <button onClick={()=>approveMemo(m)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✍️ Approve &amp; sign</button>
+              </div>
+            ); })}
+          </div>
+        </div>
+      )}
+
+      {/* NPAs (employee movements) awaiting Admin approval + signature */}
+      {pendingMovements.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-purple-50 border-b border-purple-200 flex items-center justify-between">
+            <div className="font-semibold text-purple-900">📄 Notice of Personnel Action (NPA) <span className="text-purple-600 font-normal text-xs ml-1">· {pendingMovements.length} pending</span></div>
+            <div className="text-xs text-purple-600">Open to review the document, then approve &amp; sign.</div>
+          </div>
+          <div className="divide-y">
+            {pendingMovements.map(m=>{ const mt=movTypeMeta(m.movement_type); const posChange=(m.previous_position||m.new_position)?`${m.previous_position||'—'} → ${m.new_position||'—'}`:''; const salChange=(m.previous_salary!=null||m.new_salary!=null)?`${m.previous_salary!=null?peso(m.previous_salary):'—'} → ${m.new_salary!=null?peso(m.new_salary):'—'}`:''; return (
+              <div key={m.id} className="px-4 py-2.5 flex items-center gap-3 flex-wrap hover:bg-purple-50/40">
+                <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${mt.color}`}>{m.movement_type}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{movEmpName(m.employee_id)}</div>
+                  <div className="text-[11px] text-slate-500">{posChange}{posChange&&salChange?' · ':''}{salChange} · Effective {m.effective_date?fmtDate(m.effective_date):'—'}</div>
+                </div>
+                <button onClick={()=>setOpenMov(m)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold">👁 View &amp; sign</button>
+                <button onClick={()=>returnMovement(m)} className="text-xs px-2.5 py-1 rounded bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200" title="Send back to HR">↩ Return to HR</button>
+                <button onClick={()=>approveMovement(m)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✍️ Approve &amp; sign</button>
               </div>
             ); })}
           </div>
@@ -35688,6 +35730,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
          giving Admin access to the Approve & Sign button + Print there too. */}
       {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} costCenters={costCenters} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
       {openMemo && <MemoViewModal memo={openMemo} profiles={profiles} onClose={()=>setOpenMemo(null)} />}
+      {openMov && <NPAPrintView movement={openMov} employees={employees} profiles={profiles} profile={profile} onClose={()=>setOpenMov(null)} />}
       {/* Payment verify modal — flips Pending → Verified, posts to bank, handles bank charges. */}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
@@ -45082,7 +45125,8 @@ function App(){
     + (budgetRequests||[]).filter(b=>b.status==='pending').length
     + (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at).length
     + (hrMemos||[]).filter(m => m.status==='pending').length
-    + (hrLoans||[]).filter(l => l.status==='pending_admin').length;
+    + (hrLoans||[]).filter(l => l.status==='pending_admin').length
+    + (profile?.role==='admin' ? (hrMovements||[]).filter(m => m.status==='for_approval' && !m.deleted_at).length : 0);
 
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
@@ -45710,7 +45754,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} costCenters={costCenters} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
