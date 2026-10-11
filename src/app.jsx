@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 714 · In-House Cutting board now hides Done jobs by default — the Done column is tucked away and a 'Show done (N)' checkbox reveals it when needed, keeping the board focused on active work.";
+const BUILD = "Live build 715 · In-House Cutting: every job card has an 'Open ▸' button and the detail panel has 'Open full details' — reopening the full pattern/fabric/sizes/notes view like before, so nothing is hidden.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11554,6 +11554,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
         <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">Cutting Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty>0?` · ${qty} pcs`:''}</div></div>
         <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded shrink-0 ${stat[1]}`}>{stat[0]}</span>
       </div>
+      <div className="px-4 pt-3"><button onClick={()=>setDetail(w)} className="w-full py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📂 Open full details</button></div>
       <div className="p-4 space-y-4 text-sm">
         <div className="space-y-1.5">
           <PRow label="Pattern" value={w.pattern_number||'—'} ok={patternApproved(w)} okText="Approved" />
@@ -11668,6 +11669,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                   <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                     {(w.status==='open'||!w.status) && <button onClick={()=>moveStatus(w,'in_progress')} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">▶ Start cutting</button>}
                     {w.status==='in_progress' && <button onClick={()=>logOutput(w)} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">🧾 Log output</button>}
+                    <button onClick={()=>setDetail(w)} className="text-[11px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open full details">Open ▸</button>
                     {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[11px] text-teal-700 hover:underline" title="Techpack">📋</button>}
                   </div>
                 </div>); }}
