@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 721 · Subli Pressing output is now easy to track: set a Target qty per project, tap '🔥 Log today's output' to add the day's pressed pieces, and the panel shows pieces-so-far, Balance left, and the daily output history. Progress/balance also shows on each board card.";
+const BUILD = "Live build 722 · Fixed the pressing Target qty field so it's truly per-project — switching jobs no longer carries over the previous target (it was an uncontrolled-input reuse bug). Set the target on each project independently.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12061,7 +12061,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
         <div className="rounded-lg border bg-slate-50 p-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-slate-600">Target qty</span>
-            <input type="number" defaultValue={w.target_qty!=null?w.target_qty:(workQty(w)||'')} onBlur={e=>setTarget(w,e.target.value)} className="w-24 text-sm text-right border rounded px-2 py-1" placeholder="0" />
+            <input key={w.id} type="number" defaultValue={w.target_qty!=null?w.target_qty:(workQty(w)||'')} onBlur={e=>setTarget(w,e.target.value)} className="w-24 text-sm text-right border rounded px-2 py-1" placeholder="0" />
           </div>
           <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-600">{showPress?'Pressed':'Output'} so far</span><span className="font-bold text-emerald-700">{val.toLocaleString()}</span></div>
           <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-600">Balance left</span><span className={`font-extrabold ${bal>0?'text-rose-600':'text-emerald-600'}`}>{bal.toLocaleString()}{tgt>0?` of ${tgt.toLocaleString()}`:''}</span></div>
