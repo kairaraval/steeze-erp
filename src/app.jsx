@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 718 · Pattern board now matches the In-House Cutting look: KPI strip (Active/To Do/In Progress/Done), board cards with Pattern-logged / Techpack-ready badges, a right detail panel (pattern, sizes, techpack, notes, actions), 'Show done' toggle, '+ Add to worklist' button up top, and the Start/Pause timer removed.";
+const BUILD = "Live build 719 · Fixed: tagging someone in a Pattern/Cutting job comment now opens the exact job's conversation when they click the inbox mention (before, it couldn't open). Works from both the inbox card and the 💬 Comments button, across the worklist boards.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -45473,8 +45473,13 @@ function App(){
       return;
     }
     if(m.source==='marketing'){ setView('marketing'); setInboxMarketingId(m.content_id||null); return; }
-    const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:prodJobs;
-    const j=list.find(x=>x.id===m.job_id); if(j) setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
+    // Any department / worklist comment-mention → open that job's activity thread
+    // (where the person was tagged), landing on the right board.
+    const deptLists={ graphic:graphicJobs, printing:printingJobs, sampling:sampleJobs, production:prodJobs, embroidery:embroideryJobs, knitting:knittingJobs, pattern:patternWorklist, cutting:cuttingWorklist };
+    const dview={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod', embroidery:'embroidery', knitting:'knitting', pattern:'pattern', cutting:'cutting' };
+    const j=(deptLists[m.source]||prodJobs||[]).find(x=>x.id===m.job_id) || { id:m.job_id, item:m.item||m.title||'', client_name:m.client_name||'' };
+    if(dview[m.source]) setView(dview[m.source]);
+    setDeptActivity({ job:j, jobType:m.source, title:`${j.item||m.title||''}${j.client_name?` · ${j.client_name}`:''}` });
   }
   // From the Inbox: main card click → opens the right context for the mention.
   //   • Lead mention      → Sales Pipeline lead detail (setDetailLead).
@@ -45518,6 +45523,14 @@ function App(){
     if(m.source==='sales_order'){
       const so = (salesOrders||[]).find(x => x.id === m.sales_order_id);
       if(so){ setView('sales-orders'); setInboxOpenSO(so); }
+      return;
+    }
+    // Pattern / Cutting worklist mentions → open that job's activity thread on
+    // its board (they aren't production_jobs, so the generic lookup below misses).
+    if(m.source==='pattern' || m.source==='cutting'){
+      const wl=(m.source==='pattern'?patternWorklist:cuttingWorklist)||[];
+      const w=wl.find(x=>x.id===m.job_id)||{ id:m.job_id, item:m.item||m.title||'', client_name:m.client_name||'' };
+      setView(m.source); setDeptActivity({ job:w, jobType:m.source, title:`${w.item||m.title||''}${w.client_name?` · ${w.client_name}`:''}` });
       return;
     }
     const list = m.source==='graphic'    ? graphicJobs
@@ -46191,7 +46204,7 @@ function App(){
       {sendGraphicLead && <SendToGraphicModal profile={profile} profiles={profiles} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
-      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
+      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod', embroidery:'embroidery', knitting:'knitting', pattern:'pattern', cutting:'cutting', sewing:'sewing', packing:'packing', qc:'qc' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
       {/* SO opened via deep-link / inbox click. Renders the full SO modal
          (which has its own Activity tab built in). */}
       {inboxOpenSO && <SalesOrderEditModal so={(salesOrders||[]).find(s=>s.id===inboxOpenSO.id)||inboxOpenSO} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===inboxOpenSO.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setInboxOpenSO(null)} onSaved={()=>{ setInboxOpenSO(null); loadAll(); }} onPay={()=>{}} onVerifyPayment={()=>{}} onOpenLead={(l)=>{ setInboxOpenSO(null); setDetailLead(l); }} />}
