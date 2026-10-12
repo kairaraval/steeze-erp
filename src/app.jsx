@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 719 · Fixed: tagging someone in a Pattern/Cutting job comment now opens the exact job's conversation when they click the inbox mention (before, it couldn't open). Works from both the inbox card and the 💬 Comments button, across the worklist boards.";
+const BUILD = "Live build 720 · Subli Pressing (and the sibling process boards: DTF Pressing, Trad/Subli Sorting) now use the In-House Cutting layout: KPI strip, board cards with progress, a right detail panel, 'Show done' toggle, '+ Add task' button up top, and the Start/Pause timer removed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11970,6 +11970,8 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   useEffect(()=>{ loadPressLogs(); },[process, tab]);
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);
+  const [selId,setSelId]=useState(null);         // job selected for the right detail panel
+  const [showDone,setShowDone]=useState(false);  // hide Done column unless toggled
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
   const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
@@ -12016,7 +12018,41 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   const pressCol=(key)=> (key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done')).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
+  async function addAdhocPrompt(){ const t=(prompt(`New ad-hoc ${title} task:`)||'').trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); load(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
+  // ── Board helpers (mirrors the In-House Cutting board) ──
+  const selected=rows.find(w=>w.id===selId)||null;
+  const progOf=(w)=> showPress ? (pressedByWork[w.id]||0) : Number(w.qty_done||0);
+  const PgBadge=({ok,okText,noText})=> <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ok?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{ok?('✓ '+okText):('◷ '+noText)}</span>;
+  function PgRow({label,value,action,actionText}){ return (<div className="flex items-center gap-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold w-24 shrink-0">{label}</span><span className="font-medium text-slate-800 flex-1 min-w-0 truncate">{value}</span>{action && <button onClick={action} className="text-[11px] text-indigo-600 font-semibold hover:underline shrink-0">{actionText} ↗</button>}</div>); }
+  function renderPanel(w){
+    if(!w) return <div className="bg-white border rounded-xl p-8 text-sm text-slate-400 text-center">Select a job on the left to see its details.</div>;
+    const lead=leadFor(w.lead_id); const qty=workQty(w); const val=progOf(w); const pct=qty>0?Math.min(100,Math.round(val/qty*100)):0;
+    const stat = w.status==='done'?['Done','bg-emerald-100 text-emerald-700']: w.status==='in_progress'?['In progress','bg-amber-100 text-amber-700']:['To do','bg-slate-100 text-slate-600'];
+    return (<div className="bg-white border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b flex items-start justify-between gap-2">
+        <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">{title} Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div></div>
+        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded shrink-0 ${stat[1]}`}>{stat[0]}</span>
+      </div>
+      <div className="p-4 space-y-4 text-sm">
+        <div className="space-y-1.5">
+          <PgRow label="Tech pack" value={lead?.techpack?'Attached':'—'} action={lead&&lead.techpack&&openTechpack?()=>openTechpack(lead):null} actionText="View" />
+          <PgRow label="Due" value={workDue(w)?fmtDate(workDue(w)):'—'} />
+          <PgRow label="Started" value={w.start_date?fmtDate(w.start_date):'—'} />
+          {w.reject_count? <PgRow label="Rejects" value={`${w.reject_count}`} /> : null}
+        </div>
+        {(qty!=null || val>0) && <div>
+          <div className="flex items-center justify-between text-xs mb-1"><span className="font-semibold text-slate-600">{showPress?'Pressed':'Output'} progress</span><span className="text-slate-500">{val} of {qty||'—'} · {pct}%</span></div>
+          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div>
+        </div>}
+        {w.notes && <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-900">📝 {w.notes}</div>}
+        <div className="flex gap-2 pt-1">
+          <button onClick={()=>setDetail(w)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">{showPress?'🔥 Log output':'📂 Open report'}</button>
+          {w.status!=='done' ? <button onClick={()=>markDone(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">✓ Mark done</button> : <button onClick={()=>reopenItem(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">↺ Reopen</button>}
+        </div>
+      </div>
+    </div>);
+  }
 
   const worklistRow=(w,idx)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); return (
     <div key={w.id} className="border-t px-3 py-2.5">
@@ -12053,9 +12089,12 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
-        <div>
-          <h1 className="text-2xl font-bold">{icon} {title}</h1>
-          <p className="text-slate-500 text-sm">{open.length} to do · {done.length} done · items appear here when a Production job hits the “{title}” stage.</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold">{icon} {title}</h1>
+            <p className="text-slate-500 text-sm">{open.length} to do · {done.length} done · items appear here when a Production job hits the “{title}” stage.</p>
+          </div>
+          <button onClick={addAdhocPrompt} className="px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ Add task</button>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({rows.length})</button>
@@ -12064,45 +12103,58 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
         </div>
       </div>
 
-      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='worklist' ? (
-        <div className="space-y-3">
-          <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
-            {PRESS_COLS.map(([key,label,color])=>{ const col=pressCol(key); return (
-              <div key={key} className="flex-shrink-0 w-72 flex flex-col">
-                <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
-                <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
-                  {col.map(w=>{ const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const pressed=pressedByWork[w.id]||0; const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (
-                    <div key={w.id} className="bg-white border rounded-lg shadow-sm p-2.5">
-                      <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
-                      <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||w.title||'—'}</div></button>
-                      <div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
-                      {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
-                      <div className="flex flex-wrap items-center gap-1 mt-1">
-                        {showPress && pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
-                        {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
-                      </div>
-                      <div className="mt-2 flex items-center gap-1">
-                        <select value={w.status==='in_progress'?'in_progress':w.status==='done'?'done':'open'} onChange={e=>moveStatus(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
-                        <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open report">{showPress?'🔥 Log':'Open ▸'}</button>
-                        <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
-                      </div>
-                      <StartFinishBar row={w} table="process_worklist" reload={load} />
-                    </div>
-                  ); })}
-                  {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
-                </div>
-              </div>
-            ); })}
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : tab==='worklist' ? (()=>{
+        const nActive=rows.filter(w=>w.status!=='done').length;
+        const nTodo=rows.filter(w=>w.status!=='done'&&w.status!=='in_progress').length;
+        const nProg=rows.filter(w=>w.status==='in_progress').length;
+        const nDone=done.length;
+        const Kpi=({ic,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
+        const cols = showDone ? PRESS_COLS : PRESS_COLS.filter(([k])=>k!=='done');
+        return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Kpi ic="📄" label="Active Jobs" value={nActive} color="bg-blue-100" />
+            <Kpi ic="📋" label="To Do" value={nTodo} color="bg-slate-100" />
+            <Kpi ic="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
+            <Kpi ic="✓" label="Done" value={nDone} color="bg-emerald-100" />
           </div>
-          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
-            <div className="p-2 flex gap-1.5">
-              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder={`Add something to ${title.toLowerCase()}…`} className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+          <div className="flex items-center justify-end">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
+          </div>
+          <div className="flex gap-4 items-start">
+            <div className="flex-1 min-w-0">
+              <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
+                {cols.map(([key,label,color])=>{ const col=pressCol(key); return (
+                  <div key={key} className="flex-shrink-0 w-72 flex flex-col">
+                    <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
+                    <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
+                      {col.map(w=>{ const lead=leadFor(w.lead_id); const pressed=pressedByWork[w.id]||0; const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; const val=progOf(w); const pct=qty>0?Math.min(100,Math.round(val/qty*100)):0; return (
+                        <div key={w.id} className={`bg-white border rounded-lg shadow-sm p-2.5 ${isSel?'ring-2 ring-indigo-400':''}`}>
+                          <button onClick={()=>setSelId(w.id)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div></button>
+                          <div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+                          {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
+                          {w.status==='in_progress' && (qty!=null||val>0) && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{showPress?'Pressed':'Done'}</span><span>{val}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
+                          <div className="flex flex-wrap items-center gap-1 mt-1">
+                            {showPress && pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
+                            {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋</button>}
+                          </div>
+                          <div className="mt-2 flex items-center gap-1">
+                            <select value={w.status==='in_progress'?'in_progress':w.status==='done'?'done':'open'} onChange={e=>moveStatus(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
+                            <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open report">{showPress?'🔥 Log':'Open ▸'}</button>
+                            <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
+                          </div>
+                        </div>
+                      ); })}
+                      {col.length===0 && <div className="text-[10px] text-center text-slate-400 py-3">—</div>}
+                    </div>
+                  </div>
+                ); })}
+              </div>
             </div>
+            <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
           </div>
         </div>
-      ) : tab==='released' ? (
+        ); })() : tab==='released' ? (
         <div className="bg-white border rounded-xl overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm flex items-center justify-between"><span>📦 Released batches — everything sent out to subcon / in-house sewing</span><span className="text-xs text-slate-400 font-normal">{batches.length} batch{batches.length===1?'':'es'}</span></div>
           {batches.length===0 ? <div className="px-4 py-8 text-center text-slate-400 text-sm">No batches released yet. Open a project's Report and add a “batch out”.</div> : (
