@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 716 · Fabric availability now links Purchasing → Cutting: when Purchasing stock-outs fabric/blocks to a job, the Cutting board shows '✓ Fabric issued' on that card (and the detail panel shows when it was issued), and the Cutting team gets a notification that the fabric is ready to cut.";
+const BUILD = "Live build 717 · In-House Cutting: '+ Add Cutting Job' button moved to the top-right header for easy access (ad-hoc items), replacing the inline box at the bottom of the board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11547,6 +11547,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   const boardItems=(cuttingWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
+  async function addAdhocPrompt(){ const t=(prompt('New ad-hoc cutting job — what are we cutting?')||'').trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); reload(); }
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
   // ── Cutting board helpers (new look) ──
   const selected=(cuttingWorklist||[]).find(w=>w.id===selId)||null;
@@ -11645,9 +11646,12 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
-        <div>
-          <h1 className="text-2xl font-bold">🔪 In House Cutting</h1>
-          <p className="text-slate-500 text-sm">{open.length} to cut · {done.length} done</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold">🔪 In House Cutting</h1>
+            <p className="text-slate-500 text-sm">{open.length} to cut · {done.length} done</p>
+          </div>
+          <button onClick={addAdhocPrompt} className="px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ Add Cutting Job</button>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
@@ -11699,13 +11703,6 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                   </div>
                 </div>); }}
                 extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
-              <div className="bg-white border rounded-xl overflow-hidden max-w-md">
-                <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
-                <div className="p-2 flex gap-1.5">
-                  <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add something to cut…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-                  <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
-                </div>
-              </div>
             </div>
             <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
           </div>
