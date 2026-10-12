@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 722 · Fixed the pressing Target qty field so it's truly per-project — switching jobs no longer carries over the previous target (it was an uncontrolled-input reuse bug). Set the target on each project independently.";
+const BUILD = "Live build 723 · New role: Purchasing Personnel — same access as Jay-Ann's Purchasing Admin role (Purchase Requests, POs, Stock Out, Materials Library, etc.) but WITHOUT Subcon Payroll / Subcon Sewing. Assign it to the new purchasing hire.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3563,7 +3563,7 @@ const SALES_RES_TABS = [
 function salesResCanEdit(category, profile){
   const r = profile?.role;
   if(category === 'pricelist') return r === 'admin';
-  if(category === 'swatches') return r === 'admin' || isManagerRole(r) || r === 'assistant' || r === 'sales_representative' || r === 'purchasing' || r === 'purchasing_admin';
+  if(category === 'swatches') return r === 'admin' || isManagerRole(r) || r === 'assistant' || r === 'sales_representative' || r === 'purchasing' || r === 'purchasing_admin' || r === 'purchasing_personnel';
   return r === 'admin' || isManagerRole(r) || r === 'assistant';
 }
 // Preset folders per tab (Size Charts + Designs). Others have no folders.
@@ -4323,7 +4323,7 @@ const PUR_RES_TABS = [
 const PUR_RES_FOLDERS = { pricelist: ['Fabrics','Trims'] };
 function purFoldersFor(category){ return PUR_RES_FOLDERS[category] || []; }
 // Admin + Purchasing team can add/edit; everyone else who can see it is read-only.
-function purResCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='purchasing' || r==='purchasing_admin'; }
+function purResCanEdit(profile){ const r=profile?.role; return r==='admin' || r==='purchasing' || r==='purchasing_admin' || r==='purchasing_personnel'; }
 
 // A structured pricelist row (material name / supplier / unit / unit price),
 // filed under a Fabrics or Trims folder.
@@ -4422,7 +4422,7 @@ function PurchasingResourceForm({ profile, category, existing, onClose, onSaved 
 // holding its identity + specs (independent of live stock). Purchasing maintains
 // the cards; Sales uses it as a picker/reference when quoting and building
 // techpacks. Editable by purchasing/managers/admin; read-only for everyone else.
-function matLibCanEdit(profile){ return ['admin','purchasing','purchasing_admin'].includes(profile?.role); }
+function matLibCanEdit(profile){ return ['admin','purchasing','purchasing_admin','purchasing_personnel'].includes(profile?.role); }
 // Multi-photo swatch editor — one photo per colour so everyone can see the
 // actual colours a fabric/trim comes in.
 function MatLibSwatchesEditor({ value, onChange }){
@@ -4969,7 +4969,7 @@ function FabricCalculatorView({ profile }){
   const [rollYards,setRollYards]=useState('');
   const [search,setSearch]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const canEdit = ['admin','purchasing','purchasing_admin','production','production_supervisor','production_assistant','pattern_maker','cutting_dept'].includes(profile?.role);
+  const canEdit = ['admin','purchasing','purchasing_admin','purchasing_personnel','production','production_supervisor','production_assistant','pattern_maker','cutting_dept'].includes(profile?.role);
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   async function load(){ const { data }=await sb.from('fabric_specs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setSaved(data||[]); }
   async function loadFabrics(){ try{ const { data }=await sb.from('items').select('name').eq('bucket','fabrics').limit(1000); setFabrics([...new Set((data||[]).map(x=>x.name).filter(Boolean))]); }catch(_){} }
@@ -6677,7 +6677,7 @@ const CHECKIN_DEPTS = [
   { key:'sewing',      label:'Sewing',                 roles:['sewing_lead'] },
   { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
   { key:'packing',     label:'Packing',                roles:['packing_head'] },
-  { key:'purchasing',  label:'Purchasing',             roles:['purchasing_admin','purchasing'] },
+  { key:'purchasing',  label:'Purchasing',             roles:['purchasing_admin','purchasing_personnel','purchasing'] },
   { key:'sales',       label:'Sales',                  roles:['manager','sales_representative','assistant'] },
   { key:'hr',          label:'HR / People',            roles:['hr'] },
   { key:'accounting',  label:'Accounting',             roles:['accounting','accounting_officer'] },
@@ -8771,7 +8771,7 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
   const [sizes,setSizes]=useState([]); const [addingSize,setAddingSize]=useState(false);
   const [newSize,setNewSize]=useState({ name:'', w:'', l:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const canEditSizes=['admin','purchasing','purchasing_admin','production_supervisor'].includes(profile?.role);
+  const canEditSizes=['admin','purchasing','purchasing_admin','purchasing_personnel','production_supervisor'].includes(profile?.role);
   async function loadSizes(){ try{ const { data }=await sb.from('block_sizes').select('*').eq('active',true).order('name'); setSizes(data||[]); }catch(_){ setSizes([]); } }
   useEffect(()=>{ loadSizes(); },[]);
   // Source = rolls/fabric only (you cut fabric into blocks).
@@ -8863,7 +8863,7 @@ function ConvertStockModal({ profile, items, onClose, onSaved }){
    this view is for review ("did everything land correctly today?").
 */
 function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockMovements, requests, leads, clients, sampleJobs, reload }){
-  const canReverse = ['admin','purchasing','purchasing_admin','accounting','accounting_officer'].includes(profile?.role);
+  const canReverse = ['admin','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer'].includes(profile?.role);
   async function reverseMovement(s){
     if(String(s.reason||'').startsWith('↩')){ alert('This is already a reversal entry.'); return; }
     if(!confirm(`Reverse this ${s.type==='in'?'STOCK-IN':'STOCK-OUT'} of ${Number(s.qty||0).toFixed(2)} ${s._item?.unit||''} · ${s._item?.name||'item'}?\n\nA counter-entry is posted and on-hand is corrected. Nothing is deleted.`)) return;
@@ -23049,6 +23049,7 @@ function roleLabel(r){
          r==='production_assistant'   ? 'Production Assistant' :
          r==='purchasing'             ? 'Purchasing Team' :
          r==='purchasing_admin'       ? 'Purchasing Admin' :
+         r==='purchasing_personnel'   ? 'Purchasing Personnel' :
          r==='accounting'             ? 'Accounting Supervisor' :
          r==='accounting_officer'     ? 'Accounting Officer' :
          r==='pattern_maker'          ? 'Pattern Maker' :
@@ -23080,6 +23081,7 @@ function RoleBadge({ role }){
     role==='production_assistant'   ? 'bg-emerald-50 text-emerald-600' :
     role==='purchasing'             ? 'bg-violet-100 text-violet-700' :
     role==='purchasing_admin'       ? 'bg-violet-200 text-violet-800' :
+    role==='purchasing_personnel'   ? 'bg-violet-50 text-violet-600' :
     role==='accounting'             ? 'bg-sky-100 text-sky-700' :
     role==='accounting_officer'     ? 'bg-sky-50 text-sky-600' :
     role==='pattern_maker'          ? 'bg-lime-100 text-lime-700' :
@@ -23373,6 +23375,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'printing',    label:'Printing',      count:profiles.filter(p=>p.role==='printing').length },
     { key:'purchasing',  label:'Purchasing',    count:profiles.filter(p=>p.role==='purchasing').length },
     { key:'purchasing_admin', label:'Purchasing Admin', count:profiles.filter(p=>p.role==='purchasing_admin').length },
+    { key:'purchasing_personnel', label:'Purchasing Personnel', count:profiles.filter(p=>p.role==='purchasing_personnel').length },
     { key:'accounting',  label:'Acct. Supervisor', count:profiles.filter(p=>p.role==='accounting').length },
     { key:'accounting_officer', label:'Acct. Officer', count:profiles.filter(p=>p.role==='accounting_officer').length },
     { key:'pattern_maker', label:'Pattern Maker', count:profiles.filter(p=>p.role==='pattern_maker').length },
@@ -23394,7 +23397,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
+  const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -23452,6 +23455,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="printing">Printing Team</option>
               <option value="purchasing">Purchasing Team</option>
               <option value="purchasing_admin">Purchasing Admin</option>
+              <option value="purchasing_personnel">Purchasing Personnel</option>
               <option value="accounting">Accounting Supervisor</option>
               <option value="accounting_officer">Accounting Officer</option>
               <option value="sewing_lead">Sewing Line Lead</option>
@@ -23564,6 +23568,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="printing">Printing Team</option>
                   <option value="purchasing">Purchasing Team</option>
                   <option value="purchasing_admin">Purchasing Admin</option>
+                  <option value="purchasing_personnel">Purchasing Personnel</option>
                   <option value="accounting">Accounting Supervisor</option>
                   <option value="accounting_officer">Accounting Officer</option>
                   <option value="sewing_lead">Sewing Line Lead</option>
@@ -28086,7 +28091,7 @@ function SuppliersView({ profile, suppliers, orders, bankAccounts, onOpen, reloa
   // Two separate lists in one table: Purchasing sees Material suppliers only,
   // Accounting sees Expense payees only, Admin can toggle between them.
   const role=profile?.role;
-  const isPurchasing=['purchasing','purchasing_admin'].includes(role);
+  const isPurchasing=['purchasing','purchasing_admin','purchasing_personnel'].includes(role);
   const isAccounting=['accounting','accounting_officer'].includes(role);
   const fixedKind = isPurchasing?'materials':isAccounting?'expense':null; // null = admin (sees a toggle)
   const [kindFilter,setKindFilter]=useState(fixedKind||'materials');
@@ -29704,12 +29709,12 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   // CANCEL a PR instead — that keeps the record, just marks it cancelled.
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
-  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
-  const myLane = profile.role==='purchasing_admin' ? 'ready' : (profile.role==='purchasing' ? 'review' : null);
+  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
+  const myLane = (profile.role==='purchasing_admin' || profile.role==='purchasing_personnel') ? 'ready' : (profile.role==='purchasing' ? 'review' : null);
   async function approveAndHandoff(pr){
     const { error } = await sb.from('purchase_requests').update({ status:'approved' }).eq('id', pr.id);
     if(error){ alert(error.message); return; }
-    try{ const { data:admins }=await sb.from('profiles').select('id').eq('role','purchasing_admin'); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`✅ PR ${pr.number||''} approved — ready for PO processing.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    try{ const { data:admins }=await sb.from('profiles').select('id').in('role',['purchasing_admin','purchasing_personnel']); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`✅ PR ${pr.number||''} approved — ready for PO processing.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
     reload();
   }
   const canDelete = isAdmin;
@@ -29888,7 +29893,7 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
       if(error) throw error;
       // Notify the Purchasing team in their inbox.
       try {
-        const { data:purchasers }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin']);
+        const { data:purchasers }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel']);
         const mentionIds=(purchasers||[]).map(p=>p.id).filter(id=>id!==profile.id);
         if(mentionIds.length){
           await sb.from('pr_activity').insert({ pr_id: prRow?.id||null, actor_id: profile.id, type:'system',
@@ -30004,7 +30009,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   const [addingItemForLine, setAddingItemForLine] = useState(null);
   const isEdit=!!existing;
   const isAdmin=profile.role==='admin';
-  const isPurchasing=profile.role==='purchasing' || profile.role==='purchasing_admin';
+  const isPurchasing=profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   // Purchasing owns the PR review queue — they're the ones who decide what to
   // buy and when, so they can approve / reject PRs the same as admin.
   const canApprove = isAdmin || isPurchasing;
@@ -30379,7 +30384,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
   const isAdmin = profile.role === 'admin';
-  const canDelete = isAdmin || profile.role==='purchasing_admin';
+  const canDelete = isAdmin || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   // Stock reservations so we can tell which lines are already covered on-hand.
   const reservations = useMemo(()=>computeStockReservations(requests||[], orders||[]), [requests, orders]);
   // Admin-only: remove a single line from a PR right inside the Materials
@@ -30643,7 +30648,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
   // Delete (soft-delete) is ADMIN-ONLY. Purchasing / Purchasing Admin can CANCEL
   // a PO instead — keeps the record, just marks it Cancelled.
   const isAdmin = profile.role === 'admin';
-  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
+  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   const canDelete = isAdmin;
   const canCancel = isAdmin || isPurchasing;
   async function cancelPO(po){
@@ -34002,7 +34007,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:(code||'—'); };
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
-  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin';
+  const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   const po = orders.find(o=>o.id===rfp.po_id);
   const poAtts = po && Array.isArray(po.attachments) ? po.attachments : [];
   const poLines = po && Array.isArray(po.lines) ? po.lines : [];
@@ -34095,7 +34100,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     try{
       const recips=new Set();
       if(rfp.requested_by) recips.add(rfp.requested_by);
-      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
+      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin','purchasing_personnel'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
       recips.delete(profile.id);
       const rows=[...recips].map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_returned', text:`RFP ${rfp.number} returned with a question — please review & re-submit`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }));
       if(rows.length) await sb.from('notifications').insert(rows);
@@ -34131,7 +34136,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       const recips=new Set();
       if(rfp.returned_by) recips.add(rfp.returned_by);
       if(rfp.requested_by) recips.add(rfp.requested_by);
-      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
+      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin','purchasing_personnel'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
       recips.delete(profile.id);
       const rows=[...recips].map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_reply', text:`Reply on RFP ${rfp.number}: ${reply.trim().slice(0,80)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }));
       if(rows.length) await sb.from('notifications').insert(rows);
@@ -45126,6 +45131,10 @@ function App(){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
       allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
       fallback = 'pur-home';
+    } else if(profile.role==='purchasing_personnel'){
+      // Purchasing Personnel — same access as Purchasing Admin but WITHOUT Subcon Payroll.
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
+      fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
@@ -45348,7 +45357,7 @@ function App(){
   // purchasing + admin + accounting roles.
   useEffect(()=>{
     if(!profile) return;
-    const isPurchasingTeam = ['purchasing','purchasing_admin','admin','accounting'].includes(profile.role);
+    const isPurchasingTeam = ['purchasing','purchasing_admin','purchasing_personnel','admin','accounting'].includes(profile.role);
     if(!isPurchasingTeam) return;
     const ch = sb.channel('pr-watch-purchasing')
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'purchase_requests' }, (p)=>{
@@ -45531,7 +45540,7 @@ function App(){
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){
-      const purch=['purchasing','purchasing_admin','admin'].includes(profile.role);
+      const purch=['purchasing','purchasing_admin','purchasing_personnel','admin'].includes(profile.role);
       if(purch){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
       // Non-purchasing (e.g. Sales): land on the linked lead's conversation —
       // that's the context the mention belongs to, not the manual PR intake form.
@@ -45579,7 +45588,7 @@ function App(){
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){
-      const purch=['purchasing','purchasing_admin','admin'].includes(profile.role);
+      const purch=['purchasing','purchasing_admin','purchasing_personnel','admin'].includes(profile.role);
       if(purch){ setView('requests'); setInboxPRId(m.pr_id||null); return; }
       // Non-purchasing (e.g. Sales): open the linked lead detail instead of the
       // PR intake form, so Clara lands on the actual lead she was tagged about.
@@ -45647,6 +45656,7 @@ function App(){
   const isProduction=profile.role==='production';
   const isPurchasing=profile.role==='purchasing';
   const isPurchasingAdmin=profile.role==='purchasing_admin';
+  const isPurchasingPersonnel=profile.role==='purchasing_personnel';
   const isAccounting=profile.role==='accounting';
   const isAccountingOfficer=profile.role==='accounting_officer';
   const isManager=isManagerRole(profile.role);
@@ -45853,6 +45863,17 @@ function App(){
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      FINANCE_PURCHASING,
+      LOGISTICS_GROUP,
+      PERSONAL_GROUP,
+    ];
+  } else if(isPurchasingPersonnel){
+    // Purchasing Personnel — same nav as Purchasing Admin but WITHOUT Subcon Payroll.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
