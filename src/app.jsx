@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 720 · Subli Pressing (and the sibling process boards: DTF Pressing, Trad/Subli Sorting) now use the In-House Cutting layout: KPI strip, board cards with progress, a right detail panel, 'Show done' toggle, '+ Add task' button up top, and the Start/Pause timer removed.";
+const BUILD = "Live build 721 · Subli Pressing output is now easy to track: set a Target qty per project, tap '🔥 Log today's output' to add the day's pressed pieces, and the panel shows pieces-so-far, Balance left, and the daily output history. Progress/balance also shows on each board card.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12023,15 +12023,31 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   // ── Board helpers (mirrors the In-House Cutting board) ──
   const selected=rows.find(w=>w.id===selId)||null;
   const progOf=(w)=> showPress ? (pressedByWork[w.id]||0) : Number(w.qty_done||0);
+  // Target = what the head sets per project (target_qty), else the order qty.
+  const targetOf=(w)=> (w.target_qty!=null && w.target_qty!=='') ? Number(w.target_qty) : (workQty(w)||0);
+  const balanceOf=(w)=> Math.max(0, targetOf(w) - progOf(w));
+  async function setTarget(w, val){ const n=(val===''||val==null)?null:Number(val); if(n===(w.target_qty==null?null:Number(w.target_qty))) return; const { error }=await sb.from('process_worklist').update({ target_qty:n }).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
+  // One-tap daily output log — asks only for today's pressed pcs and records it
+  // as a per-day entry. The balance updates automatically.
+  async function quickLog(w){
+    const tgt=targetOf(w); const bal=balanceOf(w);
+    const val=prompt(`How many pressed TODAY for "${w.item||w.title||''}"?${tgt?`  (balance left: ${bal} of ${tgt})`:''}`, '');
+    if(val===null) return; const n=Number(val)||0; if(n<=0) return;
+    const { error }=await sb.from('process_output_logs').insert({ process, worklist_id:w.id, lead_id:w.lead_id||null, item:w.item||null, client_name:w.client_name||null, log_date:todayManila(), qty_done:n, created_by:profile.id });
+    if(error){ alert(error.message); return; }
+    if((w.status==='open'||!w.status)){ await sb.from('process_worklist').update({ status:'in_progress', start_date:w.start_date||todayManila() }).eq('id',w.id); }
+    loadPressLogs(); load();
+  }
   const PgBadge=({ok,okText,noText})=> <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ok?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{ok?('✓ '+okText):('◷ '+noText)}</span>;
   function PgRow({label,value,action,actionText}){ return (<div className="flex items-center gap-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold w-24 shrink-0">{label}</span><span className="font-medium text-slate-800 flex-1 min-w-0 truncate">{value}</span>{action && <button onClick={action} className="text-[11px] text-indigo-600 font-semibold hover:underline shrink-0">{actionText} ↗</button>}</div>); }
   function renderPanel(w){
     if(!w) return <div className="bg-white border rounded-xl p-8 text-sm text-slate-400 text-center">Select a job on the left to see its details.</div>;
-    const lead=leadFor(w.lead_id); const qty=workQty(w); const val=progOf(w); const pct=qty>0?Math.min(100,Math.round(val/qty*100)):0;
+    const lead=leadFor(w.lead_id); const tgt=targetOf(w); const val=progOf(w); const bal=balanceOf(w); const pct=tgt>0?Math.min(100,Math.round(val/tgt*100)):0;
+    const myLogs=(pressLogs||[]).filter(l=>l.worklist_id===w.id).slice(0,6);
     const stat = w.status==='done'?['Done','bg-emerald-100 text-emerald-700']: w.status==='in_progress'?['In progress','bg-amber-100 text-amber-700']:['To do','bg-slate-100 text-slate-600'];
     return (<div className="bg-white border rounded-xl overflow-hidden">
       <div className="px-4 py-3 border-b flex items-start justify-between gap-2">
-        <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">{title} Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div></div>
+        <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">{title} Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}</div></div>
         <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded shrink-0 ${stat[1]}`}>{stat[0]}</span>
       </div>
       <div className="p-4 space-y-4 text-sm">
@@ -12041,15 +12057,27 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
           <PgRow label="Started" value={w.start_date?fmtDate(w.start_date):'—'} />
           {w.reject_count? <PgRow label="Rejects" value={`${w.reject_count}`} /> : null}
         </div>
-        {(qty!=null || val>0) && <div>
-          <div className="flex items-center justify-between text-xs mb-1"><span className="font-semibold text-slate-600">{showPress?'Pressed':'Output'} progress</span><span className="text-slate-500">{val} of {qty||'—'} · {pct}%</span></div>
-          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div>
+        {/* Target (editable) + balance */}
+        <div className="rounded-lg border bg-slate-50 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-600">Target qty</span>
+            <input type="number" defaultValue={w.target_qty!=null?w.target_qty:(workQty(w)||'')} onBlur={e=>setTarget(w,e.target.value)} className="w-24 text-sm text-right border rounded px-2 py-1" placeholder="0" />
+          </div>
+          <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-600">{showPress?'Pressed':'Output'} so far</span><span className="font-bold text-emerald-700">{val.toLocaleString()}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-600">Balance left</span><span className={`font-extrabold ${bal>0?'text-rose-600':'text-emerald-600'}`}>{bal.toLocaleString()}{tgt>0?` of ${tgt.toLocaleString()}`:''}</span></div>
+          <div className="h-2.5 bg-white border rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div>
+        </div>
+        {/* Daily output log */}
+        {myLogs.length>0 && <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">Daily output</div>
+          <div className="space-y-0.5 max-h-40 overflow-auto">{myLogs.map(l=>(<div key={l.id} className="flex items-center justify-between text-xs border-b last:border-0 py-0.5"><span className="text-slate-500">{fmtDate(l.log_date)}</span><span className="font-semibold">{Number(l.qty_done||0).toLocaleString()} pcs</span></div>))}</div>
         </div>}
         {w.notes && <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-900">📝 {w.notes}</div>}
         <div className="flex gap-2 pt-1">
-          <button onClick={()=>setDetail(w)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">{showPress?'🔥 Log output':'📂 Open report'}</button>
-          {w.status!=='done' ? <button onClick={()=>markDone(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">✓ Mark done</button> : <button onClick={()=>reopenItem(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">↺ Reopen</button>}
+          <button onClick={()=>quickLog(w)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🔥 Log today's output</button>
+          {w.status!=='done' ? <button onClick={()=>markDone(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">✓ Done</button> : <button onClick={()=>reopenItem(w)} className="px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">↺ Reopen</button>}
         </div>
+        <button onClick={()=>setDetail(w)} className="w-full text-[11px] text-indigo-600 font-semibold hover:underline">Open full report (machine, operators, rejects) ↗</button>
       </div>
     </div>);
   }
@@ -12128,19 +12156,18 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
                   <div key={key} className="flex-shrink-0 w-72 flex flex-col">
                     <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${color}`}>{label} <span className="opacity-70">({col.length})</span></div>
                     <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
-                      {col.map(w=>{ const lead=leadFor(w.lead_id); const pressed=pressedByWork[w.id]||0; const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; const val=progOf(w); const pct=qty>0?Math.min(100,Math.round(val/qty*100)):0; return (
+                      {col.map(w=>{ const lead=leadFor(w.lead_id); const pressed=pressedByWork[w.id]||0; const due=workDue(w); const tgt=targetOf(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; const val=progOf(w); const bal=balanceOf(w); const pct=tgt>0?Math.min(100,Math.round(val/tgt*100)):0; return (
                         <div key={w.id} className={`bg-white border rounded-lg shadow-sm p-2.5 ${isSel?'ring-2 ring-indigo-400':''}`}>
                           <button onClick={()=>setSelId(w.id)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div></button>
-                          <div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+                          <div className="text-xs text-slate-500 truncate">{w.client_name||''}{tgt>0?` · ${tgt} pcs`:''}</div>
                           {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
-                          {w.status==='in_progress' && (qty!=null||val>0) && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{showPress?'Pressed':'Done'}</span><span>{val}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
+                          {w.status==='in_progress' && (tgt>0||val>0) && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{showPress?'Pressed':'Done'}</span><span>{val}/{tgt||'—'}{tgt>0?` · bal ${bal}`:''}</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
                           <div className="flex flex-wrap items-center gap-1 mt-1">
-                            {showPress && pressed>0 && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100">🔥 {pressed.toLocaleString()} pressed</span>}
                             {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋</button>}
                           </div>
                           <div className="mt-2 flex items-center gap-1">
                             <select value={w.status==='in_progress'?'in_progress':w.status==='done'?'done':'open'} onChange={e=>moveStatus(w,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50"><option value="open">To Do</option><option value="in_progress">In Progress</option><option value="done">Done</option></select>
-                            <button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open report">{showPress?'🔥 Log':'Open ▸'}</button>
+                            <button onClick={()=> showPress ? quickLog(w) : setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold" title="Log today's output">{showPress?'🔥 Log':'Open ▸'}</button>
                             <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>
                           </div>
                         </div>
