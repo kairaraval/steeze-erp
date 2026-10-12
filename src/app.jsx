@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 717 · In-House Cutting: '+ Add Cutting Job' button moved to the top-right header for easy access (ad-hoc items), replacing the inline box at the bottom of the board.";
+const BUILD = "Live build 718 · Pattern board now matches the In-House Cutting look: KPI strip (Active/To Do/In Progress/Done), board cards with Pattern-logged / Techpack-ready badges, a right detail panel (pattern, sizes, techpack, notes, actions), 'Show done' toggle, '+ Add to worklist' button up top, and the Start/Pause timer removed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10473,6 +10473,8 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
   const [prefill,setPrefill]=useState(null);    // prefill from a worklist item
   const [newTask,setNewTask]=useState('');
   const [activityFor,setActivityFor]=useState(null);
+  const [selId,setSelId]=useState(null);         // job selected for the right detail panel
+  const [showDone,setShowDone]=useState(false);  // hide Done column unless toggled
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   const patternFor=(pid)=> pid?(patterns||[]).find(p=>p.id===pid):null;
   const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
@@ -10507,6 +10509,45 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
   const boardItems=(patternWorklist||[]).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm('Remove this from the worklist?')) return; const { error }=await sb.from('pattern_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
+  async function addAdhocPrompt(){ const t=(prompt('New ad-hoc pattern task — what pattern to work on?')||'').trim(); if(!t) return; const { error }=await sb.from('pattern_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); reload(); }
+  // ── Pattern board helpers (mirrors the Cutting board) ──
+  const selected=(patternWorklist||[]).find(w=>w.id===selId)||null;
+  const PBadge=({ok,okText,noText})=> <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${ok?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{ok?('✓ '+okText):('◷ '+noText)}</span>;
+  function PPRow({label,value,ok,okText,action,actionText}){ return (<div className="flex items-center gap-2 text-sm"><span className="text-slate-400 text-xs uppercase font-semibold w-24 shrink-0">{label}</span><span className="font-medium text-slate-800 flex-1 min-w-0 truncate">{value}{ok && <span className="ml-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">✓ {okText}</span>}</span>{action && <button onClick={action} className="text-[11px] text-indigo-600 font-semibold hover:underline shrink-0">{actionText} ↗</button>}</div>); }
+  function renderPanel(w){
+    if(!w) return <div className="bg-white border rounded-xl p-8 text-sm text-slate-400 text-center">Select a pattern job on the left to see its details.</div>;
+    const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const qty=workQty(w);
+    const male=p&&Array.isArray(p.sizes_male)?p.sizes_male:[]; const female=p&&Array.isArray(p.sizes_female)?p.sizes_female:[];
+    const stat = w.status==='done'?['Done','bg-emerald-100 text-emerald-700']: w.status==='in_progress'?['In progress','bg-amber-100 text-amber-700']:['To do','bg-slate-100 text-slate-600'];
+    return (<div className="bg-white border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b flex items-start justify-between gap-2">
+        <div className="min-w-0"><div className="text-[10px] uppercase text-slate-400 font-bold">Pattern Job</div><div className="font-bold text-lg leading-tight truncate">{w.item||w.title||'—'}</div><div className="text-xs text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div></div>
+        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded shrink-0 ${stat[1]}`}>{stat[0]}</span>
+      </div>
+      <div className="p-4 space-y-4 text-sm">
+        <div className="space-y-1.5">
+          <PPRow label="Pattern" value={p?(p.pattern_code||'logged'):'Not logged yet'} ok={!!p} okText="Logged" />
+          <PPRow label="Tech pack" value={lead?.techpack?'Attached':'—'} action={lead&&lead.techpack&&openTechpack?()=>openTechpack(lead):null} actionText="View" />
+          <PPRow label="Due" value={workDue(w)?fmtDate(workDue(w)):'—'} />
+          <PPRow label="Started" value={w.start_date?fmtDate(w.start_date):'—'} />
+        </div>
+        {p && (male.length>0||female.length>0) && <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">Sizes</div>
+          <div className="flex flex-col gap-1">
+            {male.length>0 && <div className="flex gap-1 flex-wrap items-center"><span className="text-[9px] font-bold text-blue-600 w-3">M</span>{male.map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">{s}</span>)}</div>}
+            {female.length>0 && <div className="flex gap-1 flex-wrap items-center"><span className="text-[9px] font-bold text-pink-600 w-3">F</span>{female.map((s,i)=><span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-pink-50 text-pink-700 font-medium">{s}</span>)}</div>}
+          </div>
+        </div>}
+        {w.notes && <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-900">📝 {w.notes}</div>}
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          {p ? <button onClick={()=>{ setPrefill(null); setEditing(p); }} className="py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📂 Open pattern</button>
+             : <button onClick={()=>logFromWorklist(w)} className="py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
+          <button onClick={()=>setActivityFor(w)} className="py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">💬 Activity</button>
+          {w.status!=='done' ? <button onClick={()=>markDone(w)} className="py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50 col-span-2">✓ Mark done</button> : <button onClick={()=>reopenItem(w)} className="py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50 col-span-2">↺ Reopen</button>}
+        </div>
+      </div>
+    </div>);
+  }
   async function delPattern(p){ if(!confirm(`Delete pattern ${p.pattern_code||''}?`)) return; const { error }=await sb.from('patterns').update({ deleted_at:new Date().toISOString() }).eq('id',p.id); if(error){ alert(error.message); return; } reload(); }
   function logFromWorklist(w){ setPrefill({ worklist_id:w.id, name: w.item||w.title||'', item_type: w.item||'', source_job_id: w.source_job_id||null, source_type: w.source_type||'manual', lead_id: w.lead_id||null, library: w.source_type==='sampling'?'sample':'production' }); setEditing({}); }
   const srcBadge=(src)=> src==='sampling'?['Sample','bg-purple-100 text-purple-700']:src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
@@ -10574,7 +10615,10 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
             <h1 className="text-2xl font-bold">✂ Pattern</h1>
             <p className="text-slate-500 text-sm">{open.length} on the worklist · {prodCount} production + {sampleCount} sample patterns</p>
           </div>
-          <button onClick={()=>{ setPrefill(null); setEditing({}); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New pattern</button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={addAdhocPrompt} className="px-3.5 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">+ Add to worklist</button>
+            <button onClick={()=>{ setPrefill(null); setEditing({}); }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New pattern</button>
+          </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
           <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
@@ -10588,31 +10632,49 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
       {tab==='replacements' && <ForReplacementPanel profile={profile} department="Pattern" />}
       {tab==='reports' && <ProgressReport rows={(patternWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Done" />}
 
-      {tab==='worklist' && (
-        <div className="space-y-3">
-          <KanbanBoard items={boardItems} onMove={moveStatus}
-            renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const [bl,bc]=srcBadge(w.source_type); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
-              <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>{p && <span className="text-[9px] text-emerald-700 font-semibold">✓ {p.pattern_code||'logged'}</span>}</div>
-              <div className="font-semibold text-sm leading-tight">{w.item||w.title||'—'}</div>
-              <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
-              {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
-              <div className="flex flex-wrap items-center gap-1 mt-1">
-                {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
-                {!p && <button onClick={()=>logFromWorklist(w)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">＋ Log pattern</button>}
-                <button onClick={()=>setActivityFor(w)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200">💬 Activity</button>
-              </div>
-              <StartFinishBar row={w} table="pattern_worklist" reload={reload} />
-            </div>); }}
-            extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
-          <div className="bg-white border rounded-xl overflow-hidden max-w-md">
-            <div className="px-4 py-2.5 bg-slate-50 border-b font-semibold text-sm">📝 Add an ad-hoc item</div>
-            <div className="p-2 flex gap-1.5">
-              <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addManual(); }} placeholder="Add a pattern to work on…" className="flex-1 text-sm px-2.5 py-1.5 rounded-lg border border-slate-200" />
-              <button onClick={addManual} className="px-3 rounded-lg bg-indigo-600 text-white text-lg font-bold leading-none">+</button>
+      {tab==='worklist' && (()=>{
+        const act=boardItems.filter(w=>w.status!=='done');
+        const nTodo=boardItems.filter(w=>(w.status||'open')==='open').length;
+        const nProg=boardItems.filter(w=>w.status==='in_progress').length;
+        const nDone=done.length;
+        const Kpi=({icon,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{icon}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
+        return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Kpi icon="📄" label="Active Jobs" value={act.length} color="bg-blue-100" />
+            <Kpi icon="📋" label="To Do" value={nTodo} color="bg-slate-100" />
+            <Kpi icon="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
+            <Kpi icon="✓" label="Done" value={nDone} color="bg-emerald-100" />
+          </div>
+          <div className="flex items-center justify-end">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
+          </div>
+          <div className="flex gap-4 items-start">
+            <div className="flex-1 min-w-0 space-y-3">
+              <KanbanBoard items={showDone?boardItems:boardItems.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
+                renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; return (<div className={isSel?'ring-2 ring-indigo-400 rounded-md -m-0.5 p-0.5':''}>
+                  <button onClick={()=>setSelId(w.id)} className="text-left w-full">
+                    <div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div>
+                    <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{qty!=null?` · ${qty} pcs`:''}</div>
+                  </button>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    <PBadge ok={!!p} okText="Pattern logged" noText="Not logged" />
+                    <PBadge ok={!!(lead&&lead.techpack)} okText="Techpack ready" noText="No techpack" />
+                  </div>
+                  {due && <div className={`text-[11px] mt-1 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
+                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                    {(w.status==='open'||!w.status) && <button onClick={()=>moveStatus(w,'in_progress')} className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">▶ Start</button>}
+                    {!p && <button onClick={()=>logFromWorklist(w)} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">＋ Log pattern</button>}
+                    <button onClick={()=>setSelId(w.id)} className="text-[11px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold">Open ▸</button>
+                    {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[11px] text-teal-700 hover:underline" title="Techpack">📋</button>}
+                  </div>
+                </div>); }}
+                extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
             </div>
+            <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
           </div>
         </div>
-      )}
+        ); })()}
 
       {(tab==='library' || tab==='sample') && (
         <div>
