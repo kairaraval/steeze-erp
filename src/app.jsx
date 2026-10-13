@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 725 · RFP responses now reach the requester: HR/requesters get notified when an RFP is rejected (with the reason), approved, or paid. HR Dashboard shows a 'My Requests for Payment' list, and leave cash-out RFPs now have a 'Preview form' button (for HR, Finance & Admin) so the signed cash-out form travels as the supporting document.";
+const BUILD = "Live build 726 · HR can now Reprocess a rejected leave cash-out — it raises a fresh Request for Payment straight to Finance (not a budget request) using the finalized figures. Finance & Admin can preview the signed cash-out form from the RFP to confirm the exact amount to pay.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17965,6 +17965,34 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
     }catch(err){ setBusy(false); alert(err.message||err); return; }
     setBusy(false); onClose(); reload&&reload();
   }
+  // Reprocess a REJECTED cash-out: raise a fresh Request for Payment (→ Finance,
+  // not a budget request) using the already-finalized figures, and relink the
+  // cash-out to the new RFP. Leave credits are NOT touched (already reset on the
+  // original finalize).
+  async function reprocess(){
+    if(!cashout) return;
+    if(!confirm(`Reprocess this cash-out?\n\n${fullName(e)} — ${peso(cashout.amount)}.\n\nA NEW Request for Payment is created and sent to Finance (Accounting → RFPs, For Approval). This is an RFP, not a budget request. Leave credits are not changed.`)) return;
+    setBusy(true);
+    try{
+      const nowISO=new Date().toISOString();
+      const monthKey=todayManila().slice(0,7);
+      const { data:monthRows }=await sb.from('rfps').select('number').like('number', `RFP-${monthKey}-%`);
+      let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+      const rfpNumber=`RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
+      const annivISO=cashout.anniversary_date||(hd?hd.toISOString().slice(0,10):todayManila());
+      const slDays=Number(cashout.sl_days)||0, rt=Number(cashout.rate)||0, amt2=Number(cashout.amount)||0;
+      const particulars=`Leave cash-out (hire anniversary ${fmtDate(annivISO)}) — ${fullName(e)}: unused Sick Leave ${slDays} day(s) × ${peso(rt)}/day = ${peso(amt2)}. (Vacation Leave is not convertible to cash.) [Reprocessed]`;
+      const { data:rfpIns, error:rfpErr }=await sb.from('rfps').insert({
+        number:rfpNumber, date:todayManila(), supplier_name:fullName(e), amount:amt2, particulars,
+        payment_method:'cash', status:'pending_finance', requested_by:profile.id, requested_at:nowISO,
+      }).select().single();
+      if(rfpErr) throw rfpErr;
+      // Relink the cash-out to the new RFP + set it back to For Approval.
+      await sb.from('leave_cashouts').update({ rfp_id:rfpIns.id, status:'for_approval' }).eq('id', cashout.id);
+      try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`🌴 Leave cash-out for ${fullName(e)} — ${peso(amt2)} — RE-SUBMITTED for approval (${rfpNumber}).`, link_view:'rfps', ref_type:'rfp', ref_id:rfpIns.id, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    }catch(err){ setBusy(false); alert(err.message||err); return; }
+    setBusy(false); onClose(); reload&&reload();
+  }
   if(printing) return <LeaveCashoutPrintView row={row} preparer={hrSigner||profile} onClose={()=>setPrinting(false)} />;
   const finalized=!!cashout;
   return (
@@ -17989,10 +18017,12 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
             ? <>Prepared &amp; signed by <b>{hrSigner?(hrSigner.name||hrSigner.email):'HR'}</b>{cashout.hr_signed_at?` on ${fmtDate(cashout.hr_signed_at.slice(0,10))}`:''}. {cashout.rfp_id?'A Request for Payment was created — track it in Accounting → RFPs (For Approval / For Payment).':''}</>
             : <>Review the figures, print the form for signature if needed, then finalize to sign as preparer and send to Accounting.</>}
         </div>
+        {finalized && liveStatus==='rejected' && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2">This cash-out's Request for Payment was <b>rejected</b> by Finance. Review the figures (print the form if needed), then <b>Reprocess</b> to send a fresh RFP back to Finance for approval.</div>}
         <div className="flex justify-end gap-2 pt-2 border-t flex-wrap">
           <button onClick={()=>setPrinting(true)} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print form</button>
           <div className="flex-1"></div>
           {!finalized && canEdit && <button disabled={busy} onClick={finalize} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Finalizing…':'✍ Finalize & send to Accounting'}</button>}
+          {finalized && liveStatus==='rejected' && canEdit && <button disabled={busy} onClick={reprocess} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Reprocessing…':'🔄 Reprocess → send to Finance'}</button>}
           {finalized && <button onClick={onClose} className="px-4 py-2 rounded-lg border text-sm font-semibold">Close</button>}
         </div>
       </div>
