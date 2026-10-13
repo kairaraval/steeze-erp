@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 730 · Purchase Requests reworked into a 5-stage pipeline: Manual Request → To Review → For Materials Queue → Ordered → Fulfilled. Manual PRs land in Manual Request; project (sampling/closed-won) PRs land in To Review. Minda must assign a supplier to every line before a PR can be approved (no more Unassigned in the Materials Queue). Receiving the PO now auto-moves the PR to Fulfilled. Per-line supplier picker added to the PR form.";
+const BUILD = "Live build 731 · Materials Queue (Phase 2): per-supplier 🧾 Buy List — a printable buying list of every material needed from that supplier, where you can add extra same-supplier items before finalizing into a PO. Materials Queue now shows only approved PRs. Cleaned out the old 'Unassigned supplier' items.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30534,6 +30534,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
 function MaterialsQueueView({ profile, requests, items, suppliers, leads, clients, orders, reload, onOpenPO }){
   const [expanded,setExpanded]=useState(()=>new Set());
   const [busy,setBusy]=useState(null); // bucket id currently being processed
+  const [buyList,setBuyList]=useState(null);   // supplier bucket being previewed as a printable Buy List
   const isAdmin = profile.role === 'admin';
   const canDelete = isAdmin || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   // Stock reservations so we can tell which lines are already covered on-hand.
@@ -30566,7 +30567,9 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
   // Build per-supplier buckets of unfulfilled PR lines.
   const buckets = (()=>{
     const map = new Map();
-    const openPRs = (requests||[]).filter(r => r.status==='submitted' || r.status==='approved');
+    // Only APPROVED PRs ("For Materials Queue" stage) land here — To-Review PRs
+    // stay on Minda's board until she approves them.
+    const openPRs = (requests||[]).filter(r => r.status==='approved');
     openPRs.forEach(pr => {
       const lead = pr.linked_lead_id ? (leads||[]).find(l=>l.id===pr.linked_lead_id) : null;
       (pr.lines||[]).forEach((line, idx) => {
@@ -30609,7 +30612,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
 
   function toggleExpand(key){ setExpanded(prev=>{ const n=new Set(prev); if(n.has(key)) n.delete(key); else n.add(key); return n; }); }
 
-  async function createBulkPO(bucket){
+  async function createBulkPO(bucket, extraLines=[]){
     if(bucket.supplierId === '__unassigned__'){
       alert('These items have no preferred supplier set in Inventory. Open Inventory, edit each item, and set its Supplier. Then come back — they\'ll appear under the right supplier here.');
       return;
@@ -30642,6 +30645,15 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
         };
       });
 
+      // Manual extras added on the Buy List (ad-hoc items from the same supplier,
+      // not tied to a PR).
+      const extras = (extraLines||[]).filter(e=>(e.description||'').trim() && (Number(e.qty)||0)>0).map(e=>({
+        item_id:null, description:e.description.trim(), qty:Number(e.qty)||0, qty_received:0, qty_issued:0,
+        unit_cost:Number(e.unit_cost)||0, pr_id:null, pr_line_idx:null, lead_id:null, client_name:null, project_title:null,
+      }));
+      const allLines = [...lines, ...extras];
+      const extrasTotal = extras.reduce((s,e)=>s+e.qty*e.unit_cost,0);
+
       const supp = bucket.supplier;
       const payment_terms = supp?.payment_terms || null;
       const payload = {
@@ -30649,9 +30661,9 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
         date: todayStr,
         supplier_id: bucket.supplierId,
         status: 'draft',
-        notes: `Auto-built from Materials Queue · ${bucket.prIds.size} PR(s) consolidated`,
-        total: bucket.total,
-        lines,
+        notes: `Auto-built from Materials Queue · ${bucket.prIds.size} PR(s) consolidated${extras.length?` · +${extras.length} manual item(s)`:''}`,
+        total: bucket.total + extrasTotal,
+        lines: allLines,
         payment_terms,
         expected_pay_date: poExpectedPayDate(payment_terms, todayStr),
       };
@@ -30724,6 +30736,9 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
               </button>
               <div className="flex items-center gap-2">
                 {!isUnassigned && (
+                  <button onClick={()=>setBuyList(b)} className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-50" title="Preview & print the buying list for this supplier">🧾 Buy List</button>
+                )}
+                {!isUnassigned && (
                   <button onClick={()=>createBulkPO(b)} disabled={busy===b.supplierId} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">
                     {busy===b.supplierId ? 'Creating…' : '+ Create draft PO'}
                   </button>
@@ -30757,7 +30772,105 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
           </div>
         );
       })}</div>
+      {buyList && <BuyListModal bucket={buyList} profile={profile} clients={clients} busy={busy===buyList.supplierId} onClose={()=>setBuyList(null)} onCreatePO={async(extras)=>{ await createBulkPO(buyList, extras); setBuyList(null); }} />}
     </div>
+  );
+}
+
+// Printable buying list for one supplier: every material needed from them across
+// the approved PRs, plus any manual items the purchaser adds for the same
+// supplier. Minda prints this and brings it; purchasing personnel turns it into
+// a PO when finalized.
+function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
+  const [extra,setExtra]=useState([]);   // [{description, qty, unit, unit_cost}]
+  const supName = bucket.supplier?.company || bucket.supplier?.name || '(supplier)';
+  const today = todayManila();
+  function addRow(){ setExtra(e=>[...e,{ description:'', qty:1, unit:'', unit_cost:'' }]); }
+  function setRow(i,k,v){ setExtra(e=>e.map((r,j)=>j===i?{...r,[k]:v}:r)); }
+  function removeRow(i){ setExtra(e=>e.filter((_,j)=>j!==i)); }
+  const baseRows = bucket.items.map(({ line, lead, inventoryItem })=>({
+    material: inventoryItem ? (inventoryItem.name + (inventoryItem.color?` - ${inventoryItem.color}`:'')) : (line.description||'(item)'),
+    sku: inventoryItem?.sku || '',
+    project: lead?.title || '',
+    qty: Number(line.qty)||0,
+    unit: inventoryItem?.unit || '',
+    est: Number(line.est_cost)||0,
+  }));
+  const extraClean = extra.filter(e=>(e.description||'').trim() && (Number(e.qty)||0)>0);
+  const baseTotal = baseRows.reduce((s,r)=>s+r.qty*r.est,0);
+  const extraTotal = extraClean.reduce((s,r)=>s+(Number(r.qty)||0)*(Number(r.unit_cost)||0),0);
+  const Row = ({ r, extra:isExtra })=>(
+    <tr className="border-t border-slate-300">
+      <td className="px-2 py-1.5">{r.material}{r.sku?<span className="text-slate-400 text-[10px]"> · {r.sku}</span>:null}</td>
+      <td className="px-2 py-1.5 text-slate-500 text-xs">{r.project||(isExtra?'manual add':'—')}</td>
+      <td className="px-2 py-1.5 text-right font-semibold">{r.qty}</td>
+      <td className="px-2 py-1.5 text-xs text-slate-500">{r.unit||''}</td>
+      <td className="px-2 py-1.5 text-right text-xs">{r.est?peso(r.est):''}</td>
+      <td className="px-2 py-1.5"></td>
+    </tr>
+  );
+  return (
+    <Modal title={`🧾 Buy List · ${supName}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .buy-list-print,.buy-list-print *{visibility:visible !important;} .buy-list-print{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="buy-list-print border rounded-lg p-5 text-sm text-slate-800">
+          <div className="flex items-start justify-between border-b border-slate-300 pb-3 mb-3">
+            <div>
+              <div className="text-xl font-extrabold">Steeze Corporation</div>
+              <div className="text-base font-semibold mt-0.5">Buying List</div>
+            </div>
+            <div className="text-right text-xs">
+              <div><span className="text-slate-500">Supplier:</span> <strong>{supName}</strong></div>
+              <div><span className="text-slate-500">Date:</span> {fmtDate(today)}</div>
+              <div><span className="text-slate-500">Prepared by:</span> {profile.name||profile.email||'—'}</div>
+            </div>
+          </div>
+          <table className="w-full">
+            <thead><tr className="text-[10px] uppercase text-slate-500 border-b border-slate-300">
+              <th className="text-left px-2 py-1.5">Material</th>
+              <th className="text-left px-2 py-1.5">Project</th>
+              <th className="text-right px-2 py-1.5">Qty</th>
+              <th className="text-left px-2 py-1.5">Unit</th>
+              <th className="text-right px-2 py-1.5">Est. ₱</th>
+              <th className="text-right px-2 py-1.5 w-28">Actual ₱</th>
+            </tr></thead>
+            <tbody>
+              {baseRows.map((r,i)=><Row key={'b'+i} r={r} />)}
+              {extraClean.map((r,i)=><Row key={'e'+i} r={{ material:r.description, sku:'', project:'', qty:Number(r.qty)||0, unit:r.unit, est:Number(r.unit_cost)||0 }} extra />)}
+              {baseRows.length===0 && extraClean.length===0 && <tr><td colSpan={6} className="text-center text-slate-400 py-6">No items.</td></tr>}
+            </tbody>
+            <tfoot><tr className="border-t-2 border-slate-400 font-bold"><td className="px-2 py-2" colSpan={2}>Estimated total</td><td className="px-2 py-2 text-right">{baseRows.reduce((s,r)=>s+r.qty,0)+extraClean.reduce((s,r)=>s+(Number(r.qty)||0),0)} pcs</td><td></td><td className="px-2 py-2 text-right">{peso(baseTotal+extraTotal)}</td><td></td></tr></tfoot>
+          </table>
+          <div className="text-[11px] text-slate-500 mt-6">Received by: ____________________   ·   Date: ____________</div>
+        </div>
+
+        {/* Add manual items from the same supplier (not tied to a PR). */}
+        <div className="no-print bg-slate-50 border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-slate-700">Add items for {supName} (optional)</div>
+            <button onClick={addRow} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add item</button>
+          </div>
+          {extra.length===0 ? <div className="text-xs text-slate-400">Need something else from this supplier? Add it here — it'll print on the list and go onto the PO.</div> : (
+            <div className="space-y-1.5">{extra.map((r,i)=>(
+              <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                <input className="input text-xs col-span-6" placeholder="Material / description" value={r.description} onChange={e=>setRow(i,'description',e.target.value)} />
+                <input type="number" className="input text-xs col-span-2 text-right" placeholder="Qty" value={r.qty} onChange={e=>setRow(i,'qty',e.target.value)} />
+                <input className="input text-xs col-span-1" placeholder="Unit" value={r.unit} onChange={e=>setRow(i,'unit',e.target.value)} />
+                <input type="number" step="0.01" className="input text-xs col-span-2 text-right" placeholder="Est ₱" value={r.unit_cost} onChange={e=>setRow(i,'unit_cost',e.target.value)} />
+                <button onClick={()=>removeRow(i)} className="col-span-1 text-rose-400 hover:text-rose-600 text-sm">✕</button>
+              </div>
+            ))}</div>
+          )}
+        </div>
+
+        <div className="no-print flex gap-2 pt-2 border-t flex-wrap">
+          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print buy list</button>
+          <div className="flex-1"></div>
+          <button onClick={()=>onCreatePO(extraClean)} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Creating…':'✓ Finalize → Create PO'}</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border text-sm font-semibold">Close</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
