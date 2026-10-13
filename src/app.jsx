@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 724 · Techpack Design Canvas: text labels are now editable again — just click a label to edit it in the Text bar above (or select it and tap ✎ Edit text). No more unreliable double-click.";
+const BUILD = "Live build 725 · RFP responses now reach the requester: HR/requesters get notified when an RFP is rejected (with the reason), approved, or paid. HR Dashboard shows a 'My Requests for Payment' list, and leave cash-out RFPs now have a 'Preview form' button (for HR, Finance & Admin) so the signed cash-out form travels as the supporting document.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17265,7 +17265,7 @@ function CriteriaManagerModal({ criteria, employees, profile, onClose, onSaved }
 }
 
 /* ─────────── HR — Dashboard (home) ─────────── */
-function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, hrMemos, hrJobs, setView }){
+function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, hrMemos, hrJobs, rfps, setView, onOpenRfp }){
   const todayISO=todayManila();
   const in28=new Date(Date.now()+28*86400000).toISOString().slice(0,10);
   const first=(profile.name||'').split(' ')[0]||'there';
@@ -17277,6 +17277,12 @@ function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, h
   const openCycles=(hrReviewCycles||[]).filter(c=>c.status==='active'||c.status==='planning');
   const openJobs=(hrJobs||[]).filter(j=>j.status==='open'||j.status==='active'||!j.status);
   const recentMemos=(hrMemos||[]).slice(0,4);
+  // RFPs this HR person submitted (e.g. leave cash-outs) — so they can track
+  // Finance's response (approved / rejected / paid) without chasing anyone.
+  const myRfps=(rfps||[]).filter(r=>r.requested_by===profile.id && !r.deleted_at)
+    .slice().sort((a,b)=>String(b.requested_at||b.date||'').localeCompare(String(a.requested_at||a.date||'')));
+  const myRfpPending=myRfps.filter(r=>['pending_finance','pending_admin','returned','pending_purchasing'].includes(r.status)).length;
+  const myRfpRejected=myRfps.filter(r=>r.status==='rejected').length;
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
   // Department headcount
   const byDept={}; activeEmps.forEach(e=>{ const d=e.department||'Unassigned'; byDept[d]=(byDept[d]||0)+1; });
@@ -17300,8 +17306,32 @@ function HRHomeView({ profile, employees, hrLeaves, hrReviewCycles, hrReviews, h
         {card('👥','Active employees',activeEmps.length,'in the roster','employees')}
         {card('🚫','Out today',outToday.length, outToday.length? outToday.map(l=>empName(l.employee_id)).slice(0,2).join(', ')+(outToday.length>2?` +${outToday.length-2}`:'') : 'everyone in','hr-leave', outToday.length?'text-rose-600':'text-slate-800')}
         {card('🗓️','Upcoming leaves',upcoming.length,'next 4 weeks','hr-leave')}
-        {card('📊','Open review cycles',openCycles.length,'performance reviews','hr-reviews')}
+        {card('🧾','My payment requests',myRfps.length, myRfpRejected? `${myRfpRejected} rejected · needs action` : (myRfpPending? `${myRfpPending} awaiting response` : 'all settled'),'rfps', myRfpRejected?'text-rose-600':'text-slate-800')}
       </div>
+
+      {/* My Requests for Payment — responses from Finance on RFPs this HR
+          person submitted (e.g. leave cash-outs). */}
+      {myRfps.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-5">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-bold text-sm flex items-center justify-between"><span>🧾 My Requests for Payment</span><button onClick={()=>go('rfps')} className="text-xs text-indigo-600 hover:underline">Open all →</button></div>
+          <div className="divide-y">
+            {myRfps.slice(0,6).map(r=>{ const m=rfpMeta(r.status); const rej=r.status==='rejected'; return (
+              <button key={r.id} onClick={()=> onOpenRfp ? onOpenRfp(r.id) : go('rfps')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-slate-500">{r.number}</span>
+                    <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span>
+                    <span className="text-[11px] text-slate-400 ml-auto whitespace-nowrap">{fmtDate(r.date)}</span>
+                  </div>
+                  <div className="text-sm text-slate-700 truncate mt-0.5">{r.particulars||r.supplier_name||'—'}</div>
+                  {rej && r.rejected_reason && <div className="text-[12px] text-rose-600 mt-0.5">❌ {r.rejected_reason}</div>}
+                </div>
+                <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">{peso(r.amount)}</div>
+              </button>
+            ); })}
+          </div>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-3 gap-4">
         {/* Out today / upcoming */}
@@ -33816,7 +33846,7 @@ const RFP_STATUSES = [
 function rfpBalance(r){ return Math.max(0, Number(r?.amount||0) - Number(r?.amount_paid||0)); }
 function rfpMeta(k){ return RFP_STATUSES.find(s=>s.key===k)||RFP_STATUSES[0]; }
 
-function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, costCenters, chartAccounts, reload, navTo, openRfpId, onOpenConsumed }){
+function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vouchers, apVouchers, costCenters, chartAccounts, leaveCashouts, employees, leaveBalances, reload, navTo, openRfpId, onOpenConsumed }){
   const [editing,setEditing]=useState(null);
   // Deep-link: open a specific RFP (from the Inbox notification or Home banner).
   useEffect(()=>{ if(openRfpId){ const r=(rfps||[]).find(x=>x.id===openRfpId); if(r) setEditing(r); onOpenConsumed&&onOpenConsumed(); } },[openRfpId, rfps]);
@@ -33982,7 +34012,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
           <button disabled={!sameSupplier} onClick={()=>setBatchPaying(selectedRfps)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">💰 Pay together as one check</button>
         </div>
       )}
-      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} onEditPO={(po)=>{ setEditing(null); if(navTo) navTo('orders'); }} />}
+      {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} onEditPO={(po)=>{ setEditing(null); if(navTo) navTo('orders'); }} />}
       {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
       {viewingAp && <APVoucherModal ap={viewingAp} profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setViewingAp(null)} />}
@@ -33990,11 +34020,18 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   );
 }
 
-function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, onClose, onSaved, onPay, onEditPO }){
+function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, leaveCashouts, employees, leaveBalances, onClose, onSaved, onPay, onEditPO }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const [showPO,setShowPO]=useState(false);
   const [poPrint,setPoPrint]=useState(false);
+  const [cashoutPrint,setCashoutPrint]=useState(false);
+  // If this RFP was raised by an HR leave cash-out, surface the signed cash-out
+  // form so Finance can review it as the supporting document (and HR can preview
+  // what they submitted). Reconstruct the print row from the linked record.
+  const linkedCashout=(leaveCashouts||[]).find(c=>c.rfp_id===rfp.id && !c.deleted_at) || null;
+  const cashoutRow=linkedCashout ? (()=>{ const e=(employees||[]).find(x=>x.id===linkedCashout.employee_id)||{ id:linkedCashout.employee_id, first_name:linkedCashout.employee_name||'' }; const hd=linkedCashout.anniversary_date?new Date(linkedCashout.anniversary_date+'T00:00:00'):new Date(); const b=(typeof balanceOfEmp==='function')?balanceOfEmp(leaveBalances,linkedCashout.employee_id):null; return { e, hd, b, vl:Number(linkedCashout.vl_days), sl:Number(linkedCashout.sl_days), rate:Number(linkedCashout.rate), amount:Number(linkedCashout.amount), cashout:linkedCashout }; })() : null;
+  const cashoutPreparer=linkedCashout ? ((profiles||[]).find(p=>p.id===linkedCashout.hr_signed_by) || (profiles||[]).find(p=>p.id===rfp.requested_by) || profile) : profile;
   // RFP supporting documents — proof of transaction (from Purchasing), receipts,
   // and invoices. Editable in ANY status (including Paid) so complete proof of
   // expense can always be attached. Persisted immediately, without closing.
@@ -34085,6 +34122,12 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
         });
       }
     } catch(e){ console.warn('AP voucher creation failed:', e?.message||e); }
+    // Let the requester (e.g. HR) know it cleared approval and is queued to pay.
+    try{
+      if(rfp.requested_by && rfp.requested_by!==profile.id){
+        await sb.from('notifications').insert([{ recipient_id:rfp.requested_by, actor_id:profile.id, type:'rfp_approved', text:`✅ RFP ${rfp.number} approved — queued for payment`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }]);
+      }
+    }catch(_){}
     setBusy(false);
     onSaved();
   }
@@ -34094,6 +34137,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     setBusy(true);
     const { error } = await sb.from('rfps').update({ status:'rejected', rejected_by:profile.id, rejected_at:new Date().toISOString(), rejected_reason:notes }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    // Notify whoever requested this RFP (e.g. HR for a leave cash-out) + the
+    // Purchasing team, so the rejection + reason reaches them. Previously this
+    // sent no notification, so the requester never learned it was rejected.
+    try{
+      const recips=new Set();
+      if(rfp.requested_by) recips.add(rfp.requested_by);
+      (profiles||[]).forEach(p=>{ if(['purchasing','purchasing_admin','purchasing_personnel'].includes(p.role) && !p.deleted_at) recips.add(p.id); });
+      recips.delete(profile.id);
+      const rows=[...recips].map(id=>({ recipient_id:id, actor_id:profile.id, type:'rfp_rejected', text:`❌ RFP ${rfp.number} rejected — ${String(notes).slice(0,90)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }));
+      if(rows.length) await sb.from('notifications').insert(rows);
+    }catch(_){}
     onSaved();
   }
   // Return the RFP to Purchasing with a question (NOT a rejection) — they fix it
@@ -34169,6 +34223,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
         </div>
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
+
+        {/* Linked HR leave cash-out form — the signed supporting document. */}
+        {linkedCashout && (
+          <div className="border rounded-lg bg-indigo-50 border-indigo-200 p-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase text-indigo-700">🌴 Leave Cash-out Form</div>
+              <div className="text-[12px] text-slate-600 truncate">Signed by {cashoutPreparer?(cashoutPreparer.name||cashoutPreparer.email):'HR'} — the supporting document for this payment.</div>
+            </div>
+            <button onClick={()=>setCashoutPrint(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-indigo-600 text-white font-semibold hover:bg-indigo-700">📄 Preview form</button>
+          </div>
+        )}
 
         {/* Linked PO — items + attachments, so Accounting can match the quotation
             / estimate against the PO before paying. */}
@@ -34339,6 +34404,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
         </div>
       </div>
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
+      {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
     </Modal>
   );
 }
@@ -34472,6 +34538,12 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
           paid_at: fullyPaid ? nowIso : null, paid_by: profile.id, amount_paid: newPaid,
         }).eq('id', rfp.po_id);
       }
+      // Notify the requester (e.g. HR) when their RFP is paid (or partially paid).
+      try{
+        if(rfp.requested_by && rfp.requested_by!==profile.id){
+          await sb.from('notifications').insert([{ recipient_id:rfp.requested_by, actor_id:profile.id, type:'rfp_paid', text:`💸 RFP ${rfp.number} ${fullyPaid?'has been paid':'received a partial payment'} — ${peso(f.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }]);
+        }
+      }catch(_){}
       setBusy(false); onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -34679,6 +34751,12 @@ function BatchVoucherModal({ rfps, profile, vouchers, bankAccounts, suppliers, o
       for(const r of list){
         if(r.po_id){ await sb.from('purchase_orders').update({ payment_status:'paid', paid_at:nowIso, paid_by:profile.id, amount_paid:Number(r.amount||0) }).eq('id', r.po_id); }
       }
+      // Notify each RFP's requester (e.g. HR for a leave cash-out) that it's paid.
+      try{
+        const notes=[];
+        list.forEach(r=>{ if(r.requested_by && r.requested_by!==profile.id) notes.push({ recipient_id:r.requested_by, actor_id:profile.id, type:'rfp_paid', text:`💸 RFP ${r.number} has been paid — ${peso(r.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:r.id }); });
+        if(notes.length) await sb.from('notifications').insert(notes);
+      }catch(_){}
       setBusy(false); onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -35739,7 +35817,7 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
-function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, reload }){
+function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
@@ -36128,7 +36206,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       )}
 
       {/* Reuse the existing RFP modal for the actual approval flow */}
-      {openRfp && <RFPModal rfp={openRfp} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} onClose={()=>setOpenRfp(null)} onSaved={()=>{ setOpenRfp(null); reload(); }} onPay={()=>{}} />}
+      {openRfp && <RFPModal rfp={openRfp} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} onClose={()=>setOpenRfp(null)} onSaved={()=>{ setOpenRfp(null); reload(); }} onPay={()=>{}} />}
       {/* Budget request approval — reuses the form modal which has approve/reject buttons for admins */}
       {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
       {/* Voucher review — uses the same view modal as the Vouchers list,
@@ -45164,7 +45242,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates','payroll','budgets','profile','trip-tickets']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -45833,7 +45911,7 @@ function App(){
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
-      FINANCE_DEPT_ONLY,
+      { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProdSupervisor){
@@ -46131,7 +46209,7 @@ function App(){
         {view==='hr-templates' && <HRTemplatesView profile={profile} hrTemplates={hrTemplates} reload={loadAll} />}
         {view==='hr-reviews' && <HRReviewsView profile={profile} profiles={profiles} employees={employees} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrReviewCriteria={hrReviewCriteria} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
         {view==='my-evals' && <MyEvaluationsView profile={profile} profiles={profiles} employees={employees} evalTemplates={evalTemplates} evalReviews={evalReviews} reload={loadAll} />}
-        {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} setView={setView} />}
+        {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} rfps={rfps} setView={setView} onOpenRfp={(id)=>{ setView('rfps'); setInboxRfpId(id); }} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} profiles={profiles} employees={employees} hrLeaves={hrLeaves} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} rfps={rfps} reload={loadAll} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} profiles={profiles} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
@@ -46191,7 +46269,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
@@ -46220,7 +46298,7 @@ function App(){
         {view==='client-orders' && <ClientOrdersInbox profile={profile} clients={clients} onOpenLead={(l)=>setDetailLead(l)} reloadApp={loadAll} />}
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} onOpenSO={(so)=>setInboxOpenSO(so)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
+        {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
