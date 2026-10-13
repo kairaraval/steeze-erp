@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 729 · Tablet fix for Production boards (Pattern, Cutting, Subli/DTF Pressing & sorting): the job detail + edit panel was desktop-only (hidden on tablets). Tapping a job on a tablet/phone now opens its full details & edit controls as a bottom sheet.";
+const BUILD = "Live build 730 · Purchase Requests reworked into a 5-stage pipeline: Manual Request → To Review → For Materials Queue → Ordered → Fulfilled. Manual PRs land in Manual Request; project (sampling/closed-won) PRs land in To Review. Minda must assign a supplier to every line before a PR can be approved (no more Unassigned in the Materials Queue). Receiving the PO now auto-moves the PR to Fulfilled. Per-line supplier picker added to the PR form.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29741,25 +29741,35 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, 
 
 /* ====================== PURCHASE REQUESTS ====================== */
 const PR_STATUSES=[
-  { key:'manual_request', label:'Manual Requests', color:'bg-fuchsia-100 text-fuchsia-700' },
-  { key:'submitted', label:'Requests', color:'bg-amber-100 text-amber-700' },
-  { key:'approved',  label:'Approved',  color:'bg-emerald-100 text-emerald-700' },
+  { key:'manual_request', label:'Manual Request', color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'submitted', label:'To Review', color:'bg-amber-100 text-amber-700' },
+  { key:'approved',  label:'For Materials Queue',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
-  { key:'fulfilled_stock', label:'Fulfilled from Stock', color:'bg-teal-100 text-teal-700' },
+  { key:'fulfilled_stock', label:'Fulfilled', color:'bg-teal-100 text-teal-700' },
   { key:'cancelled', label:'Cancelled', color:'bg-slate-200 text-slate-600' },
   { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
 // Statuses that represent a new, not-yet-actioned request awaiting approval.
 const PR_AWAITING = ['submitted','manual_request'];
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
-// The real 2-person workflow lanes: Minda reviews new requests → approves →
-// hands off to Jay-Ann (Purchasing Admin) for PO processing.
+// The 5-stage purchasing pipeline:
+//   Manual Request (manual PRs) → To Review (sampling + closed-won auto PRs) →
+//   For Materials Queue (approved) → Ordered (POed in Materials Queue) →
+//   Fulfilled (PO received or issued from stock).
+// Minda (Purchasing) works the first two lanes; Jay-Ann / purchasing personnel
+// take over at "For Materials Queue".
 const PR_LANES=[
-  { key:'review',  title:'To Review',    who:'Minda · Purchasing',        statuses:['submitted','manual_request'], color:'bg-amber-100 text-amber-700' },
-  { key:'ready',   title:'Ready for PO', who:'Jay-Ann · Purchasing Admin', statuses:['approved'],                    color:'bg-emerald-100 text-emerald-700' },
-  { key:'ordered', title:'Ordered',      who:'',                           statuses:['ordered'],                     color:'bg-indigo-100 text-indigo-700' },
-  { key:'done',    title:'Fulfilled',    who:'',                           statuses:['fulfilled_stock'],             color:'bg-teal-100 text-teal-700' },
+  { key:'manual',  title:'Manual Request',       who:'Minda · Purchasing',        statuses:['manual_request'], color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'review',  title:'To Review',            who:'Minda · Purchasing',        statuses:['submitted'],      color:'bg-amber-100 text-amber-700' },
+  { key:'queue',   title:'For Materials Queue',  who:'Jay-Ann · Purchasing',      statuses:['approved'],       color:'bg-emerald-100 text-emerald-700' },
+  { key:'ordered', title:'Ordered',              who:'',                          statuses:['ordered'],        color:'bg-indigo-100 text-indigo-700' },
+  { key:'done',    title:'Fulfilled',            who:'',                          statuses:['fulfilled_stock'],color:'bg-teal-100 text-teal-700' },
 ];
+// Supplier assigned to a PR line = the line's own supplier_id, or the one on the
+// linked inventory item. Used to block approval until every line has a supplier,
+// so the Materials Queue never shows an "Unassigned supplier" bucket.
+function prLineSupplierId(l, items){ return l.supplier_id || (l.item_id ? (items||[]).find(i=>i.id===l.item_id)?.supplier_id : null) || null; }
+function prLinesMissingSupplier(pr, items){ return (pr?.lines||[]).filter(l=>(l.item_id||l.description) && !prLineSupplierId(l, items)); }
 const PR_URGENCY_BADGE={ urgent:'bg-rose-100 text-rose-700', high:'bg-amber-100 text-amber-700', normal:'' };
 const PR_URGENCIES=['normal','high','urgent'];
 
@@ -29837,8 +29847,10 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting';
   const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
-  const myLane = (profile.role==='purchasing_admin' || profile.role==='purchasing_personnel') ? 'ready' : (profile.role==='purchasing' ? 'review' : null);
+  const myLane = (profile.role==='purchasing_admin' || profile.role==='purchasing_personnel') ? 'queue' : (profile.role==='purchasing' ? 'review' : null);
   async function approveAndHandoff(pr){
+    const missing = prLinesMissingSupplier(pr, items);
+    if(missing.length){ alert(`Assign a supplier to every material line before approving.\n\n${missing.length} line${missing.length===1?'':'s'} still ${missing.length===1?'has':'have'} no supplier. Open the PR and pick a supplier for each line so it lands cleanly in the Materials Queue.`); setEditing(pr); return; }
     const { error } = await sb.from('purchase_requests').update({ status:'approved' }).eq('id', pr.id);
     if(error){ alert(error.message); return; }
     try{ const { data:admins }=await sb.from('profiles').select('id').in('role',['purchasing_admin','purchasing_personnel']); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`✅ PR ${pr.number||''} approved — ready for PO processing.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id, type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
@@ -30264,11 +30276,16 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
     return { toBuy, fromStock, shortLines };
   })();
   async function save(){ if(!f.lines.some(l=>l.item_id||l.description)){ setMsg('Add at least one item line.'); return; } setBusy(true); setMsg('');
-    const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status:f.status, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines, linked_lead_id: leadId||null };
+    // A brand-new PR with no linked project is a MANUAL request → lands in the
+    // "Manual Request" lane. One linked to a project stays "To Review".
+    const createStatus = leadId ? 'submitted' : 'manual_request';
+    const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status: isEdit ? f.status : createStatus, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines, linked_lead_id: leadId||null };
     if(!isEdit) payload.number='PR-'+Date.now().toString().slice(-5);
     const { error } = isEdit ? await sb.from('purchase_requests').update(payload).eq('id',existing.id) : await sb.from('purchase_requests').insert(payload);
     setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
-  async function setStatus(s){ if(!isEdit) return; setBusy(true); const {error}=await sb.from('purchase_requests').update({ status:s, approver_note:f.approver_note||'' }).eq('id',existing.id); setBusy(false); if(error){ alert(error.message); return; } onSaved(); }
+  async function setStatus(s){ if(!isEdit) return;
+    if(s==='approved'){ const missing=prLinesMissingSupplier({ lines:f.lines }, items); if(missing.length){ setMsg(`Pick a supplier for every material line before approving — ${missing.length} line${missing.length===1?'':'s'} still ${missing.length===1?'has':'have'} none.`); return; } }
+    setBusy(true); const {error}=await sb.from('purchase_requests').update({ status:s, approver_note:f.approver_note||'', lines:f.lines }).eq('id',existing.id); setBusy(false); if(error){ alert(error.message); return; } onSaved(); }
 
   // Custom modal title that includes client + techpack info inline.
   const titleText = isEdit
@@ -30421,8 +30438,15 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                     <label className="text-[9px] uppercase text-slate-400">Unit ₱</label>
                     <input type="number" step="0.01" className="input text-xs text-right" value={l.est_cost} onChange={e=>setLine(i,{est_cost:e.target.value})} disabled={readOnly} />
                   </div>
-                  <div className="col-span-2 text-xs">
-                    {suppText ? <span className="font-medium text-slate-700">{suppText}</span> : <span className="text-amber-600">⚠ no supplier set</span>}
+                  <div className="col-span-2">
+                    {readOnly ? (
+                      <div className="text-xs">{suppText ? <span className="font-medium text-slate-700">{suppText}</span> : <span className="text-amber-600">⚠ no supplier</span>}</div>
+                    ) : (
+                      <select className={`input text-xs ${!suppId?'border-amber-400 bg-amber-50 text-amber-700':''}`} value={l.supplier_id||(it?.supplier_id||'')} onChange={e=>{ const v=e.target.value; const s=(suppliers||[]).find(x=>x.id===v); setLine(i,{ supplier_id:v||null, supplier_name: s?(s.company||s.name||''):'' }); }} title="Assign the supplier for this material">
+                        <option value="">⚠ pick supplier…</option>
+                        {(suppliers||[]).map(s=><option key={s.id} value={s.id}>{s.company||s.name}</option>)}
+                      </select>
+                    )}
                   </div>
                   <div className="col-span-1 text-right text-xs font-semibold">{peso(Number(l.qty||0)*Number(l.est_cost||0))}</div>
                   <div className="col-span-1 text-right">{!readOnly && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
@@ -31396,8 +31420,15 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
       const byPR=new Map();
       rec.forEach(r=>{ const rn=Number(r.receive_now)||0; if(rn>0 && r.pr_id!=null && r.pr_line_idx!=null){ if(!byPR.has(r.pr_id)) byPR.set(r.pr_id,[]); byPR.get(r.pr_id).push({ idx:r.pr_line_idx, recv:rn }); } });
       for(const [prId, upds] of byPR){
-        try{ const { data:prRow }=await sb.from('purchase_requests').select('lines').eq('id',prId).maybeSingle();
-          if(prRow){ const pl=(prRow.lines||[]).map((l,i)=>{ const u=upds.find(x=>x.idx===i); return u?{...l, qty_received:(Number(l.qty_received)||0)+u.recv}:l; }); await sb.from('purchase_requests').update({ lines:pl }).eq('id',prId); }
+        try{ const { data:prRow }=await sb.from('purchase_requests').select('lines,status').eq('id',prId).maybeSingle();
+          if(prRow){
+            const pl=(prRow.lines||[]).map((l,i)=>{ const u=upds.find(x=>x.idx===i); return u?{...l, qty_received:(Number(l.qty_received)||0)+u.recv}:l; });
+            // When every buy line is fully received, the PR is Fulfilled.
+            const fullyRecv = pl.length>0 && pl.every(l=> (Number(l.qty_received)||0) >= (Number(l.qty)||0));
+            const patch = { lines:pl };
+            if(fullyRecv && prRow.status==='ordered') patch.status='fulfilled_stock';
+            await sb.from('purchase_requests').update(patch).eq('id',prId);
+          }
         }catch(_){}
       }
       onSaved();
