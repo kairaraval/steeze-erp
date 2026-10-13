@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 731 · Materials Queue (Phase 2): per-supplier 🧾 Buy List — a printable buying list of every material needed from that supplier, where you can add extra same-supplier items before finalizing into a PO. Materials Queue now shows only approved PRs. Cleaned out the old 'Unassigned supplier' items.";
+const BUILD = "Live build 732 · Buy List now shows the Client name per line (alongside the project), so the printed buying list is clearer about who each material is for.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30791,6 +30791,7 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
   const baseRows = bucket.items.map(({ line, lead, inventoryItem })=>({
     material: inventoryItem ? (inventoryItem.name + (inventoryItem.color?` - ${inventoryItem.color}`:'')) : (line.description||'(item)'),
     sku: inventoryItem?.sku || '',
+    client: (lead ? ((clients||[]).find(c=>c.id===lead.client_id)?.company || lead.client_name) : '') || '',
     project: lead?.title || '',
     qty: Number(line.qty)||0,
     unit: inventoryItem?.unit || '',
@@ -30802,6 +30803,7 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
   const Row = ({ r, extra:isExtra })=>(
     <tr className="border-t border-slate-300">
       <td className="px-2 py-1.5">{r.material}{r.sku?<span className="text-slate-400 text-[10px]"> · {r.sku}</span>:null}</td>
+      <td className="px-2 py-1.5 text-slate-600 text-xs">{r.client||(isExtra?'—':'—')}</td>
       <td className="px-2 py-1.5 text-slate-500 text-xs">{r.project||(isExtra?'manual add':'—')}</td>
       <td className="px-2 py-1.5 text-right font-semibold">{r.qty}</td>
       <td className="px-2 py-1.5 text-xs text-slate-500">{r.unit||''}</td>
@@ -30828,6 +30830,7 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
           <table className="w-full">
             <thead><tr className="text-[10px] uppercase text-slate-500 border-b border-slate-300">
               <th className="text-left px-2 py-1.5">Material</th>
+              <th className="text-left px-2 py-1.5">Client</th>
               <th className="text-left px-2 py-1.5">Project</th>
               <th className="text-right px-2 py-1.5">Qty</th>
               <th className="text-left px-2 py-1.5">Unit</th>
@@ -30836,10 +30839,10 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
             </tr></thead>
             <tbody>
               {baseRows.map((r,i)=><Row key={'b'+i} r={r} />)}
-              {extraClean.map((r,i)=><Row key={'e'+i} r={{ material:r.description, sku:'', project:'', qty:Number(r.qty)||0, unit:r.unit, est:Number(r.unit_cost)||0 }} extra />)}
-              {baseRows.length===0 && extraClean.length===0 && <tr><td colSpan={6} className="text-center text-slate-400 py-6">No items.</td></tr>}
+              {extraClean.map((r,i)=><Row key={'e'+i} r={{ material:r.description, sku:'', client:'', project:'', qty:Number(r.qty)||0, unit:r.unit, est:Number(r.unit_cost)||0 }} extra />)}
+              {baseRows.length===0 && extraClean.length===0 && <tr><td colSpan={7} className="text-center text-slate-400 py-6">No items.</td></tr>}
             </tbody>
-            <tfoot><tr className="border-t-2 border-slate-400 font-bold"><td className="px-2 py-2" colSpan={2}>Estimated total</td><td className="px-2 py-2 text-right">{baseRows.reduce((s,r)=>s+r.qty,0)+extraClean.reduce((s,r)=>s+(Number(r.qty)||0),0)} pcs</td><td></td><td className="px-2 py-2 text-right">{peso(baseTotal+extraTotal)}</td><td></td></tr></tfoot>
+            <tfoot><tr className="border-t-2 border-slate-400 font-bold"><td className="px-2 py-2" colSpan={3}>Estimated total</td><td className="px-2 py-2 text-right">{baseRows.reduce((s,r)=>s+r.qty,0)+extraClean.reduce((s,r)=>s+(Number(r.qty)||0),0)} pcs</td><td></td><td className="px-2 py-2 text-right">{peso(baseTotal+extraTotal)}</td><td></td></tr></tfoot>
           </table>
           <div className="text-[11px] text-slate-500 mt-6">Received by: ____________________   ·   Date: ____________</div>
         </div>
