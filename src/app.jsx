@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 723 · New role: Purchasing Personnel — same access as Jay-Ann's Purchasing Admin role (Purchase Requests, POs, Stock Out, Materials Library, etc.) but WITHOUT Subcon Payroll / Subcon Sewing. Assign it to the new purchasing hire.";
+const BUILD = "Live build 724 · Techpack Design Canvas: text labels are now editable again — just click a label to edit it in the Text bar above (or select it and tap ✎ Edit text). No more unreliable double-click.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26340,6 +26340,15 @@ function DesignCanvas({ value, onChange, readOnly }){
   const [draftText,setDraftText] = useState('');  // live text while editing a text box (kept in state so saves capture it)
   const editRef = useRef(null);                   // the textarea while editing — focused explicitly (SVG foreignObject autofocus is unreliable)
   useEffect(()=>{ if(editingId && editRef.current){ const t=editRef.current; setTimeout(()=>{ try{ t.focus(); t.select(); }catch(_){} }, 0); } },[editingId]);
+  // Selecting a text box opens it for editing in the Text bar above — no
+  // double-click needed. (Pointer capture during drag/select can swallow the
+  // dblclick event on some setups, so selection is the reliable trigger.)
+  useEffect(()=>{
+    if(readOnly) return;
+    const e = els.find(x=>x.id===sel) || null;
+    if(e && e.type==='text' && editingId!==e.id){ setEditingId(e.id); setDraftText(e.text||''); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[sel]);
 
   const commit = (nextEls)=> onChange({ ...v, w:DC_W, h:DC_H, els:nextEls });
   const addEl = (el)=> commit([...els, el]);
@@ -26443,7 +26452,8 @@ function DesignCanvas({ value, onChange, readOnly }){
           <button onClick={()=>fileRef.current&&fileRef.current.click()} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-600 hover:bg-slate-50" title="Upload or paste (⌘V) a background photo">{uploading?'Uploading…':(v.bg?'Change photo':'Upload / paste photo')}</button>
           {v.bg && <button onClick={()=>onChange({...v, bg:''})} className="text-xs px-2 py-1.5 rounded-md text-rose-500 hover:bg-rose-50">Remove photo</button>}
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={uploadBg} />
-          {sel && <button onClick={()=>removeEl(sel)} className="text-xs px-2.5 py-1.5 rounded-md bg-rose-500 text-white ml-auto">🗑 Delete</button>}
+          {selEl && selEl.type==='text' && editingId!==selEl.id && <button onClick={()=>{ setEditingId(selEl.id); setDraftText(selEl.text||''); }} className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-600 text-white ml-auto">✎ Edit text</button>}
+          {sel && <button onClick={()=>removeEl(sel)} className={`text-xs px-2.5 py-1.5 rounded-md bg-rose-500 text-white ${selEl&&selEl.type==='text'&&editingId!==selEl.id?'':'ml-auto'}`}>🗑 Delete</button>}
         </div>
       )}
       {!readOnly && editingId && (
@@ -26462,7 +26472,7 @@ function DesignCanvas({ value, onChange, readOnly }){
         {v.bg && <DesignCanvasBg path={v.bg} />}
         {els.map(renderEl)}
       </svg>
-      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick the Text tool and click the canvas to drop a label — then type in the Text bar that appears above (double-click any text box to edit it again). Drag other tools to draw. Select a shape to move, resize (corner handle), recolor, or delete. Paste (⌘V) or upload a photo as the background.</div>}
+      {!readOnly && <div className="text-[11px] text-slate-400 mt-1 no-print">Pick the Text tool and click the canvas to drop a label — then type in the Text bar that appears above. To edit a label later, click it (or select it and tap ✎ Edit text) and retype in the Text bar. Drag other tools to draw. Select a shape to move, resize (corner handle), recolor, or delete. Paste (⌘V) or upload a photo as the background.</div>}
     </div>
   );
 }
