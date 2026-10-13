@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 726 · HR can now Reprocess a rejected leave cash-out — it raises a fresh Request for Payment straight to Finance (not a budget request) using the finalized figures. Finance & Admin can preview the signed cash-out form from the RFP to confirm the exact amount to pay.";
+const BUILD = "Live build 727 · Rejected leave cash-out now shows Finance's actual rejection note (who rejected it, when, and the reason) right in the cash-out modal, above the Reprocess button.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17913,13 +17913,13 @@ function LeaveAnniversaryPanel({ profile, profiles, employees, leaveBalances, le
           </table></div>
         )}
       </div>
-      {viewing && <LeaveCashoutModal profile={profile} profiles={profiles} row={viewing} canEdit={canEdit} liveStatus={liveStatus(viewing.cashout)} onClose={()=>setViewing(null)} reload={reload} />}
+      {viewing && <LeaveCashoutModal profile={profile} profiles={profiles} row={viewing} canEdit={canEdit} liveStatus={liveStatus(viewing.cashout)} linkedRfp={viewing.cashout ? (rfps||[]).find(x=>x.id===viewing.cashout.rfp_id)||null : null} onClose={()=>setViewing(null)} reload={reload} />}
     </div>
   );
 }
 
 // Review + finalize + print a single anniversary leave cash-out.
-function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClose, reload }){
+function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, linkedRfp, onClose, reload }){
   const { e, hd, b, vl, sl, rate, amount, cashout } = row;
   const [busy,setBusy]=useState(false);
   const [printing,setPrinting]=useState(false);
@@ -18017,7 +18017,15 @@ function LeaveCashoutModal({ profile, profiles, row, canEdit, liveStatus, onClos
             ? <>Prepared &amp; signed by <b>{hrSigner?(hrSigner.name||hrSigner.email):'HR'}</b>{cashout.hr_signed_at?` on ${fmtDate(cashout.hr_signed_at.slice(0,10))}`:''}. {cashout.rfp_id?'A Request for Payment was created — track it in Accounting → RFPs (For Approval / For Payment).':''}</>
             : <>Review the figures, print the form for signature if needed, then finalize to sign as preparer and send to Accounting.</>}
         </div>
-        {finalized && liveStatus==='rejected' && <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2">This cash-out's Request for Payment was <b>rejected</b> by Finance. Review the figures (print the form if needed), then <b>Reprocess</b> to send a fresh RFP back to Finance for approval.</div>}
+        {finalized && liveStatus==='rejected' && (()=>{ const rej=prof(linkedRfp?.rejected_by); const when=linkedRfp?.rejected_at?fmtDate(String(linkedRfp.rejected_at).slice(0,10)):''; return (
+          <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3 space-y-1.5">
+            <div className="font-bold uppercase tracking-wide text-[10px] text-rose-600">Rejected by Finance{rej?` · ${rej.name||rej.email}`:''}{when?` · ${when}`:''}</div>
+            {linkedRfp?.rejected_reason
+              ? <div className="text-rose-800 whitespace-pre-wrap">“{linkedRfp.rejected_reason}”</div>
+              : <div className="italic text-rose-500">No reason was recorded.</div>}
+            <div className="text-rose-600">Review the figures (print the form if needed), then <b>Reprocess</b> to send a fresh RFP back to Finance for approval.</div>
+          </div>
+        ); })()}
         <div className="flex justify-end gap-2 pt-2 border-t flex-wrap">
           <button onClick={()=>setPrinting(true)} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print form</button>
           <div className="flex-1"></div>
