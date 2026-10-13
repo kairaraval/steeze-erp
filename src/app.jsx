@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 728 · Petty Cash: bulk-upload expenses from a spreadsheet (download template → upload CSV → preview → import), plus a Conversation on each float where you can @mention the approver and ping them in their Inbox.";
+const BUILD = "Live build 729 · Tablet fix for Production boards (Pattern, Cutting, Subli/DTF Pressing & sorting): the job detail + edit panel was desktop-only (hidden on tablets). Tapping a job on a tablet/phone now opens its full details & edit controls as a bottom sheet.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10682,6 +10682,19 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
                 extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
             </div>
             <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
+            {/* Tablet / phone: the side panel is lg+ only, so show the selected
+                job's details & edit controls as a bottom sheet instead. */}
+            {selected && (
+              <div className="lg:hidden fixed inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={()=>setSelId(null)}>
+                <div className="bg-white rounded-t-2xl max-h-[88vh] overflow-y-auto shadow-2xl" onClick={e=>e.stopPropagation()}>
+                  <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between z-10">
+                    <div className="text-sm font-bold truncate pr-2">{selected.item||selected.title||'Details'}</div>
+                    <button onClick={()=>setSelId(null)} className="text-slate-400 hover:text-slate-700 text-2xl leading-none shrink-0 px-1">✕</button>
+                  </div>
+                  <div className="p-4">{renderPanel(selected)}</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         ); })()}
@@ -11777,6 +11790,19 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                 extraActions={(w)=>(<button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button>)} />
             </div>
             <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
+            {/* Tablet / phone: the side panel is lg+ only, so show the selected
+                job's details & edit controls as a bottom sheet instead. */}
+            {selected && (
+              <div className="lg:hidden fixed inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={()=>setSelId(null)}>
+                <div className="bg-white rounded-t-2xl max-h-[88vh] overflow-y-auto shadow-2xl" onClick={e=>e.stopPropagation()}>
+                  <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between z-10">
+                    <div className="text-sm font-bold truncate pr-2">{selected.item||selected.title||'Details'}</div>
+                    <button onClick={()=>setSelId(null)} className="text-slate-400 hover:text-slate-700 text-2xl leading-none shrink-0 px-1">✕</button>
+                  </div>
+                  <div className="p-4">{renderPanel(selected)}</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         ); })()}
@@ -12189,6 +12215,19 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
               </div>
             </div>
             <div className="w-[360px] shrink-0 hidden lg:block sticky top-28">{renderPanel(selected)}</div>
+            {/* Tablet / phone: the side panel is lg+ only, so show the selected
+                job's details & edit controls as a bottom sheet instead. */}
+            {selected && (
+              <div className="lg:hidden fixed inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={()=>setSelId(null)}>
+                <div className="bg-white rounded-t-2xl max-h-[88vh] overflow-y-auto shadow-2xl" onClick={e=>e.stopPropagation()}>
+                  <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between z-10">
+                    <div className="text-sm font-bold truncate pr-2">{selected.item||selected.title||'Details'}</div>
+                    <button onClick={()=>setSelId(null)} className="text-slate-400 hover:text-slate-700 text-2xl leading-none shrink-0 px-1">✕</button>
+                  </div>
+                  <div className="p-4">{renderPanel(selected)}</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         ); })() : tab==='released' ? (
