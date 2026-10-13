@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 727 · Rejected leave cash-out now shows Finance's actual rejection note (who rejected it, when, and the reason) right in the cash-out modal, above the Reprocess button.";
+const BUILD = "Live build 728 · Petty Cash: bulk-upload expenses from a spreadsheet (download template → upload CSV → preview → import), plus a Conversation on each float where you can @mention the approver and ping them in their Inbox.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -966,7 +966,7 @@ function LoginScreen(){
 
 /* ----------------------- Generic activity thread (leads + dept jobs) ----------------------- */
 const DEPT_JOB_TABLE_BY_TYPE = { graphic:'graphic_design_jobs', printing:'printing_jobs', embroidery:'embroidery_jobs', knitting:'knitting_jobs', sampling:'sampling_jobs', production:'production_jobs' };
-function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack, afterChange, onOpenSource, openSourceLabel, embedded, headerless, onAttach }){
+function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack, afterChange, onOpenSource, openSourceLabel, embedded, headerless, onAttach, mentionNotify }){
   const [rows,setRows]=useState(null); const [text,setText]=useState('');
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
@@ -1096,6 +1096,16 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
           }
         } catch(mirrorErr){ console.warn('Mirror attachments failed:', mirrorErr?.message||mirrorErr); }
         if(atts.length > 0 && onAttach){ try{ onAttach(atts); }catch(_){} }
+        // Opt-in: for threads that aren't scanned by the Inbox mention feed
+        // (e.g. petty cash / cash advances), drop a standard notification so the
+        // tagged person is pinged in their Inbox. Existing threads don't pass
+        // mentionNotify, so their behavior is unchanged.
+        if(mentionNotify && Array.isArray(mentions) && mentions.length){
+          try{
+            const rows=mentions.filter(id=>id && id!==profile.id).map(id=>({ recipient_id:id, actor_id:profile.id, type:'mention', text:`${firstName(profile)} mentioned you${mentionNotify.label?` on ${mentionNotify.label}`:''}: ${t.slice(0,80)}`, link_view:mentionNotify.link_view||null, ref_type:mentionNotify.ref_type||null, ref_id:mentionNotify.ref_id||null }));
+            if(rows.length) await sb.from('notifications').insert(rows);
+          }catch(_){}
+        }
         try { await load(); } catch(_){}
         afterChange && afterChange();
       })();
@@ -37657,6 +37667,11 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   const blankRow = ()=>({ id:'r'+Math.random().toString(36).slice(2,7), date: today, gl_account_code:'', category:'', cost_center_id:'', vendor:'', description:'', amount:'', input_vat:'', receipt_url:'' });
   const [addOpen,setAddOpen]=useState(false);
   const [rows,setRows]=useState([ blankRow() ]);
+  // Bulk upload of expenses from a spreadsheet.
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkRows,setBulkRows]=useState(null);   // parsed+validated preview rows
+  const [bulkMsg,setBulkMsg]=useState('');
+  const [bulkBusy,setBulkBusy]=useState(false);
   const [busy,setBusy]=useState(false);
   const [uploadingId,setUploadingId]=useState(null);
   const [msg,setMsg]=useState('');
@@ -37711,6 +37726,53 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
     } catch(e){ setMsg('Could not save: '+(e.message||String(e))); }
     finally { setBusy(false); }
   }
+  // ── Bulk upload of expenses ──────────────────────────────────────────────
+  const BULK_HEADERS = ['Date','Description','Amount','Category','Vendor','GL Account Code','Input VAT'];
+  function downloadBulkTemplate(){
+    const example=[ todayManila(), 'Gas for delivery van', '500.00', 'Fuel & Transportation', 'Petron', '', '0.00' ];
+    const lines=[ BULK_HEADERS, example ].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+    const blob=new Blob(['﻿'+lines],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`petty-cash-expenses-template.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+  function parseBulk(text){
+    const grid=parseCSV(String(text||'').trim()); if(!grid.length){ setBulkMsg('That file looks empty.'); setBulkRows(null); return; }
+    const header=grid[0].map(h=>String(h||'').trim().toLowerCase());
+    const col=(names)=>{ for(const n of names){ const i=header.indexOf(n); if(i>=0) return i; } return -1; };
+    const ci={ date:col(['date']), desc:col(['description','particulars','details']), amt:col(['amount','amt']), cat:col(['category']), vendor:col(['vendor','payee','supplier']), gl:col(['gl account code','gl code','account code','coa','account']), vat:col(['input vat','vat']) };
+    if(ci.desc<0 || ci.amt<0){ setBulkMsg('The file needs at least "Description" and "Amount" columns. Download the template to see the format.'); setBulkRows(null); return; }
+    const out=[]; const errs=[];
+    for(let i=1;i<grid.length;i++){
+      const r=grid[i]; if(!r || r.every(c=>!String(c||'').trim())) continue;
+      const desc=String(r[ci.desc]||'').trim();
+      const amt=Number(String(r[ci.amt]||'').replace(/[₱,\s]/g,''));
+      const glCode=ci.gl>=0?String(r[ci.gl]||'').trim():'';
+      const coa=glCode?(chartAccounts||[]).find(a=>String(a.code)===glCode):null;
+      const dateRaw=ci.date>=0?String(r[ci.date]||'').trim():'';
+      const date=/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)?dateRaw:(dateRaw? (new Date(dateRaw).toString()!=='Invalid Date'? new Date(dateRaw).toISOString().slice(0,10) : today) : today);
+      const rowErr=[];
+      if(!desc) rowErr.push('no description');
+      if(!(amt>0)) rowErr.push('amount must be > 0');
+      if(glCode && !coa) rowErr.push(`GL code "${glCode}" not found`);
+      out.push({ _line:i+1, date, description:desc, amount:amt, category: (coa?coa.name:(ci.cat>=0?String(r[ci.cat]||'').trim():''))||'Other', gl_account_code: coa?coa.code:null, vendor: ci.vendor>=0?String(r[ci.vendor]||'').trim():'', input_vat: ci.vat>=0?(Number(String(r[ci.vat]||'').replace(/[₱,\s]/g,''))||0):0, _err: rowErr });
+    }
+    if(!out.length){ setBulkMsg('No data rows found under the header.'); setBulkRows(null); return; }
+    setBulkMsg(''); setBulkRows(out);
+  }
+  function onBulkFile(e){ const f=e.target.files&&e.target.files[0]; if(!f){ return; } const rd=new FileReader(); rd.onload=()=>parseBulk(String(rd.result||'')); rd.readAsText(f); e.target.value=''; }
+  async function importBulk(){
+    const valid=(bulkRows||[]).filter(r=>!r._err.length);
+    if(!valid.length){ setBulkMsg('Nothing valid to import — fix the flagged rows first.'); return; }
+    const total=valid.reduce((s,r)=>s+Number(r.amount||0),0);
+    if(total>outstanding+0.005 && !confirm(`These expenses (${peso(total)}) exceed the outstanding balance (${peso(outstanding)}). Import anyway?`)) return;
+    setBulkBusy(true); setBulkMsg('');
+    try{
+      const payload=valid.map(r=>({ date:r.date, category:r.category||'Other', gl_account_code:r.gl_account_code||null, cost_center_id:null, input_vat:Number(r.input_vat)||0, vendor:r.vendor||null, description:r.description, amount:Number(r.amount)||0, paid_via:'petty_cash', bank_id:null, receipt_url:null, tax_deductible:true, petty_cash_id:pc.id, created_by:profile.id }));
+      const { error }=await sb.from('expenses').insert(payload);
+      if(error) throw error;
+      setBulkRows(null); setBulkOpen(false); onSaved && onSaved();
+    }catch(e){ setBulkMsg('Import failed: '+(e.message||String(e))); }
+    finally{ setBulkBusy(false); }
+  }
   return (
     <Modal title={`💵 Petty Cash · ${pc.number||''}`} onClose={onClose} wide>
       <div className="space-y-4">
@@ -37763,9 +37825,52 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
           )}
         </div>
 
+        {/* Bulk upload panel */}
+        {bulkOpen && (
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-xs font-semibold text-violet-800 uppercase tracking-wide">⇪ Bulk upload expenses</div>
+              <div className="flex items-center gap-2">
+                <button onClick={downloadBulkTemplate} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-700 font-semibold hover:bg-slate-50">⬇ Download template</button>
+                <label className="text-xs px-2.5 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700 cursor-pointer">📁 Choose CSV file<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onBulkFile} /></label>
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-500">Columns: <b>Date, Description, Amount, Category, Vendor, GL Account Code, Input VAT</b>. Only <b>Description</b> and <b>Amount</b> are required. Leave GL Account Code blank to set the account later.</div>
+            {bulkMsg && <div className="text-xs text-rose-600">{bulkMsg}</div>}
+            {bulkRows && (()=>{ const ok=bulkRows.filter(r=>!r._err.length); const bad=bulkRows.filter(r=>r._err.length); const tot=ok.reduce((s,r)=>s+Number(r.amount||0),0); return (
+              <div className="space-y-2">
+                <div className="text-xs text-slate-600"><b>{ok.length}</b> ready{bad.length?<> · <span className="text-rose-600 font-semibold">{bad.length} with problems (skipped)</span></>:''} · total {peso(tot)}</div>
+                <div className="max-h-56 overflow-auto border rounded-lg bg-white">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Description</th><th className="text-left px-2 py-1">Category</th><th className="text-left px-2 py-1">Vendor</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Issue</th></tr></thead>
+                    <tbody>{bulkRows.map((r,i)=>(
+                      <tr key={i} className={`border-t ${r._err.length?'bg-rose-50':''}`}>
+                        <td className="px-2 py-1 whitespace-nowrap">{fmtDate(r.date)}</td>
+                        <td className="px-2 py-1">{r.description||<span className="text-rose-500">—</span>}</td>
+                        <td className="px-2 py-1 text-slate-500">{r.category}</td>
+                        <td className="px-2 py-1 text-slate-500">{r.vendor||'—'}</td>
+                        <td className="px-2 py-1 text-right font-semibold">{r.amount>0?peso(r.amount):<span className="text-rose-500">—</span>}</td>
+                        <td className="px-2 py-1 text-rose-600">{r._err.join(', ')}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={importBulk} disabled={bulkBusy||!ok.length} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50">{bulkBusy?'Importing…':`Import ${ok.length} expense${ok.length===1?'':'s'}`}</button>
+                  <button onClick={()=>{ setBulkRows(null); setBulkMsg(''); }} className="py-2 px-4 rounded-lg bg-white border text-slate-700 font-semibold hover:bg-slate-50">Clear</button>
+                </div>
+              </div>
+            ); })()}
+            {!bulkRows && <button onClick={()=>{ setBulkOpen(false); setBulkMsg(''); }} className="text-xs text-slate-500 hover:underline">Close</button>}
+          </div>
+        )}
+
         {/* Add expense inline form */}
         {!addOpen ? (
-          <button onClick={()=>{ resetForm(); setAddOpen(true); }} disabled={outstanding<=0.01} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">{outstanding<=0.01 ? 'Float exhausted — no more expenses can be charged' : '+ Add expenses'}</button>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={()=>{ resetForm(); setAddOpen(true); }} disabled={outstanding<=0.01} className="flex-1 min-w-[180px] py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">{outstanding<=0.01 ? 'Float exhausted — no more expenses can be charged' : '+ Add expenses'}</button>
+            <button onClick={()=>{ setBulkOpen(o=>!o); setBulkMsg(''); }} disabled={outstanding<=0.01} className="py-2 px-4 rounded-lg bg-white border border-violet-300 text-violet-700 font-semibold hover:bg-violet-50 disabled:opacity-40">⇪ Bulk upload</button>
+          </div>
         ) : (
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 space-y-2">
             <div className="text-xs font-semibold text-indigo-800 uppercase tracking-wide">Log expenses — add as many lines as you need, then save together</div>
@@ -37867,6 +37972,13 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
               })()}</tbody>
             </table>
           )}
+        </div>
+
+        {/* Conversation — @mention the approver (Admin) so they're pinged to
+            approve the liquidation/replenishment on time. */}
+        <div className="bg-white border rounded-lg p-3">
+          <div className="text-xs uppercase font-semibold text-slate-500 mb-2">💬 Conversation · tag the approver with @name</div>
+          <ThreadBody profile={profile} profiles={profiles} table="cash_advance_activity" match={{ cash_advance_id: pc.id }} scope={'pettycash/'+pc.id} titleText={`Petty Cash ${pc.number||''}`} mentionNotify={{ link_view:'petty-cash', ref_type:'cash_advance', ref_id:pc.id, label:`Petty Cash ${pc.number||''}` }} headerless embedded />
         </div>
       </div>
       {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Receipt" onClose={()=>setReceiptView(null)} />}
