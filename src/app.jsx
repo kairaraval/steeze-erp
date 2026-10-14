@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 732 · Buy List now shows the Client name per line (alongside the project), so the printed buying list is clearer about who each material is for.";
+const BUILD = "Live build 733 · Purchase Orders: VAT-inclusive toggle + a Discount box in the totals; a finalized PO is NOT sent to Finance until you press Request for Payment, and the list now shows a 📤 Sent to finance badge so you can monitor; you can reopen & re-edit a finalized PO while it's unpaid (and re-submit — it withdraws the old payment request); PO search now covers PO#, supplier, client and item.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -28659,15 +28659,16 @@ function SignatureBox({ role, name }){
 
 function POPrintView({ po, suppliers, profile, profiles, onClose }){
   const supplier = suppliers.find(s => s.id === po.supplier_id);
-  const subtotalRaw = (po.lines||[]).reduce((s,l) => s + (Number(l.qty)||0) * (Number(l.unit_cost)||0), 0);
-  // If VAT was enabled, po.total already includes VAT (saved as gross). Back out
-  // the subtotal so the print breakdown shows correct lines.
-  const subtotal = subtotalRaw;
-  const vatAmount = po.vat_enabled ? subtotal * 0.12 : 0;
-  const gross = subtotal + vatAmount;
-  const whtAmount = po.withholding_tax_enabled ? subtotal * (Number(po.withholding_tax_rate)||0)/100 : 0;
-  const netPayable = gross - whtAmount;
-  const total = Number(po.total) || gross;
+  const lineSum = (po.lines||[]).reduce((s,l) => s + (Number(l.qty)||0) * (Number(l.unit_cost)||0), 0);
+  // Mirror the form's VAT-inclusive / discount math so the printed totals match.
+  const vatBase = po.vat_enabled ? (po.vat_inclusive ? lineSum/1.12 : lineSum) : lineSum;
+  const vatAmount = po.vat_enabled ? (po.vat_inclusive ? (lineSum - lineSum/1.12) : lineSum*0.12) : 0;
+  const subtotal = vatBase;
+  const gross = vatBase + vatAmount;
+  const discount = Math.max(0, Number(po.discount_amount)||0);
+  const whtAmount = po.withholding_tax_enabled ? vatBase * (Number(po.withholding_tax_rate)||0)/100 : 0;
+  const netPayable = gross - discount - whtAmount;
+  const total = (gross - discount) || Number(po.total) || gross;
   const finalizedBy = po.finalized_by ? (profiles||[]).find(p => p.id === po.finalized_by) : null;
   const paidBy = po.paid_by ? (profiles||[]).find(p => p.id === po.paid_by) : null;
   const methodLabel = (PO_PAYMENT_METHODS.find(m=>m.key===po.payment_method)||{}).label || '—';
@@ -28759,9 +28760,15 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
                     <td className="border border-slate-400 px-2 py-1 text-right">{peso(vatAmount)}</td>
                   </tr>
                 )}
+                {discount>0 && (
+                  <tr>
+                    <td colSpan="4" className="border border-slate-400 px-2 py-1 text-right text-[10px] uppercase text-slate-500">− Discount</td>
+                    <td className="border border-slate-400 px-2 py-1 text-right">({peso(discount)})</td>
+                  </tr>
+                )}
                 <tr className="bg-slate-100">
-                  <td colSpan="4" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">Gross Total{po.vat_enabled?' (VAT inc.)':''}</td>
-                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(gross)}</td>
+                  <td colSpan="4" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs tracking-wider">{discount>0?'Total':'Gross Total'}{po.vat_enabled?' (VAT inc.)':''}</td>
+                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold text-base">{peso(gross - discount)}</td>
                 </tr>
                 {po.withholding_tax_enabled && (
                   <>
@@ -30939,8 +30946,15 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
   }
   useEffect(()=>{ if(openFromPR) setCreating(true); },[openFromPR&&openFromPR.id]);
   const counts=PO_STATUSES.reduce((a,s)=>{ a[s.key]=orders.filter(o=>o.status===s.key).length; return a; },{});
-  const rows=orders.filter(o=>(!filter||o.status===filter)&&(!search||`${o.number}`.toLowerCase().includes(search.toLowerCase())));
   const suppName=(id)=>suppliers.find(s=>s.id===id)?.company||'—';
+  // Searchable blob per PO: number, supplier, client/project names, line
+  // descriptions, status, payment method.
+  function poSearchText(o){
+    const lineText=(o.lines||[]).map(l=>`${l.description||''} ${l.client_name||''} ${l.project_title||''}`).join(' ');
+    return [o.number, suppName(o.supplier_id), o.status, o.payment_method, o.notes, lineText].filter(Boolean).join(' ').toLowerCase();
+  }
+  const q=search.trim().toLowerCase();
+  const rows=orders.filter(o=>(!filter||o.status===filter)&&(!q||poSearchText(o).includes(q)));
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -30950,7 +30964,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
         </div>
       </div>
       <div className="grid grid-cols-5 gap-3 mb-4">{PO_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PO#…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72 mb-4" />
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PO#, supplier, client, item…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-80 mb-4" />
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">PO#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">Lines</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Payment</th><th></th></tr></thead>
         <tbody>{rows.map(o=>{ const meta=poMeta(o.status); const isFinalized=o.status!=='draft' && o.status!=='cancelled'; const isPaid=o.payment_status==='paid';
@@ -30975,7 +30989,9 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
               {isFinalized ? (
                 isPaid
                   ? <span className="text-xs px-2 py-1 rounded font-semibold bg-emerald-100 text-emerald-700">✅ Paid</span>
-                  : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
+                  : o.rfp_id
+                    ? <span className="text-xs px-2 py-1 rounded font-semibold bg-blue-100 text-blue-700" title="Sent to Finance for payment — awaiting payment">📤 Sent to finance</span>
+                    : <span className="text-xs px-2 py-1 rounded font-semibold bg-rose-100 text-rose-700">⏳ Unpaid</span>
               ) : <span className="text-xs text-slate-300">—</span>}
               {!isPaid && o.expected_pay_date && <div className={`text-[10px] mt-0.5 ${o.expected_pay_date<todayManila()?'text-rose-600 font-semibold':'text-slate-400'}`}>pay by {fmtDate(o.expected_pay_date)}{o.payment_terms?` · ${o.payment_terms}`:''}</div>}
             </td>
@@ -31030,6 +31046,8 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     payment_terms: isEdit?(existing.payment_terms||''):'',
     expected_pay_date: isEdit?(existing.expected_pay_date||''):'',
     vat_enabled: isEdit?!!existing.vat_enabled:false,
+    vat_inclusive: isEdit?!!existing.vat_inclusive:false,
+    discount_amount: isEdit?(Number(existing.discount_amount)||0):0,
     withholding_tax_enabled: isEdit?!!existing.withholding_tax_enabled:false,
     withholding_tax_rate: isEdit?(Number(existing.withholding_tax_rate)||2):2,
     // One-off bank-transfer details for suppliers that don't have bank info
@@ -31056,7 +31074,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   // editable; once finalized (Placed/Partial/Received/Cancelled) the lines lock.
   const locked = isEdit && existing.status !== 'draft';
   const finalizedBy = existing && existing.finalized_by ? (profiles||[]).find(p=>p.id===existing.finalized_by) : null;
-  function up(k,v){ if(locked && !['payment_method','payment_method_detail','payment_terms','vat_enabled','withholding_tax_enabled','withholding_tax_rate'].includes(k)) return; setF(p=>({...p,[k]:v})); }
+  function up(k,v){ if(locked && !['payment_method','payment_method_detail','payment_terms','vat_enabled','vat_inclusive','discount_amount','withholding_tax_enabled','withholding_tax_rate'].includes(k)) return; setF(p=>({...p,[k]:v})); }
   function setLine(i,patch){ if(locked) return; setF(p=>({...p,lines:p.lines.map((l,j)=>j===i?{...l,...patch}:l)})); }
   // Reserve available on-hand against this line → buy only the shortfall. Records
   // the reserved qty on the line (stock_allocated) so it's earmarked for this
@@ -31088,12 +31106,19 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   //                  is computed on the VAT-exclusive amount (i.e. the subtotal), and we
   //                  deduct it from what we pay the supplier (we remit it to BIR instead).
   //   net payable  = gross − WHT  ← this is what we ACTUALLY pay the supplier
-  const subtotal = f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
-  const vatAmount = f.vat_enabled ? subtotal * 0.12 : 0;
-  const gross = subtotal + vatAmount;
-  const whtAmount = f.withholding_tax_enabled ? subtotal * (Number(f.withholding_tax_rate)||0)/100 : 0;
-  const netPayable = gross - whtAmount;
-  const total = gross; // PO "total" we save = the gross (what the supplier invoices)
+  const lineSum = f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
+  // VAT can be EXCLUSIVE (supplier adds 12% on top) or INCLUSIVE (the prices the
+  // user typed already contain VAT). For inclusive, we back out the VAT so the
+  // VAT-exclusive base is correct for WHT.
+  const vatInclusive = !!f.vat_inclusive;
+  const vatBase = f.vat_enabled ? (vatInclusive ? lineSum/1.12 : lineSum) : lineSum; // VAT-exclusive amount
+  const vatAmount = f.vat_enabled ? (vatInclusive ? (lineSum - lineSum/1.12) : lineSum*0.12) : 0;
+  const subtotal = vatBase;                 // shown as "Subtotal (VAT-exclusive)"
+  const gross = vatBase + vatAmount;         // supplier invoice before discount (= lineSum when inclusive)
+  const discount = Math.max(0, Number(f.discount_amount)||0);
+  const whtAmount = f.withholding_tax_enabled ? vatBase * (Number(f.withholding_tax_rate)||0)/100 : 0;
+  const netPayable = gross - discount - whtAmount;
+  const total = gross - discount; // PO "total" we save = supplier invoice after discount
   // Auto-pull supplier's saved bank info + payment terms when the user picks
   // a supplier. The bank rows display read-only inside the Bank Transfer panel.
   const supplier = (suppliers||[]).find(s=>s.id===f.supplier_id);
@@ -31125,7 +31150,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:f.status, notes:f.notes||'', total, lines:f.lines,
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null, expected_pay_date:f.expected_pay_date||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
-      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0, attachments:f.attachments||[] };
+      vat_enabled:!!f.vat_enabled, vat_inclusive:!!f.vat_inclusive, discount_amount:Number(f.discount_amount)||0, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0, attachments:f.attachments||[] };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
     const { data, error } = isEdit ? await sb.from('purchase_orders').update(payload).eq('id',existing.id).select().single() : await sb.from('purchase_orders').insert(payload).select().single();
     if(error){ setBusy(false); setMsg(error.message); return; }
@@ -31137,12 +31162,12 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   async function finalize(){
     if(!f.supplier_id){ setMsg('Pick a supplier.'); return; }
     if(!f.lines.length){ setMsg('Add at least one line.'); return; }
-    if(!confirm('Finalize this PO?\n\nOnce finalized:\n• Lines are locked for editing\n• The total goes to finance\n• Use the Receive button later to record deliveries\n\nMake sure quantities match what you actually bought.')) return;
+    if(!confirm('Finalize this PO?\n\nOnce finalized:\n• Lines are locked for editing (you can Reopen to edit again while unpaid)\n• It is NOT sent to Finance yet — press "Request for Payment" when you\'re ready to send it for payment\n• Use the Receive button later to record deliveries\n\nMake sure quantities match what you actually bought.')) return;
     setBusy(true); setMsg('');
     const payload={ date:f.date, expected_date:f.expected_date||null, supplier_id:f.supplier_id, pr_id:f.pr_id||null, status:'open', notes:f.notes||'', total, lines:f.lines, finalized_at: new Date().toISOString(), finalized_by: profile.id,
       payment_method:f.payment_method||null, payment_method_detail:f.payment_method_detail||null, payment_terms:f.payment_terms||null, expected_pay_date:f.expected_pay_date||null,
       transfer_bank_name: f.transfer_bank_name||null, transfer_bank_account_name: f.transfer_bank_account_name||null, transfer_bank_account_number: f.transfer_bank_account_number||null,
-      vat_enabled:!!f.vat_enabled, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
+      vat_enabled:!!f.vat_enabled, vat_inclusive:!!f.vat_inclusive, discount_amount:Number(f.discount_amount)||0, withholding_tax_enabled:!!f.withholding_tax_enabled, withholding_tax_rate:Number(f.withholding_tax_rate)||0,
       attachments:f.attachments||[],
       payment_status: existing?.payment_status || 'unpaid' };
     if(!isEdit) payload.number = nextPONumber(allOrders, f.date);
@@ -31220,11 +31245,25 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
   // Stamps audit info clear so the next finalize is a fresh action.
   async function reopen(){
     if(!isEdit) return;
-    if(!confirm('Reopen this PO as a draft?\n\nThe lines will become editable again. Use this if you need to correct what was finalized.')) return;
+    // A PAID PO can't be re-edited — the money already moved.
+    if(existing.payment_status==='paid'){ setMsg('This PO is already paid, so it can\'t be re-edited. If you really need to change it, mark it unpaid first.'); return; }
+    const wasSent = !!existing.rfp_id;
+    if(!confirm(wasSent
+      ? `Reopen this PO and withdraw its Request for Payment from Finance?\n\nIt hasn't been paid, so the PO becomes an editable draft and its RFP is withdrawn. After you fix it, Finalize again and press "Request for Payment" to re-submit.`
+      : 'Reopen this PO as a draft?\n\nThe lines become editable again. Use this if you need to correct what was finalized.')) return;
     setBusy(true);
-    const { error } = await sb.from('purchase_orders').update({ status:'draft', finalized_at:null, finalized_by:null }).eq('id', existing.id);
-    setBusy(false); if(error){ setMsg(error.message); return; }
-    onSaved();
+    try{
+      if(wasSent){
+        // Withdraw the unpaid RFP (+ any unpaid A/P voucher) from Finance.
+        await sb.from('rfps').update({ deleted_at:new Date().toISOString() }).eq('id', existing.rfp_id);
+        try{ await sb.from('ap_vouchers').update({ deleted_at:new Date().toISOString() }).eq('rfp_id', existing.rfp_id).is('deleted_at',null); }catch(_){}
+        // Tell Finance/Admin it was pulled back so they're not left looking for it.
+        try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`↩ Payment request for PO ${existing.number||''} was withdrawn by Purchasing for edits — a corrected request will follow.`, link_view:'rfps', type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      }
+      const { error } = await sb.from('purchase_orders').update({ status:'draft', finalized_at:null, finalized_by:null, rfp_id: wasSent?null:existing.rfp_id }).eq('id', existing.id);
+      if(error) throw error;
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); return; }
+    setBusy(false); onSaved();
   }
   const lineCount = f.lines.filter(l=>l.description||l.item_id).length;
   // Tracking context: linked PR, linked job (lead), client, and the stepper stage.
@@ -31332,15 +31371,27 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
 
           {/* Totals breakdown — subtotal, optional VAT, optional withholding tax, net payable */}
           <div className="mt-3 bg-white border rounded p-3 max-w-md ml-auto text-sm">
-            <div className="flex justify-between py-0.5"><span className="text-slate-500">Subtotal</span><span className="font-semibold">{peso(subtotal)}</span></div>
+            <div className="flex justify-between py-0.5"><span className="text-slate-500">Subtotal{f.vat_enabled?' (VAT-exclusive)':''}</span><span className="font-semibold">{peso(subtotal)}</span></div>
             <div className="flex items-center justify-between py-0.5">
               <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
                 <input type="checkbox" checked={!!f.vat_enabled} onChange={e=>up('vat_enabled', e.target.checked)} />
-                <span>+ VAT 12% <span className="text-[10px] text-slate-400">(supplier adds VAT)</span></span>
+                <span>VAT 12%</span>
               </label>
               <span className={f.vat_enabled?'font-semibold':'text-slate-300'}>{peso(vatAmount)}</span>
             </div>
-            <div className="flex justify-between py-0.5 border-t mt-1 pt-1"><span className="text-slate-700 font-medium">Gross (supplier invoice)</span><span className="font-bold">{peso(gross)}</span></div>
+            {f.vat_enabled && (
+              <div className="flex items-center gap-2 py-0.5 pl-6 text-[11px] text-slate-500">
+                <label className="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={!!f.vat_inclusive} onChange={e=>up('vat_inclusive', e.target.checked)} /><span>Prices already include VAT (VAT inc.)</span></label>
+              </div>
+            )}
+            <div className="flex items-center justify-between py-0.5">
+              <label className="flex items-center gap-2 text-slate-500">
+                <span>− Discount</span>
+                <input type="number" step="0.01" min="0" className="input text-xs w-24 py-0.5 px-1" value={f.discount_amount} onChange={e=>up('discount_amount', e.target.value)} placeholder="0.00" />
+              </label>
+              <span className={discount>0?'font-semibold text-rose-600':'text-slate-300'}>{peso(-discount)}</span>
+            </div>
+            <div className="flex justify-between py-0.5 border-t mt-1 pt-1"><span className="text-slate-700 font-medium">Total (supplier invoice){f.vat_enabled?' · VAT inc.':''}</span><span className="font-bold">{peso(gross - discount)}</span></div>
             <div className="flex items-center justify-between py-0.5">
               <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
                 <input type="checkbox" checked={!!f.withholding_tax_enabled} onChange={e=>up('withholding_tax_enabled', e.target.checked)} />
