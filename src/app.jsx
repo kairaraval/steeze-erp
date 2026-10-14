@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 739 · New '🛒 Request for Purchasing' button in the sidebar for every department — send Purchasing what you need (bond paper, needles, supplies). Sales roles' requests land in 'Sales Manual Requests' (renamed), everyone else's in the new 'Department Requests' lane for Minda to review.";
+const BUILD = "Live build 740 · Moved 'Request for Purchasing' from the big top button into a normal menu item right under My Profile (opens the request form). Same routing: sales → Sales Manual Requests, other departments → Department Requests.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46587,6 +46587,11 @@ function App(){
     if(hadPersonal && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='profile')){
       NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['profile','My Profile','⭐']] };
     }
+    // "Request for Purchasing" for everyone — sits right under My Profile. It
+    // opens a request modal (handled in NavBtn), not a view.
+    if(NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='req-purchasing')){
+      NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['req-purchasing','Request for Purchasing','🛒']] };
+    }
     // Sampling Board sits at the top of the Production group.
     NAV = NAV.map(g=>{
       if(g.group==='Production' && Array.isArray(g.items)){
@@ -46615,7 +46620,7 @@ function App(){
     const fav = favs.includes(k);
     return (
       <div key={(keyPrefix||'')+k} className="group/nav flex items-center">
-        <button onClick={()=>navTo(k)} className={`flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center shrink-0">{icon}</span><span className="flex-1 text-left truncate">{lbl}</span>{badge>0 && <span className={`text-[10px] ${badgeColor} text-white rounded-full px-1.5 py-0.5 font-bold shrink-0`}>{badge}</span>}</button>
+        <button onClick={()=> k==='req-purchasing' ? (setReqPurchasingOpen(true), setSidebarOpen(false)) : navTo(k)} className={`flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${view===k?'bg-slate-700/80 text-white font-semibold':'text-slate-300 hover:bg-slate-800 hover:text-white'}`}><span className="w-4 text-center shrink-0">{icon}</span><span className="flex-1 text-left truncate">{lbl}</span>{badge>0 && <span className={`text-[10px] ${badgeColor} text-white rounded-full px-1.5 py-0.5 font-bold shrink-0`}>{badge}</span>}</button>
         <button onClick={()=>toggleFav(k)} title={fav?'Remove from favorites':'Add to favorites'} className={`shrink-0 w-6 text-center text-xs ${fav?'text-amber-400':'text-slate-600 opacity-0 group-hover/nav:opacity-100'} hover:text-amber-300`}>{fav?'★':'☆'}</button>
       </div>
     );
@@ -46661,10 +46666,6 @@ function App(){
           </button>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1">
-          {/* Quick action for every department head — send Purchasing a request
-              for supplies (bond paper, needles, etc.). Routes to Sales Manual or
-              Department Requests based on the person's role. */}
-          <button type="button" onClick={()=>{ setReqPurchasingOpen(true); setSidebarOpen(false); }} className="w-full mb-2 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 flex items-center justify-center gap-1.5" title="Request supplies / materials from Purchasing">🛒 Request for Purchasing</button>
           {/* Favorites render right AFTER the first block (Dashboard … My
               Profile). Star any item to pin it here; "Only" hides the rest. */}
           {(() => { const favBlock = (favItems.length>0 || favOnly) ? (
