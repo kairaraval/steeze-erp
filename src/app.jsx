@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 741 · 'Request for Purchasing' now shows only for the other departments (production, QC, sorting/pressing, packing, HR, graphics, etc.) — hidden for sales, leadership, purchasing and accounting who already have the Purchase Requests module.";
+const BUILD = "Live build 742 · Buy List: adding a manual item now has a clear ✓ Add button — the item saves into the list immediately (shown as a confirmed row you can remove) and is included on the printed list and the PO. Enter key also adds it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30910,12 +30910,19 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
 // supplier. Minda prints this and brings it; purchasing personnel turns it into
 // a PO when finalized.
 function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
-  const [extra,setExtra]=useState([]);   // [{description, qty, unit, unit_cost}]
+  const [savedExtras,setSavedExtras]=useState([]);   // committed manual items
+  const [draft,setDraft]=useState({ description:'', qty:'', unit:'', unit_cost:'' });   // the row being entered
+  const [addMsg,setAddMsg]=useState('');
   const supName = bucket.supplier?.company || bucket.supplier?.name || '(supplier)';
   const today = todayManila();
-  function addRow(){ setExtra(e=>[...e,{ description:'', qty:1, unit:'', unit_cost:'' }]); }
-  function setRow(i,k,v){ setExtra(e=>e.map((r,j)=>j===i?{...r,[k]:v}:r)); }
-  function removeRow(i){ setExtra(e=>e.filter((_,j)=>j!==i)); }
+  function setDraftK(k,v){ setDraft(d=>({...d,[k]:v})); }
+  function addDraft(){
+    if(!(draft.description||'').trim()){ setAddMsg('Type what you need first.'); return; }
+    if(!(Number(draft.qty)>0)){ setAddMsg('Enter a quantity (more than 0).'); return; }
+    setSavedExtras(e=>[...e,{ description:draft.description.trim(), qty:Number(draft.qty), unit:(draft.unit||'').trim(), unit_cost:Number(draft.unit_cost)||0 }]);
+    setDraft({ description:'', qty:'', unit:'', unit_cost:'' }); setAddMsg('');
+  }
+  function removeSaved(i){ setSavedExtras(e=>e.filter((_,j)=>j!==i)); }
   const baseRows = bucket.items.map(({ line, lead, inventoryItem })=>({
     material: inventoryItem ? (inventoryItem.name + (inventoryItem.color?` - ${inventoryItem.color}`:'')) : (line.description||'(item)'),
     sku: inventoryItem?.sku || '',
@@ -30925,7 +30932,7 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
     unit: inventoryItem?.unit || '',
     est: Number(line.est_cost)||0,
   }));
-  const extraClean = extra.filter(e=>(e.description||'').trim() && (Number(e.qty)||0)>0);
+  const extraClean = savedExtras;
   const baseTotal = baseRows.reduce((s,r)=>s+r.qty*r.est,0);
   const extraTotal = extraClean.reduce((s,r)=>s+(Number(r.qty)||0)*(Number(r.unit_cost)||0),0);
   const Row = ({ r, extra:isExtra })=>(
@@ -30976,22 +30983,26 @@ function BuyListModal({ bucket, profile, clients, busy, onClose, onCreatePO }){
         </div>
 
         {/* Add manual items from the same supplier (not tied to a PR). */}
-        <div className="no-print bg-slate-50 border rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-semibold text-slate-700">Add items for {supName} (optional)</div>
-            <button onClick={addRow} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add item</button>
-          </div>
-          {extra.length===0 ? <div className="text-xs text-slate-400">Need something else from this supplier? Add it here — it'll print on the list and go onto the PO.</div> : (
-            <div className="space-y-1.5">{extra.map((r,i)=>(
-              <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                <input className="input text-xs col-span-6" placeholder="Material / description" value={r.description} onChange={e=>setRow(i,'description',e.target.value)} />
-                <input type="number" className="input text-xs col-span-2 text-right" placeholder="Qty" value={r.qty} onChange={e=>setRow(i,'qty',e.target.value)} />
-                <input className="input text-xs col-span-1" placeholder="Unit" value={r.unit} onChange={e=>setRow(i,'unit',e.target.value)} />
-                <input type="number" step="0.01" className="input text-xs col-span-2 text-right" placeholder="Est ₱" value={r.unit_cost} onChange={e=>setRow(i,'unit_cost',e.target.value)} />
-                <button onClick={()=>removeRow(i)} className="col-span-1 text-rose-400 hover:text-rose-600 text-sm">✕</button>
+        <div className="no-print bg-slate-50 border rounded-lg p-3 space-y-2">
+          <div className="text-xs font-semibold text-slate-700">Add items for {supName} (optional) <span className="font-normal text-slate-400">— they print on the list and go onto the PO</span></div>
+          {savedExtras.length>0 && (
+            <div className="space-y-1">{savedExtras.map((r,i)=>(
+              <div key={i} className="flex items-center gap-2 bg-white border rounded px-2 py-1 text-xs">
+                <span className="flex-1 font-medium text-slate-700 truncate">{r.description}</span>
+                <span className="text-slate-500">{r.qty}{r.unit?` ${r.unit}`:''}</span>
+                {r.unit_cost>0 && <span className="text-slate-500">· {peso(r.unit_cost)}</span>}
+                <button onClick={()=>removeSaved(i)} className="text-rose-400 hover:text-rose-600" title="Remove">✕</button>
               </div>
             ))}</div>
           )}
+          <div className="grid grid-cols-12 gap-2 items-center">
+            <input className="input text-xs col-span-6" placeholder="Material / description" value={draft.description} onChange={e=>{ setDraftK('description',e.target.value); if(addMsg) setAddMsg(''); }} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); addDraft(); } }} />
+            <input type="number" className="input text-xs col-span-2 text-right" placeholder="Qty" value={draft.qty} onChange={e=>{ setDraftK('qty',e.target.value); if(addMsg) setAddMsg(''); }} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); addDraft(); } }} />
+            <input className="input text-xs col-span-1" placeholder="Unit" value={draft.unit} onChange={e=>setDraftK('unit',e.target.value)} />
+            <input type="number" step="0.01" className="input text-xs col-span-2 text-right" placeholder="Est ₱" value={draft.unit_cost} onChange={e=>setDraftK('unit_cost',e.target.value)} />
+            <button onClick={addDraft} className="col-span-1 px-2 py-1.5 rounded-md bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700" title="Add this item to the buy list">✓ Add</button>
+          </div>
+          {addMsg && <div className="text-[11px] text-rose-600">{addMsg}</div>}
         </div>
 
         <div className="no-print flex gap-2 pt-2 border-t flex-wrap">
