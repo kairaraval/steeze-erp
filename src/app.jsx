@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 735 · Cleaner VAT control on the PO: one clear toggle — No VAT · Add 12% · VAT-inclusive — so it's obvious whether 12% is being added on top or the prices already include VAT.";
+const BUILD = "Live build 736 · Purchase Requests: projects already delivered to the client are now tucked into a 'Delivered' bucket and hidden from the board/list by default — tick '📦 Show delivered' to see them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29799,6 +29799,11 @@ const PR_URGENCIES=['normal','high','urgent'];
 
 function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, onOpenQueue, openPRId, onConsumedPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [createLeadId,setCreateLeadId]=useState(''); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
+  const [showDelivered,setShowDelivered]=useState(false);
+  // A PR's project is "delivered" once its linked lead reaches a delivered stage.
+  // Those PRs are tucked into a Delivered bucket and hidden until "Show delivered".
+  const PR_DELIVERED_STAGES=['delivered_pending','delivered_paid'];
+  const isPRDelivered=(r)=>{ const l=r.linked_lead_id ? (leads||[]).find(x=>x.id===r.linked_lead_id) : null; return !!(l && PR_DELIVERED_STAGES.includes(l.stage)); };
   // From the Inbox: a Purchase Request mention opens the exact PR here.
   React.useEffect(()=>{
     if(!openPRId) return;
@@ -29820,9 +29825,11 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   }
   const q=search.trim().toLowerCase();
   const matchSearch=(r)=> !q || prSearchText(r).includes(q);
+  const deliveredCount=requests.filter(isPRDelivered).length;
   const rows=requests
     .filter(r=>(!filter||r.status===filter))
     .filter(r=>(!sourceFilter||prSource(r)===sourceFilter))
+    .filter(r=> showDelivered || !isPRDelivered(r))
     .filter(matchSearch);
   // Board lanes ignore the status count-card filter (they ARE the stages) but honour search + source.
   const boardRows=requests
@@ -29915,6 +29922,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">{PR_STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`rounded-xl border p-4 text-left ${filter===s.key?'bg-indigo-600 border-indigo-600 text-white':'bg-white hover:border-indigo-300'}`}><div className={`text-[11px] uppercase ${filter===s.key?'text-indigo-100':'text-slate-400'}`}>{s.label}</div><div className="text-2xl font-bold">{counts[s.key]||0}</div></button>))}</div>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR#, client, project, item, techpack…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-80" />
+        <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none px-2" title="Projects already delivered to the client are hidden by default"><input type="checkbox" checked={showDelivered} onChange={e=>setShowDelivered(e.target.checked)} className="accent-indigo-600" /> 📦 Show delivered ({deliveredCount})</label>
         <div className="flex items-center gap-1 flex-wrap ml-auto">
           <span className="text-xs text-slate-400 mr-1">Source:</span>
           <button onClick={()=>setSourceFilter('')} className={`text-xs px-2.5 py-1 rounded-full border ${sourceFilter===''?'bg-slate-800 text-white border-slate-800':'bg-white hover:bg-slate-50'}`}>All</button>
@@ -29924,7 +29932,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
 
       {layout==='board' ? (
         <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-300px)]">
-          {PR_LANES.map(lane=>{ const col=boardRows.filter(r=>lane.statuses.includes(r.status)).sort((a,b)=>{ const da=derivePR(a).requiredBy||'9999', db=derivePR(b).requiredBy||'9999'; return String(da).localeCompare(String(db)); }); const mine=myLane===lane.key; return (
+          {(showDelivered ? [...PR_LANES, { key:'delivered', title:'Delivered', who:'Delivered to client', statuses:[], color:'bg-green-100 text-green-800' }] : PR_LANES).map(lane=>{ const col=(lane.key==='delivered' ? boardRows.filter(isPRDelivered) : boardRows.filter(r=>!isPRDelivered(r) && lane.statuses.includes(r.status))).sort((a,b)=>{ const da=derivePR(a).requiredBy||'9999', db=derivePR(b).requiredBy||'9999'; return String(da).localeCompare(String(db)); }); const mine=myLane===lane.key; return (
             <div key={lane.key} className={`flex-shrink-0 w-80 flex flex-col h-full rounded-lg ${mine?'ring-2 ring-indigo-400':''}`}>
               <div className={`shrink-0 rounded-t-lg px-3 py-2 ${lane.color}`}>
                 <div className="flex items-center justify-between text-xs font-bold"><span>{lane.title}</span><span className="opacity-70">{col.length}</span></div>
