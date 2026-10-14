@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 738 · PR materials: the inventory-item picker is now a type-to-search box — start typing (e.g. 'Neoprene Black') to filter instead of scrolling the whole list. '➕ Add new inventory item' still available at the top.";
+const BUILD = "Live build 739 · New '🛒 Request for Purchasing' button in the sidebar for every department — send Purchasing what you need (bond paper, needles, supplies). Sales roles' requests land in 'Sales Manual Requests' (renamed), everyone else's in the new 'Department Requests' lane for Minda to review.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29777,7 +29777,8 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, 
 
 /* ====================== PURCHASE REQUESTS ====================== */
 const PR_STATUSES=[
-  { key:'manual_request', label:'Manual Request', color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'manual_request', label:'Sales Manual Requests', color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'department_request', label:'Department Requests', color:'bg-cyan-100 text-cyan-700' },
   { key:'submitted', label:'To Review', color:'bg-amber-100 text-amber-700' },
   { key:'approved',  label:'For Materials Queue',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
@@ -29786,7 +29787,11 @@ const PR_STATUSES=[
   { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
 // Statuses that represent a new, not-yet-actioned request awaiting approval.
-const PR_AWAITING = ['submitted','manual_request'];
+const PR_AWAITING = ['submitted','manual_request','department_request'];
+// Sales-side roles whose manual requests go to "Sales Manual Requests"; everyone
+// else's "Request for Purchasing" lands in "Department Requests".
+const PR_SALES_ROLES = ['admin','manager','sales_representative','assistant'];
+function prManualStatusForRole(role){ return PR_SALES_ROLES.includes(role) ? 'manual_request' : 'department_request'; }
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 // The 5-stage purchasing pipeline:
 //   Manual Request (manual PRs) → To Review (sampling + closed-won auto PRs) →
@@ -29795,7 +29800,8 @@ function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 // Minda (Purchasing) works the first two lanes; Jay-Ann / purchasing personnel
 // take over at "For Materials Queue".
 const PR_LANES=[
-  { key:'manual',  title:'Manual Request',       who:'Minda · Purchasing',        statuses:['manual_request'], color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'manual',  title:'Sales Manual Requests', who:'Minda · Purchasing',       statuses:['manual_request'], color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'dept',    title:'Department Requests',  who:'Other departments',         statuses:['department_request'], color:'bg-cyan-100 text-cyan-700' },
   { key:'review',  title:'To Review',            who:'Minda · Purchasing',        statuses:['submitted'],      color:'bg-amber-100 text-amber-700' },
   { key:'queue',   title:'For Materials Queue',  who:'Jay-Ann · Purchasing',      statuses:['approved'],       color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered', title:'Ordered',              who:'',                          statuses:['ordered'],        color:'bg-indigo-100 text-indigo-700' },
@@ -29808,6 +29814,62 @@ function prLineSupplierId(l, items){ return l.supplier_id || (l.item_id ? (items
 function prLinesMissingSupplier(pr, items){ return (pr?.lines||[]).filter(l=>(l.item_id||l.description) && !prLineSupplierId(l, items)); }
 const PR_URGENCY_BADGE={ urgent:'bg-rose-100 text-rose-700', high:'bg-amber-100 text-amber-700', normal:'' };
 const PR_URGENCIES=['normal','high','urgent'];
+
+// Lightweight "Request for Purchasing" available to every department head. Sales
+// roles' requests land in "Sales Manual Requests"; everyone else's in "Department
+// Requests" (bond paper, needles, and whatever a department needs).
+function RequestForPurchasingModal({ profile, items, onClose, onSaved }){
+  const [rows,setRows]=useState([{ item_id:null, description:'', qty:1 }]);
+  const [justification,setJustification]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const dest = prManualStatusForRole(profile.role);
+  const itemOptions=(()=>{ const opts=[{ value:'', label:'— no specific inventory item (type it below) —' }]; (items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).forEach(it=>opts.push({ value:it.id, label:`${it.name}${it.color?` - ${it.color}`:''}${it.sku?` · ${it.sku}`:''}` })); return opts; })();
+  function setRow(i,patch){ setRows(rs=>rs.map((r,j)=>j===i?{...r,...patch}:r)); }
+  function addRow(){ setRows(rs=>[...rs,{ item_id:null, description:'', qty:1 }]); }
+  function removeRow(i){ setRows(rs=>rs.length>1?rs.filter((_,j)=>j!==i):rs); }
+  async function submit(){
+    const valid=rows.filter(r=> (r.description||'').trim() || r.item_id);
+    if(!valid.length){ setMsg('Add at least one item you need.'); return; }
+    if(valid.some(r=>!(Number(r.qty)>0))){ setMsg('Each item needs a quantity.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const lines=valid.map(r=>{ const it=(items||[]).find(x=>x.id===r.item_id); return { item_id:r.item_id||null, description:(r.description||'').trim() || (it?`${it.name}${it.color?` - ${it.color}`:''}`:''), qty:Number(r.qty)||1, est_cost:0, stock_allocated:0 }; });
+      const payload={ number:'PR-'+Date.now().toString().slice(-5), date:todayManila(), requested_by:profile.id, dept_id:null, urgency:'normal', status:dest, justification:(justification.trim()|| `Request for purchasing by ${profile.name||profile.email}`), lines, linked_lead_id:null };
+      const { data, error }=await sb.from('purchase_requests').insert(payload).select().single();
+      if(error) throw error;
+      try{ const { data:pur }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel','admin']); const notes=(pur||[]).filter(p=>p.id!==profile.id).map(p=>({ recipient_id:p.id, actor_id:profile.id, type:'system', text:`🛒 New ${dest==='department_request'?'department':'sales'} purchase request from ${profile.name||profile.email}${lines[0]?` — ${lines[0].description}`:''}`, link_view:'requests', ref_type:'purchase_request', ref_id:data.id })); if(notes.length) await sb.from('notifications').insert(notes); }catch(_){}
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="🛒 Request for Purchasing" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className={`rounded-lg border p-3 text-xs ${dest==='department_request'?'bg-cyan-50 border-cyan-200 text-cyan-800':'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-800'}`}>
+          List what your team needs to buy (e.g. bond paper, needles, supplies). This goes to Purchasing as a <strong>{dest==='department_request'?'Department Request':'Sales Manual Request'}</strong> — Minda will review and process it.
+        </div>
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-700">What do you need?</div><button onClick={addRow} className="text-xs text-indigo-600 font-semibold hover:underline">+ Add item</button></div>
+          <div className="space-y-2">{rows.map((r,i)=>(
+            <div key={i} className="grid grid-cols-12 gap-2 items-start">
+              <div className="col-span-6">
+                <SearchSelect value={r.item_id||''} onChange={(v)=>{ const it=(items||[]).find(x=>x.id===v); setRow(i,{ item_id:v||null, description: v&&it? `${it.name}${it.color?` - ${it.color}`:''}` : r.description }); }} options={itemOptions} placeholder="🔍 Search an inventory item (optional)" className="text-xs" />
+              </div>
+              <div className="col-span-4"><input className="input text-xs" placeholder="Describe the item" value={r.description} onChange={e=>setRow(i,{description:e.target.value})} /></div>
+              <div className="col-span-1"><input type="number" min="1" className="input text-xs text-right" placeholder="Qty" value={r.qty} onChange={e=>setRow(i,{qty:e.target.value})} /></div>
+              <div className="col-span-1 text-right pt-1.5">{rows.length>1 && <button onClick={()=>removeRow(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button>}</div>
+            </div>
+          ))}</div>
+        </div>
+        <TpLbl t="Reason / note (optional)"><textarea className="input min-h-[48px]" value={justification} onChange={e=>setJustification(e.target.value)} placeholder="What's this for? Any detail that helps Purchasing." /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button onClick={submit} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Sending…':'🛒 Send to Purchasing'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold hover:bg-slate-50">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function PurchaseRequestsView({ profile, requests, items, suppliers, departments, profiles, leads, clients, sampleJobs, reload, onCreatePO, onViewTechpack, onOpenQueue, openPRId, onConsumedPR }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [createLeadId,setCreateLeadId]=useState(''); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
@@ -30348,9 +30410,10 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
     return { toBuy, fromStock, shortLines };
   })();
   async function save(){ if(!f.lines.some(l=>l.item_id||l.description)){ setMsg('Add at least one item line.'); return; } setBusy(true); setMsg('');
-    // A brand-new PR with no linked project is a MANUAL request → lands in the
-    // "Manual Request" lane. One linked to a project stays "To Review".
-    const createStatus = leadId ? 'submitted' : 'manual_request';
+    // A brand-new PR with no linked project is a MANUAL request. Sales roles land
+    // in "Sales Manual Requests"; any other department lands in "Department
+    // Requests". One linked to a project stays "To Review".
+    const createStatus = leadId ? 'submitted' : prManualStatusForRole(profile.role);
     const payload={ date:f.date, requested_by:f.requested_by||profile.id, dept_id:f.dept_id||null, urgency:f.urgency, status: isEdit ? f.status : createStatus, justification:f.justification||'', approver_note:f.approver_note||'', lines:f.lines, linked_lead_id: leadId||null };
     if(!isEdit) payload.number='PR-'+Date.now().toString().slice(-5);
     const { error } = isEdit ? await sb.from('purchase_requests').update(payload).eq('id',existing.id) : await sb.from('purchase_requests').insert(payload);
@@ -45210,6 +45273,7 @@ function App(){
   // Mobile drawer: sidebar slides in/out from the left on phones. On desktop
   // (md and up) it's always visible and this state has no effect.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [reqPurchasingOpen, setReqPurchasingOpen] = useState(false);
   function navTo(v){ setView(v); setSidebarOpen(false); }
 
   // Mention notifications: mute toggle + toast + ref to keep callback fresh.
@@ -46597,6 +46661,10 @@ function App(){
           </button>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1">
+          {/* Quick action for every department head — send Purchasing a request
+              for supplies (bond paper, needles, etc.). Routes to Sales Manual or
+              Department Requests based on the person's role. */}
+          <button type="button" onClick={()=>{ setReqPurchasingOpen(true); setSidebarOpen(false); }} className="w-full mb-2 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 flex items-center justify-center gap-1.5" title="Request supplies / materials from Purchasing">🛒 Request for Purchasing</button>
           {/* Favorites render right AFTER the first block (Dashboard … My
               Profile). Star any item to pin it here; "Only" hides the rest. */}
           {(() => { const favBlock = (favItems.length>0 || favOnly) ? (
@@ -46758,6 +46826,8 @@ function App(){
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
       </main>
+
+      {reqPurchasingOpen && <RequestForPurchasingModal profile={profile} items={items} onClose={()=>setReqPurchasingOpen(false)} onSaved={()=>{ setReqPurchasingOpen(false); try{ loadAll(); }catch(_){} setToast({ title:'Sent to Purchasing', body:'Your request was sent. Purchasing will review it.' }); }} />}
 
       {/* 🎉 Closed-Won celebration overlay */}
       {wonCelebration && (
