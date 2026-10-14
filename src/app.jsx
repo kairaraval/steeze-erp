@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 740 · Moved 'Request for Purchasing' from the big top button into a normal menu item right under My Profile (opens the request form). Same routing: sales → Sales Manual Requests, other departments → Department Requests.";
+const BUILD = "Live build 741 · 'Request for Purchasing' now shows only for the other departments (production, QC, sorting/pressing, packing, HR, graphics, etc.) — hidden for sales, leadership, purchasing and accounting who already have the Purchase Requests module.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46587,9 +46587,11 @@ function App(){
     if(hadPersonal && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='profile')){
       NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['profile','My Profile','⭐']] };
     }
-    // "Request for Purchasing" for everyone — sits right under My Profile. It
-    // opens a request modal (handled in NavBtn), not a view.
-    if(NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='req-purchasing')){
+    // "Request for Purchasing" — only for the OTHER departments that don't already
+    // have the Purchase Requests module (sales, leadership, purchasing and
+    // accounting create PRs directly, so it would be redundant for them).
+    const PR_REQUEST_HIDE_ROLES = ['admin','agm','manager','sales_representative','assistant','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer'];
+    if(!PR_REQUEST_HIDE_ROLES.includes(profile.role) && NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].items.some(it=>it[0]==='req-purchasing')){
       NAV[0] = { ...NAV[0], items: [...NAV[0].items, ['req-purchasing','Request for Purchasing','🛒']] };
     }
     // Sampling Board sits at the top of the Production group.
