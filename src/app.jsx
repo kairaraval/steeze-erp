@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 737 · PR materials editor tidied up: columns aligned, the scary 'Legacy' note removed (old text now just shows as a muted hint), and the '🧱 Blocks available' strip is now clickable — tap 'Use N from blocks' to cover the line from cut blocks instead of buying new fabric (flows through to Stock Out and decrements block inventory).";
+const BUILD = "Live build 738 · PR materials: the inventory-item picker is now a type-to-search box — start typing (e.g. 'Neoprene Black') to filter instead of scrolling the whole list. '➕ Add new inventory item' still available at the top.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30239,6 +30239,15 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
     return out;
   })();
   const BUCKET_META = { fabrics:{label:'Fabrics', icon:'🧵'}, ready_made:{label:'Ready Made Items', icon:'👕'}, trims:{label:'Trims', icon:'🔗'}, printing:{label:'Printing Supplies', icon:'🖨'}, office:{label:'Office Supplies', icon:'📎'}, other:{label:'Other Supplies', icon:'•'} };
+  // Flat, searchable option list for the inventory-item picker (bucket icon kept
+  // as a prefix so grouping context survives in the type-ahead list).
+  const itemOptions = (()=>{
+    const opts=[{ value:'__new__', label:'➕ Add new inventory item…' }];
+    ['fabrics','ready_made','trims','printing','office','other'].forEach(bk=>{
+      (itemsByBucket[bk]||[]).forEach(it=>opts.push({ value:it.id, label:`${BUCKET_META[bk].icon} ${it.name}${it.color?` - ${it.color}`:''}${it.sku?` · ${it.sku}`:''}` }));
+    });
+    return opts;
+  })();
   const itemById = (id)=> (items||[]).find(i=>i.id===id);
   const supplierName = (id)=> (suppliers||[]).find(s=>s.id===id)?.company || '';
 
@@ -30482,15 +30491,10 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
               <div key={i} className="bg-white border rounded p-2">
                 <div className="grid grid-cols-12 gap-2 items-center">
                   <div className="col-span-4">
-                    <select className="input text-xs" value={l.item_id||''} onChange={e=>pickItem(i, e.target.value)} disabled={readOnly}>
-                      <option value="">— pick an inventory item —</option>
-                      <option value="__new__" style={{fontWeight:'bold', color:'#4f46e5'}}>+ Add new inventory item…</option>
-                      {['fabrics','ready_made','trims','printing','office','other'].map(bk => itemsByBucket[bk].length>0 && (
-                        <optgroup key={bk} label={`${BUCKET_META[bk].icon} ${BUCKET_META[bk].label}`}>
-                          {itemsByBucket[bk].map(it=>(<option key={it.id} value={it.id}>{it.name}{it.color?` - ${it.color}`:''}{it.sku?` · ${it.sku}`:''}</option>))}
-                        </optgroup>
-                      ))}
-                    </select>
+                    {readOnly
+                      ? <div className="input text-xs bg-slate-50 truncate" title={it?`${it.name}${it.color?` - ${it.color}`:''}`:''}>{it ? `${it.name}${it.color?` - ${it.color}`:''}` : <span className="text-slate-400">—</span>}</div>
+                      : <SearchSelect value={l.item_id||''} onChange={(v)=>pickItem(i, v)} options={itemOptions} placeholder="🔍 Search inventory item…" className="text-xs" />
+                    }
                     {hasLegacyDesc && <div className="text-[10px] text-slate-400 mt-1 truncate" title={l.description}>{l.description}</div>}
                   </div>
                   <div className="col-span-2">
