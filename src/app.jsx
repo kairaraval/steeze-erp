@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 733 · Purchase Orders: VAT-inclusive toggle + a Discount box in the totals; a finalized PO is NOT sent to Finance until you press Request for Payment, and the list now shows a 📤 Sent to finance badge so you can monitor; you can reopen & re-edit a finalized PO while it's unpaid (and re-submit — it withdraws the old payment request); PO search now covers PO#, supplier, client and item.";
+const BUILD = "Live build 734 · Stock Out: a project that was already fulfilled from stock at the Purchase Request step no longer reappears in the Stock Out queue; and the Issue-materials list now pre-fills every material the project needs across all its PRs (reserved-from-stock AND bought-on-PO/received), so you can pull them from inventory in one click.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5946,27 +5946,29 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
      • Clears matching PR.lines.stock_allocated so reservations release
    Visible to: Production, Purchasing, Admin, Accounting. */
 function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved }){
-  // Find PR linked to the same lead — used to pre-fill candidate items.
-  const linkedPR = (requests||[]).find(r => r.linked_lead_id === job.lead_id && r.deleted_at == null);
-  // Build initial rows from the PR.lines (only ones with stock_allocated > 0 are
-  // the obvious "pull from stock" intent). Fall back to all PR lines if none.
+  // Every non-cancelled PR for this project. We pre-fill the pull list from ALL
+  // of them so materials Minda requested — whether reserved from stock OR bought
+  // on a PO and since received into inventory — show up ready to pull. (PRs
+  // already fulfilled from stock had their lines zeroed, so they contribute
+  // nothing.) linkedPR (the first one) is used for the reservation write-back.
+  const leadPRs = (requests||[]).filter(r => r.linked_lead_id === job.lead_id && r.deleted_at == null && r.status!=='cancelled' && r.status!=='rejected');
+  const linkedPR = leadPRs[0] || null;
   const initialRows = (()=>{
-    if(!linkedPR) return [{ item_id:null, qty:0, unit:'pc', notes:'' }];
-    const lines = linkedPR.lines || [];
-    const allocated = lines.filter(l => l.item_id && Number(l.stock_allocated||0) > 0);
-    const source = allocated.length > 0 ? allocated : lines.filter(l => l.item_id);
-    if(source.length === 0) return [{ item_id:null, qty:0, unit:'pc', notes:'' }];
-    return source.map(l => {
-      const it = (items||[]).find(x=>x.id===l.item_id);
-      const allocatedAmt = Number(l.stock_allocated||0);
-      return {
-        item_id: l.item_id,
-        qty: allocatedAmt > 0 ? allocatedAmt : (Number(l.qty)||0),
-        unit: it?.unit || 'pc',
-        notes: '',
-        pr_line_idx: lines.indexOf(l),  // remember which PR line this came from
-      };
+    const byItem = new Map();
+    leadPRs.forEach(pr => {
+      (pr.lines||[]).forEach((l,idx) => {
+        if(!l.item_id) return;
+        // Full project requirement for the line = what was reserved from stock
+        // plus what was bought (now in inventory once received).
+        const need = Number(l.stock_allocated||0) + Number(l.qty||0);
+        if(need <= 0) return;
+        const it = (items||[]).find(x=>x.id===l.item_id);
+        if(byItem.has(l.item_id)){ byItem.get(l.item_id).qty += need; }
+        else byItem.set(l.item_id, { item_id:l.item_id, qty:need, unit: it?.unit||'pc', notes:'', pr_line_idx: idx, pr_id: pr.id });
+      });
     });
+    const out = [...byItem.values()];
+    return out.length ? out : [{ item_id:null, qty:0, unit:'pc', notes:'' }];
   })();
   const [rows,setRows]=useState(initialRows);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -7796,12 +7798,27 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
   const [histSearch,setHistSearch]=useState('');
   const [tab,setTab]=useState('jobs'); // 'jobs' | 'history'
 
+  // Leads whose materials were ALREADY fully issued from stock at the Purchase
+  // Request step (fulfilled_stock) and have nothing bought via PO still waiting
+  // to be pulled. Their production jobs shouldn't appear here again.
+  const stockFulfilledLeads = (()=>{
+    const byLead = {};
+    (requests||[]).filter(r=>!r.deleted_at && r.linked_lead_id && r.status!=='cancelled' && r.status!=='rejected').forEach(r=>{ (byLead[r.linked_lead_id]=byLead[r.linked_lead_id]||[]).push(r); });
+    const s=new Set();
+    Object.entries(byLead).forEach(([leadId,prs])=>{
+      const hasStockFulfilled = prs.some(r=>r.status==='fulfilled_stock');
+      const hasPending = prs.some(r=>['submitted','manual_request','approved','ordered','partial'].includes(r.status));
+      if(hasStockFulfilled && !hasPending) s.add(leadId);
+    });
+    return s;
+  })();
   // Active production jobs that haven't been delivered yet AND haven't been
   // explicitly marked materials-complete. These are the candidates Purchasing
   // can issue materials for. Sorted by deadline.
   const activeJobs = (prodJobs||[])
     .filter(j => !PRODUCTION_DONE.includes(j.status))
     .filter(j => !j.materials_complete_at)
+    .filter(j => !(j.lead_id && stockFulfilledLeads.has(j.lead_id)))
     .filter(j => !jobSearch || `${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(jobSearch.toLowerCase()))
     .sort((a,b)=>{
       const aT = a.due_date ? new Date(a.due_date+'T00:00:00').getTime() : Number.POSITIVE_INFINITY;
