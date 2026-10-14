@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 734 · Stock Out: a project that was already fulfilled from stock at the Purchase Request step no longer reappears in the Stock Out queue; and the Issue-materials list now pre-fills every material the project needs across all its PRs (reserved-from-stock AND bought-on-PO/received), so you can pull them from inventory in one click.";
+const BUILD = "Live build 735 · Cleaner VAT control on the PO: one clear toggle — No VAT · Add 12% · VAT-inclusive — so it's obvious whether 12% is being added on top or the prices already include VAT.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31389,18 +31389,21 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
           {/* Totals breakdown — subtotal, optional VAT, optional withholding tax, net payable */}
           <div className="mt-3 bg-white border rounded p-3 max-w-md ml-auto text-sm">
             <div className="flex justify-between py-0.5"><span className="text-slate-500">Subtotal{f.vat_enabled?' (VAT-exclusive)':''}</span><span className="font-semibold">{peso(subtotal)}</span></div>
-            <div className="flex items-center justify-between py-0.5">
-              <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
-                <input type="checkbox" checked={!!f.vat_enabled} onChange={e=>up('vat_enabled', e.target.checked)} />
-                <span>VAT 12%</span>
-              </label>
-              <span className={f.vat_enabled?'font-semibold':'text-slate-300'}>{peso(vatAmount)}</span>
-            </div>
-            {f.vat_enabled && (
-              <div className="flex items-center gap-2 py-0.5 pl-6 text-[11px] text-slate-500">
-                <label className="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={!!f.vat_inclusive} onChange={e=>up('vat_inclusive', e.target.checked)} /><span>Prices already include VAT (VAT inc.)</span></label>
+            {(()=>{ const vatMode = !f.vat_enabled ? 'none' : (f.vat_inclusive ? 'inc' : 'add');
+              const seg=(on)=>`px-2.5 py-1 rounded-md transition ${on?'bg-indigo-600 text-white font-semibold shadow-sm':'text-slate-600 hover:bg-white'}`;
+              return (
+              <div className="flex items-center justify-between gap-2 py-1 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 text-[11px] uppercase tracking-wide">VAT 12%</span>
+                  <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-[11px]">
+                    <button type="button" onClick={()=>up('vat_enabled',false)} className={seg(vatMode==='none')}>No VAT</button>
+                    <button type="button" onClick={()=>{ up('vat_enabled',true); up('vat_inclusive',false); }} className={seg(vatMode==='add')} title="Supplier adds 12% VAT on top of the prices">Add 12%</button>
+                    <button type="button" onClick={()=>{ up('vat_enabled',true); up('vat_inclusive',true); }} className={seg(vatMode==='inc')} title="The prices you typed already include 12% VAT">VAT-inclusive</button>
+                  </div>
+                </div>
+                <span className={f.vat_enabled?'font-semibold':'text-slate-300'}>{peso(vatAmount)}</span>
               </div>
-            )}
+              ); })()}
             <div className="flex items-center justify-between py-0.5">
               <label className="flex items-center gap-2 text-slate-500">
                 <span>− Discount</span>
