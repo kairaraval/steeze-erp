@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 736 · Purchase Requests: projects already delivered to the client are now tucked into a 'Delivered' bucket and hidden from the board/list by default — tick '📦 Show delivered' to see them.";
+const BUILD = "Live build 737 · PR materials editor tidied up: columns aligned, the scary 'Legacy' note removed (old text now just shows as a muted hint), and the '🧱 Blocks available' strip is now clickable — tap 'Use N from blocks' to cover the line from cut blocks instead of buying new fabric (flows through to Stock Out and decrements block inventory).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5955,16 +5955,16 @@ function PullMaterialsModal({ job, items, requests, profile, onClose, onSaved })
   const linkedPR = leadPRs[0] || null;
   const initialRows = (()=>{
     const byItem = new Map();
+    const addNeed=(itemId, qty, idx, prId)=>{ if(!itemId || qty<=0) return; const it=(items||[]).find(x=>x.id===itemId); if(byItem.has(itemId)){ byItem.get(itemId).qty += qty; } else byItem.set(itemId, { item_id:itemId, qty, unit: it?.unit||'pc', notes:'', pr_line_idx: idx, pr_id: prId }); };
     leadPRs.forEach(pr => {
       (pr.lines||[]).forEach((l,idx) => {
-        if(!l.item_id) return;
-        // Full project requirement for the line = what was reserved from stock
-        // plus what was bought (now in inventory once received).
-        const need = Number(l.stock_allocated||0) + Number(l.qty||0);
-        if(need <= 0) return;
-        const it = (items||[]).find(x=>x.id===l.item_id);
-        if(byItem.has(l.item_id)){ byItem.get(l.item_id).qty += need; }
-        else byItem.set(l.item_id, { item_id:l.item_id, qty:need, unit: it?.unit||'pc', notes:'', pr_line_idx: idx, pr_id: pr.id });
+        if(l.item_id){
+          // Full project requirement for the line = reserved from stock + bought
+          // (now in inventory once received).
+          addNeed(l.item_id, Number(l.stock_allocated||0) + Number(l.qty||0), idx, pr.id);
+        }
+        // Pieces earmarked from cut blocks are pulled from the block items.
+        (l.block_items||[]).forEach(b=> addNeed(b.item_id, Number(b.qty||0), idx, pr.id));
       });
     });
     const out = [...byItem.values()];
@@ -29668,6 +29668,8 @@ async function issuePRFromStock(pr, items, profile){
   const consume = (pr.lines||[])
     .filter(l=> l.item_id && (Number(l.qty||0)+Number(l.stock_allocated||0))>0)
     .map(l=>({ item_id:l.item_id, qty: Number(l.qty||0)+Number(l.stock_allocated||0) }));
+  // Pieces pulled from cut BLOCKS (fabric blocks) are consumed from the block items.
+  (pr.lines||[]).forEach(l=>{ (l.block_items||[]).forEach(b=>{ if(b.item_id && Number(b.qty||0)>0) consume.push({ item_id:b.item_id, qty:Number(b.qty||0) }); }); });
   if(consume.length){
     const movements = consume.map(c=>({
       item_id:c.item_id, type:'out', qty:c.qty,
@@ -29683,7 +29685,7 @@ async function issuePRFromStock(pr, items, profile){
     }
     // On-hand is decremented automatically by the stock_movements trigger.
   }
-  const newLines = (pr.lines||[]).map(l=> l.item_id ? { ...l, qty:0, stock_allocated:0 } : l);
+  const newLines = (pr.lines||[]).map(l=> l.item_id ? { ...l, qty:0, stock_allocated:0, block_items:[] } : l);
   const { error } = await sb.from('purchase_requests').update({ status:'fulfilled_stock', lines:newLines }).eq('id', pr.id);
   if(error) throw error;
   // The materials were just issued from stock for this order — take its linked
@@ -29700,7 +29702,7 @@ async function issuePRFromStock(pr, items, profile){
 // Reusable stock-visibility strip that renders under a PR/PO line item.
 // Shows On-hand · Reserved · Available with color coding. If `onPullFromStock`
 // is provided, also renders a "Pull from stock" button when there's stock to grab.
-function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, onUnreserve, readOnly, mode='pr', items }){
+function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, onUnreserve, onPullFromBlocks, onClearBlocks, readOnly, mode='pr', items }){
   if(!item) return <div className="text-[10px] text-slate-400 px-2 py-1">No inventory link — stock info unavailable.</div>;
   // For a sublimation fabric, also surface the cut BLOCKS available (what
   // production actually uses), matched by block item name starting with the
@@ -29709,10 +29711,20 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, 
     ? (items||[]).filter(i=>(i.bucket||'').toLowerCase()==='blocks' && Number(i.qty||0)>0 && String(i.name||'').toLowerCase().startsWith(String(item.name||'').toLowerCase()))
     : [];
   const blocksTotal = blocks.reduce((s,b)=>s+Number(b.qty||0),0);
-  const blocksStrip = blocks.length>0 ? (
-    <div className="text-[10px] border border-indigo-200 bg-indigo-50 text-indigo-900 rounded px-2 py-1 mt-1">
-      <strong>🧱 Blocks available:</strong> {blocksTotal} pcs
-      <span className="text-indigo-600 ml-1">· {blocks.map(b=>{ const sz=String(b.name||'').split('·').pop().trim(); return `${sz}: ${Math.round(Number(b.qty||0))}`; }).join(' · ')}</span>
+  const blockAlloc = (line.block_items||[]).reduce((s,p)=>s+Number(p.qty||0),0);
+  const canUseBlocks = mode==='pr' && !readOnly && onPullFromBlocks && blocksTotal>0;
+  const blocksStrip = (blocks.length>0 || blockAlloc>0) ? (
+    <div className="text-[10px] border border-indigo-200 bg-indigo-50 text-indigo-900 rounded px-2 py-1 mt-1 flex items-center justify-between gap-2 flex-wrap">
+      <div>
+        <strong>🧱 Blocks available:</strong> {blocksTotal} pcs
+        {blocks.length>0 && <span className="text-indigo-600 ml-1">· {blocks.map(b=>{ const sz=String(b.name||'').split('·').pop().trim(); return `${sz}: ${Math.round(Number(b.qty||0))}`; }).join(' · ')}</span>}
+        {blockAlloc>0 && <span className="font-bold ml-1 text-emerald-700">· using {blockAlloc} from blocks</span>}
+      </div>
+      {blockAlloc>0 ? (
+        !readOnly && mode==='pr' && <button onClick={onClearBlocks} className="text-[10px] px-2 py-0.5 rounded bg-white border border-slate-300 text-slate-500 font-semibold hover:bg-slate-100 shrink-0" title="Undo — buy the quantity again">↺ Undo blocks</button>
+      ) : (
+        canUseBlocks && Number(line.qty||0)>0 && <button onClick={onPullFromBlocks} className="text-[10px] px-2 py-0.5 rounded bg-white border border-indigo-400 text-indigo-700 font-bold hover:bg-indigo-100 shrink-0" title="Use cut blocks from inventory instead of buying new fabric">🧱 Use {Math.min(blocksTotal, Number(line.qty||0))} from blocks</button>
+      )}
     </div>
   ) : null;
   const cov = lineCoverage(line, item, reservations);
@@ -30290,6 +30302,25 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
     const l = f.lines[i];
     setLine(i, { qty: Number(l.qty||0) + Number(l.stock_allocated||0), stock_allocated: 0 });
   }
+  // Blocks = pre-cut fabric pieces in inventory. Using blocks covers the buy qty
+  // without purchasing new fabric. We greedily allocate across the block sizes
+  // and record the picks on the line (block_items) so Stock Out can issue them.
+  function blocksForItem(it){
+    if(!it || !['fabrics','remnants'].includes((it.bucket||'').toLowerCase())) return [];
+    return (items||[]).filter(i=>(i.bucket||'').toLowerCase()==='blocks' && Number(i.qty||0)>0 && String(i.name||'').toLowerCase().startsWith(String(it.name||'').toLowerCase()));
+  }
+  function pullFromBlocks(i){
+    const l=f.lines[i]; const it=l.item_id?itemById(l.item_id):null; const blocks=blocksForItem(it); if(!blocks.length) return;
+    const already=(l.block_items||[]).reduce((s,p)=>s+Number(p.qty||0),0);
+    let need=Number(l.qty||0)+already;              // full line requirement
+    const picks=[]; for(const b of blocks){ if(need<=0) break; const take=Math.min(Number(b.qty||0), need); if(take>0){ picks.push({ item_id:b.id, name:b.name, qty:take }); need-=take; } }
+    const pulled=picks.reduce((s,p)=>s+p.qty,0);
+    setLine(i,{ qty:Math.max(0,(Number(l.qty||0)+already)-pulled), block_items:picks });
+  }
+  function clearBlocks(i){
+    const l=f.lines[i]; const pulled=(l.block_items||[]).reduce((s,p)=>s+Number(p.qty||0),0);
+    setLine(i,{ qty:Number(l.qty||0)+pulled, block_items:[] });
+  }
   const total=f.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.est_cost)||0),0);
 
   // Overall coverage banner: how many lines need to be bought vs how many can
@@ -30432,8 +30463,8 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
             {!readOnly && <button onClick={addLine} className="text-xs text-indigo-600 font-semibold">+ Add line</button>}
           </div>
           <div className="grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wide text-slate-500 px-2 mb-1">
-            <div className="col-span-5">Inventory item</div>
-            <div className="col-span-1 text-right">Qty</div>
+            <div className="col-span-4">Inventory item</div>
+            <div className="col-span-2 text-right">Buy qty</div>
             <div className="col-span-2 text-right">Unit ₱</div>
             <div className="col-span-2">Supplier</div>
             <div className="col-span-1 text-right">Subtotal</div>
@@ -30460,14 +30491,12 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                         </optgroup>
                       ))}
                     </select>
-                    {hasLegacyDesc && <div className="text-[10px] text-amber-600 mt-1">⚠ Legacy: "{l.description}" — pick an inventory item to replace</div>}
+                    {hasLegacyDesc && <div className="text-[10px] text-slate-400 mt-1 truncate" title={l.description}>{l.description}</div>}
                   </div>
                   <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-400">Buy qty</label>
                     <input type="number" className="input text-xs text-right" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={readOnly} />
                   </div>
                   <div className="col-span-2">
-                    <label className="text-[9px] uppercase text-slate-400">Unit ₱</label>
                     <input type="number" step="0.01" className="input text-xs text-right" value={l.est_cost} onChange={e=>setLine(i,{est_cost:e.target.value})} disabled={readOnly} />
                   </div>
                   <div className="col-span-2">
@@ -30475,17 +30504,17 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                       <div className="text-xs">{suppText ? <span className="font-medium text-slate-700">{suppText}</span> : <span className="text-amber-600">⚠ no supplier</span>}</div>
                     ) : (
                       <select className={`input text-xs ${!suppId?'border-amber-400 bg-amber-50 text-amber-700':''}`} value={l.supplier_id||(it?.supplier_id||'')} onChange={e=>{ const v=e.target.value; const s=(suppliers||[]).find(x=>x.id===v); setLine(i,{ supplier_id:v||null, supplier_name: s?(s.company||s.name||''):'' }); }} title="Assign the supplier for this material">
-                        <option value="">⚠ pick supplier…</option>
+                        <option value="">pick supplier…</option>
                         {(suppliers||[]).map(s=><option key={s.id} value={s.id}>{s.company||s.name}</option>)}
                       </select>
                     )}
                   </div>
-                  <div className="col-span-1 text-right text-xs font-semibold">{peso(Number(l.qty||0)*Number(l.est_cost||0))}</div>
-                  <div className="col-span-1 text-right">{!readOnly && <button onClick={()=>removeLine(i)} className="text-rose-400 text-sm">✕</button>}</div>
+                  <div className="col-span-1 text-right text-xs font-semibold self-center">{peso(Number(l.qty||0)*Number(l.est_cost||0))}</div>
+                  <div className="col-span-1 text-right self-center">{!readOnly && <button onClick={()=>removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button>}</div>
                 </div>
-                {/* Stock visibility strip — Layer 1. Shows On-hand / Reserved / Available
-                    with color-coded coverage and a "Pull from stock" split button. */}
-                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={readOnly} mode="pr" items={items} onPullFromStock={()=>pullFromStock(i)} />}
+                {/* Stock visibility strip — On-hand / Reserved / Available + Pull-from-stock
+                    and Use-from-blocks actions. */}
+                {l.item_id && <StockLineStrip item={it} line={l} reservations={reservations} readOnly={readOnly} mode="pr" items={items} onPullFromStock={()=>pullFromStock(i)} onPullFromBlocks={()=>pullFromBlocks(i)} onClearBlocks={()=>clearBlocks(i)} />}
                 {allocated > 0 && !readOnly && (
                   <div className="text-[10px] mt-1 px-2 py-1 bg-emerald-50 border border-emerald-200 rounded flex items-center justify-between">
                     <span>⤓ <strong>{allocated}</strong> being pulled from stock for this line. Buy qty above is the remainder.</span>
