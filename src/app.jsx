@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 755 · Bank Reconciliation: post-dated checks (PDCs) are now hidden from the list by default (still excluded from the balance) — toggle 'Show post-dated' to reveal them. They surface for reconciliation on their own date.";
+const BUILD = "Live build 756 · Bank Reconciliation: ticking 'Reconciled' now stamps who did it and when (shown under the checkbox), for the audit trail. Unticking clears the stamp.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32095,7 +32095,7 @@ function soOpen(sos){ return (sos||[]).filter(s=>s.status!=='paid' && s.status!=
 
 
 /* ─────────── BANK ACCOUNTS ─────────── */
-function BankAccountsView({ profile, bankAccounts, bankTransactions, vouchers, reload }){
+function BankAccountsView({ profile, profiles, bankAccounts, bankTransactions, vouchers, reload }){
   const [editing,setEditing]=useState(null);  // bank to edit (account name/number/opening balance)
   const [detail,setDetail]=useState(null);    // bank to see transaction history for
   const [adding,setAdding]=useState(false);    // adding a brand-new bank account
@@ -32152,7 +32152,7 @@ function BankAccountsView({ profile, bankAccounts, bankTransactions, vouchers, r
 
       {adding && <BankAccountCreateModal profile={profile} onClose={()=>setAdding(false)} onSaved={()=>{ setAdding(false); reload(); }} />}
       {editing && <BankAccountEditModal bank={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} />}
-      {detail && <BankAccountDetailModal bank={detail} txns={(bankTransactions||[]).filter(t=>t.bank_id===detail.id)} vouchers={vouchers} onClose={()=>setDetail(null)} reload={reload} canEdit={canEdit} />}
+      {detail && <BankAccountDetailModal bank={detail} txns={(bankTransactions||[]).filter(t=>t.bank_id===detail.id)} vouchers={vouchers} profile={profile} profiles={profiles} onClose={()=>setDetail(null)} reload={reload} canEdit={canEdit} />}
     </div>
   );
 }
@@ -32225,7 +32225,7 @@ function BankAccountEditModal({ bank, onClose, onSaved }){
 }
 
 const BANK_TXN_TYPES = ['Check','Bank Transfer','Cash','JV','Payroll','Subcon','Petty Cash','Cash Advance','Other'];
-function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit }){
+function BankAccountDetailModal({ bank, txns, vouchers, profile, profiles, onClose, reload, canEdit }){
   const [filter,setFilter]=useState('all');  // all | in | out | unreconciled | reconciled
   const [search,setSearch]=useState('');
   const [showPdc,setShowPdc]=useState(false); // hide post-dated (future) items until their date arrives
@@ -32244,16 +32244,18 @@ function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit
   }
   async function toggleReconcile(t){
     const next = !t.reconciled;
-    const { error } = await sb.from('bank_transactions').update({ reconciled: next, reconciled_at: next? new Date().toISOString() : null }).eq('id', t.id);
+    // Stamp who reconciled it and when, for the audit trail (cleared on unmark).
+    const { error } = await sb.from('bank_transactions').update({ reconciled: next, reconciled_at: next? new Date().toISOString() : null, reconciled_by: next? profile.id : null }).eq('id', t.id);
     if(error){ alert(error.message); return; } reload();
   }
   async function bulkReconcile(val){
     const ids=Object.keys(selected).filter(id=>selected[id]); if(!ids.length) return;
-    const { error }=await sb.from('bank_transactions').update({ reconciled:val, reconciled_at: val? new Date().toISOString():null }).in('id', ids);
+    const { error }=await sb.from('bank_transactions').update({ reconciled:val, reconciled_at: val? new Date().toISOString():null, reconciled_by: val? profile.id : null }).in('id', ids);
     if(error){ alert(error.message); return; } setSelected({}); reload();
   }
   const cleared=(t)=> String(t.date||'').slice(0,10) <= asOf;
   const isFuture=(t)=> t.date && String(t.date).slice(0,10) > asOf;   // post-dated relative to the "As of" date
+  const recName=(id)=> id ? ((profiles||[]).find(p=>p.id===id)?.name || 'someone') : '—';
   const inSum  = txns.filter(t=>t.direction==='in'  && cleared(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const outSum = txns.filter(t=>t.direction==='out' && cleared(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const pdcOut = txns.filter(t=>t.direction==='out' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
@@ -32335,6 +32337,11 @@ function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit
               <td className="px-3 py-2 text-center">
                 {canEdit ? <input type="checkbox" checked={!!t.reconciled} onChange={()=>toggleReconcile(t)} />
                          : <span className={`text-xs ${t.reconciled?'text-emerald-700':'text-slate-300'}`}>{t.reconciled?'✓':'○'}</span>}
+                {t.reconciled && t.reconciled_at && (
+                  <div className="text-[9px] text-emerald-600 leading-tight mt-0.5" title={`Reconciled by ${recName(t.reconciled_by)} on ${new Date(t.reconciled_at).toLocaleString('en-PH')}`}>
+                    {recName(t.reconciled_by)}<br/>{new Date(t.reconciled_at).toLocaleDateString('en-PH',{month:'short',day:'numeric'})} · {new Date(t.reconciled_at).toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'})}
+                  </div>
+                )}
               </td>
             </tr>
           ); })}{pageRows.length===0 && <tr><td colSpan={canEdit?8:7} className="text-center text-slate-400 py-6">No transactions match.</td></tr>}</tbody>
@@ -47524,7 +47531,7 @@ function App(){
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
-        {view==='banks' && <BankAccountsView profile={profile} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
+        {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
         {/* Finance Sprint 2 routes */}
         {view==='expenses' && <ExpensesView profile={profile} profiles={profiles} expenses={expenses} bankAccounts={bankAccounts} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='expense-log' && <ExpenseLogView profile={profile} vouchers={vouchers} expenses={expenses} budgetRequests={budgetRequests} cashAdvances={cashAdvances} journalEntries={journalEntries} chartAccounts={chartAccounts} />}
