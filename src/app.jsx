@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 743 · PR materials: new items are now added as plain items — just type the name and pick 'Add item'. No inventory record is created at request time (that only happens when it's POed and received). Pick an existing inventory item from the same search box as before.";
+const BUILD = "Live build 744 · Finance batch: (1) A/P Vouchers — Finance can record a payable manually with a due date and press 'Send for RFP' to push it into the payment queue. (2) Cash Advances — bulk-upload from a spreadsheet + an @mention conversation on each advance. (3) Sales Orders — 'Record payment · multiple SOs' logs one customer payment across several orders at once.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32111,6 +32111,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
   }
   const [editing,setEditing]=useState(null);   // SO to open
   const [paying,setPaying]=useState(null);     // SO to log a Pending payment for
+  const [batchPay,setBatchPay]=useState(false); // record one payment across multiple SOs
   const [verifyingPayment,setVerifyingPayment]=useState(null); // pending payment row to verify
   const [editingPayment,setEditingPayment]=useState(null); // payment row to edit (admin/accounting)
   const [filter,setFilter]=useState('');
@@ -32243,6 +32244,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {canLogSOPayment(profile) && <button onClick={()=>setBatchPay(true)} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600" title="Record one payment that covers several sales orders">📩 Record payment · multiple SOs</button>}
             {/* Admin-only My/All toggle. Lets Kaira flip to just the SOs whose
                underlying lead she owns — useful when she's actively selling and
                wants a quick view of her own collection workload. */}
@@ -32394,6 +32396,7 @@ function SalesOrdersView({ profile, profiles, salesOrders, soPayments, invoices,
 
       {editing && <SalesOrderEditModal so={editing} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===editing.id)} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(so)=>{ setEditing(null); setPaying(so); }} onVerifyPayment={(payment, so)=>{ setEditing(null); setVerifyingPayment({ payment, so }); }} onEditPayment={(payment, so)=>{ setEditing(null); setEditingPayment({ payment, so }); }} onOpenLead={onOpenLead} />}
       {paying && <SalesOrderLogPaymentModal so={paying} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {batchPay && <SOBatchPaymentModal salesOrders={visibleSOs} clients={clients} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setBatchPay(false)} onSaved={()=>{ setBatchPay(false); reload(); }} />}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
       {editingPayment && <SalesOrderEditPaymentModal payment={editingPayment.payment} so={editingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setEditingPayment(null)} onSaved={()=>{ setEditingPayment(null); reload(); }} />}
     </div>
@@ -32909,6 +32912,85 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
 }
 
 // ─────────── VERIFY PAYMENT (Pending → Verified) — Accounting / Admin only ───────────
+// Record ONE customer payment that covers several sales orders. Logs a pending
+// payment per selected SO (Accounting verifies each, same as a single payment).
+function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAccounts, onClose, onSaved }){
+  const candidates=(salesOrders||[]).filter(s=> s.status!=='cancelled' && s.status!=='paid' && Number(s.balance_due||0)>0.01)
+    .slice().sort((a,b)=> String(a.client_name||'').localeCompare(String(b.client_name||'')) || String(a.number||'').localeCompare(String(b.number||'')));
+  const [clientFilter,setClientFilter]=useState('');
+  const clientNames=Array.from(new Set(candidates.map(s=>s.client_name).filter(Boolean))).sort();
+  const shown=candidates.filter(s=> !clientFilter || s.client_name===clientFilter);
+  const [sel,setSel]=useState({});   // soId -> amount string
+  const [f,setF]=useState({ date:todayManila(), method:'bank_transfer', reference:'', bank_id:(bankAccounts||[])[0]?.id||'', notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  function toggle(s){ setSel(prev=>{ const n={...prev}; if(n[s.id]!=null) delete n[s.id]; else n[s.id]=String(Number(s.balance_due||0)); return n; }); }
+  function setAmt(id,v){ setSel(prev=>({...prev,[id]:v})); }
+  const selectedIds=Object.keys(sel);
+  const total=selectedIds.reduce((t,id)=>t+(Number(sel[id])||0),0);
+  async function save(){
+    if(!selectedIds.length){ setMsg('Tick at least one sales order.'); return; }
+    if(selectedIds.some(id=>!(Number(sel[id])>0))){ setMsg('Every ticked order needs an amount greater than 0.'); return; }
+    if(f.method==='bank_transfer' && !f.bank_id){ setMsg('Pick the bank the client deposited to.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const mentionIds=(profiles||[]).filter(p=>['accounting','admin','accounting_officer'].includes(p.role) && p.id!==profile.id).map(p=>p.id);
+      for(const id of selectedIds){
+        const amt=Number(sel[id])||0;
+        const { error }=await sb.from('sales_order_payments').insert({ sales_order_id:id, date:f.date, amount:amt, method:f.method, reference:f.reference||null, notes:f.notes||null, bank_id:f.method==='bank_transfer'?(f.bank_id||null):null, status:'pending', received_by:profile.id });
+        if(error) throw error;
+        try{ await sb.from('sales_order_activity').insert({ sales_order_id:id, actor_id:profile.id, type:'system', mentions:mentionIds, text:`📩 Logged a ${payMethodLabel(f.method)} payment of ${peso(amt)}${f.reference?` (ref ${f.reference})`:''} — part of a multi-order payment, pending verification.` }); }catch(_){}
+      }
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="📩 Record payment · multiple SOs" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">Record one customer payment covering several orders. Each ticked order is logged as a <strong>pending</strong> payment for Accounting to verify.</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Method"><select className="input" value={f.method} onChange={e=>up('method',e.target.value)}>{PAYMENT_METHOD_OPTIONS.map(m=><option key={m.value} value={m.value}>{m.label}</option>)}</select></TpLbl>
+          {f.method==='bank_transfer'
+            ? <TpLbl t="Deposited to bank *"><select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+            : <TpLbl t="Reference #"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="OR / txn #" /></TpLbl>}
+          {f.method==='bank_transfer' && <TpLbl t="Reference #"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="Bank ref / confirmation #" /></TpLbl>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-500">Client:</span>
+          <select className="text-sm border rounded-lg px-2 py-1.5 bg-white" value={clientFilter} onChange={e=>setClientFilter(e.target.value)}><option value="">All clients</option>{clientNames.map(n=><option key={n} value={n}>{n}</option>)}</select>
+          <span className="text-xs text-slate-400">{shown.length} order{shown.length===1?'':'s'} with a balance</span>
+        </div>
+        <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="w-8 px-2 py-2"></th><th className="text-left px-2 py-2">SO#</th><th className="text-left px-2 py-2">Client</th><th className="text-right px-2 py-2">Balance</th><th className="text-right px-2 py-2 w-32">Pay now</th></tr></thead>
+            <tbody>
+              {shown.length===0 && <tr><td colSpan={5} className="text-center text-slate-400 py-6">No sales orders with an outstanding balance.</td></tr>}
+              {shown.map(s=>{ const on=sel[s.id]!=null; return (
+                <tr key={s.id} className={`border-t ${on?'bg-amber-50/50':''}`}>
+                  <td className="px-2 py-1.5 text-center"><input type="checkbox" checked={on} onChange={()=>toggle(s)} className="accent-amber-600" /></td>
+                  <td className="px-2 py-1.5 font-mono text-xs">{s.number||s.id.slice(0,6)}</td>
+                  <td className="px-2 py-1.5 truncate max-w-[180px]">{s.client_name||'—'}</td>
+                  <td className="px-2 py-1.5 text-right font-semibold text-rose-700">{peso(s.balance_due)}</td>
+                  <td className="px-2 py-1.5 text-right">{on ? <input type="number" step="0.01" className="input text-xs text-right" value={sel[s.id]} onChange={e=>setAmt(s.id,e.target.value)} /> : <span className="text-slate-300 text-xs">—</span>}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+        <TpLbl t="Notes (optional)"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. one deposit for SO-1 + SO-2" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex items-center gap-2 pt-2 border-t">
+          <div className="text-sm">Selected: <b>{selectedIds.length}</b> order{selectedIds.length===1?'':'s'} · <b className="text-emerald-700">{peso(total)}</b></div>
+          <div className="flex-1"></div>
+          <button onClick={save} disabled={busy||!selectedIds.length} className="px-4 py-2 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 disabled:opacity-50">{busy?'Recording…':`Record payment (${selectedIds.length})`}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold hover:bg-slate-50">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onClose, onSaved }){
   const loggedAmount = Number(payment.amount||0);
   const [verifyAmount,setVerifyAmount]=useState(loggedAmount);
@@ -35927,17 +36009,82 @@ function amountInWords(n){
 
 /* ─────────── ACCOUNTS PAYABLE VOUCHERS ─────────── */
 const AP_STATUSES = [
+  { key:'recorded',    label:'Recorded (unpaid)', color:'bg-slate-100 text-slate-700' },
   { key:'for_payment', label:'For Payment', color:'bg-amber-100 text-amber-700' },
   { key:'paid',        label:'Paid',        color:'bg-emerald-100 text-emerald-700' },
   { key:'void',        label:'Void',        color:'bg-rose-100 text-rose-700' },
 ];
 const apMeta = (k)=> AP_STATUSES.find(s=>s.key===k) || AP_STATUSES[0];
 
+// Manually record a payable (expense not yet paid) with a due date. Finance can
+// later "Send for RFP" to push it into the payment approval queue.
+function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
+  const [f,setF]=useState({ supplier_name:'', amount:'', particulars:'', due_date:'', payment_method:'', notes:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const supNames=Array.from(new Set((suppliers||[]).map(s=>s.company||s.name).filter(Boolean))).sort();
+  async function save(){
+    if(!f.supplier_name.trim()){ setMsg('Enter the supplier / payee.'); return; }
+    if(!(Number(f.amount)>0)){ setMsg('Enter an amount greater than 0.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const monthKey=todayManila().slice(0,7);
+      const { data:apRows }=await sb.from('ap_vouchers').select('number').like('number',`APV-${monthKey}-%`);
+      let max=0;(apRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>max)max=n;}});
+      const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+      const { error }=await sb.from('ap_vouchers').insert({ number, supplier_name:f.supplier_name.trim(), amount:Number(f.amount), particulars:f.particulars.trim()||null, due_date:f.due_date||null, payment_method:f.payment_method||null, notes:f.notes||null, status:'recorded', created_by:profile.id });
+      if(error) throw error;
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="➕ New A/P Voucher" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Record a payable you owe but haven't paid yet. Set the due date so it shows on the payment calendar. When it's ready to pay, open it and press <strong>Send for RFP</strong>.</div>
+        <TpLbl t="Supplier / payee *">
+          <input className="input" list="apv-suppliers" value={f.supplier_name} onChange={e=>up('supplier_name',e.target.value)} placeholder="Who you owe" />
+          <datalist id="apv-suppliers">{supNames.map(n=><option key={n} value={n} />)}</datalist>
+        </TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount *"><input type="number" step="0.01" className="input text-right" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
+          <TpLbl t="Due date"><input type="date" className="input" value={f.due_date} onChange={e=>up('due_date',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Payment method">
+          <select className="input" value={f.payment_method} onChange={e=>up('payment_method',e.target.value)}>{PO_PAYMENT_METHODS.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}</select>
+        </TpLbl>
+        <TpLbl t="Particulars"><textarea className="input min-h-[46px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="What this payable is for (e.g. October rent, SSS Sep 2026)" /></TpLbl>
+        <TpLbl t="Notes (optional)"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'Record payable'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold hover:bg-slate-50">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers, vouchers, chartAccounts, reload }){
   const [tab,setTab]=useState('for_payment');
   const [search,setSearch]=useState('');
   const [viewing,setViewing]=useState(null);
+  const [creating,setCreating]=useState(false);
   const canManage = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  async function sendApvForRfp(a){
+    if(a.rfp_id){ alert('This AP Voucher already has a payment request — check the RFP queue.'); return; }
+    if(!confirm(`Send AP Voucher ${a.number} to the payment queue?\n\n${a.supplier_name||''} — ${peso(a.amount)}\n\nThis creates a Request for Payment that goes to Finance → Admin for approval, then payment.`)) return;
+    try{
+      const today=todayManila(); const monthKey=today.slice(0,7);
+      const { data:monthRows }=await sb.from('rfps').select('number').like('number',`RFP-${monthKey}-%`);
+      let maxSeq=0;(monthRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>maxSeq)maxSeq=n;}});
+      const rfpNumber=`RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
+      const { data:rfpIns, error }=await sb.from('rfps').insert({ number:rfpNumber, date:today, supplier_name:a.supplier_name||null, amount:Number(a.amount||0), particulars:a.particulars||`Payment for ${a.supplier_name||''}`, payment_method:a.payment_method||null, due_date:a.due_date||null, status:'pending_finance', requested_by:profile.id }).select().single();
+      if(error) throw error;
+      await sb.from('ap_vouchers').update({ rfp_id:rfpIns.id, status:'for_payment' }).eq('id', a.id);
+      try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(x=>x.id!==profile.id).map(x=>({ recipient_id:x.id, actor_id:profile.id, type:'system', text:`📄 AP Voucher ${a.number} sent for payment (${rfpNumber}) — ${a.supplier_name||''} ${peso(a.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfpIns.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      reload && reload();
+    }catch(e){ alert(e.message||String(e)); }
+  }
   const rows = (apVouchers||[])
     .filter(a=> tab==='all' ? true : a.status===tab)
     .filter(a=> !search || `${a.number} ${a.supplier_name||''} ${a.particulars||''}`.toLowerCase().includes(search.toLowerCase()));
@@ -35955,12 +36102,13 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">📄 Accounts Payable Vouchers</h1>
-            <p className="text-slate-500 text-sm">{forPay.length} awaiting payment · <strong className="text-amber-700">{peso(forPayTotal)}</strong> balance outstanding. Raised automatically when Finance + Admin approve an RFP.</p>
+            <p className="text-slate-500 text-sm">{forPay.length} awaiting payment · <strong className="text-amber-700">{peso(forPayTotal)}</strong> balance outstanding. Raised automatically on RFP approval, or record one manually.</p>
           </div>
+          {canManage && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New A/P Voucher</button>}
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
-            {[['for_payment','For Payment'],['paid','Paid'],['void','Void'],['all','All']].map(([k,l])=>(
+            {[['recorded','Recorded'],['for_payment','For Payment'],['paid','Paid'],['void','Void'],['all','All']].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
             ))}
           </div>
@@ -35985,8 +36133,9 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
                 <td className="px-3 py-2 text-xs">{a.due_date?fmtDate(a.due_date):'—'}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
+                  {canManage && a.status==='recorded' && !a.rfp_id && <button onClick={(e)=>{e.stopPropagation(); sendApvForRfp(a);}} className="text-xs text-blue-600 font-semibold hover:underline mr-2" title="Create a Request for Payment and send to Finance">📤 Send for RFP</button>}
                   <button onClick={(e)=>{e.stopPropagation(); setViewing(a);}} className="text-xs text-indigo-600 hover:underline mr-2">View</button>
-                  {canManage && a.status==='for_payment' && <button onClick={(e)=>{e.stopPropagation(); voidAp(a);}} className="text-xs text-rose-500 hover:underline">Void</button>}
+                  {canManage && (a.status==='for_payment'||a.status==='recorded') && <button onClick={(e)=>{e.stopPropagation(); voidAp(a);}} className="text-xs text-rose-500 hover:underline">Void</button>}
                 </td>
               </tr>
             ); })}
@@ -35994,6 +36143,7 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
         </table>
       </div>
       {viewing && <APVoucherModal ap={viewing} profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setViewing(null)} />}
+      {creating && <APVoucherCreateModal profile={profile} suppliers={suppliers} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
     </div>
   );
 }
@@ -38379,6 +38529,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [liquidating,setLiquidating]=useState(null);
+  const [bulkOpen,setBulkOpen]=useState(false);
   // For Petty Cash, clicking a row opens a detail modal that shows linked
   // expenses + a quick "Add expense" flow + the running outstanding balance.
   const [detail,setDetail]=useState(null);
@@ -38523,7 +38674,10 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
             <h1 className="text-2xl font-bold">{headerTitle}</h1>
             <p className="text-slate-500 text-sm">{ofKind.length} {isPetty?'replenishment':'CA'}{ofKind.length===1?'':'s'} · Open balance out: <strong className="text-rose-700">{peso(totalOpen)}</strong> · <em>{headerSub}</em></p>
           </div>
-          {canEdit && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">{ctaLabel}</button>}
+          <div className="flex items-center gap-2">
+            {canEdit && !isPetty && <button onClick={()=>setBulkOpen(true)} className="px-3 py-2 rounded-lg bg-white border border-violet-300 text-violet-700 text-sm font-semibold hover:bg-violet-50">⇪ Bulk upload</button>}
+            {canEdit && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">{ctaLabel}</button>}
+          </div>
         </div>
       </div>
 
@@ -38600,6 +38754,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
       </table></div></div>
 
       {(creating||editing) && <CashAdvanceFormModal existing={editing} kind={kind} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {bulkOpen && <CashAdvanceBulkModal profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setBulkOpen(false)} onSaved={()=>{ setBulkOpen(false); reload(); }} />}
       {detail && <PettyCashDetailModal pettyCash={detail} expensesAll={expenses} profile={profile} profiles={profiles} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={replenishments} bankAccounts={bankAccounts} onLiquidate={liquidatePetty} onApproveRepl={approveReplenishment} onReleaseRepl={releaseReplenishment} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload && reload(); }} />}
       {liquidating && <LiquidationModal ca={liquidating} profile={profile} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload(); }} />}
     </div>
@@ -38688,6 +38843,93 @@ function CashAdvanceFormModal({ existing, kind, profile, profiles, bankAccounts,
         <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save':'Issue CA'}</button>
+        {isEdit && (
+          <div className="bg-white border rounded-lg p-3 mt-1">
+            <div className="text-xs uppercase font-semibold text-slate-500 mb-2">💬 Conversation · tag the approver with @name</div>
+            <ThreadBody profile={profile} profiles={profiles} table="cash_advance_activity" match={{ cash_advance_id: existing.id }} scope={'cashadvance/'+existing.id} titleText={`${effectiveKind==='petty_cash'?'Petty Cash':'Cash Advance'} ${existing.number||''}`} mentionNotify={{ link_view: effectiveKind==='petty_cash'?'petty-cash':'cash-advances', ref_type:'cash_advance', ref_id:existing.id, label:`${effectiveKind==='petty_cash'?'Petty Cash':'Cash Advance'} ${existing.number||''}` }} headerless embedded />
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// Bulk-upload cash advances from a spreadsheet. Each row creates a CA + a bank
+// out-transaction from the chosen source bank.
+function CashAdvanceBulkModal({ profile, profiles, bankAccounts, onClose, onSaved }){
+  const [bankId,setBankId]=useState((bankAccounts||[])[0]?.id||'');
+  const [rows,setRows]=useState(null); const [msg,setMsg]=useState(''); const [busy,setBusy]=useState(false);
+  const today=todayManila();
+  function downloadTemplate(){
+    const lines=[['Date','Employee','Amount','Purpose'],[today,'Juan Dela Cruz','1500','Office supplies pickup']].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+    const blob=new Blob(['﻿'+lines],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='cash-advances-template.csv'; a.click(); URL.revokeObjectURL(url);
+  }
+  function parse(text){
+    const grid=parseCSV(String(text||'').trim()); if(!grid.length){ setMsg('That file looks empty.'); setRows(null); return; }
+    const header=grid[0].map(h=>String(h||'').trim().toLowerCase());
+    const col=(names)=>{ for(const n of names){ const i=header.indexOf(n); if(i>=0) return i; } return -1; };
+    const ci={ date:col(['date']), who:col(['employee','custodian','name','who']), amt:col(['amount','amt']), purpose:col(['purpose','reason','details']) };
+    if(ci.who<0 || ci.amt<0){ setMsg('The file needs at least "Employee" and "Amount" columns. Download the template.'); setRows(null); return; }
+    const out=[];
+    for(let i=1;i<grid.length;i++){ const r=grid[i]; if(!r||r.every(c=>!String(c||'').trim())) continue;
+      const who=String(r[ci.who]||'').trim();
+      const amt=Number(String(r[ci.amt]||'').replace(/[₱,\s]/g,''));
+      const dateRaw=ci.date>=0?String(r[ci.date]||'').trim():'';
+      const date=/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)?dateRaw:(dateRaw&&new Date(dateRaw).toString()!=='Invalid Date'?new Date(dateRaw).toISOString().slice(0,10):today);
+      const match=(profiles||[]).find(p=>String(p.name||'').toLowerCase()===who.toLowerCase());
+      const err=[]; if(!who) err.push('no employee'); if(!(amt>0)) err.push('amount must be > 0');
+      out.push({ _line:i+1, date, custodian_id:match?match.id:null, custodian_name:match?(match.name||match.email):who, amount:amt, purpose:(ci.purpose>=0?String(r[ci.purpose]||'').trim():''), _err:err });
+    }
+    if(!out.length){ setMsg('No data rows found.'); setRows(null); return; }
+    setMsg(''); setRows(out);
+  }
+  function onFile(e){ const f=e.target.files&&e.target.files[0]; if(!f) return; const rd=new FileReader(); rd.onload=()=>parse(String(rd.result||'')); rd.readAsText(f); e.target.value=''; }
+  async function importAll(){
+    const ok=(rows||[]).filter(r=>!r._err.length);
+    if(!ok.length){ setMsg('Nothing valid to import.'); return; }
+    if(!bankId){ setMsg('Pick the source bank first.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const monthKey=today.slice(0,7);
+      const { data:monthRows }=await sb.from('cash_advances').select('number').like('number',`CA-${monthKey}-%`);
+      let seq=0;(monthRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>seq)seq=n;}});
+      for(const r of ok){
+        seq+=1; const number=`CA-${monthKey}-${String(seq).padStart(3,'0')}`;
+        const { data:btx, error:btErr }=await sb.from('bank_transactions').insert({ bank_id:bankId, date:r.date, direction:'out', amount:r.amount, description:`${number} · Cash advance to ${r.custodian_name||'staff'} · ${r.purpose||''}`, ref_type:'cash_advance', ref_id:null, created_by:profile.id }).select('id').single();
+        if(btErr) throw btErr;
+        const { data:ins, error }=await sb.from('cash_advances').insert({ number, date:r.date, custodian_id:r.custodian_id, custodian_name:r.custodian_name, purpose:r.purpose||null, amount:r.amount, bank_id:bankId, kind:'cash_advance', status:'open', created_by:profile.id, bank_transaction_id:btx.id }).select('id').single();
+        if(error) throw error;
+        if(ins?.id) await sb.from('bank_transactions').update({ ref_id:ins.id }).eq('id', btx.id);
+      }
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg('Import failed: '+(e.message||String(e))); }
+  }
+  const ok=(rows||[]).filter(r=>!r._err.length); const bad=(rows||[]).filter(r=>r._err.length); const tot=ok.reduce((s,r)=>s+r.amount,0);
+  return (
+    <Modal title="⇪ Bulk upload Cash Advances" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-xs text-slate-500">Columns: <b>Date, Employee, Amount, Purpose</b> (Employee + Amount required). Each row deducts from the source bank.</div>
+          <div className="flex items-center gap-2">
+            <button onClick={downloadTemplate} className="text-xs px-2.5 py-1.5 rounded-md bg-white border text-slate-700 font-semibold hover:bg-slate-50">⬇ Template</button>
+            <label className="text-xs px-2.5 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700 cursor-pointer">📁 Choose CSV<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onFile} /></label>
+          </div>
+        </div>
+        <TpLbl t="Source bank (deducted for every row) *">
+          <select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
+        </TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        {rows && (
+          <div className="space-y-2">
+            <div className="text-xs text-slate-600"><b>{ok.length}</b> ready{bad.length?<> · <span className="text-rose-600 font-semibold">{bad.length} with problems (skipped)</span></>:''} · total {peso(tot)}</div>
+            <div className="max-h-56 overflow-auto border rounded-lg bg-white"><table className="w-full text-xs">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Employee</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Purpose</th><th className="text-left px-2 py-1">Issue</th></tr></thead>
+              <tbody>{rows.map((r,i)=>(<tr key={i} className={`border-t ${r._err.length?'bg-rose-50':''}`}><td className="px-2 py-1 whitespace-nowrap">{fmtDate(r.date)}</td><td className="px-2 py-1">{r.custodian_name||<span className="text-rose-500">—</span>}{r.custodian_id?'':<span className="text-amber-500" title="Not matched to a profile — stored as a name"> ·ext</span>}</td><td className="px-2 py-1 text-right font-semibold">{r.amount>0?peso(r.amount):<span className="text-rose-500">—</span>}</td><td className="px-2 py-1 text-slate-500">{r.purpose||'—'}</td><td className="px-2 py-1 text-rose-600">{r._err.join(', ')}</td></tr>))}</tbody>
+            </table></div>
+            <div className="flex gap-2"><button onClick={importAll} disabled={busy||!ok.length} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50">{busy?'Importing…':`Import ${ok.length} cash advance${ok.length===1?'':'s'}`}</button><button onClick={()=>{ setRows(null); setMsg(''); }} className="py-2 px-4 rounded-lg bg-white border text-slate-700 font-semibold">Clear</button></div>
+          </div>
+        )}
       </div>
     </Modal>
   );
