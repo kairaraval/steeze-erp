@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 752 · Financial Reports: 'Salary & Wages by Department' breakdown on the Monthly Summary + JV bulk-upload now has a cost_center (department) column so payroll lines get tagged.";
+const BUILD = "Live build 753 · Financial Reports → Month-End Close: live GL data-health checks + manual attestation checklist (bank rec, accruals, tie-outs) with a 3-step sign-off (staff prepares → supervisor reviews → owner approves & locks).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39720,7 +39720,137 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
   );
 }
 
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles }){
+// Month-End Close — live data checks + manual attestations + 3-step sign-off
+// (staff prepares → supervisor reviews → owner/admin approves & locks).
+function MonthEndClosePanel({ month, profile, profiles, bankAccounts, auto }){
+  const role=profile.role;
+  const canPrepare=['accounting','accounting_officer','admin'].includes(role);
+  const canReview=['accounting_officer','admin'].includes(role);
+  const canApprove=role==='admin';
+  const nameOf=(id)=> id ? ((profiles||[]).find(p=>p.id===id)?.name || 'someone') : '';
+  const whenOf=(t)=> t ? new Date(t).toLocaleString('en-PH',{ month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
+  const defaultItems=()=>{
+    const banks=(bankAccounts||[]).filter(b=>b.active!==false).map(b=>({ key:'bankrec_'+b.id, group:'Bank reconciliation', label:'Reconciled to statement: '+(b.bank_name||b.name||'account')+(b.account_number?(' ··'+String(b.account_number).slice(-4)):'') }));
+    const globals=[
+      ['all_expenses','Completeness','All expenses for the month are entered, each with a receipt/proof attached'],
+      ['payroll_posted','Completeness','Payroll JVs posted and tagged by department (cost center)'],
+      ['ap_recorded','Completeness','All supplier bills (AP) recorded — including unpaid ones (accrued)'],
+      ['accruals','Accruals','Accruals booked: electricity, water, rent, SSS/PhilHealth/Pag-IBIG, 13th-month, subcon'],
+      ['tieouts','Review','Cross-checks tie out: collections vs AR, delivered vs sales, material POs vs COGS'],
+      ['vat_ewt','Review','VAT & EWT summarized for BIR'],
+      ['tb_review','Review','Trial Balance balances; P&L and Balance Sheet reviewed for anomalies'],
+    ].map(([key,group,label])=>({ key, group, label }));
+    return [...banks, ...globals];
+  };
+  const [row,setRow]=useState(null);
+  const [items,setItems]=useState(defaultItems());
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState('');
+  // Load (or seed) the row for this month, merging saved ticks onto the live default list.
+  useEffect(()=>{ let alive=true; (async()=>{
+    setLoading(true); setMsg('');
+    const { data }=await sb.from('month_end_close').select('*').eq('month',month).maybeSingle();
+    if(!alive) return;
+    setRow(data||null);
+    const saved=(data&&Array.isArray(data.items))?data.items:[];
+    const savedMap=new Map(saved.map(s=>[s.key,s]));
+    setItems(defaultItems().map(d=>{ const s=savedMap.get(d.key); return { ...d, checked:!!(s&&s.checked), note:(s&&s.note)||'', by:(s&&s.by)||null, at:(s&&s.at)||null }; }));
+    setLoading(false);
+  })(); return ()=>{ alive=false; }; },[month, (bankAccounts||[]).length]);
+  const closed=row?.status==='closed';
+  const editable=canPrepare && !closed;
+  const checkedN=items.filter(i=>i.checked).length;
+  const autoFails=[
+    auto.expNoGl>0 && `${auto.expNoGl} expense${auto.expNoGl===1?'':'s'} missing a GL account`,
+    auto.expNoCc>0 && `${auto.expNoCc} expense${auto.expNoCc===1?'':'s'} missing a department`,
+    auto.jeDraft>0 && `${auto.jeDraft} draft journal entr${auto.jeDraft===1?'y':'ies'} not posted`,
+    auto.bankUncat>0 && `${auto.bankUncat} uncategorized bank transaction${auto.bankUncat===1?'':'s'}`,
+    !auto.balanced && `GL postings for the month are out of balance`,
+  ].filter(Boolean);
+  async function persist(patch){
+    setBusy(true);
+    const base={ month, items, updated_by:profile.id, updated_at:new Date().toISOString() };
+    const payload = row?.id ? { id:row.id, ...base, ...patch } : { ...base, ...patch };
+    const { data, error }=await sb.from('month_end_close').upsert(payload,{ onConflict:'month' }).select().single();
+    setBusy(false);
+    if(error){ setMsg('Save failed: '+error.message); return null; }
+    setRow(data); return data;
+  }
+  function toggle(key){ if(!editable) return; const next=items.map(it=> it.key===key?{ ...it, checked:!it.checked, by: !it.checked?profile.id:null, at: !it.checked?new Date().toISOString():null }:it); setItems(next); persist({ items:next }); }
+  function setNote(key,v){ setItems(items.map(it=> it.key===key?{ ...it, note:v }:it)); }
+  async function markPrepared(){ if(!canPrepare) return; if(autoFails.length && !confirm('Some live checks are still failing:\n\n• '+autoFails.join('\n• ')+'\n\nMark as Prepared anyway?')) return; await persist({ status:'prepared', prepared_by:profile.id, prepared_at:new Date().toISOString() }); }
+  async function markReviewed(){ if(!canReview) return; await persist({ status:'reviewed', reviewed_by:profile.id, reviewed_at:new Date().toISOString() }); }
+  async function approveClose(){ if(!canApprove) return; if(!confirm(`Approve and LOCK ${monLabelOf(month)}? The checklist becomes read-only.`)) return; await persist({ status:'closed', approved_by:profile.id, approved_at:new Date().toISOString() }); }
+  async function reopen(){ if(!canApprove) return; const reason=(prompt('Reopen this month for edits — reason:')||'').trim(); if(!reason) return; await persist({ status:'open', reopened_by:profile.id, reopened_at:new Date().toISOString(), reopen_reason:reason, prepared_by:null, prepared_at:null, reviewed_by:null, reviewed_at:null, approved_by:null, approved_at:null }); }
+  const status=row?.status||'open';
+  const stMeta={ open:['Open','bg-slate-200 text-slate-700'], prepared:['Prepared','bg-amber-100 text-amber-700'], reviewed:['Reviewed','bg-blue-100 text-blue-700'], closed:['Closed & locked','bg-emerald-100 text-emerald-700'] }[status];
+  const groups=[...new Set(items.map(i=>i.group))];
+  const AutoRow=({ok,label,detail})=>(<div className="flex items-start gap-2 px-4 py-2 border-b last:border-0 text-sm"><span className={ok?'text-emerald-600':'text-rose-600'}>{ok?'✓':'✕'}</span><span className="flex-1">{label}</span><span className={`text-xs font-semibold ${ok?'text-emerald-600':'text-rose-600'}`}>{detail}</span></div>);
+  if(loading) return <div className="max-w-3xl mx-auto py-10 text-center text-slate-400 text-sm">Loading {monLabelOf(month)} close…</div>;
+  return (
+    <div className="max-w-3xl mx-auto space-y-4">
+      <div className="bg-white border rounded-xl p-4 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="font-bold text-lg">Month-End Close · {monLabelOf(month)}</div>
+          <div className="text-xs text-slate-500">{checkedN}/{items.length} items checked · live checks {autoFails.length? <span className="text-rose-600 font-semibold">{autoFails.length} failing</span> : <span className="text-emerald-600 font-semibold">all clear</span>}</div>
+        </div>
+        <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${stMeta[1]}`}>{stMeta[0]}</span>
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b font-semibold text-sm">Live data checks <span className="font-normal text-slate-400">· computed from the GL — can't be ticked by hand</span></div>
+        <AutoRow ok={auto.expNoGl===0} label="Every expense has a GL account" detail={auto.expNoGl===0?`${auto.expN} expenses`:`${auto.expNoGl} missing`} />
+        <AutoRow ok={auto.expNoCc===0} label="Every expense is tagged to a department" detail={auto.expNoCc===0?'all tagged':`${auto.expNoCc} missing`} />
+        <AutoRow ok={auto.jeDraft===0} label="No draft journal entries left unposted" detail={auto.jeDraft===0?'none':`${auto.jeDraft} draft`} />
+        <AutoRow ok={auto.bankUncat===0} label="All bank transactions categorized" detail={auto.bankUncat===0?'all matched':`${auto.bankUncat} open`} />
+        <AutoRow ok={auto.apOpenN===0} label="AP vouchers for the month settled or accrued" detail={auto.apOpenN===0?'all settled':`${auto.apOpenN} open · ${peso(auto.apOpenAmt)}`} />
+        <AutoRow ok={auto.balanced} label="GL postings balance (debits = credits)" detail={auto.balanced?'balanced':`${peso(Math.abs(auto.dr-auto.cr))} off`} />
+      </div>
+
+      {groups.map(g=>(
+        <div key={g} className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b font-semibold text-sm">{g}</div>
+          {items.filter(i=>i.group===g).map(it=>(
+            <div key={it.key} className="px-4 py-2.5 border-b last:border-0">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!it.checked} disabled={!editable} onChange={()=>toggle(it.key)} className="mt-0.5 accent-emerald-600 w-4 h-4" />
+                <span className="flex-1 text-sm">
+                  <span className={it.checked?'text-slate-800':'text-slate-600'}>{it.label}</span>
+                  {it.checked && it.by && <span className="block text-[11px] text-emerald-600 mt-0.5">✓ {nameOf(it.by)} · {whenOf(it.at)}</span>}
+                </span>
+              </label>
+              {editable && <input value={it.note||''} onChange={e=>setNote(it.key,e.target.value)} onBlur={()=>persist({ items })} placeholder="note (optional) — e.g. statement balance, difference explained" className="mt-1.5 ml-7 w-[calc(100%-1.75rem)] text-xs px-2 py-1 rounded border border-slate-200" />}
+              {!editable && it.note && <div className="mt-1 ml-7 text-xs text-slate-500">📝 {it.note}</div>}
+            </div>
+          ))}
+        </div>
+      ))}
+
+      <div className="bg-white border rounded-xl p-4 space-y-3">
+        <div className="text-sm font-semibold">Sign-off trail</div>
+        <div className="grid sm:grid-cols-3 gap-2 text-xs">
+          <div className={`rounded-lg border p-2 ${row?.prepared_at?'bg-amber-50 border-amber-200':''}`}><div className="font-semibold text-slate-500 uppercase text-[10px]">1 · Prepared (staff)</div>{row?.prepared_at? <div className="mt-0.5">{nameOf(row.prepared_by)}<div className="text-slate-400">{whenOf(row.prepared_at)}</div></div> : <div className="text-slate-400 mt-0.5">Pending</div>}</div>
+          <div className={`rounded-lg border p-2 ${row?.reviewed_at?'bg-blue-50 border-blue-200':''}`}><div className="font-semibold text-slate-500 uppercase text-[10px]">2 · Reviewed (supervisor)</div>{row?.reviewed_at? <div className="mt-0.5">{nameOf(row.reviewed_by)}<div className="text-slate-400">{whenOf(row.reviewed_at)}</div></div> : <div className="text-slate-400 mt-0.5">Pending</div>}</div>
+          <div className={`rounded-lg border p-2 ${row?.approved_at?'bg-emerald-50 border-emerald-200':''}`}><div className="font-semibold text-slate-500 uppercase text-[10px]">3 · Approved (owner)</div>{row?.approved_at? <div className="mt-0.5">{nameOf(row.approved_by)}<div className="text-slate-400">{whenOf(row.approved_at)}</div></div> : <div className="text-slate-400 mt-0.5">Pending</div>}</div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 flex-wrap pt-1">
+          {status==='open' && canPrepare && <button disabled={busy} onClick={markPrepared} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 disabled:opacity-50">Mark Prepared →</button>}
+          {status==='prepared' && canReview && <button disabled={busy} onClick={markReviewed} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">Mark Reviewed →</button>}
+          {status==='reviewed' && canApprove && <button disabled={busy} onClick={approveClose} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">✓ Approve & Lock</button>}
+          {status!=='open' && canApprove && <button disabled={busy} onClick={reopen} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50">↩ Reopen</button>}
+          {status==='prepared' && !canReview && <span className="text-xs text-slate-400 self-center">Waiting for the accounting supervisor to review.</span>}
+          {status==='reviewed' && !canApprove && <span className="text-xs text-slate-400 self-center">Waiting for owner approval.</span>}
+          {!canPrepare && <span className="text-xs text-slate-400 self-center">View only — accounting completes this checklist.</span>}
+        </div>
+        {row?.reopen_reason && status!=='closed' && <div className="text-[11px] text-slate-400">Last reopened: {row.reopen_reason}</div>}
+      </div>
+    </div>
+  );
+}
+function monLabelOf(m){ try{ const [y,mo]=String(m).split('-'); return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('en-PH',{month:'long',year:'numeric'}); }catch(_){ return m; } }
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, reload }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
@@ -39761,6 +39891,19 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
     const rows=Array.from(m.entries()).map(([k,amt])=>({ id:k, name: k==='__none__' ? 'Untagged (no department)' : (ccName(k)||'Unknown department'), amt, untagged:k==='__none__' })).sort((a,b)=> (a.untagged-b.untagged) || (b.amt-a.amt));
     return { rows, total };
   })();
+  // ── Month-End Close: live data-health checks for the selected month ──
+  const closeAuto = (()=>{
+    const exps=(expenses||[]).filter(e=>!e.deleted_at && inMonth(e.date));
+    const expNoGl=exps.filter(e=>!e.gl_account_code).length;
+    const expNoCc=exps.filter(e=>!e.cost_center_id).length;
+    const jeDraft=(journalEntries||[]).filter(j=>!j.deleted_at && inMonth(j.date) && j.status==='draft').length;
+    const apOpen=(apVouchers||[]).filter(a=>!a.deleted_at && inMonth(a.created_at) && !['paid','cancelled'].includes(a.status));
+    const apOpenAmt=apOpen.reduce((s,a)=>s+(Number(a.amount)||0),0);
+    const bankUncat=(bankTransactions||[]).filter(b=>inMonth(b.date) && !b.ref_type).length;
+    const dr=monthPostings.reduce((s,p)=>s+(Number(p.debit)||0),0);
+    const cr=monthPostings.reduce((s,p)=>s+(Number(p.credit)||0),0);
+    return { expN:exps.length, expNoGl, expNoCc, jeDraft, apOpenN:apOpen.length, apOpenAmt, bankUncat, balanced:Math.abs(dr-cr)<0.5, dr, cr };
+  })();
   const periodPostings = postings.filter(p=> (p.date||'').slice(0,4)===year);      // P&L: within the year
   const cumulativePostings = postings.filter(p=> (p.date||'').slice(0,4)<=year);    // BS: up to end of year
   const plBal = glAccountBalances(periodPostings, chartAccounts);
@@ -39797,14 +39940,14 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📊 Financial Reports</h1><p className="text-slate-500 text-sm">Derived from the General Ledger. Revenue is on a cash (collection) basis. Review with your accountant before filing.</p></div>
           <div className="flex items-center gap-2">
-            {tab==='monthly'
+            {(tab==='monthly'||tab==='close')
               ? <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="input w-40" />
               : <select value={year} onChange={e=>setYear(e.target.value)} className="input w-28">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>}
             <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-white border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
           </div>
         </div>
         <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          {[['monthly','Monthly Summary'],['pl','Income Statement'],['plsummary','P&L Summary'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
+          {[['monthly','Monthly Summary'],['close','Month-End Close'],['pl','Income Statement'],['plsummary','P&L Summary'],['bs','Balance Sheet'],['tb','Trial Balance'],['vat','VAT Summary'],['ewt','EWT']].map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
           ))}
         </div>
@@ -39902,6 +40045,8 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
           </div>
         );
       })()}
+
+      {tab==='close' && <MonthEndClosePanel month={month} profile={profile} profiles={profiles} bankAccounts={bankAccounts} auto={closeAuto} />}
 
       {tab==='pl' && (
         <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
@@ -47403,7 +47548,7 @@ function App(){
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} reload={reload} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
