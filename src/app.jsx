@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 750 · Lead details: change the status/stage inline from the modal (same gates + auto-creation as the pipeline board), no need to open Edit.";
+const BUILD = "Live build 751 · Estimate modal: '📋 Copy to lead items' button pushes the estimate's items & prices onto the lead (the same items the SO inherits) — accounting can now set the lead's pricing without retyping.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2029,6 +2029,27 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   function addLine(){ setLines([...lines,{ id:'e'+Date.now(), itemType:'', category:'', quantity:'', pricePerItem:'', withVat:false }]); }
   function removeLine(idx){ setLines(lines.filter((_,i)=>i!==idx)); }
 
+  // Push these estimate line items (and the totals) straight onto the lead, so
+  // the price Accounting set here becomes the lead's items — the same items the
+  // Sales Order inherits at Closed Won. Saves retyping and keeps both in sync.
+  const [copyMsg,setCopyMsg]=useState('');
+  async function copyToLead(){
+    const valid = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0);
+    if(!valid.length){ setCopyMsg('Add at least one item first.'); return; }
+    const leadItems = valid.map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0; const sub=qty*price; const vInc=!!vatInclusive; const addVat=(!vInc&&!!it.withVat); const lt=vInc?sub:(addVat?sub*(1+EST_VAT_RATE):sub); return { itemType:it.itemType, category:'—', description:it.description||'', quantity:qty, pricePerItem:price, withVat:addVat, vatInclusive:vInc, lineTotal:lt }; });
+    const warn = disc>0 ? `\n\nNote: the ₱${disc.toLocaleString()} discount on this estimate is NOT carried to the lead items (leads don't hold a discount). The lead value will be set to the discounted total ${peso(total)}.` : '';
+    if(!confirm(`Copy ${leadItems.length} item${leadItems.length===1?'':'s'} from ${number} onto the lead "${lead.title||''}"?\n\nThis replaces the lead's current items and sets its value to ${peso(total)}.${warn}`)) return;
+    setBusy(true); setCopyMsg('');
+    const patch={ items:leadItems, value:total, subtotal_amount:subtotal, vat_amount:vat };
+    const { data:upd, error }=await sb.from('leads').update(patch).eq('id', lead.id).select('id');
+    if(error){ setBusy(false); setCopyMsg('Copy failed: '+(error.message||error)); return; }
+    if(!upd || !upd.length){ setBusy(false); setCopyMsg('Copy blocked — you don’t have permission to edit this lead.'); return; }
+    try{ await sb.from('lead_activity').insert({ lead_id:lead.id, actor_id:profile.id, type:'system', text:`📋 Copied ${leadItems.length} item${leadItems.length===1?'':'s'} from estimate ${number} to the lead — value set to ${peso(total)}.` }); }catch(_){}
+    setBusy(false); setCopyMsg('Copied to the lead ✓');
+    reload&&reload();
+    setTimeout(()=>setCopyMsg(''), 3000);
+  }
+
   function buildPayload(nextStatus){
     const items = lines.filter(it=>it.itemType&&(Number(it.quantity)||0)>0).map(it=>{ const qty=Number(it.quantity), price=Number(it.pricePerItem)||0, sub=qty*price, v=(it.withVat&&!vatInclusive)?sub*EST_VAT_RATE:0; return { itemType:it.itemType, description:it.description||'', quantity:qty, pricePerItem:price, withVat:!!it.withVat, lineTotal:sub+v }; });
     return {
@@ -2345,6 +2366,8 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
           {canEdit && <button disabled={busy} onClick={()=>save('approved')} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted this quote (does not create a Sales Order)">✅ Mark accepted</button>}
           {canEdit && <button disabled={busy} onClick={()=>save('rejected')} className="py-2 px-3 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50" title="Client declined this quote">✕ Mark declined</button>}
           <button disabled={!hasValidLine} onClick={()=>setView('print')} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50">🖨 Preview / Print</button>
+          {canEdit && <button disabled={busy||!hasValidLine} onClick={copyToLead} className="py-2 px-3 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 disabled:opacity-50" title="Copy these items & prices onto the lead — this is what the Sales Order inherits at Closed Won">📋 Copy to lead items</button>}
+          {copyMsg && <span className={`text-xs font-semibold ${copyMsg.includes('failed')?'text-rose-600':'text-emerald-600'}`}>{copyMsg}</span>}
           <div className="flex-1"></div>
           {canDelete && estimate && <button disabled={busy} onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50" title="Delete this estimate">🗑 Delete</button>}
           <button onClick={onClose} className="py-2 px-3 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
