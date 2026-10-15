@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 745 · Production: new 'In Transit' status; and a Delivery log on the Plan — record partial / priority deliveries (date + qty), and the board card now shows what's still to deliver ('X left of Y').";
+const BUILD = "Live build 746 · Production: new Subcon Cutting board (per-project sent/returned/balance/due/done), and the Plan checklist now has Subcon Cutting + Subcon Sewing stages. Subcon-sewing plan tasks show as a 'lite' section inside the Subcon Sewing page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9116,6 +9116,7 @@ const planStageMeta = (k) => PLAN_STAGES.find(s=>s.key===k) || PLAN_STAGES[0];
 const PLAN_PROCESS_DEFS = [
   { key:'pattern',        label:'Pattern',          icon:'✂',  table:'pattern_worklist',  kind:'worklist' },
   { key:'cutting',        label:'In-House Cutting', icon:'🔪', table:'cutting_worklist',  kind:'worklist' },
+  { key:'subcon_cutting', label:'Subcon Cutting',   icon:'🧵', table:'subcon_tasks',      kind:'subcon', stage:'cutting' },
   { key:'trad_sorting',   label:'Trad Sorting',     icon:'🧺', table:'process_worklist',  kind:'process', process:'trad_sorting' },
   { key:'subli_sorting',  label:'Subli Sorting',    icon:'🧺', table:'process_worklist',  kind:'process', process:'subli_sorting' },
   { key:'dtf_pressing',   label:'DTF Pressing',     icon:'🔥', table:'process_worklist',  kind:'process', process:'dtf_pressing' },
@@ -9124,20 +9125,24 @@ const PLAN_PROCESS_DEFS = [
   { key:'embroidery',     label:'Embroidery',       icon:'🪡', table:'embroidery_jobs',   kind:'deptjob', done:EMBROIDERY_DONE },
   { key:'knitting',       label:'Knitting',         icon:'🧶', table:'knitting_jobs',     kind:'deptjob', done:KNITTING_DONE },
   { key:'sewing',         label:'Sewing',           icon:'🧵', table:'sewing_jobs',       kind:'sewing',  done:SEWING_DONE },
+  { key:'subcon_sewing',  label:'Subcon Sewing',    icon:'🧵', table:'subcon_tasks',      kind:'subcon', stage:'sewing' },
   { key:'qc',             label:'Quality Control',  icon:'🔍', table:'qc_reports',        kind:'worklist' },
   { key:'packing',        label:'Packing',          icon:'📦', table:'packing_jobs',      kind:'packing', done:PACKING_DONE },
 ];
-const PLAN_TABLES_WITH_DELETED = new Set(['printing_jobs','embroidery_jobs','knitting_jobs','packing_jobs','sewing_jobs']);
+const PLAN_TABLES_WITH_DELETED = new Set(['printing_jobs','embroidery_jobs','knitting_jobs','packing_jobs','sewing_jobs','subcon_tasks']);
 
 // Idempotent: create the board item for a process if it doesn't exist yet.
 async function createPlanProcessItem(profile, job, def){
   try{
     let sel = sb.from(def.table).select('id').eq('source_job_id', job.id);
     if(def.kind==='process') sel = sel.eq('process', def.process);
+    if(def.kind==='subcon') sel = sel.eq('stage', def.stage);
     if(PLAN_TABLES_WITH_DELETED.has(def.table)) sel = sel.is('deleted_at', null);
     const { data: ex } = await sel.limit(1);
     if(ex && ex.length) return;
-    if(def.kind==='deptjob'){
+    if(def.kind==='subcon'){
+      await sb.from('subcon_tasks').insert({ stage:def.stage, source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null, qty:Number(job.quantity)||0, due_date:job.due_date||null, done:false, created_by:profile.id });
+    } else if(def.kind==='deptjob'){
       const prefix = def.table==='printing_jobs'?'PR-P-':def.table==='embroidery_jobs'?'EMB-':'KNT-';
       await sb.from(def.table).insert({ number:prefix+Date.now().toString().slice(-5), source_job_id:job.id, lead_id:job.lead_id||null, client_name:job.client_name||'', item:job.item||'', items:job.items||[], quantity:job.quantity||0, attachments:job.attachments||[], status:'to do', due_date:job.due_date||null, notes:job.notes||'', source:'production' });
     } else if(def.kind==='sewing'){ await maybeAutoCreateSewingJob(profile, job); }
@@ -9145,8 +9150,8 @@ async function createPlanProcessItem(profile, job, def){
     else { const base={ source_type:'production', source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null }; if(def.kind==='process') base.process=def.process; await sb.from(def.table).insert(base); }
   }catch(e){ console.warn('plan process create failed', def.key, e?.message||e); }
 }
-function planProcDone(def, row){ if(!row) return false; if(row.end_at) return true; if(def.done) return def.done.includes(row.status); return row.status==='done'; }
-function planProcState(def, row){ if(!row) return 'none'; if(planProcDone(def,row)) return 'done'; if(row.run_since||row.status==='in_progress') return 'in_progress'; return 'todo'; }
+function planProcDone(def, row){ if(!row) return false; if(def.kind==='subcon') return !!row.done; if(row.end_at) return true; if(def.done) return def.done.includes(row.status); return row.status==='done'; }
+function planProcState(def, row){ if(!row) return 'none'; if(planProcDone(def,row)) return 'done'; if(def.kind==='subcon') return (Number(row.qty_out)||0)>0 ? 'in_progress' : 'todo'; if(row.run_since||row.status==='in_progress') return 'in_progress'; return 'todo'; }
 
 // --- Gantt date helpers (operate on 'YYYY-MM-DD' strings; ISO sorts chronologically) ---
 function ganttDays(a,b){ if(!a||!b) return 0; return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
@@ -9217,6 +9222,8 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     ]);
     const map={ pattern:pat[0], cutting:cut[0], qc:qc[0], printing:prt[0], embroidery:emb[0], knitting:knt[0], sewing:sew[0], packing:pak[0] };
     prc.forEach(r=>{ map[r.process]=r; });
+    // Subcon stage tasks (lighter tracker), keyed by stage.
+    try{ const { data:subt }=await sb.from('subcon_tasks').select('*').eq('source_job_id',jid).is('deleted_at',null); (subt||[]).forEach(t=>{ if(t.stage==='cutting') map.subcon_cutting=t; else if(t.stage==='sewing') map.subcon_sewing=t; }); }catch(_){}
     setProc(map);
     // Pressed pcs come from the daily output logs, keyed by the worklist row id.
     const pressRows=prc.filter(r=>r.process==='dtf_pressing'||r.process==='subli_pressing');
@@ -9232,6 +9239,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   useEffect(()=>{ loadProcesses(); },[job.id]);
   function procQty(def,row){
     if(!row) return 0;
+    if(def.kind==='subcon') return Number(row.qty_returned)||Number(row.qty_out)||0;
     if(def.key==='sewing'){ const pcs=(sewJobSewers(row)||[]).reduce((s,x)=>s+(Number(x.pcs)||0),0); return pcs || (planProcDone(def,row)?(Number(job.quantity)||0):0); }
     if(def.key==='dtf_pressing'||def.key==='subli_pressing') return pressBy[def.key]||0;
     if(Number(row.qty_done)>0) return Number(row.qty_done);
@@ -9695,6 +9703,7 @@ function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }
   const [busy,setBusy]=useState(true);
   const [editing,setEditing]=useState(null);
   const [collapsed,setCollapsed]=useState({});
+  const [showPlanTasks,setShowPlanTasks]=useState(false);
   const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
@@ -9832,6 +9841,15 @@ function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }
         <div className={`rounded-xl border p-3 ${overdueCount?'bg-rose-50 border-rose-200':'bg-white'}`}><div className="text-[10px] uppercase text-slate-400">⚠ Overdue</div><div className={`text-2xl font-bold ${overdueCount?'text-rose-700':'text-slate-400'}`}>{overdueCount}</div></div>
       </div>
 
+      {/* Lite subcon-sewing tasks flagged from the Plan checklist. */}
+      <div className="bg-white border rounded-xl mb-4 overflow-hidden">
+        <button onClick={()=>setShowPlanTasks(v=>!v)} className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
+          <span>🧵 Subcon sewing — plan tasks (lite)</span>
+          <span className="text-slate-400 text-xs">{showPlanTasks?'Hide ▴':'Show ▾'}</span>
+        </button>
+        {showPlanTasks && <div className="px-4 pb-4 border-t pt-3"><SubconLiteTracker stage="sewing" title="Subcon Sewing" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={reload} embedded /></div>}
+      </div>
+
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="inline-flex rounded-lg border bg-white overflow-hidden text-sm">
@@ -9939,6 +9957,78 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Lighter per-project subcon tracker (who's doing it, qty sent/returned, balance,
+// due, done). Used for Subcon Cutting (its own page) and embedded for Subcon
+// Sewing plan tasks. Tasks appear when the stage is ticked on a project's Plan.
+function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, clients, prodJobs, reload, embedded }){
+  const stageWord = stage==='sewing'?'sewing':'cutting';
+  const canEdit = ['admin','production','production_supervisor','production_assistant','cutting_dept','sewing_lead'].includes(profile.role) || (typeof subconSewingCanEdit==='function' && subconSewingCanEdit(profile));
+  const [tasks,setTasks]=useState([]); const [busy,setBusy]=useState(true);
+  const [tab,setTab]=useState('active'); const [search,setSearch]=useState('');
+  const [addJob,setAddJob]=useState('');
+  const todayISO=todayManila();
+  async function load(){ setBusy(true); try{ const { data }=await sb.from('subcon_tasks').select('*').eq('stage',stage).is('deleted_at',null).order('created_at',{ascending:false}); setTasks(data||[]); }catch(_){ setTasks([]); } setBusy(false); }
+  useEffect(()=>{ load(); },[stage]);
+  const subconName=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'';
+  const projLabel=(t)=>{ const l=(leads||[]).find(x=>x.id===t.lead_id); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name):''; return [c||t.client_name, l?.title||t.item].filter(Boolean).join(' · ')||'Project'; };
+  async function upd(t, patch){ try{ await sb.from('subcon_tasks').update(patch).eq('id',t.id); }catch(e){ alert(e.message||e); } load(); reload&&reload(); }
+  async function del(t){ if(!confirm(`Remove this subcon ${stageWord} task?`)) return; await sb.from('subcon_tasks').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',t.id); load(); reload&&reload(); }
+  async function addFromJob(){ const j=(prodJobs||[]).find(x=>x.id===addJob); if(!j) return;
+    try{ const { data:ex }=await sb.from('subcon_tasks').select('id').eq('stage',stage).eq('source_job_id',j.id).is('deleted_at',null).limit(1); if(ex&&ex.length){ alert(`That project already has a subcon ${stageWord} task.`); return; }
+      await sb.from('subcon_tasks').insert({ stage, source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null, qty:Number(j.quantity)||0, due_date:j.due_date||null, done:false, created_by:profile.id });
+      setAddJob(''); load(); reload&&reload();
+    }catch(e){ alert(e.message||e); }
+  }
+  const rows=tasks.filter(t=> tab==='all'?true: tab==='done'?t.done:!t.done)
+    .filter(t=> !search || `${projLabel(t)} ${subconName(t.subcon_id)}`.toLowerCase().includes(search.toLowerCase()));
+  const jobOpts=(prodJobs||[]).filter(j=>!j.deleted_at).map(j=>({ value:j.id, label:`${j.number||''} · ${j.client_name||''} · ${j.item||''}` }));
+  const controls=(
+    <div className={`flex items-center gap-2 flex-wrap ${embedded?'mb-2':'mt-3'}`}>
+      <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">{[['active','Active'],['done','Done'],['all','All']].map(([k,l])=>(<button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>))}</div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project / subcon…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+      {canEdit && <div className="flex items-center gap-1"><div className="w-64"><SearchSelect value={addJob} onChange={setAddJob} options={jobOpts} placeholder="🔍 Add a project…" className="text-xs" /></div><button onClick={addFromJob} disabled={!addJob} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40">+ Add</button></div>}
+    </div>
+  );
+  const table=(
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Subcon</th>
+          <th className="text-right px-3 py-2">Target</th><th className="text-right px-3 py-2">Sent out</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Balance</th>
+          <th className="text-left px-3 py-2">Due</th><th className="text-center px-3 py-2">Done</th><th></th>
+        </tr></thead>
+        <tbody>
+          {busy && <tr><td colSpan="9" className="text-center text-slate-400 py-8">Loading…</td></tr>}
+          {!busy && rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No subcon {stageWord} {tab==='done'?'completed':'tasks'} yet. Tick “Subcon {stageWord==='sewing'?'Sewing':'Cutting'}” on a project's Plan, or add one above.</td></tr>}
+          {!busy && rows.map(t=>{ const bal=Math.max(0,(Number(t.qty_out)||0)-(Number(t.qty_returned)||0)); const overdue=t.due_date && t.due_date<todayISO && bal>0 && !t.done; return (
+            <tr key={t.id} className={`border-t hover:bg-slate-50 ${overdue?'bg-rose-50/40':''}`}>
+              <td className="px-3 py-2 font-medium">{projLabel(t)}</td>
+              <td className="px-3 py-2">{canEdit ? <select className="input !py-1 text-xs" value={t.subcon_id||''} onChange={e=>upd(t,{ subcon_id:e.target.value||null })}><option value="">— pick subcon —</option>{(subcons||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select> : (subconName(t.subcon_id)||'—')}</td>
+              <td className="px-3 py-2 text-right text-slate-500">{Number(t.qty||0).toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" value={t.qty_out||''} onChange={e=>upd(t,{ qty_out:Number(e.target.value)||0 })} /> : Number(t.qty_out||0).toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" value={t.qty_returned||''} onChange={e=>upd(t,{ qty_returned:Number(e.target.value)||0 })} /> : Number(t.qty_returned||0).toLocaleString()}</td>
+              <td className={`px-3 py-2 text-right font-bold ${bal>0?'text-rose-700':'text-emerald-700'}`}>{bal.toLocaleString()}</td>
+              <td className="px-3 py-2">{canEdit ? <input type="date" className="input !py-1 text-xs" value={t.due_date||''} onChange={e=>upd(t,{ due_date:e.target.value||null })} /> : (t.due_date?fmtDate(t.due_date):'—')}{overdue && <div className="text-[10px] text-rose-600 font-semibold">overdue</div>}</td>
+              <td className="px-3 py-2 text-center">{canEdit ? <input type="checkbox" checked={!!t.done} onChange={e=>upd(t,{ done:e.target.checked })} className="accent-emerald-600" /> : (t.done?'✓':'')}</td>
+              <td className="px-3 py-2 text-right">{canEdit && <button onClick={()=>del(t)} className="text-xs text-rose-500 hover:underline">Remove</button>}</td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+  );
+  if(embedded) return (<div>{controls}{table}</div>);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">{title||'🔪 Subcon Cutting'}</h1><p className="text-slate-500 text-sm">{stageWord==='sewing'?'Sewing':'Cutting'} sent to subcontractors — track qty out, returned &amp; balance per project.</p></div>
+        </div>
+        {controls}
+      </div>
+      {table}
+    </div>
   );
 }
 
@@ -45957,7 +46047,7 @@ function App(){
       // visibility; money-write/banking/approval views are gated inside each view.
       allowed = new Set(['ops-command','scorecard','checkin','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
-        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing',
+        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
@@ -46012,23 +46102,23 @@ function App(){
     } else if(profile.role==='packing_head'){
       allowed = new Set(['inbox','my-tasks','packing','prod','profile']); fallback = 'packing';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
       fallback = 'prod';
       // (QC list is visible to production floor for reference; QC role owns edits.)
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','subcon-sewing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','subcon-sewing','subcon-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
     } else if(profile.role==='production_assistant'){
       // Production Assistant — production boards + the Replacement Requests queue (view).
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing']);
+      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
@@ -46037,7 +46127,7 @@ function App(){
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_personnel'){
       // Purchasing Personnel — same access as Purchasing Admin but WITHOUT Subcon Payroll.
@@ -46046,13 +46136,13 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
       // (read-only — they don't own status changes, but need to see what's
       // coming down to the floor).
-      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','sewing','profile','subcon-sewing']);
+      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','sewing','profile','subcon-sewing','subcon-cutting']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
       // Knit / Embro Team Lead — sees Production + Sampling boards for context,
@@ -46655,7 +46745,7 @@ function App(){
       { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
@@ -46739,7 +46829,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -46750,7 +46840,7 @@ function App(){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction || isGraphicTeam || isPrintingTeam){
@@ -46758,7 +46848,7 @@ function App(){
     // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -46770,7 +46860,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -46807,7 +46897,7 @@ function App(){
       FINANCE_FULL,
       { group:'Payees', items:[ ['suppliers','Expense Payees','🧾'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
       PERSONAL_GROUP,
@@ -46818,7 +46908,7 @@ function App(){
     // coming down to the floor.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
@@ -46870,7 +46960,7 @@ function App(){
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
@@ -47058,6 +47148,7 @@ function App(){
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
         {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
+        {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
