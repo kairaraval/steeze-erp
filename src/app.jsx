@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 756 · Bank Reconciliation: ticking 'Reconciled' now stamps who did it and when (shown under the checkbox), for the audit trail. Unticking clears the stamp.";
+const BUILD = "Live build 757 · For Approval: new 'For Bank Payment' queue — RFPs you approved that still need the real bank payment. Process it in your bank, then click Done (paid). Separates what you approved from what actually transacted.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36727,6 +36727,19 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   }
   const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
+  // For Bank Payment — RFPs YOU already approved that still need the real bank
+  // payment processed. Owner-only tracking: clicking Done stamps that the bank
+  // transaction was authorized. Independent of the finance voucher / GL.
+  const forBankPayment = profile.role==='admin'
+    ? (rfps||[]).filter(r => !r.deleted_at && r.admin_approved_at && !r.bank_paid_at && ['approved','partial'].includes(r.status))
+        .slice().sort((a,b)=> String(a.admin_approved_at||'').localeCompare(String(b.admin_approved_at||'')))
+    : [];
+  async function markBankPaid(r){
+    if(!confirm(`Mark ${r.number} as paid in the bank?\n\n${r.supplier_name||''} · ${peso(r.amount)}\n\nClick OK once you've authorized the actual payment in your bank.`)) return;
+    const { error }=await sb.from('rfps').update({ bank_paid_at:new Date().toISOString(), bank_paid_by:profile.id }).eq('id', r.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
   // Pending SO payments — only accounting + admin can verify these; rendered
   // only for them. Sales agents who logged the payment see the status on the SO.
   const pendingPayments = canVerifySOPayment(profile)
@@ -36901,6 +36914,54 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
           })}</div>
         )}
       </div>
+
+      {/* For Bank Payment — approved RFPs awaiting the actual bank transaction (admin/owner only) */}
+      {profile.role==='admin' && (
+      <div className="bg-white border rounded-xl overflow-hidden mb-4">
+        <div className="px-4 py-3 bg-teal-50 border-b border-teal-200 flex items-center justify-between flex-wrap gap-1">
+          <div className="font-semibold text-teal-900">🏦 For Bank Payment <span className="text-teal-600 font-normal text-xs ml-1">· {forBankPayment.length} to pay</span></div>
+          <div className="text-xs text-teal-700">You approved these — process the payment in your bank, then click Done.</div>
+        </div>
+        {forBankPayment.length===0 ? (
+          <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to pay. Approved RFPs that still need a bank payment show up here.</div>
+        ) : (<>
+          <table className="hidden md:table w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              <th className="text-left px-3 py-2">RFP#</th>
+              <th className="text-left px-3 py-2">Approved</th>
+              <th className="text-left px-3 py-2">Supplier</th>
+              <th className="text-left px-3 py-2">Pay to (bank)</th>
+              <th className="text-right px-3 py-2">Amount</th>
+              <th></th>
+            </tr></thead>
+            <tbody>{forBankPayment.map(r=>{
+              const po=orders.find(o=>o.id===r.po_id);
+              const waited = r.admin_approved_at ? Math.floor((Date.now()-new Date(r.admin_approved_at).getTime())/86400000) : 0;
+              const bankLine = [r.bank_name, r.bank_account_number].filter(Boolean).join(' · ');
+              return (
+                <tr key={r.id} className="border-t hover:bg-teal-50/40">
+                  <td className="px-3 py-2 font-mono text-xs cursor-pointer" onClick={()=>setOpenRfp(r)}>{r.number}{r.status==='partial' && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">partial</span>}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(r.admin_approved_at)} <span className={`ml-1 ${waited>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>· {waited===0?'today':waited+'d ago'}</span></td>
+                  <td className="px-3 py-2">{r.supplier_name||'—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{bankLine|| (r.payment_method||'—')}</td>
+                  <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(r.amount)}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>markBankPaid(r)} className="text-xs px-2.5 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">✓ Done (paid)</button></td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+          <div className="md:hidden divide-y border-t">{forBankPayment.map(r=>{
+            const po=orders.find(o=>o.id===r.po_id);
+            const bankLine = [r.bank_name, r.bank_account_number].filter(Boolean).join(' · ');
+            return (
+              <ApprovalMRow key={r.id} title={r.number} sub={r.supplier_name||'—'} meta={`${bankLine||r.payment_method||''} · approved ${fmtDate(r.admin_approved_at)}`} amount={peso(r.amount)}>
+                <button onClick={()=>markBankPaid(r)} className="flex-1 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold">✓ Done (paid)</button>
+              </ApprovalMRow>
+            );
+          })}</div>
+        </>)}
+      </div>
+      )}
 
       {/* Budget Requests — Sprint 2 will surface these */}
       <div className="bg-white border rounded-xl overflow-hidden">
