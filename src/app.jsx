@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 751 · Estimate modal: '📋 Copy to lead items' button pushes the estimate's items & prices onto the lead (the same items the SO inherits) — accounting can now set the lead's pricing without retyping.";
+const BUILD = "Live build 752 · Financial Reports: 'Salary & Wages by Department' breakdown on the Monthly Summary + JV bulk-upload now has a cost_center (department) column so payroll lines get tagged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39746,6 +39746,21 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   const monthBal = glAccountBalances(monthPostings, chartAccounts);
   const monthExpenseAccts = monthBal.filter(b=>b.type==='Expense' && b.balance>0.005).sort((a,b)=>b.balance-a.balance);
   const monthExpenseTotal = monthExpenseAccts.reduce((s,b)=>s+b.balance,0);
+  // Salary & wages broken down per department (cost center). Reads the per-line
+  // cost_center_id tagged on each payroll JV. Untagged amounts fall into a clearly
+  // labelled bucket so the gap is visible rather than hidden.
+  const ccName = (id)=> (costCenters||[]).find(c=>c.id===id)?.name || null;
+  const salaryByDept = (()=>{
+    const isSalaryAcct=(p)=> /salary|wage|overtime/i.test(p.account_name||'');
+    const m=new Map(); let total=0;
+    monthPostings.filter(p=> isSalaryAcct(p) && (Number(p.debit)||0)>0).forEach(p=>{
+      const amt=(Number(p.debit)||0)-(Number(p.credit)||0); if(amt<=0) return;
+      const key=p.cost_center_id||'__none__';
+      m.set(key,(m.get(key)||0)+amt); total+=amt;
+    });
+    const rows=Array.from(m.entries()).map(([k,amt])=>({ id:k, name: k==='__none__' ? 'Untagged (no department)' : (ccName(k)||'Unknown department'), amt, untagged:k==='__none__' })).sort((a,b)=> (a.untagged-b.untagged) || (b.amt-a.amt));
+    return { rows, total };
+  })();
   const periodPostings = postings.filter(p=> (p.date||'').slice(0,4)===year);      // P&L: within the year
   const cumulativePostings = postings.filter(p=> (p.date||'').slice(0,4)<=year);    // BS: up to end of year
   const plBal = glAccountBalances(periodPostings, chartAccounts);
@@ -39858,6 +39873,31 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
                       </div>
                     </div>}
               </div>
+            </div>
+            <div className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b flex items-center justify-between">
+                <span className="font-semibold text-sm">Salary &amp; Wages by Department</span>
+                <span className="text-xs text-slate-400">tagged from payroll JV cost centers</span>
+              </div>
+              {salaryByDept.total<=0
+                ? <div className="px-4 py-6 text-center text-sm text-slate-400">No salary/wage entries this month.</div>
+                : <table className="w-full text-sm">
+                    <tbody>
+                      {salaryByDept.rows.map(r=>(
+                        <tr key={r.id} className={`border-b last:border-0 ${r.untagged?'bg-amber-50':''}`}>
+                          <td className={`px-4 py-2 ${r.untagged?'text-amber-700':''}`}>{r.untagged?'⚠ ':''}{r.name}</td>
+                          <td className="px-4 py-2 text-right text-slate-400 text-xs">{salaryByDept.total>0?Math.round(r.amt/salaryByDept.total*100):0}%</td>
+                          <td className="px-4 py-2 text-right font-semibold">{fmtP(r.amt)}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-50 font-bold"><td className="px-4 py-2">Total salary &amp; wages</td><td></td><td className="px-4 py-2 text-right">{fmtP(salaryByDept.total)}</td></tr>
+                    </tbody>
+                  </table>}
+              {salaryByDept.rows.some(r=>r.untagged) && (
+                <div className="px-4 py-2 text-[11px] text-amber-700 bg-amber-50 border-t">
+                  The highlighted amount has no department tag. Tag each payroll line with a cost center (in the JV screen or the bulk-upload <em>cost_center</em> column) and it will move into its department here.
+                </div>
+              )}
             </div>
           </div>
         );
@@ -40026,13 +40066,16 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
   const [fileName,setFileName]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const acctFor=(code)=> (chartAccounts||[]).find(a=>String(a.code)===String(code));
+  // Match a CSV cost-center value against a department by code or name (case-insensitive).
+  const ccResolve=(raw)=>{ const v=String(raw||'').trim().toLowerCase(); if(!v) return null; return (costCenters||[]).find(c=> String(c.code||'').toLowerCase()===v || String(c.name||'').toLowerCase()===v ) || null; };
   function downloadTemplate(){
-    const header='jv_group,date,reference,memo,account_code,description,debit,credit';
+    const header='jv_group,date,reference,memo,account_code,cost_center,description,debit,credit';
     const sample=[
-      '1,2026-09-05,OR-1234,Monthly office rent,6200,Rent for September,25000,0',
-      '1,2026-09-05,OR-1234,Monthly office rent,1010,Paid from BDO,0,25000',
-      '2,2026-09-05,,Depreciation accrual,6800,Equipment depreciation,5000,0',
-      '2,2026-09-05,,Depreciation accrual,1520,Accumulated depreciation,0,5000',
+      '1,2026-09-05,OR-1234,Monthly office rent,6200,Executive Department,Rent for September,25000,0',
+      '1,2026-09-05,OR-1234,Monthly office rent,1010,,Paid from BDO,0,25000',
+      '2,2026-09-04,,Week 1 payroll,401007,Sewing Department,Sewing dept payroll,120000,0',
+      '2,2026-09-04,,Week 1 payroll,401007,Cutting Department,Cutting dept payroll,45000,0',
+      '2,2026-09-04,,Week 1 payroll,1010,,Paid from BDO,0,165000',
     ];
     const csv=[header,...sample].join('\n');
     const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
@@ -40055,6 +40098,7 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
       const ref=idx('reference')>=0?(c[idx('reference')]||'').trim():'';
       const memo=idx('memo')>=0?(c[idx('memo')]||'').trim():'';
       const desc=idx('description')>=0?(c[idx('description')]||'').trim():'';
+      const ccRaw=idx('cost_center')>=0?(c[idx('cost_center')]||'').trim():'';
       const debit=idx('debit')>=0?Number((c[idx('debit')]||'0').trim())||0:0;
       const credit=idx('credit')>=0?Number((c[idx('credit')]||'0').trim())||0:0;
       if(!g && !code && !memo) continue;
@@ -40063,9 +40107,13 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
       if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) errs.push(`Line ${ln}: date must be YYYY-MM-DD.`);
       if(!code) errs.push(`Line ${ln}: account_code is required.`);
       else if(!acctFor(code)) errs.push(`Line ${ln}: account code "${code}" is not in the chart of accounts.`);
+      // Resolve the department / cost center by name or code (case-insensitive).
+      // Blank is allowed (untagged line); a value that matches nothing is an error.
+      let cc_id=null, cc_name='';
+      if(ccRaw){ const hit=ccResolve(ccRaw); if(hit){ cc_id=hit.id; cc_name=hit.name; } else errs.push(`Line ${ln}: cost center / department "${ccRaw}" is not recognized. Use the exact department name or code.`); }
       if(debit===0 && credit===0) errs.push(`Line ${ln}: needs a debit or a credit amount.`);
       if(debit>0 && credit>0) errs.push(`Line ${ln}: a line can't have both a debit and a credit.`);
-      out.push({ group:g, date, ref, memo, code, desc, debit, credit });
+      out.push({ group:g, date, ref, memo, code, desc, cc_id, cc_name, debit, credit });
     }
     return { rows:out, errors:errs };
   }
@@ -40097,7 +40145,7 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
         const { data: exist } = await sb.from('journal_entries').select('number').like('number', `JV-${monthKey}-%`);
         let max=0; (exist||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
         const number=`JV-${monthKey}-${String(max+1).padStart(3,'0')}`;
-        const clean=g.lines.map(l=>({ account_code:l.code, account_name:acctFor(l.code)?.name||'', cost_center_id:null, description:l.desc||'', debit:l.debit, credit:l.credit }));
+        const clean=g.lines.map(l=>({ account_code:l.code, account_name:acctFor(l.code)?.name||'', cost_center_id:l.cc_id||null, description:l.desc||'', debit:l.debit, credit:l.credit }));
         const payload={ number, date:first.date, reference:first.ref||null, memo:first.memo||null, bank_id:null, cost_center_id:null, lines:clean, total_debit:g.debit, total_credit:g.credit, status:'posted', created_by:profile.id };
         const { error } = await sb.from('journal_entries').insert(payload);
         if(error) throw new Error(`JV group "${g.group}": ${error.message}`);
@@ -40111,7 +40159,7 @@ function JVBulkUploadModal({ chartAccounts, bankAccounts, costCenters, profile, 
       <div className="space-y-4">
         <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-sm text-slate-700">
           <div className="font-semibold text-indigo-800 mb-1">How it works</div>
-          Download the template, fill one row per <strong>account line</strong>, and group the lines of a single voucher with the same <strong>jv_group</strong> value. Each group becomes one posted JV and its debits must equal its credits.
+          Download the template, fill one row per <strong>account line</strong>, and group the lines of a single voucher with the same <strong>jv_group</strong> value. Each group becomes one posted JV and its debits must equal its credits. Put a department in the <strong>cost_center</strong> column (the exact department name or code, e.g. “Sewing Department”) to tag that line — do this on each payroll/expense line so Financial Reports can break it down per department. Leave it blank for cash/liability lines.
           <div className="mt-2"><button onClick={downloadTemplate} className="px-3 py-1.5 rounded bg-white border font-semibold text-indigo-700 hover:bg-indigo-50">⬇ Download template (CSV)</button></div>
         </div>
         <div>
