@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 747 · Embroidery & Knitting boards updated to match the In-House Cutting / Subli Pressing look: KPI strip (Active · To Do · In Progress · Done) + a 'Show done' toggle that hides finished columns by default. (Sewing, Packing & QC next.)";
+const BUILD = "Live build 748 · Reverted the Embroidery & Knitting board changes back to their previous layout.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5582,7 +5582,6 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   const canLogOutput=['printing','embroidery','knitting'].includes(jobType);
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
-  const [showDone,setShowDone]=useState(false);
   // Kanban drag-and-drop state for the Board layout — same pattern as the
   // Sales Pipeline. draggedJobId fades the grabbed card; dragOverStatus
   // highlights the drop column.
@@ -5701,26 +5700,12 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
       {mainTab==='resources' && <DesignResourcesBoard profile={profile} />}
       {mainTab==='report' && <ProgressReport rows={jobs.map(j=>({ date:j.created_at, done:doneStatuses.includes(j.status), item:j.item, client:j.client_name, qty:Number(j.quantity)||0, rejects:0, people:[], subcon:null }))} dims={[]} qtyLabel="pcs" showQty doneLabel="Done" />}
 
-      {mainTab==='jobs' && layout==='board' && (()=>{
-        const todoKey=statuses[0]?.key;
-        const nDone=filtered.filter(j=>doneStatuses.includes(j.status)).length;
-        const nTodo=filtered.filter(j=>j.status===todoKey).length;
-        const nProg=filtered.filter(j=>!doneStatuses.includes(j.status) && j.status!==todoKey).length;
-        const nActive=filtered.length-nDone;
-        const Kpi=({ic,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
-        const cols = showDone ? statuses : statuses.filter(s=>!doneStatuses.includes(s.key));
-        return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Kpi ic="📄" label="Active Jobs" value={nActive} color="bg-blue-100" />
-          <Kpi ic="📋" label="To Do" value={nTodo} color="bg-slate-100" />
-          <Kpi ic="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
-          <Kpi ic="✓" label="Done" value={nDone} color="bg-emerald-100" />
-        </div>
-        <div className="flex items-center justify-end">
-          <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
-        </div>
-        <div className="flex gap-3 overflow-x-auto pb-4" style={{minHeight:'55vh'}}>
+      {mainTab==='jobs' && layout==='board' && (
+        // Kanban pattern: each column body scrolls independently so the column
+        // header stays put. Outer container takes the rest of the viewport
+        // height below the page header (~150px) and is horizontally
+        // scrollable when there are more columns than fit.
+        <div className="flex gap-3 overflow-x-auto pb-4 h-[calc(100vh-160px)]">
           {showChecklist && (
             <div className="flex-shrink-0 w-64 flex flex-col h-full">
               <div className="shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold bg-pink-600 text-white">📋 Checklist <span className="opacity-70">({checklistJobs.length})</span></div>
@@ -5760,7 +5745,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
               </div>
             </div>
           )}
-          {cols.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; });
+          {statuses.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; });
             const isDragTarget = dragOverStatus === st.key;
             const onColumnDragOver = (e)=>{ e.preventDefault(); try { e.dataTransfer.dropEffect='move'; } catch(_){}; if(dragOverStatus!==st.key) setDragOverStatus(st.key); };
             const onColumnDragLeave = ()=>{ if(dragOverStatus===st.key) setDragOverStatus(null); };
@@ -5835,8 +5820,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
             </div>
           ); })}
         </div>
-      </div>
-      ); })()}
+      )}
 
       {mainTab==='jobs' && layout==='table' && (
         <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
