@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 753 · Financial Reports → Month-End Close: live GL data-health checks + manual attestation checklist (bank rec, accruals, tie-outs) with a 3-step sign-off (staff prepares → supervisor reviews → owner approves & locks).";
+const BUILD = "Live build 754 · Fix: Financial Reports crashed with 'reload is not defined' — wired the correct reload function. Month-End Close now loads.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47548,7 +47548,7 @@ function App(){
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} reload={reload} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
