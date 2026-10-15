@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 757 · For Approval: new 'For Bank Payment' queue — RFPs you approved that still need the real bank payment. Process it in your bank, then click Done (paid). Separates what you approved from what actually transacted.";
+const BUILD = "Live build 758 · For Bank Payment queue: added a Cancel button (with reason) for payments that didn't push through — marks the RFP Cancelled and removes it from the list.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34632,6 +34632,7 @@ const RFP_STATUSES = [
   { key:'partial',         label:'Partially Paid',   color:'bg-amber-100 text-amber-800' },
   { key:'paid',            label:'Paid',             color:'bg-emerald-100 text-emerald-700' },
   { key:'rejected',        label:'Rejected',         color:'bg-rose-100 text-rose-700' },
+  { key:'cancelled',       label:'Cancelled',        color:'bg-slate-200 text-slate-600' },
 ];
 // Remaining balance on an RFP after any partial payment.
 function rfpBalance(r){ return Math.max(0, Number(r?.amount||0) - Number(r?.amount_paid||0)); }
@@ -36740,6 +36741,13 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  async function cancelBankPayment(r){
+    const reason=(prompt(`Cancel the payment for ${r.number} (${r.supplier_name||''} · ${peso(r.amount)})?\n\nThis removes it from the bank-payment list and marks the RFP Cancelled. Reason:`)||'').trim();
+    if(!reason) return;
+    const { error }=await sb.from('rfps').update({ status:'cancelled', bank_cancelled_at:new Date().toISOString(), bank_cancelled_by:profile.id, bank_cancel_reason:reason }).eq('id', r.id);
+    if(error){ alert(error.message); return; }
+    reload && reload();
+  }
   // Pending SO payments — only accounting + admin can verify these; rendered
   // only for them. Sales agents who logged the payment see the status on the SO.
   const pendingPayments = canVerifySOPayment(profile)
@@ -36945,7 +36953,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
                   <td className="px-3 py-2">{r.supplier_name||'—'}</td>
                   <td className="px-3 py-2 text-xs text-slate-500">{bankLine|| (r.payment_method||'—')}</td>
                   <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(r.amount)}</td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>markBankPaid(r)} className="text-xs px-2.5 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">✓ Done (paid)</button></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>markBankPaid(r)} className="text-xs px-2.5 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">✓ Done (paid)</button><button onClick={()=>cancelBankPayment(r)} className="ml-1.5 text-xs px-2.5 py-1 rounded border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Cancel</button></td>
                 </tr>
               );
             })}</tbody>
@@ -36956,6 +36964,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
             return (
               <ApprovalMRow key={r.id} title={r.number} sub={r.supplier_name||'—'} meta={`${bankLine||r.payment_method||''} · approved ${fmtDate(r.admin_approved_at)}`} amount={peso(r.amount)}>
                 <button onClick={()=>markBankPaid(r)} className="flex-1 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold">✓ Done (paid)</button>
+                <button onClick={()=>cancelBankPayment(r)} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold">Cancel</button>
               </ApprovalMRow>
             );
           })}</div>
