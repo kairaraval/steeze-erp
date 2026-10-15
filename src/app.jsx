@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 744 · Finance batch: (1) A/P Vouchers — Finance can record a payable manually with a due date and press 'Send for RFP' to push it into the payment queue. (2) Cash Advances — bulk-upload from a spreadsheet + an @mention conversation on each advance. (3) Sales Orders — 'Record payment · multiple SOs' logs one customer payment across several orders at once.";
+const BUILD = "Live build 745 · Production: new 'In Transit' status; and a Delivery log on the Plan — record partial / priority deliveries (date + qty), and the board card now shows what's still to deliver ('X left of Y').";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -217,9 +217,14 @@ const PRODUCTION_STATUSES = [
   { key:'quality check (qc)',    label:'Quality Check (QC)',    color:'bg-teal-100 text-teal-700' },
   { key:'packing',               label:'Packing',               color:'bg-lime-100 text-lime-700' },
   { key:'ready for delivery',    label:'Ready for Delivery',    color:'bg-green-100 text-green-700' },
+  { key:'in transit',            label:'In Transit',            color:'bg-sky-100 text-sky-700' },
   { key:'delivered',             label:'Delivered',             color:'bg-emerald-200 text-emerald-800' },
 ];
 const PRODUCTION_DONE = ['delivered'];
+// Sum of partial deliveries logged on a production job.
+function prodDeliveredSum(j){ return (Array.isArray(j?.deliveries)?j.deliveries:[]).reduce((s,d)=>s+Number(d.qty||0),0); }
+// Qty cell content: once partial deliveries exist, show what's still to deliver.
+function prodQtyDisplay(j){ const t=Number(j?.quantity)||0; const del=prodDeliveredSum(j); if(del>0 && t>0){ const rem=Math.max(0,t-del); return <span title={`${del.toLocaleString()} delivered of ${t.toLocaleString()}`}><span className={rem>0?'font-semibold':'text-emerald-700 font-semibold'}>{rem.toLocaleString()}</span> <span className="text-[10px] text-slate-400">left of {t.toLocaleString()}</span></span>; } return j?.quantity||'—'; }
 
 const SAMPLING_STATUSES = [
   { key:'endorsed',         label:'Endorsed',         color:'bg-slate-200 text-slate-700' },
@@ -5824,7 +5829,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
             <tr key={j.id} className={`border-t hover:bg-slate-50 ${di.overdue?'bg-rose-50/40':''}`}>
               <td className="px-3 py-2 font-mono text-xs">{j.number}<div className={`inline-block ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Prod':'🎨 Graphic'}</div></td><td className="px-3 py-2">{j.client_name}</td>
               <td className="px-3 py-2 font-medium">{(jobType==='graphic'&&lead&&lead.title)?lead.title:j.item}{jobType==='graphic'&&lead&&lead.title&&j.item&&j.item!==lead.title && <div className="text-[11px] text-slate-500 font-normal">📝 {j.item}</div>}{j.graphic_type && <span className="ml-1 text-[9px] uppercase px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">{j.graphic_type}</span>}{(j.attachments||[]).length?<span className="text-[10px] text-slate-400"> 📎{j.attachments.length}</span>:''}</td>
-              <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
+              <td className="px-3 py-2 text-right">{prodQtyDisplay(j)}</td>
               <td className="px-3 py-2"><select value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color}`}>{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
               <td className="px-3 py-2"><span className={`text-xs ${di.cls}`}>{di.label || (j.due_date ? fmtDate(j.due_date) : '—')}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -7916,7 +7921,7 @@ function StockOutView({ profile, profiles, prodJobs, leads, items, requests, sto
                   <td className="px-3 py-2 font-mono text-xs">{j.number}</td>
                   <td className="px-3 py-2">{j.client_name||'—'}</td>
                   <td className="px-3 py-2 font-medium">{j.item||'—'}</td>
-                  <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
+                  <td className="px-3 py-2 text-right">{prodQtyDisplay(j)}</td>
                   <td className="px-3 py-2 text-xs">{effectiveDue?<span className={di.overdue?'text-rose-700 font-semibold':''}>{fmtDate(effectiveDue)}</span>:'—'}</td>
                   <td className="px-3 py-2 text-xs">{sum.count>0 ? <span className="text-emerald-700 font-semibold">📤 {sum.count} pull{sum.count===1?'':'s'} · {sum.totalQty.toFixed(2)} total</span> : <span className="text-slate-400">none yet</span>}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -8419,7 +8424,7 @@ function SewingReport({ jobs, replacements, sewers }){
               <td className="px-3 py-2">{j.client_name}</td>
               <td className="px-3 py-2 font-medium">{j.item}</td>
               <td className="px-3 py-2 text-xs">{sewJobSewers(j).map(s=>`${s.name}${s.pcs?` (${s.pcs})`:''}`).join(', ')||'—'}</td>
-              <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
+              <td className="px-3 py-2 text-right">{prodQtyDisplay(j)}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.start_at)}</td>
               <td className="px-3 py-2 text-xs">{fmtDT(j.end_at)}</td>
               <td className="px-3 py-2 text-right font-semibold">{fmtHrs(hrs)}</td>
@@ -9179,6 +9184,15 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const todayISO = todayManila();
   const clampPct = (n)=> Math.max(0, Math.min(100, n));
   const canEdit = true; // production floor logs output; RLS allows any signed-in user
+  // Partial-delivery log — supports priority / staggered deliveries.
+  const [deliveries,setDeliveries]=useState(Array.isArray(job.deliveries)?job.deliveries:[]);
+  const [delDate,setDelDate]=useState(todayManila());
+  const [delQty,setDelQty]=useState(''); const [delNote,setDelNote]=useState('');
+  const deliveredSum = deliveries.reduce((s,d)=>s+Number(d.qty||0),0);
+  const remainingToDeliver = Math.max(0, total - deliveredSum);
+  async function saveDeliveries(next){ setDeliveries(next); try{ await sb.from('production_jobs').update({ deliveries: next }).eq('id', job.id); reload && reload(); }catch(e){ setMsg(e.message||String(e)); } }
+  async function addDelivery(){ const q=Number(delQty); if(!(q>0)){ setMsg('Enter a delivered quantity greater than 0.'); return; } setMsg(''); await saveDeliveries([...deliveries, { date: delDate||todayManila(), qty:q, note:(delNote||'').trim()||undefined }]); setDelQty(''); setDelNote(''); }
+  async function removeDelivery(i){ await saveDeliveries(deliveries.filter((_,j)=>j!==i)); }
 
   async function load(){
     setLoading(true);
@@ -9408,6 +9422,36 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
           </div>
           );
         })()}
+
+        {/* Deliveries — partial / priority deliveries. Each row = one delivery. */}
+        <div className="border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold">🚚 Deliveries · log partial / priority deliveries here</div>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold">Delivered {deliveredSum.toLocaleString()}{total?`/${total.toLocaleString()}`:''}</span>
+              <span className={`px-2 py-0.5 rounded font-semibold ${remainingToDeliver>0?'bg-amber-50 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{remainingToDeliver>0?`${remainingToDeliver.toLocaleString()} left to deliver`:'✓ Fully delivered'}</span>
+            </div>
+          </div>
+          {deliveries.length>0 && (
+            <div className="space-y-1 mb-2">{deliveries.map((d,i)=>(
+              <div key={i} className="flex items-center gap-2 text-xs bg-white border rounded px-2 py-1">
+                <span className="text-slate-400 w-20 shrink-0">{fmtDate(d.date)}</span>
+                <span className="font-semibold text-emerald-700 w-20 shrink-0">{Number(d.qty||0).toLocaleString()} pcs</span>
+                <span className="flex-1 text-slate-600 truncate">{d.note||''}</span>
+                {canEdit && <button onClick={()=>removeDelivery(i)} className="text-rose-400 hover:text-rose-600 shrink-0">✕</button>}
+              </div>
+            ))}</div>
+          )}
+          {canEdit && (
+            <div className="grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-3"><label className="text-[9px] uppercase text-slate-400">Date</label><input type="date" className="input !py-1 text-xs" value={delDate} onChange={e=>setDelDate(e.target.value)} /></div>
+              <div className="col-span-2"><label className="text-[9px] uppercase text-slate-400">Qty delivered</label><input type="number" className="input !py-1 text-xs text-right" value={delQty} onChange={e=>setDelQty(e.target.value)} placeholder={remainingToDeliver||''} /></div>
+              <div className="col-span-5"><label className="text-[9px] uppercase text-slate-400">Note (optional)</label><input className="input !py-1 text-xs" value={delNote} onChange={e=>setDelNote(e.target.value)} placeholder="e.g. priority batch for ISM" /></div>
+              <div className="col-span-2"><button onClick={addDelivery} className="w-full py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">+ Log delivery</button></div>
+            </div>
+          )}
+          <div className="text-[10px] text-slate-400 mt-2">Status stays yours to set — move the job to <b>In Transit</b> / <b>Delivered</b> on the board when ready. The board card shows what's still to deliver.</div>
+        </div>
 
         {/* Sewing allocation — where cut panels were sent (subcon vs in-house) */}
         {allocBatches.length>0 && (()=>{
@@ -10126,7 +10170,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
           <tr key={j.id} className={`border-t hover:bg-slate-50 group ${di.overdue?'bg-rose-50/40':''}`}>
             <td className="px-3 py-2 font-mono text-xs">{j.number}</td><td className="px-3 py-2">{j.client_name}</td>
             <td className="px-3 py-2 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
-            <td className="px-3 py-2 text-right">{j.quantity||'—'}</td>
+            <td className="px-3 py-2 text-right">{prodQtyDisplay(j)}</td>
             <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="Closed-won / added to the board">{(()=>{ const d=lead?.won_at||j.created_at; return d?fmtDate(d):'—'; })()}</td>
             <td className="px-3 py-2"><select disabled={readOnly} value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color} ${readOnly?'appearance-none cursor-default':''}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
             <td className="px-3 py-2">
@@ -10203,7 +10247,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                         <td className="px-3 py-2.5 font-mono text-xs">{j.number}</td>
                         <td className="px-3 py-2.5 text-slate-600 truncate max-w-[200px]" title={j.client_name}>{j.client_name}</td>
                         <td className="px-3 py-2.5 font-medium">{j.item}{(j.items||[]).length>0 && <div className="text-[10px] text-slate-500">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</div>}</td>
-                        <td className="px-3 py-2.5 text-right">{j.quantity||'—'}</td>
+                        <td className="px-3 py-2.5 text-right">{prodQtyDisplay(j)}</td>
                         <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap" title="Closed-won / added to the board">{(()=>{ const d=lead?.won_at||j.created_at; return d?fmtDate(d):'—'; })()}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex flex-col gap-0.5">
