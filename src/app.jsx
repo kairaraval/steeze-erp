@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 748 · Reverted the Embroidery & Knitting board changes back to their previous layout.";
+const BUILD = "Live build 749 · Sewing, Packing & QC boards updated to the In-House Cutting / Subli Pressing look: KPI strip + Show done toggle + sticky header + full-text search (Embroidery & Knitting left as-is).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -8121,6 +8121,7 @@ function deriveSewItems(job, lead){
 function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTechpack, openLead }){
   const [tab,setTab]=useState('board'); // 'board' | 'report'
   const [search,setSearch]=useState('');
+  const [showDone,setShowDone]=useState(false);
   const [replFor,setReplFor]=useState(null); // job we're logging a replacement for
   const [reportFor,setReportFor]=useState(null); // job we're viewing the report for
   const [replacements,setReplacements]=useState([]);
@@ -8133,7 +8134,8 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.sewing_job_id]=replByJob[r.sewing_job_id]||[]).push(r); });
   // Sewers = active employees whose position mentions "sew" (Sewer, Sewing Head, Button Sew).
   const sewers=(employees||[]).filter(e=> e.is_active!==false && /sew/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
-  const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item} ${j.sewer_name||''}`.toLowerCase().includes(search.toLowerCase()));
+  const q=search.trim().toLowerCase();
+  const filtered=jobs.filter(j=>{ if(!q) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(SEWING_STATUSES.find(s=>s.key===j.status)||{}).label||''; const itemList=(j.items||[]).map(it=>`${it.itemType||''} ${it.quantity||''}`).join(' '); return [j.number,j.client_name,j.item,j.sewer_name,j.notes,st,l?.title,l?.client_name,l?.po_number,l?.techpack_number,itemList].filter(Boolean).join(' ').toLowerCase().includes(q); });
 
   // A project can be handled by several sewers (shared timeline + status).
   // Stored as a list on the job; falls back to the legacy single-sewer fields.
@@ -8152,26 +8154,37 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   async function toggleSewItem(j, lead, idx){ const items=deriveSewItems(j, lead).map((it,i)=> i===idx? {...it, active:!it.active} : it); await patch(j,{ sew_items: items }); }
 
   const doneJobs=jobs.filter(j=>SEWING_DONE.includes(j.status));
+  const todoKey=SEWING_STATUSES[0]?.key;
+  const nDone=filtered.filter(j=>SEWING_DONE.includes(j.status)).length;
+  const nTodo=filtered.filter(j=>j.status===todoKey).length;
+  const nProg=filtered.filter(j=>!SEWING_DONE.includes(j.status)&&j.status!==todoKey).length;
+  const nActive=filtered.length-nDone;
+  const cols=showDone?SEWING_STATUSES:SEWING_STATUSES.filter(s=>!SEWING_DONE.includes(s.key));
+  const Kpi=({ic,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-bold flex items-center gap-2">🧵 Sewing</h2>
-          <span className="text-xs text-slate-400">{jobs.length} project{jobs.length===1?'':'s'}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border overflow-hidden text-xs font-semibold">
-            <button onClick={()=>setTab('board')} className={`px-3 py-1.5 ${tab==='board'?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>Board</button>
-            <button onClick={()=>setTab('report')} className={`px-3 py-1.5 ${tab==='report'?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>📊 Report</button>
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div><h1 className="text-2xl font-bold">🧵 Sewing</h1><p className="text-slate-500 text-sm">{jobs.length} project{jobs.length===1?'':'s'} · in-house sewing floor</p></div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setTab('board')} className={`px-3 py-1.5 rounded-md ${tab==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setTab('report')} className={`px-3 py-1.5 rounded-md ${tab==='report'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Report</button></div>
+            {tab==='board' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, client, item, sewer…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-56" />}
           </div>
-          {tab==='board' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 w-40" />}
         </div>
       </div>
 
       {tab==='board' && (
-        <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {SEWING_STATUSES.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>j.due_date); return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Kpi ic="📄" label="Active Jobs" value={nActive} color="bg-blue-100" />
+            <Kpi ic="📋" label="To Do" value={nTodo} color="bg-slate-100" />
+            <Kpi ic="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
+            <Kpi ic="✓" label="Done" value={nDone} color="bg-emerald-100" />
+          </div>
+          <div className="flex items-center justify-end"><label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label></div>
+        <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
+          {cols.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>j.due_date); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}><span>{st.label} <span className="opacity-70">({col.length})</span></span><BoardSortBtn mode={mode} onClick={()=>cycleColSort(st.key)} /></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
@@ -8222,6 +8235,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
               </div>
             </div>
           ); })}
+        </div>
         </div>
       )}
 
@@ -8634,6 +8648,7 @@ function PackingDetailModal({ job, profile, employees, onClose, reload }){
 function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openTechpack, openLead }){
   const [tab,setTab]=useState('board');
   const [search,setSearch]=useState('');
+  const [showDone,setShowDone]=useState(false);
   const [replFor,setReplFor]=useState(null);
   const [detailFor,setDetailFor]=useState(null);
   const [activityFor,setActivityFor]=useState(null);
@@ -8645,7 +8660,8 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('packing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.packing_job_id]=replByJob[r.packing_job_id]||[]).push(r); });
   const packers=(employees||[]).filter(e=> e.is_active!==false && /pack/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
-  const filtered=jobs.filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()));
+  const q=search.trim().toLowerCase();
+  const filtered=jobs.filter(j=>{ if(!q) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(PACKING_STATUSES.find(s=>s.key===j.status)||{}).label||''; const itemList=(j.items||[]).map(it=>`${it.itemType||''} ${it.quantity||''}`).join(' '); return [j.number,j.client_name,j.item,j.notes,st,l?.title,l?.client_name,l?.po_number,l?.techpack_number,itemList].filter(Boolean).join(' ').toLowerCase().includes(q); });
 
   async function patch(j, upd){ const { error }=await sb.from('packing_jobs').update(upd).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   async function move(j,st){ await patch(j,{ status:st }); }
@@ -8653,25 +8669,37 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   async function removePacker(j, empId){ await patch(j,{ packers: packJobPackers(j).filter(s=>s.id!==empId) }); }
   async function del(id){ if(!confirm('Send this packing job to Trash?')) return; await sb.from('packing_jobs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',id); reload(); }
 
+  const todoKey=PACKING_STATUSES[0]?.key;
+  const nDone=filtered.filter(j=>PACKING_DONE.includes(j.status)).length;
+  const nTodo=filtered.filter(j=>j.status===todoKey).length;
+  const nProg=filtered.filter(j=>!PACKING_DONE.includes(j.status)&&j.status!==todoKey).length;
+  const nActive=filtered.length-nDone;
+  const cols=showDone?PACKING_STATUSES:PACKING_STATUSES.filter(s=>!PACKING_DONE.includes(s.key));
+  const Kpi=({ic,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-bold flex items-center gap-2">📦 Packing</h2>
-          <span className="text-xs text-slate-400">{jobs.length} project{jobs.length===1?'':'s'}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border overflow-hidden text-xs font-semibold">
-            <button onClick={()=>setTab('board')} className={`px-3 py-1.5 ${tab==='board'?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>Board</button>
-            <button onClick={()=>setTab('report')} className={`px-3 py-1.5 ${tab==='report'?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>📊 Report</button>
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div><h1 className="text-2xl font-bold">📦 Packing</h1><p className="text-slate-500 text-sm">{jobs.length} project{jobs.length===1?'':'s'} · pack & polybag</p></div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setTab('board')} className={`px-3 py-1.5 rounded-md ${tab==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setTab('report')} className={`px-3 py-1.5 rounded-md ${tab==='report'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Report</button></div>
+            {tab==='board' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, client, item…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-56" />}
           </div>
-          {tab==='board' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 w-40" />}
         </div>
       </div>
 
       {tab==='board' && (
-        <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'60vh'}}>
-          {PACKING_STATUSES.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; }); return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Kpi ic="📄" label="Active Jobs" value={nActive} color="bg-blue-100" />
+            <Kpi ic="📋" label="To Do" value={nTodo} color="bg-slate-100" />
+            <Kpi ic="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
+            <Kpi ic="✓" label="Done" value={nDone} color="bg-emerald-100" />
+          </div>
+          <div className="flex items-center justify-end"><label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label></div>
+        <div className="flex gap-3 overflow-x-auto pb-2" style={{minHeight:'55vh'}}>
+          {cols.map(st=>{ const mode=colSort[st.key]||'due'; const col=sortByBoardMode(filtered.filter(j=>j.status===st.key), mode, j=>{ const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; return j.due_date||l?.delivery_date||l?.expected_close||null; }); return (
             <div key={st.key} className="flex-shrink-0 w-72 flex flex-col">
               <div className={`shrink-0 rounded-t-lg px-3 py-2 text-xs font-bold ${st.color} flex items-center justify-between gap-2`}><span>{st.label} <span className="opacity-70">({col.length})</span></span><BoardSortBtn mode={mode} onClick={()=>cycleColSort(st.key)} /></div>
               <div className="flex-1 overflow-y-auto rounded-b-lg p-2 space-y-2 min-h-[120px] bg-slate-200/60">
@@ -8719,6 +8747,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
               </div>
             </div>
           ); })}
+        </div>
         </div>
       )}
 
@@ -11144,6 +11173,8 @@ function PressReport({ logs, rows }){
 function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcReports, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const [detail,setDetail]=useState(null);
+  const [search,setSearch]=useState('');
+  const [showDone,setShowDone]=useState(false);
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   // Size Charts — read-only mirror of the Sales module's "Size Charts" resources
   // so QC can reference size specs while checking. Same rows, no editing here.
@@ -11210,6 +11241,13 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
   const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
   const workQty=(w)=>{ const pj=prodById[w.source_job_id]; return pj?.quantity!=null?pj.quantity:null; };
   const boardItems=dedupe((qcReports||[])).slice().sort(byDueAsc(workDue));
+  const qcQ=search.trim().toLowerCase();
+  const boardFiltered=boardItems.filter(w=>{ if(!qcQ) return true; const l=leadFor(w.lead_id); return [w.item,w.client_name,l?.title,l?.client_name,l?.po_number,l?.techpack_number,w.sewer_name,w.source_type,summaryLine(w)].filter(Boolean).join(' ').toLowerCase().includes(qcQ); });
+  const nTodoQ=boardItems.filter(w=>kbStatusOf(w)==='open').length;
+  const nProgQ=boardItems.filter(w=>kbStatusOf(w)==='in_progress').length;
+  const nDoneQ=boardItems.filter(w=>kbStatusOf(w)==='done').length;
+  const nActiveQ=nTodoQ+nProgQ;
+  const QcKpi=({ic,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
   async function delItem(w){ if(!confirm('Remove this from the QC list?')) return; const { error }=await sb.from('qc_reports').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
 
   const typeBadge=(t)=> t==='sample'?['Sample','bg-purple-100 text-purple-700']:['Production','bg-emerald-100 text-emerald-700'];
@@ -11247,10 +11285,13 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
           <h1 className="text-2xl font-bold">🔍 Quality Control</h1>
           <p className="text-slate-500 text-sm">{open.length} to check · {done.length} done · Production jobs & samples land here when set to “Quality Check (QC)”.</p>
         </div>
-        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
-          <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📐 Size Charts ({sizers.length})</button>
-          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
+        <div className="flex items-center justify-between gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm flex-wrap">
+            <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({boardItems.length})</button>
+            <button onClick={()=>setTab('sizers')} className={`px-3 py-1.5 rounded-md ${tab==='sizers'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📐 Size Charts ({sizers.length})</button>
+            <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
+          </div>
+          {tab==='worklist' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search item, client, subcon…" className="text-sm px-3 py-2 rounded-lg border border-slate-300 w-56" />}
         </div>
       </div>
       {tab==='reports' ? (
@@ -11273,9 +11314,17 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
           )}
         </div>
       ) : (
-        boardItems.length===0
-          ? <div className="bg-white rounded-xl border px-3 py-10 text-center text-slate-400 text-sm">Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.</div>
-          : <KanbanBoard items={boardItems} onMove={moveStatus}
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <QcKpi ic="📄" label="Active Jobs" value={nActiveQ} color="bg-blue-100" />
+            <QcKpi ic="📋" label="To Do" value={nTodoQ} color="bg-slate-100" />
+            <QcKpi ic="⚙️" label="In Progress" value={nProgQ} color="bg-amber-100" />
+            <QcKpi ic="✓" label="Done" value={nDoneQ} color="bg-emerald-100" />
+          </div>
+          <div className="flex items-center justify-end"><label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDoneQ})</label></div>
+          {boardFiltered.length===0
+          ? <div className="bg-white rounded-xl border px-3 py-10 text-center text-slate-400 text-sm">{boardItems.length===0?'Nothing to QC. Move a production job or sample to “Quality Check (QC)” to see it here.':'No items match your search.'}</div>
+          : <KanbanBoard items={boardFiltered} hideDone={!showDone} onMove={moveStatus}
               renderCard={(w)=>{ const lead=leadFor(w.lead_id); const [bl,bc]=typeBadge(w.source_type); const sm=summaryLine(w); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); return (<div>
                 <div className="flex items-center gap-1 mb-0.5"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span></div>
                 <button onClick={()=>setDetail(w)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700 hover:underline">{w.item||'—'}</div></button>
@@ -11285,7 +11334,8 @@ function QCView({ profile, profiles, employees, prodJobs, sampleJobs, leads, qcR
                 {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋 Techpack</button>}
                 <StartFinishBar row={w} table="qc_reports" reload={reload} />
               </div>); }}
-              extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open QC report">QC ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />
+              extraActions={(w)=>(<><button onClick={()=>setDetail(w)} className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-semibold" title="Open QC report">QC ▸</button><button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm" title="Remove">✕</button></>)} />}
+        </div>
       )}
       {detail && <QCDetailModal w={detail} profile={profile} profiles={profiles} employees={employees} leads={leads} openTechpack={openTechpack} onClose={()=>setDetail(null)} reload={reload} />}
       {sizerLightbox && <MediaLightbox url={sizerLightbox.url} path={sizerLightbox.path} name={sizerLightbox.name} kind={sizerLightbox.kind} onClose={()=>setSizerLightbox(null)} />}
