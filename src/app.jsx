@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 742 · Buy List: adding a manual item now has a clear ✓ Add button — the item saves into the list immediately (shown as a confirmed row you can remove) and is included on the printed list and the PO. Enter key also adds it.";
+const BUILD = "Live build 743 · PR materials: new items are now added as plain items — just type the name and pick 'Add item'. No inventory record is created at request time (that only happens when it's POed and received). Pick an existing inventory item from the same search box as before.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -593,22 +593,29 @@ function SignedImg({ url, path, className, alt }){
 // Searchable dropdown — type to filter, click to pick. A drop-in upgrade for a
 // plain <select> where the option list is long (clients, suppliers, etc.).
 // options: [{ value, label }]. Pass className to size it like an .input.
-function SearchSelect({ value, onChange, options, placeholder='Select…', className='', allowClear=false }){
+function SearchSelect({ value, onChange, options, placeholder='Select…', className='', allowClear=false, onCreate, createLabel }){
   const [open,setOpen]=useState(false);
   const [q,setQ]=useState('');
   const opts=options||[];
   const sel=opts.find(o=>String(o.value)===String(value));
   const filtered=(q ? opts.filter(o=>String(o.label||'').toLowerCase().includes(q.toLowerCase())) : opts).slice(0,80);
+  // When onCreate is provided, let the user add whatever they typed as a plain
+  // item (no exact match needed) — used to add a PR line without creating an
+  // inventory record.
+  const qt=(q||'').trim();
+  const showCreate = !!onCreate && qt.length>0 && !opts.some(o=>String(o.label||'').toLowerCase()===qt.toLowerCase());
   return (
     <div className="relative">
       <input className={`input ${className}`} value={open?q:(sel?sel.label:'')} placeholder={sel?sel.label:placeholder}
         onFocus={()=>{ setOpen(true); setQ(''); }}
         onChange={e=>{ setQ(e.target.value); setOpen(true); }}
+        onKeyDown={e=>{ if(e.key==='Enter' && showCreate){ e.preventDefault(); onCreate(qt); setOpen(false); setQ(''); } }}
         onBlur={()=>setTimeout(()=>setOpen(false),150)} autoComplete="off" />
       {open && (
         <div className="absolute z-40 left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
+          {showCreate && <button type="button" onMouseDown={e=>{ e.preventDefault(); onCreate(qt); setOpen(false); setQ(''); }} className="w-full text-left px-3 py-1.5 text-sm text-indigo-700 font-semibold hover:bg-indigo-50 border-b">➕ {(createLabel||'Add')} “{qt}”</button>}
           {allowClear && <button type="button" onMouseDown={e=>{ e.preventDefault(); onChange(''); setOpen(false); setQ(''); }} className="w-full text-left px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-50 border-b">— None —</button>}
-          {filtered.length===0 && <div className="px-3 py-2 text-xs text-slate-400">No matches</div>}
+          {filtered.length===0 && !showCreate && <div className="px-3 py-2 text-xs text-slate-400">No matches</div>}
           {filtered.map(o=>(
             <button key={String(o.value)} type="button" onMouseDown={e=>{ e.preventDefault(); onChange(o.value); setOpen(false); setQ(''); }} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-indigo-50 ${String(o.value)===String(value)?'bg-indigo-50/60 font-semibold text-indigo-700':'text-slate-700'}`}>{o.label}</button>
           ))}
@@ -30304,7 +30311,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   // Flat, searchable option list for the inventory-item picker (bucket icon kept
   // as a prefix so grouping context survives in the type-ahead list).
   const itemOptions = (()=>{
-    const opts=[{ value:'__new__', label:'➕ Add new inventory item…' }];
+    const opts=[];
     ['fabrics','ready_made','trims','printing','office','other'].forEach(bk=>{
       (itemsByBucket[bk]||[]).forEach(it=>opts.push({ value:it.id, label:`${BUCKET_META[bk].icon} ${it.name}${it.color?` - ${it.color}`:''}${it.sku?` · ${it.sku}`:''}` }));
     });
@@ -30555,10 +30562,14 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
                 <div className="grid grid-cols-12 gap-2 items-center">
                   <div className="col-span-4">
                     {readOnly
-                      ? <div className="input text-xs bg-slate-50 truncate" title={it?`${it.name}${it.color?` - ${it.color}`:''}`:''}>{it ? `${it.name}${it.color?` - ${it.color}`:''}` : <span className="text-slate-400">—</span>}</div>
-                      : <SearchSelect value={l.item_id||''} onChange={(v)=>pickItem(i, v)} options={itemOptions} placeholder="🔍 Search inventory item…" className="text-xs" />
+                      ? <div className="input text-xs bg-slate-50 truncate" title={it?`${it.name}${it.color?` - ${it.color}`:''}`:(l.description||'')}>{it ? `${it.name}${it.color?` - ${it.color}`:''}` : (l.description ? <span className="text-slate-700">{l.description}</span> : <span className="text-slate-400">—</span>)}</div>
+                      : (!l.item_id && l.description)
+                        ? <div className="flex items-center gap-1">
+                            <div className="input text-xs flex-1 truncate flex items-center" title={l.description}>📝 {l.description}</div>
+                            <button onClick={()=>setLine(i,{ description:'' })} title="Change item" className="shrink-0 text-slate-400 hover:text-slate-700 text-xs px-1">✎</button>
+                          </div>
+                        : <SearchSelect value={l.item_id||''} onChange={(v)=>pickItem(i, v)} options={itemOptions} placeholder="🔍 Search or type a new item…" className="text-xs" onCreate={(text)=>setLine(i,{ item_id:null, description:text })} createLabel="Add item" />
                     }
-                    {hasLegacyDesc && <div className="text-[10px] text-slate-400 mt-1 truncate" title={l.description}>{l.description}</div>}
                   </div>
                   <div className="col-span-2">
                     <input type="number" className="input text-xs text-right" value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} disabled={readOnly} />
