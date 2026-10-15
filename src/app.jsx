@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 754 · Fix: Financial Reports crashed with 'reload is not defined' — wired the correct reload function. Month-End Close now loads.";
+const BUILD = "Live build 755 · Bank Reconciliation: post-dated checks (PDCs) are now hidden from the list by default (still excluded from the balance) — toggle 'Show post-dated' to reveal them. They surface for reconciliation on their own date.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32228,6 +32228,7 @@ const BANK_TXN_TYPES = ['Check','Bank Transfer','Cash','JV','Payroll','Subcon','
 function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit }){
   const [filter,setFilter]=useState('all');  // all | in | out | unreconciled | reconciled
   const [search,setSearch]=useState('');
+  const [showPdc,setShowPdc]=useState(false); // hide post-dated (future) items until their date arrives
   const [asOf,setAsOf]=useState(todayLocalStr());
   const [perPage,setPerPage]=useState(10);
   const [page,setPage]=useState(1);
@@ -32258,12 +32259,16 @@ function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit
   const pdcOut = txns.filter(t=>t.direction==='out' && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const pdcIn  = txns.filter(t=>t.direction==='in'  && isFuture(t)).reduce((s,t)=>s+Number(t.amount||0),0);
   const hasPdc = pdcOut>0.005 || pdcIn>0.005;
+  const pdcCount = txns.filter(t=>isFuture(t)).length;
   const balanceAsOf = Number(bank.opening_balance||0) + inSum - outSum;
-  // Tab counts
-  const cAll=txns.length, cIn=txns.filter(t=>t.direction==='in').length, cOut=txns.filter(t=>t.direction==='out').length, cUnrec=txns.filter(t=>!t.reconciled).length, cRec=txns.filter(t=>!!t.reconciled).length;
+  // Post-dated checks (future-dated) are hidden by default — they only count as a
+  // real expense/receipt once their date arrives. A toggle reveals them.
+  const visible = showPdc ? txns : txns.filter(t=>!isFuture(t));
+  // Tab counts (respect the post-dated toggle so numbers match the list)
+  const cAll=visible.length, cIn=visible.filter(t=>t.direction==='in').length, cOut=visible.filter(t=>t.direction==='out').length, cUnrec=visible.filter(t=>!t.reconciled).length, cRec=visible.filter(t=>!!t.reconciled).length;
   const TABS=[['all','All',cAll],['in','Money in',cIn],['out','Money out',cOut],['unreconciled','Unreconciled',cUnrec],['reconciled','Reconciled',cRec]];
   // Filter → search → sort → paginate
-  const base = txns.filter(t=> filter==='all' ? true : filter==='in' ? t.direction==='in' : filter==='out' ? t.direction==='out' : filter==='reconciled' ? !!t.reconciled : !t.reconciled);
+  const base = visible.filter(t=> filter==='all' ? true : filter==='in' ? t.direction==='in' : filter==='out' ? t.direction==='out' : filter==='reconciled' ? !!t.reconciled : !t.reconciled);
   const q=search.trim().toLowerCase();
   const searched = q ? base.filter(t=> `${t.description||''} ${refLabel(t)} ${ov(t).bank_ref||''}`.toLowerCase().includes(q)) : base;
   const sorted = searched.slice().sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
@@ -32286,7 +32291,7 @@ function BankAccountDetailModal({ bank, txns, vouchers, onClose, reload, canEdit
           <div className="bg-slate-50 border rounded p-2"><div className="text-[10px] uppercase text-slate-500">Opening balance</div><div className="font-bold">{peso(bank.opening_balance)}</div></div>
           <div className="bg-indigo-50 border border-indigo-200 rounded p-2"><div className="text-[10px] uppercase text-indigo-700">Balance as of {fmtDate(asOf)}</div><div className="font-bold text-indigo-800">{peso(balanceAsOf)}</div></div>
         </div>
-        {hasPdc && <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 text-xs text-amber-800">🕒 <b>Post-dated (not yet cleared):</b> {pdcOut>0.005 && <>−{peso(pdcOut)} out</>}{pdcOut>0.005&&pdcIn>0.005 && ' · '}{pdcIn>0.005 && <>+{peso(pdcIn)} in</>}. These are excluded from the balance until their date arrives.</div>}
+        {hasPdc && <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 text-xs text-amber-800 flex items-center justify-between gap-2 flex-wrap"><span>🕒 <b>Post-dated (not yet cleared):</b> {pdcOut>0.005 && <>−{peso(pdcOut)} out</>}{pdcOut>0.005&&pdcIn>0.005 && ' · '}{pdcIn>0.005 && <>+{peso(pdcIn)} in</>}. Hidden from the list and the balance until their date arrives — they post as an expense on their own date.</span><label className="inline-flex items-center gap-1.5 shrink-0 cursor-pointer font-semibold"><input type="checkbox" checked={showPdc} onChange={e=>setShowPdc(e.target.checked)} className="accent-amber-600" />Show post-dated ({pdcCount})</label></div>}
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-1 text-xs flex-wrap">
             {TABS.map(([k,label,n])=>(
