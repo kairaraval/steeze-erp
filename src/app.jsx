@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 749 · Sewing, Packing & QC boards updated to the In-House Cutting / Subli Pressing look: KPI strip + Show done toggle + sticky header + full-text search (Embroidery & Knitting left as-is).";
+const BUILD = "Live build 750 · Lead details: change the status/stage inline from the modal (same gates + auto-creation as the pipeline board), no need to open Edit.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3045,6 +3045,56 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
     setNotesMsg('Saved.');
     setTimeout(()=>setNotesMsg(''), 2000);
   }
+  // Inline stage change straight from the Lead details modal — mirrors the
+  // Pipeline board's move() so the same gates + auto-creation (Sampling job,
+  // PR/BOM, Production job, Sales Order) fire no matter where the stage is set.
+  const [stageBusy,setStageBusy]=useState(false);
+  async function changeStage(st){
+    const l=lead;
+    if(st===l.stage) return;
+    // Gate: contact person + delivery address required for Sampling / Closed Won.
+    if(['sampling','won'].includes(st)){
+      const c=(clients||[]).find(x=>x.id===l.client_id);
+      if(!c || !String(c.contact||'').trim() || !String(c.address||'').trim()){
+        alert(`⚠ Missing info — "${l.title||'this lead'}" needs a Contact Person and Delivery Address before it can move to "${stageMeta(st).label}".\n\nOpen the lead → Edit → fill in the "Contact & delivery address" section, then change it again.`);
+        return;
+      }
+    }
+    if(st==='won' && isSaleLead(l) && !(Number(l.value)>0)){
+      alert(`⚠ "${l.title||'this lead'}" has ₱0 value. Add the deal value on the lead before moving it to Closed Won.`);
+      return;
+    }
+    if(st==='won' && !l.expected_close){
+      alert(`⚠ "${l.title||'this lead'}" has no Due Date. Open the lead → Edit → set the Due Date before moving it to Closed Won.`);
+      return;
+    }
+    setStageBusy(true);
+    const wasSold=SOLD_STAGES.includes(l.stage); const willBeSold=SOLD_STAGES.includes(st);
+    const patch={ stage:st, stage_changed_at:new Date().toISOString() };
+    if(willBeSold && !l.won_at) patch.won_at=todayManila();
+    if(st==='delivered_paid') patch.payment_status='paid';
+    const { error }=await sb.from('leads').update(patch).eq('id',l.id);
+    if(error){ setStageBusy(false); alert(error.message); return; }
+    await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Moved to "${stageMeta(st).label}"` });
+    const liveLead={ ...l, ...patch };
+    try{
+      if(l.stage!=='sampling' && st==='sampling'){
+        const newSample=await maybeAutoCreateSamplingJobForLead(profile, liveLead, clients);
+        if(newSample) await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Sampling job ${newSample.number}` });
+      }
+      if(!wasSold && willBeSold){
+        const newPR=await maybeAutoCreatePRForLead(profile, liveLead);
+        if(newPR) await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Purchase Request ${newPR.number} (BOM) for purchasing` });
+        const newJob=await maybeAutoCreateProductionJobForLead(profile, liveLead, clients);
+        if(newJob) await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Production job ${newJob.number}` });
+        const newSO=await maybeAutoCreateSalesOrderForLead(profile, liveLead, clients);
+        if(newSO) await sb.from('lead_activity').insert({ lead_id:l.id, actor_id:profile.id, type:'system', text:`Auto-created Sales Order ${newSO.number} for finance` });
+      }
+    }catch(_){}
+    if(st==='won' && l.stage!=='won'){ try{ window.dispatchEvent(new CustomEvent('steeze:won', { detail:{ lead:liveLead } })); }catch(_){} }
+    setStageBusy(false);
+    reload && reload();
+  }
   return (
     <Modal title="Lead details" onClose={onClose} xwide>
       <div className="grid md:grid-cols-5 gap-5">
@@ -3055,7 +3105,16 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               <div className="text-lg font-bold truncate">{lead.title}</div>
               <div className="text-sm text-slate-500 truncate">{client?.company||'—'}</div>
             </div>
-            <span className={`text-xs px-2 py-1 rounded font-medium ${stageMeta(lead.stage).color}`}>{stageMeta(lead.stage).label}</span>
+            {canEdit ? (
+              <div className="flex flex-col items-end gap-1">
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Status</span>
+                <select value={lead.stage} disabled={stageBusy} onChange={e=>changeStage(e.target.value)} className={`text-xs px-2 py-1 rounded font-semibold border cursor-pointer disabled:opacity-60 ${stageMeta(lead.stage).color}`} title="Change the status of this lead">
+                  {STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+              </div>
+            ) : (
+              <span className={`text-xs px-2 py-1 rounded font-medium ${stageMeta(lead.stage).color}`}>{stageMeta(lead.stage).label}</span>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div><div className="text-[10px] uppercase text-slate-400">Sales Manager</div><div className="flex items-center gap-1.5">{mgr ? <><Avatar profile={mgr} size="sm" /><span className="font-medium">{mgr.name||mgr.email}</span></> : <span className="text-slate-400">— Unassigned —</span>}</div></div>
