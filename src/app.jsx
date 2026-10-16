@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 765 · Fix: Toolbox Meetings now appears under Executive for the CEO (admin) and the AGM — the admin nav group and the AGM's allowed views were missing it.";
+const BUILD = "Live build 766 · Production deadline history: every time a project deadline is moved we record old→new, who, and when, and lock in the original deadline. The planning board shows original vs current, times moved, days slipped, and an editable reason per change; the board card flags moved deadlines (↔N).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -9518,6 +9518,13 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload,
   async function saveDeliveries(next){ setDeliveries(next); try{ await sb.from(jobTable).update({ deliveries: next }).eq('id', job.id); reload && reload(); }catch(e){ setMsg(e.message||String(e)); } }
   async function addDelivery(){ const q=Number(delQty); if(!(q>0)){ setMsg('Enter a delivered quantity greater than 0.'); return; } setMsg(''); await saveDeliveries([...deliveries, { date: delDate||todayManila(), qty:q, note:(delNote||'').trim()||undefined }]); setDelQty(''); setDelNote(''); }
   async function removeDelivery(i){ await saveDeliveries(deliveries.filter((_,j)=>j!==i)); }
+  // Deadline change history (production jobs). Captured automatically whenever the
+  // deadline is moved on the board; notes are editable here.
+  const [dueHist,setDueHist]=useState(Array.isArray(job.due_date_history)?job.due_date_history:[]);
+  const histName=(id)=>(profiles||[]).find(p=>p.id===id)?.name||'—';
+  async function saveHistNote(idx, note){ const next=dueHist.map((h,i)=>i===idx?{...h, note:(note||'').trim()||null}:h); setDueHist(next); try{ await sb.from(jobTable).update({ due_date_history: next }).eq('id', job.id); reload&&reload(); }catch(e){ setMsg(e.message||String(e)); } }
+  const dueOriginal = job.original_due_date || (dueHist[0]&&dueHist[0].from) || job.due_date || null;
+  const dueSlip = (dueOriginal && job.due_date) ? ganttDays(dueOriginal, job.due_date) : 0;
 
   async function load(){
     setLoading(true);
@@ -9750,6 +9757,35 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload,
           </div>
           );
         })()}
+
+        {/* Deadline history — original vs current + every adjustment (production). */}
+        {jobTable==='production_jobs' && (
+        <div className="border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <div className="text-[10px] uppercase text-slate-400 font-semibold">📅 Deadline history</div>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold" title="The first deadline set for this project">Original: {dueOriginal?fmtDate(dueOriginal):'—'}</span>
+              <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">Current: {job.due_date?fmtDate(job.due_date):'—'}</span>
+              {dueHist.length>0 && <span className={`px-2 py-0.5 rounded font-semibold ${dueSlip>0?'bg-rose-50 text-rose-700':dueSlip<0?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-500'}`}>Moved {dueHist.length}× · {dueSlip>0?`+${dueSlip}d later`:dueSlip<0?`${dueSlip}d earlier`:'net 0'}</span>}
+            </div>
+          </div>
+          {dueHist.length===0 ? (
+            <div className="text-[11px] text-slate-400">No changes yet — the deadline hasn't been moved. Any change made on the board is recorded here with the date, who moved it, and a note.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {dueHist.slice().reverse().map((h,ri)=>{ const idx=dueHist.length-1-ri; const later=h.from&&h.to&&h.to>h.from; const earlier=h.from&&h.to&&h.to<h.from; return (
+                <div key={idx} className="flex items-start gap-2 text-xs border-b last:border-0 pb-1.5">
+                  <span className={`mt-0.5 font-semibold ${later?'text-rose-600':earlier?'text-emerald-600':'text-slate-600'}`}>{h.from?fmtDate(h.from):'—'} → {h.to?fmtDate(h.to):'—'}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] text-slate-400">{histName(h.by)} · {h.at?new Date(h.at).toLocaleString('en-PH',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''}{later?` · +${ganttDays(h.from,h.to)}d`:earlier?` · ${ganttDays(h.from,h.to)}d`:''}</div>
+                    <input defaultValue={h.note||''} onBlur={e=>{ if((e.target.value||'')!==(h.note||'')) saveHistNote(idx, e.target.value); }} placeholder="reason for the change (optional)" className="mt-0.5 w-full text-[11px] px-1.5 py-0.5 rounded border border-slate-200" />
+                  </div>
+                </div>
+              ); })}
+            </div>
+          )}
+        </div>
+        )}
 
         {/* Deliveries — partial / priority deliveries. Each row = one delivery. */}
         <div className="border rounded-lg p-3">
@@ -10400,7 +10436,17 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   // production team can adjust deadlines without leaving the board.
   async function changeDueDate(j, newDate){
     const due = newDate || null;
-    const { error } = await sb.from('production_jobs').update({ due_date: due }).eq('id', j.id);
+    const prev = j.due_date || null;
+    // Record the deadline change on the job's history (original + every move,
+    // with who & when), so a moved deadline is auditable and never lost.
+    const patch = { due_date: due };
+    if(prev !== due){
+      const hist = Array.isArray(j.due_date_history) ? j.due_date_history.slice() : [];
+      hist.push({ from: prev, to: due, by: profile.id, at: new Date().toISOString(), note: null, kind: 'full' });
+      patch.due_date_history = hist;
+      if(!j.original_due_date) patch.original_due_date = prev || due;
+    }
+    const { error } = await sb.from('production_jobs').update(patch).eq('id', j.id);
     if(error){ alert(error.message); return; }
     // Cascade the new deadline to every downstream department board + the
     // delivery schedule so they never drift. The process boards (pattern /
@@ -10585,7 +10631,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
             <td className="px-3 py-2"><select disabled={readOnly} value={j.status} onChange={e=>move(j,e.target.value)} className={`text-xs px-2 py-1 rounded font-medium border-0 ${meta.color} ${readOnly?'appearance-none cursor-default':''}`}>{PRODUCTION_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
             <td className="px-3 py-2">
               <div className="flex flex-col gap-0.5">
-                <input type="date" value={effectiveDue||''} onChange={e=>changeDueDate(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white ${di.overdue?'text-rose-700 font-semibold':''}`} title={dueIsFromLead?'Inherited from the lead\'s delivery date — save here to override':'Production deadline'} />
+                <input type="date" value={effectiveDue||''} onChange={e=>changeDueDate(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white ${di.overdue?'text-rose-700 font-semibold':''}`} title={dueIsFromLead?'Inherited from the lead\'s delivery date — save here to override':'Production deadline'} />{(j.due_date_history||[]).length>0 && <span className="text-[9px] text-amber-600 font-bold ml-0.5 cursor-help" title={`Deadline moved ${j.due_date_history.length}×. Original: ${fmtDate(j.original_due_date||(j.due_date_history[0]&&j.due_date_history[0].from)||j.due_date)}`}>↔{j.due_date_history.length}</span>}
                 {di.label && <span className={`text-[10px] ${di.cls}`}>{di.label}{dueIsFromLead?' · from lead':''}</span>}
               </div>
             </td>
@@ -10661,7 +10707,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                         <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap" title="Closed-won / added to the board">{(()=>{ const d=lead?.won_at||j.created_at; return d?fmtDate(d):'—'; })()}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex flex-col gap-0.5">
-                            <input type="date" value={effectiveDue||''} onChange={e=>changeDueDate(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white ${di.overdue?'text-rose-700 font-semibold':''}`} title={dueIsFromLead?'Inherited from the lead\'s delivery date — save here to override':'Production deadline'} />
+                            <input type="date" value={effectiveDue||''} onChange={e=>changeDueDate(j,e.target.value)} className={`text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white ${di.overdue?'text-rose-700 font-semibold':''}`} title={dueIsFromLead?'Inherited from the lead\'s delivery date — save here to override':'Production deadline'} />{(j.due_date_history||[]).length>0 && <span className="text-[9px] text-amber-600 font-bold ml-0.5 cursor-help" title={`Deadline moved ${j.due_date_history.length}×. Original: ${fmtDate(j.original_due_date||(j.due_date_history[0]&&j.due_date_history[0].from)||j.due_date)}`}>↔{j.due_date_history.length}</span>}
                             {di.label && <span className={`text-[10px] ${di.cls}`}>{di.label}{dueIsFromLead?' · from lead':''}</span>}
                           </div>
                         </td>
