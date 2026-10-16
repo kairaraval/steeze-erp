@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 758 · For Bank Payment queue: added a Cancel button (with reason) for payments that didn't push through — marks the RFP Cancelled and removes it from the list.";
+const BUILD = "Live build 759 · Production fix: logged daily output (Embroidery/Printing/Knitting) and released batches (Subli/Trad Sorting) now show on the board cards — the entries were saving, they just weren't reflected on the board.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5662,6 +5662,19 @@ function DeptDailyLogModal({ job, process, profile, employees, onClose }){
 function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, statuses, doneStatuses, jobs, leads, graphicTypes, canSendToPrinting, showResources, showReport, replacementDept, reload, openActivity, openTechpack, openLead }){
   const [logFor,setLogFor]=useState(null); // dept job whose daily output log is open
   const canLogOutput=['printing','embroidery','knitting'].includes(jobType);
+  const wordDone = jobType==='printing'?'printed':jobType==='embroidery'?'embroidered':jobType==='knitting'?'knitted':'done';
+  // Running tally of logged daily output per job, so the board reflects what the
+  // team entered in the Daily Output modal (otherwise a logged qty looks unsaved).
+  const [logTotals,setLogTotals]=useState({});
+  async function loadLogTotals(){
+    if(!canLogOutput){ return; }
+    const ids=(jobs||[]).map(j=>j.id).filter(Boolean);
+    if(!ids.length){ setLogTotals({}); return; }
+    const { data }=await sb.from('process_output_logs').select('worklist_id,qty_done').eq('process',jobType).is('deleted_at',null).in('worklist_id',ids);
+    const m={}; (data||[]).forEach(l=>{ if(l.worklist_id) m[l.worklist_id]=(m[l.worklist_id]||0)+(Number(l.qty_done)||0); });
+    setLogTotals(m);
+  }
+  useEffect(()=>{ loadLogTotals(); },[jobType, (jobs||[]).map(j=>j.id).join(',')]);
   const [layout,setLayout]=useState('board'); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false);
   const [detail,setDetail]=useState(null); const [search,setSearch]=useState('');
   // Kanban drag-and-drop state for the Board layout — same pattern as the
@@ -5880,7 +5893,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
                         {j.graphic_type && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-semibold">{j.graphic_type}</span>}
                         {lead && openTechpack && <button onClick={(e)=>{e.stopPropagation(); openTechpack(lead);}} className="inline-flex items-center gap-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button>}
                       </div>
-                      <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.overdue?'text-rose-600 font-semibold':'text-slate-500'}>{j.due_date?`📅 ${fmtDate(j.due_date)}`:''}{di.label?` · ${di.label}`:''}</span></div>
+                      <div className="flex items-center justify-between mt-1 text-[11px]"><span className="text-slate-600">{j.quantity?j.quantity+' pcs':''}{canLogOutput && logTotals[j.id]>0 && <span className="text-emerald-700 font-semibold"> · {logTotals[j.id].toLocaleString()} {wordDone}{j.quantity?` / ${Number(j.quantity).toLocaleString()}`:''}</span>}{(j.attachments||[]).length?` · 📎${j.attachments.length}`:''}</span><span className={di.overdue?'text-rose-600 font-semibold':'text-slate-500'}>{j.due_date?`📅 ${fmtDate(j.due_date)}`:''}{di.label?` · ${di.label}`:''}</span></div>
                       <div className="flex items-center gap-1 mt-2">
                         <select value={j.status} onChange={e=>move(j,e.target.value)} className="text-[11px] border rounded px-1 py-0.5 flex-1 bg-slate-50">{statuses.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select>
                         {canSendToPrinting && <button onClick={()=>sendToPrinting(j)} title="Send to Printing" className="text-purple-600 text-xs px-1">🖨</button>}
@@ -5888,7 +5901,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
                         {canSendToPrinting && <button onClick={()=>sendToKnitting(j)} title="Send to Knitting" className="text-amber-600 text-xs px-1">🧶</button>}
                       </div>
                       <StartFinishBar row={j} table={table} reload={reload} />
-                      {canLogOutput && <button onClick={(e)=>{e.stopPropagation(); setLogFor(j);}} className="w-full mt-2 py-1 rounded bg-orange-50 text-orange-700 text-[11px] font-semibold hover:bg-orange-100">📋 Log daily output</button>}
+                      {canLogOutput && <button onClick={(e)=>{e.stopPropagation(); setLogFor(j);}} className="w-full mt-2 py-1 rounded bg-orange-50 text-orange-700 text-[11px] font-semibold hover:bg-orange-100">📋 Log daily output{logTotals[j.id]>0?` · ${logTotals[j.id].toLocaleString()} ${wordDone}`:''}</button>}
                       {openLead && (
                         lead
                           ? <button onClick={(e)=>{e.stopPropagation(); openLead({ lead, job:j, jobType, canSendToPrinting });}} className="w-full mt-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium">Open lead</button>
@@ -6025,7 +6038,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
           </div>
         </Modal>
       ); })()}
-      {logFor && <DeptDailyLogModal job={logFor} process={jobType} profile={profile} employees={employees} onClose={()=>setLogFor(null)} />}
+      {logFor && <DeptDailyLogModal job={logFor} process={jobType} profile={profile} employees={employees} onClose={()=>{ setLogFor(null); loadLogTotals(); }} />}
     </div>
   );
 }
@@ -12340,6 +12353,9 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   async function moveStatus(w, st){ const patch={ status:st, done_at: st==='done'? new Date().toISOString() : null }; if(st!=='done' && !w.start_date && st==='in_progress') patch.start_date=todayManila(); const { error }=await sb.from('process_worklist').update(patch).eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   // Pcs pressed per project (from the daily output logs) — for the board cards.
   const pressedByWork={}; (pressLogs||[]).forEach(l=>{ if(l.worklist_id) pressedByWork[l.worklist_id]=(pressedByWork[l.worklist_id]||0)+(Number(l.qty_done)||0); });
+  // Released garments per worklist item (sorting) — so the board reflects the
+  // batches the team released, instead of looking empty.
+  const releasedByWork={}; (batches||[]).forEach(bt=>{ if(bt.worklist_id && bt.status!=='returned') releasedByWork[bt.worklist_id]=(releasedByWork[bt.worklist_id]||0)+(Number(batchGarmentTotal(bt))||0); });
   const PRESS_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
   const pressCol=(key)=> (key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done')).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
@@ -12348,7 +12364,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
   // ── Board helpers (mirrors the In-House Cutting board) ──
   const selected=rows.find(w=>w.id===selId)||null;
-  const progOf=(w)=> showPress ? (pressedByWork[w.id]||0) : Number(w.qty_done||0);
+  const progOf=(w)=> showPress ? (pressedByWork[w.id]||0) : showBatches ? (releasedByWork[w.id]||0) : Number(w.qty_done||0);
   // Target = what the head sets per project (target_qty), else the order qty.
   const targetOf=(w)=> (w.target_qty!=null && w.target_qty!=='') ? Number(w.target_qty) : (workQty(w)||0);
   const balanceOf=(w)=> Math.max(0, targetOf(w) - progOf(w));
@@ -12419,7 +12435,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
         <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
         <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group">
           <div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div>
-          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.qty_done!=null?` · ${w.qty_done} done`:''}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
+          <div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{progOf(w)>0?` · ${progOf(w)} ${showBatches?'released':'done'}`:(w.qty_done!=null?` · ${w.qty_done} done`:'')}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.start_date?` · started ${fmtDate(w.start_date)}`:''}</div>
         </button>
         <button onClick={()=>setDetail(w)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 font-semibold shrink-0">Report ▸</button>
         {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline shrink-0" title="View techpack">📋 Techpack</button>}
@@ -12433,7 +12449,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   const doneRow=(w)=>{ const [bl,bc]=srcBadge(w.source_type); return (
     <div key={w.id} className="border-t px-3 py-2 flex items-center gap-2 flex-wrap">
       <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${bc}`}>{bl}</span>
-      <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group"><div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{w.qty_done!=null?` · ${w.qty_done} done`:''}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.notes?` · ${w.notes}`:''}</div></button>
+      <button onClick={()=>setDetail(w)} className="min-w-0 flex-1 text-left group"><div className="text-sm font-medium truncate group-hover:text-indigo-700 group-hover:underline">{w.item||w.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{w.client_name||''}{progOf(w)>0?` · ${progOf(w)} ${showBatches?'released':'done'}`:(w.qty_done!=null?` · ${w.qty_done} done`:'')}{w.reject_count?` · ${w.reject_count} reject${w.reject_count===1?'':'s'}`:''}{w.notes?` · ${w.notes}`:''}</div></button>
       <div className="text-[11px] text-slate-500 text-right shrink-0">{w.start_date?fmtDate(w.start_date):'—'} → <span className="font-semibold text-emerald-700">{w.done_at?fmtTime(w.done_at):'done'}</span></div>
       <button onClick={()=>reopenItem(w)} className="text-xs text-indigo-600 hover:underline shrink-0">Reopen</button>
       <button onClick={()=>delItem(w)} className="text-slate-300 hover:text-rose-500 text-sm shrink-0">✕</button>
@@ -12487,7 +12503,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
                           <button onClick={()=>setSelId(w.id)} className="text-left w-full"><div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div></button>
                           <div className="text-xs text-slate-500 truncate">{w.client_name||''}{tgt>0?` · ${tgt} pcs`:''}</div>
                           {due && <div className={`text-[11px] mt-0.5 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
-                          {w.status==='in_progress' && (tgt>0||val>0) && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{showPress?'Pressed':'Done'}</span><span>{val}/{tgt||'—'}{tgt>0?` · bal ${bal}`:''}</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
+                          {w.status!=='done' && (tgt>0||val>0) && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{showPress?'Pressed':showBatches?'Released':'Done'}</span><span>{val}/{tgt||'—'}{tgt>0?` · bal ${bal}`:''}</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
                           <div className="flex flex-wrap items-center gap-1 mt-1">
                             {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200">📋</button>}
                           </div>
