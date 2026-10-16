@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 762 · Production search: every department board now has a search that matches anything on the card. Added search to Sorting/Pressing boards (was missing) and the Cutting & Pattern worklists; broadened Production, Sampling, Printing/Embroidery/Knitting searches (item, client, PO, techpack, notes, status, owner).";
+const BUILD = "Live build 763 · New Executive → Toolbox Meetings module: the AGM logs each meeting (minutes, issues, decisions, attendance), adds accountable action items (owner + due date + overdue tracking, owner gets notified), attaches photos/files, and discusses in a thread; CEO can mark each meeting reviewed.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6807,6 +6807,200 @@ const CHECKIN_DEPTS = [
 function checkinDeptForRole(role){ return CHECKIN_DEPTS.find(d=>d.roles.includes(role))||null; }
 function checkinDeptLabel(key){ return (CHECKIN_DEPTS.find(d=>d.key===key)||{}).label||key; }
 const CHECKIN_STATUS = { green:{ label:'On track', dot:'bg-emerald-500', pill:'bg-emerald-100 text-emerald-700' }, yellow:{ label:'Needs attention', dot:'bg-amber-500', pill:'bg-amber-100 text-amber-700' }, red:{ label:'Problem', dot:'bg-rose-500', pill:'bg-rose-100 text-rose-700' } };
+
+// ─── Toolbox Meetings (Executive) ───────────────────────────────────────────
+const TBM_STATUS = { routine:['Routine','bg-slate-100 text-slate-600'], issues:['Has issues','bg-amber-100 text-amber-700'], attention:['Needs CEO attention','bg-rose-100 text-rose-700'] };
+function ToolboxMeetingsView({ profile, profiles, employees }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [open,setOpen]=useState(null);       // meeting object (edit) or 'new'
+  const [fStatus,setFStatus]=useState('');
+  const [q,setQ]=useState('');
+  const canEdit = ['admin','agm'].includes(profile.role);
+  const nameOf=(id)=> (profiles||[]).find(p=>p.id===id)?.name || '—';
+  async function load(){ setLoading(true); const { data }=await sb.from('toolbox_meetings').select('*').is('deleted_at',null).order('meeting_date',{ascending:false}).order('created_at',{ascending:false}); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  const today=todayManila();
+  const allItems = rows.flatMap(m=> (Array.isArray(m.action_items)?m.action_items:[]).map(a=>({ ...a, _m:m })));
+  const openItems = allItems.filter(a=>!a.done);
+  const overdue = openItems.filter(a=> a.due_date && a.due_date < today);
+  const thisMonth = rows.filter(m=> String(m.meeting_date||'').slice(0,7)===today.slice(0,7)).length;
+  const qq=q.trim().toLowerCase();
+  const filtered = rows.filter(m=> (!fStatus||m.status===fStatus) && (!qq || [m.number,m.department,m.topic,m.minutes,m.issues,m.decisions,m.attendees,nameOf(m.facilitator_id)].filter(Boolean).join(' ').toLowerCase().includes(qq)));
+  const Kpi=({ic,label,value,color,alert})=>(<div className={`bg-white border rounded-xl p-3 flex items-center gap-3 ${alert?'ring-1 ring-rose-200':''}`}><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className={`text-2xl font-extrabold leading-tight ${alert&&value>0?'text-rose-600':'text-slate-900'}`}>{value}</div></div></div>);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div><h1 className="text-2xl font-bold">🧰 Toolbox Meetings</h1><p className="text-slate-500 text-sm">A record of every toolbox meeting — minutes, issues raised, action items, and supporting photos.</p></div>
+          {canEdit && <button onClick={()=>setOpen('new')} className="px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ New meeting</button>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All statuses</option>{Object.entries(TBM_STATUS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</select>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search department, topic, minutes, issues…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-80" />
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <Kpi ic="🧰" label="Meetings this month" value={thisMonth} color="bg-indigo-100" />
+        <Kpi ic="📋" label="Open action items" value={openItems.length} color="bg-amber-100" />
+        <Kpi ic="⏰" label="Overdue follow-ups" value={overdue.length} color="bg-rose-100" alert />
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : filtered.length===0 ? (
+        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No toolbox meetings logged yet.{canEdit?' Click “+ New meeting” to add the first one.':''}</div>
+      ) : (
+        <div className="space-y-2.5">
+          {filtered.map(m=>{ const items=Array.isArray(m.action_items)?m.action_items:[]; const doneN=items.filter(a=>a.done).length; const od=items.filter(a=>!a.done && a.due_date && a.due_date<today).length; const st=TBM_STATUS[m.status]||TBM_STATUS.routine; const atts=(Array.isArray(m.attachments)?m.attachments:[]).length; return (
+            <button key={m.id} onClick={()=>setOpen(m)} className="w-full text-left bg-white border rounded-xl p-3.5 hover:border-indigo-300 hover:bg-indigo-50/30 transition">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <span className="font-mono text-[11px] text-slate-400">{m.number||'—'}</span>
+                  <span className="font-semibold text-slate-900 truncate">{m.topic||'(no topic)'}</span>
+                  <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${st[1]}`}>{st[0]}</span>
+                  {m.ceo_reviewed_at && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700" title={`Reviewed ${fmtDate(m.ceo_reviewed_at)}`}>✓ CEO reviewed</span>}
+                </div>
+                <div className="text-xs text-slate-500 shrink-0">{fmtDate(m.meeting_date)}</div>
+              </div>
+              <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500 flex-wrap">
+                {m.department && <span>🏭 {m.department}</span>}
+                <span>🎤 {nameOf(m.facilitator_id)}</span>
+                {m.attendee_count!=null && <span>👥 {m.attendee_count}</span>}
+                {items.length>0 && <span className={od>0?'text-rose-600 font-semibold':''}>✅ {doneN}/{items.length} action items{od>0?` · ${od} overdue`:''}</span>}
+                {atts>0 && <span>📎 {atts}</span>}
+              </div>
+            </button>
+          ); })}
+        </div>
+      )}
+      {open && <ToolboxMeetingModal meeting={open==='new'?null:open} profile={profile} profiles={profiles} employees={employees} onClose={()=>setOpen(null)} onSaved={()=>{ load(); }} />}
+    </div>
+  );
+}
+
+function ToolboxMeetingModal({ meeting, profile, profiles, employees, onClose, onSaved }){
+  const isEdit=!!meeting?.id;
+  const canEdit = ['admin','agm'].includes(profile.role);
+  const isCeo = profile.role==='admin';
+  const [date,setDate]=useState(meeting?.meeting_date||todayManila());
+  const [department,setDepartment]=useState(meeting?.department||'');
+  const [facilitatorId,setFacilitatorId]=useState(meeting?.facilitator_id||profile.id);
+  const [attCount,setAttCount]=useState(meeting?.attendee_count!=null?String(meeting.attendee_count):'');
+  const [attendees,setAttendees]=useState(meeting?.attendees||'');
+  const [topic,setTopic]=useState(meeting?.topic||'');
+  const [minutes,setMinutes]=useState(meeting?.minutes||'');
+  const [issues,setIssues]=useState(meeting?.issues||'');
+  const [decisions,setDecisions]=useState(meeting?.decisions||'');
+  const [status,setStatus]=useState(meeting?.status||'routine');
+  const [items,setItems]=useState(()=> Array.isArray(meeting?.action_items)? meeting.action_items.map(a=>({ ...a })) : []);
+  const [atts,setAtts]=useState(Array.isArray(meeting?.attachments)?meeting.attachments:[]);
+  const [row,setRow]=useState(meeting||null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const origOwners = useRef(new Map((Array.isArray(meeting?.action_items)?meeting.action_items:[]).map(a=>[a.id, a.owner_id||null])));
+  const today=todayManila();
+  const staff=(profiles||[]).filter(p=>!p.deleted_at).slice().sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
+  const deptList=(typeof CHECKIN_DEPTS!=='undefined'?CHECKIN_DEPTS:[]).map(d=>d.label);
+  function addItem(){ setItems(a=>[...a,{ id:'ai'+Date.now()+Math.floor(Math.random()*1000), text:'', owner_id:'', due_date:'', done:false }]); }
+  function setItem(i,k,v){ setItems(a=>a.map((it,j)=>j===i?{...it,[k]:v}:it)); }
+  function removeItem(i){ setItems(a=>a.filter((_,j)=>j!==i)); }
+  async function saveAtts(next){ setAtts(next); if(isEdit && row){ try{ await sb.from('toolbox_meetings').update({ attachments: next }).eq('id', row.id); }catch(_){} } }
+  async function save(){
+    if(!date){ setMsg('Pick the meeting date.'); return; }
+    setBusy(true); setMsg('');
+    const cleanItems = items.filter(a=>(a.text||'').trim()).map(a=>({ id:a.id||('ai'+Date.now()+Math.floor(Math.random()*1000)), text:a.text.trim(), owner_id:a.owner_id||null, due_date:a.due_date||null, done:!!a.done, done_at:a.done?(a.done_at||new Date().toISOString()):null, done_by:a.done?(a.done_by||profile.id):null }));
+    const payload={ meeting_date:date, department:department.trim()||null, facilitator_id:facilitatorId||null, attendee_count: attCount===''?null:Number(attCount)||0, attendees:attendees.trim()||null, topic:topic.trim()||null, minutes:minutes.trim()||null, issues:issues.trim()||null, decisions:decisions.trim()||null, status, action_items:cleanItems, attachments:atts, updated_at:new Date().toISOString() };
+    let saved=row;
+    try{
+      if(isEdit){ const { data, error }=await sb.from('toolbox_meetings').update(payload).eq('id', row.id).select().single(); if(error) throw error; saved=data; }
+      else {
+        const monthKey=date.slice(0,7);
+        const { data: ex }=await sb.from('toolbox_meetings').select('number').like('number', `TBM-${monthKey}-%`);
+        let max=0; (ex||[]).forEach(r=>{ const mm=String(r.number||'').match(/-(\d+)$/); if(mm){ const n=parseInt(mm[1],10); if(n>max) max=n; } });
+        const number=`TBM-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        const { data, error }=await sb.from('toolbox_meetings').insert({ ...payload, number, created_by:profile.id }).select().single(); if(error) throw error; saved=data;
+      }
+    }catch(e){ setBusy(false); setMsg('Save failed: '+(e.message||e)); return; }
+    // Notify owners of new / newly-assigned action items.
+    try{
+      for(const a of cleanItems){
+        const prev=origOwners.current.get(a.id);
+        if(a.owner_id && a.owner_id!==profile.id && a.owner_id!==prev){
+          await sb.from('notifications').insert({ recipient_id:a.owner_id, actor_id:profile.id, type:'system', text:`📋 Toolbox action item for you${a.due_date?` (due ${fmtDate(a.due_date)})`:''}: ${a.text.slice(0,80)}`, ref_type:'toolbox', ref_id:saved.id, link_view:'toolbox' });
+        }
+      }
+    }catch(_){}
+    origOwners.current=new Map(cleanItems.map(a=>[a.id,a.owner_id||null]));
+    setRow(saved); setItems(cleanItems); setBusy(false); setMsg('Saved ✓');
+    onSaved&&onSaved();
+    setTimeout(()=>setMsg(''),2000);
+  }
+  async function markReviewed(){ if(!row) return; const { data, error }=await sb.from('toolbox_meetings').update({ ceo_reviewed_by:profile.id, ceo_reviewed_at:new Date().toISOString() }).eq('id',row.id).select().single(); if(error){ alert(error.message); return; } setRow(data); onSaved&&onSaved(); }
+  async function del(){ if(!row||!confirm('Delete this toolbox meeting record?')) return; await sb.from('toolbox_meetings').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',row.id); onSaved&&onSaved(); onClose(); }
+  const nameOf=(id)=> (profiles||[]).find(p=>p.id===id)?.name || '—';
+  const Lbl=({children})=> <label className="text-[10px] uppercase font-semibold text-slate-400">{children}</label>;
+  return (
+    <Modal title={isEdit?`Toolbox Meeting · ${row?.number||''}`:'New Toolbox Meeting'} onClose={onClose} xwide>
+      <div className="grid md:grid-cols-5 gap-5">
+        <div className="md:col-span-3 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><Lbl>Date</Lbl><input type="date" value={date} onChange={e=>setDate(e.target.value)} disabled={!canEdit} className="input mt-0.5" /></div>
+            <div><Lbl>Department</Lbl><input list="tbm-depts" value={department} onChange={e=>setDepartment(e.target.value)} disabled={!canEdit} placeholder="e.g. Sewing / All departments" className="input mt-0.5" /><datalist id="tbm-depts"><option value="All departments" />{deptList.map(d=><option key={d} value={d} />)}</datalist></div>
+            <div><Lbl>Facilitated by</Lbl><select value={facilitatorId} onChange={e=>setFacilitatorId(e.target.value)} disabled={!canEdit} className="input mt-0.5"><option value="">—</option>{staff.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></div>
+            <div><Lbl>Attendees (count)</Lbl><input type="number" min="0" value={attCount} onChange={e=>setAttCount(e.target.value)} disabled={!canEdit} placeholder="e.g. 12" className="input mt-0.5" /></div>
+          </div>
+          <div><Lbl>Topic</Lbl><input value={topic} onChange={e=>setTopic(e.target.value)} disabled={!canEdit} placeholder="What the meeting was about" className="input mt-0.5" /></div>
+          <div><Lbl>Attendees / names (optional)</Lbl><input value={attendees} onChange={e=>setAttendees(e.target.value)} disabled={!canEdit} placeholder="Names, or 'see attendance sheet'" className="input mt-0.5" /></div>
+          <div><Lbl>Minutes · key points discussed</Lbl><textarea value={minutes} onChange={e=>setMinutes(e.target.value)} disabled={!canEdit} rows={3} className="input mt-0.5" /></div>
+          <div><Lbl>Issues raised from the floor</Lbl><textarea value={issues} onChange={e=>setIssues(e.target.value)} disabled={!canEdit} rows={2} className="input mt-0.5" placeholder="Concerns, complaints, safety/quality flags…" /></div>
+          <div><Lbl>Decisions made</Lbl><textarea value={decisions} onChange={e=>setDecisions(e.target.value)} disabled={!canEdit} rows={2} className="input mt-0.5" /></div>
+          <div><Lbl>Status</Lbl><select value={status} onChange={e=>setStatus(e.target.value)} disabled={!canEdit} className="input mt-0.5">{Object.entries(TBM_STATUS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</select></div>
+
+          <div className="border rounded-xl p-3 bg-slate-50/60">
+            <div className="flex items-center justify-between mb-2"><span className="text-sm font-semibold">✅ Action items — what to do after</span>{canEdit && <button onClick={addItem} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 font-semibold">+ Add</button>}</div>
+            {items.length===0 ? <div className="text-xs text-slate-400 py-2">No action items yet.</div> : (
+              <div className="space-y-2">
+                {items.map((a,i)=>{ const od=!a.done && a.due_date && a.due_date<today; return (
+                  <div key={a.id||i} className={`rounded-lg border p-2 ${a.done?'bg-emerald-50 border-emerald-200':od?'bg-rose-50 border-rose-200':'bg-white'}`}>
+                    <div className="flex items-start gap-2">
+                      <input type="checkbox" checked={!!a.done} disabled={!canEdit} onChange={e=>setItem(i,'done',e.target.checked)} className="mt-1 accent-emerald-600" />
+                      <div className="flex-1 min-w-0">
+                        <input value={a.text||''} disabled={!canEdit} onChange={e=>setItem(i,'text',e.target.value)} placeholder="What needs to be done" className={`w-full text-sm px-2 py-1 rounded border ${a.done?'line-through text-slate-400':''}`} />
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <select value={a.owner_id||''} disabled={!canEdit} onChange={e=>setItem(i,'owner_id',e.target.value)} className="text-xs border rounded px-1.5 py-1 bg-white"><option value="">— owner —</option>{staff.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select>
+                          <input type="date" value={a.due_date||''} disabled={!canEdit} onChange={e=>setItem(i,'due_date',e.target.value)} className={`text-xs border rounded px-1.5 py-1 ${od?'border-rose-400 text-rose-600':''}`} />
+                          {od && <span className="text-[10px] font-bold text-rose-600 uppercase">Overdue</span>}
+                          {a.done && a.done_at && <span className="text-[10px] text-emerald-600">done {fmtDate(a.done_at)}</span>}
+                          {canEdit && <button onClick={()=>removeItem(i)} className="text-slate-300 hover:text-rose-500 text-sm ml-auto">✕</button>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ); })}
+              </div>
+            )}
+          </div>
+
+          <div className="border rounded-xl p-3 bg-slate-50/60">
+            <div className="text-sm font-semibold mb-1.5">📎 Supporting documents · photos, attendance sheet, files</div>
+            {isEdit ? <AttachmentsEditor value={atts} onChange={saveAtts} scope={'toolbox/'+row.id} inline />
+                    : <div className="text-xs text-slate-400">Save the meeting first, then you can attach photos and files.</div>}
+          </div>
+
+          {msg && <div className={`text-xs ${msg.startsWith('Saved')?'text-emerald-600':'text-rose-600'}`}>{msg}</div>}
+          <div className="flex gap-2 flex-wrap pt-1 border-t">
+            {canEdit && <button disabled={busy} onClick={save} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create meeting')}</button>}
+            {isEdit && isCeo && !row?.ceo_reviewed_at && <button onClick={markReviewed} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">✓ Mark reviewed</button>}
+            {isEdit && row?.ceo_reviewed_at && <span className="text-xs text-emerald-600 self-center font-semibold">✓ Reviewed by {nameOf(row.ceo_reviewed_by)} · {fmtDate(row.ceo_reviewed_at)}</span>}
+            {isEdit && canEdit && <button onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 ml-auto">🗑 Delete</button>}
+          </div>
+        </div>
+        <div className="md:col-span-2 border-l md:pl-5 min-h-0">
+          <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">💬 Discussion</div>
+          {isEdit ? <ThreadBody profile={profile} profiles={profiles} table="toolbox_meeting_activity" match={{ meeting_id: row.id }} scope={'toolbox/'+row.id} titleText={row.topic||'Toolbox meeting'} headerless embedded mentionNotify />
+                  : <div className="text-xs text-slate-400">Save the meeting to start a discussion thread.</div>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function DailyCheckinView({ profile, profiles, reload }){
   const isAdmin=profile.role==='admin';
@@ -47190,7 +47384,7 @@ function App(){
     // fund release and no monetary approval authority (those stay with the CEO).
     NAV = [
       { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['goals','Vision & Goals','🎯'] ] },
+      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
@@ -47639,6 +47833,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
+        {view==='toolbox' && <ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
