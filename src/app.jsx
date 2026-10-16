@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 767 · Fix 201-file opening: HR employee Documents and Training certificates now open via a fresh signed URL instead of a public link (the Attachments bucket is private, which caused the 'Bucket not found' error). Uploads were fine — viewing was broken.";
+const BUILD = "Live build 768 · For Bank Payment: clicking 'Done (paid)' now asks which of OUR banks funded it + a reference (check no./transfer ref). The source bank shows on the RFP list (💳). Note: the 'Pay to (bank)' column is the supplier's receiving account, not ours.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35035,7 +35035,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
               <td className="px-3 py-2 text-xs">{r.due_date ? <span className={overdue?'text-rose-600 font-semibold':'text-slate-600'}>{fmtDate(r.due_date)}</span> : <span className="text-slate-300">—</span>}</td>
               <td className="px-3 py-2">{r.supplier_name||'—'}</td>
               <td className="px-3 py-2 text-xs font-mono">{poNum(r)||'—'}</td>
-              <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}{r.bank_paid_bank_id && <div className="text-[10px] font-normal text-emerald-700 mt-0.5" title="The bank you paid this from">💳 {(bankAccounts||[]).find(b=>b.id===r.bank_paid_bank_id)?.bank_name||'our bank'}{r.bank_paid_reference?` · ${r.bank_paid_reference}`:''}</div>}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
               <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{!ap ? <span className="text-[11px] text-slate-400">—</span> : (()=>{ const am=(Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status); return (
                 <div className="flex items-center gap-1.5">
@@ -36957,8 +36957,48 @@ function ApprovalMRow({ title, sub, meta, amount, amountClass='text-rose-700', c
   );
 }
 
+// When the owner marks an approved RFP paid, capture WHICH of our banks funded
+// it (source bank) + a reference (check no. / transfer ref), so the record shows
+// where the money actually came out of — not just the supplier's receiving bank.
+function BankPaidPickModal({ rfp, bankAccounts, onClose, onConfirm }){
+  const pmLabel = { bank_transfer:'Bank transfer', check:'Check', cash:'Cash', others:'Other' }[rfp.payment_method]||rfp.payment_method||'—';
+  const [bankId,setBankId]=useState('');
+  const [reference,setReference]=useState(rfp.payment_method==='check' ? (rfp.payment_method_detail||'') : '');
+  const [busy,setBusy]=useState(false);
+  const banks=(bankAccounts||[]).filter(b=>b.active!==false);
+  async function go(){ setBusy(true); const ok=await onConfirm(bankId, reference); setBusy(false); if(ok) onClose&&onClose(); }
+  return (
+    <Modal title={`Mark ${rfp.number} paid`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded-lg p-3 text-sm">
+          <div className="flex justify-between"><span className="text-slate-500">Supplier</span><span className="font-semibold">{rfp.supplier_name||'—'}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Amount</span><span className="font-bold text-rose-700">{peso(rfp.amount)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Method</span><span>{pmLabel}</span></div>
+          {rfp.bank_name && <div className="flex justify-between"><span className="text-slate-500">Pay to (their bank)</span><span className="text-xs">{rfp.bank_name}{rfp.bank_account_number?` · ${rfp.bank_account_number}`:''}</span></div>}
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">Paid from — which of OUR banks? *</label>
+          <select value={bankId} onChange={e=>setBankId(e.target.value)} className="input mt-0.5">
+            <option value="">— select our bank account —</option>
+            {banks.map(b=><option key={b.id} value={b.id}>{b.bank_name||b.name}{b.account_number?` · ${b.account_number}`:''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-slate-400">{rfp.payment_method==='check'?'Check number':'Reference (optional)'}</label>
+          <input value={reference} onChange={e=>setReference(e.target.value)} placeholder={rfp.payment_method==='check'?'check no.':'transfer ref / confirmation no.'} className="input mt-0.5" />
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button disabled={busy||!bankId} onClick={go} className="flex-1 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 disabled:opacity-50">{busy?'Saving…':'✓ Confirm paid'}</button>
+          <button onClick={onClose} className="py-2 px-3 rounded-lg border text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+        </div>
+        <div className="text-[11px] text-slate-400">Confirm only once you've actually processed this payment in the bank.</div>
+      </div>
+    </Modal>
+  );
+}
 function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, reload }){
   const [openRfp,setOpenRfp]=useState(null);
+  const [payingBank,setPayingBank]=useState(null); // RFP being marked paid — pick which of our banks
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
   const [openMemo,setOpenMemo]=useState(null);
@@ -37015,11 +37055,11 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
     ? (rfps||[]).filter(r => !r.deleted_at && r.admin_approved_at && !r.bank_paid_at && ['approved','partial'].includes(r.status))
         .slice().sort((a,b)=> String(a.admin_approved_at||'').localeCompare(String(b.admin_approved_at||'')))
     : [];
-  async function markBankPaid(r){
-    if(!confirm(`Mark ${r.number} as paid in the bank?\n\n${r.supplier_name||''} · ${peso(r.amount)}\n\nClick OK once you've authorized the actual payment in your bank.`)) return;
-    const { error }=await sb.from('rfps').update({ bank_paid_at:new Date().toISOString(), bank_paid_by:profile.id }).eq('id', r.id);
-    if(error){ alert(error.message); return; }
-    reload && reload();
+  function markBankPaid(r){ setPayingBank(r); }
+  async function doMarkBankPaid(r, bankId, reference){
+    const { error }=await sb.from('rfps').update({ bank_paid_at:new Date().toISOString(), bank_paid_by:profile.id, bank_paid_bank_id:bankId||null, bank_paid_reference:(reference||'').trim()||null }).eq('id', r.id);
+    if(error){ alert(error.message); return false; }
+    setPayingBank(null); reload && reload(); return true;
   }
   async function cancelBankPayment(r){
     const reason=(prompt(`Cancel the payment for ${r.number} (${r.supplier_name||''} · ${peso(r.amount)})?\n\nThis removes it from the bank-payment list and marks the RFP Cancelled. Reason:`)||'').trim();
@@ -37416,6 +37456,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
 
       {/* Reuse the existing RFP modal for the actual approval flow */}
       {openRfp && <RFPModal rfp={openRfp} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} onClose={()=>setOpenRfp(null)} onSaved={()=>{ setOpenRfp(null); reload(); }} onPay={()=>{}} />}
+      {payingBank && <BankPaidPickModal rfp={payingBank} bankAccounts={bankAccounts} onClose={()=>setPayingBank(null)} onConfirm={(bankId,ref)=>doMarkBankPaid(payingBank,bankId,ref)} />}
       {/* Budget request approval — reuses the form modal which has approve/reject buttons for admins */}
       {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
       {/* Voucher review — uses the same view modal as the Vouchers list,
