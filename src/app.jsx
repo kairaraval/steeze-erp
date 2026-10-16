@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 763 · New Executive → Toolbox Meetings module: the AGM logs each meeting (minutes, issues, decisions, attendance), adds accountable action items (owner + due date + overdue tracking, owner gets notified), attaches photos/files, and discusses in a thread; CEO can mark each meeting reviewed.";
+const BUILD = "Live build 764 · Delivery Receipts: sales representatives, sales associates and sales managers can now create DRs and edit drafts (released DRs stay editable only by Admin / Production Supervisor).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42340,7 +42340,7 @@ function drTotalQty(items){ return (items||[]).reduce((s,it)=> s + Number(it.qua
 // Permission helper — who can create/edit DRs (in draft) at all.
 function canManageDR(profile){
   const r = profile?.role;
-  return r==='admin' || r==='assistant' || r==='production_supervisor' || r==='accounting';
+  return r==='admin' || r==='assistant' || r==='sales_representative' || r==='manager' || r==='production_supervisor' || r==='accounting';
 }
 // After Release only Admin + Production Supervisor can edit/void — DRs are
 // official documents, so this stays tighter than canManageDR (which also lets
