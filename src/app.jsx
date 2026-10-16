@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 766 · Production deadline history: every time a project deadline is moved we record old→new, who, and when, and lock in the original deadline. The planning board shows original vs current, times moved, days slipped, and an editable reason per change; the board card flags moved deadlines (↔N).";
+const BUILD = "Live build 767 · Fix 201-file opening: HR employee Documents and Training certificates now open via a fresh signed URL instead of a public link (the Attachments bucket is private, which caused the 'Bucket not found' error). Uploads were fine — viewing was broken.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -16003,7 +16003,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
                       <div className="text-[11px] text-slate-500">{tlabel} · uploaded {fmtTime(d.uploaded_at)}</div>
                       {d.notes && <div className="text-[11px] text-slate-600 mt-0.5">{d.notes}</div>}
                     </div>
-                    <a href={d.url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">Open</a>
+                    <button onClick={()=>openSignedAttachment(d.path||d.url)} className="text-xs text-indigo-600 hover:underline">Open</button>
                     <button onClick={async ()=>{ if(!confirm('Delete this document?')) return; const { error } = await sb.from('employee_documents').delete().eq('id', d.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-xs text-rose-500 hover:underline">Delete</button>
                   </div>
                 );
@@ -16048,7 +16048,7 @@ function EmployeeDetailModal({ employee, profiles, profile, allEmployees, docs, 
                         {t.notes && <div className="text-xs text-slate-600 mt-1 whitespace-pre-wrap">{t.notes}</div>}
                       </div>
                       <div className="flex gap-2 shrink-0">
-                        {t.certificate_url && <a href={t.certificate_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">📎 Cert</a>}
+                        {t.certificate_url && <button onClick={()=>openSignedAttachment(t.certificate_path||t.certificate_url)} className="text-xs text-indigo-600 hover:underline">📎 Cert</button>}
                         <button onClick={()=>setEditingTraining(t)} className="text-xs text-slate-500 hover:underline">Edit</button>
                         <button onClick={async ()=>{ if(!confirm('Delete this training?')) return; const { error } = await sb.from('hr_trainings').delete().eq('id', t.id); if(error){ alert(error.message); return; } onSaved(); }} className="text-xs text-rose-500 hover:underline">Delete</button>
                       </div>
@@ -16898,7 +16898,7 @@ function EmployeeTrainingForm({ training, employeeId, profile, onClose, onSaved 
           <div className="flex items-center gap-2">
             <input type="file" onChange={e=>uploadCert(e.target.files?.[0])} className="text-xs flex-1" />
             {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.certificate_url && <a href={f.certificate_url} target="_blank" rel="noreferrer" className="text-xs text-emerald-600">✓ View</a>}
+            {f.certificate_url && <button type="button" onClick={()=>openSignedAttachment(f.certificate_path||f.certificate_url)} className="text-xs text-emerald-600">✓ View</button>}
           </div>
         </TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes||''} onChange={e=>up('notes',e.target.value)} /></TpLbl>
