@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 761 · Sampling Board: added a 📊 Plan button (same planner as Production) so the prod supervisor can plan a sample across departments — the processes get scheduled onto the printing/embroidery/cutting/sewing/pressing/sorting boards, tagged 🧪 Sampling.";
+const BUILD = "Live build 762 · Production search: every department board now has a search that matches anything on the card. Added search to Sorting/Pressing boards (was missing) and the Cutting & Pattern worklists; broadened Production, Sampling, Printing/Embroidery/Knitting searches (item, client, PO, techpack, notes, status, owner).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5688,7 +5688,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
   const isAdmin=profile.role==='admin';
   const isAssistant=isAssistantRole(profile.role);
   const canDelete = isAdmin || !isAssistant; // admin + managers
-  const filtered=jobs.filter(j=>{ if(!search) return true; const l=(leads||[]).find(x=>x.id===j.lead_id); return `${j.number||''} ${j.client_name||''} ${j.item||''} ${l?.title||''} ${l?.client_name||''}`.toLowerCase().includes(search.toLowerCase()); });
+  const filtered=jobs.filter(j=>{ if(!search) return true; const l=(leads||[]).find(x=>x.id===j.lead_id); const st=(statuses.find(s=>s.key===j.status)||{}).label||''; return `${j.number||''} ${j.client_name||''} ${j.item||''} ${j.graphic_type||''} ${j.notes||''} ${st} ${j.quantity||''} ${l?.title||''} ${l?.client_name||''} ${l?.po_number||''} ${l?.techpack_number||''}`.toLowerCase().includes(search.toLowerCase()); });
   async function move(j,st){ const patch={ status:st }; if(jobType==='graphic' && st==='to do') patch.cl_done=false; const {error}=await sb.from(table).update(patch).eq('id',j.id); if(error){ alert(error.message); return; } reload(); }
   // Graphic board: sales manager / assistant can send a card back to the SAME
   // assigned artist for revision — flips the linked graphic ticket to its
@@ -10278,7 +10278,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
     // on the linked lead.
     .filter(j=>{ const due = effectiveDueOf(j); if(filterDeadline==='overdue') return deadlineInfo(due,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(due); return d!==null&&d>=0&&d<=7; } return true; })
     .filter(j=>{ if(filterOwner==='__mine') return j.sales_owner_id===profile.id; if(filterOwner==='__unassigned') return !j.sales_owner_id; if(filterOwner) return j.sales_owner_id===filterOwner; return true; })
-    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(j=>{ if(!search) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(PRODUCTION_STATUSES.find(s=>s.key===j.status)||{}).label||''; const owner=(profiles||[]).find(p=>p.id===j.sales_owner_id); const itemList=(j.items||[]).map(it=>`${it.itemType||''} ${it.quantity||''}`).join(' '); return `${j.number||''} ${j.client_name||''} ${j.item||''} ${j.notes||''} ${st} ${itemList} ${owner?.name||''} ${l?.title||''} ${l?.po_number||''} ${l?.techpack_number||''}`.toLowerCase().includes(search.toLowerCase()); })
     .slice() // don't mutate the prop
     .sort(compareJobs);
   async function move(j,st){
@@ -10763,6 +10763,7 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Pattern');
   const [search,setSearch]=useState('');
+  const [boardSearch,setBoardSearch]=useState(''); // worklist board search
   const [editing,setEditing]=useState(null);   // pattern being edited/created
   const [prefill,setPrefill]=useState(null);    // prefill from a worklist item
   const [newTask,setNewTask]=useState('');
@@ -10927,10 +10928,12 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
       {tab==='reports' && <ProgressReport rows={(patternWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Done" />}
 
       {tab==='worklist' && (()=>{
-        const act=boardItems.filter(w=>w.status!=='done');
-        const nTodo=boardItems.filter(w=>(w.status||'open')==='open').length;
-        const nProg=boardItems.filter(w=>w.status==='in_progress').length;
-        const nDone=done.length;
+        const bq=boardSearch.trim().toLowerCase();
+        const shownBoard = bq ? boardItems.filter(w=>{ const p=patternFor(w.pattern_id); const l=leadFor(w.lead_id); const st=(w.status||'open'); return [w.item,w.title,w.client_name,w.notes,st,p?.pattern_code,p?.name,l?.title,l?.client_name,l?.po_number,l?.techpack_number].filter(Boolean).join(' ').toLowerCase().includes(bq); }) : boardItems;
+        const act=shownBoard.filter(w=>w.status!=='done');
+        const nTodo=shownBoard.filter(w=>(w.status||'open')==='open').length;
+        const nProg=shownBoard.filter(w=>w.status==='in_progress').length;
+        const nDone=shownBoard.filter(w=>w.status==='done').length;
         const Kpi=({icon,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{icon}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
         return (
         <div className="space-y-4">
@@ -10940,12 +10943,13 @@ function PatternView({ profile, profiles, patterns, patternWorklist, sampleJobs,
             <Kpi icon="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
             <Kpi icon="✓" label="Done" value={nDone} color="bg-emerald-100" />
           </div>
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <input value={boardSearch} onChange={e=>setBoardSearch(e.target.value)} placeholder="Search item, client, PO, pattern, note…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
             <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
           </div>
           <div className="flex gap-4 items-start">
             <div className="flex-1 min-w-0 space-y-3">
-              <KanbanBoard items={showDone?boardItems:boardItems.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
+              <KanbanBoard items={showDone?shownBoard:shownBoard.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
                 renderCard={(w)=>{ const p=patternFor(w.pattern_id); const lead=leadFor(w.lead_id); const due=workDue(w); const qty=workQty(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; return (<div className={isSel?'ring-2 ring-indigo-400 rounded-md -m-0.5 p-0.5':''}>
                   <button onClick={()=>setSelId(w.id)} className="text-left w-full">
                     <div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div>
@@ -11896,6 +11900,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
+  const [boardSearch,setBoardSearch]=useState(''); // worklist board search
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const [selId,setSelId]=useState(null);     // job selected for the right detail panel
@@ -12055,10 +12060,12 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
       {tab==='reports' && <ProgressReport rows={(cuttingWorklist||[]).map(w=>({ date:w.done_at||w.start_date||w.created_at, done:w.status==='done', item:w.item||w.title, client:w.client_name, qty:0, rejects:0, people:[], subcon:null }))} dims={[]} doneLabel="Cut" />}
 
       {tab==='worklist' && (()=>{
-        const act=boardItems.filter(w=>w.status!=='done');
-        const nTodo=boardItems.filter(w=>(w.status||'open')==='open').length;
-        const nProg=boardItems.filter(w=>w.status==='in_progress').length;
-        const nDone=done.length;
+        const bq=boardSearch.trim().toLowerCase();
+        const shownBoard = bq ? boardItems.filter(w=>{ const l=leadFor(w.lead_id); const st=(w.status||'open'); return [w.item,w.title,w.client_name,w.notes,st,w.pattern_code,l?.title,l?.client_name,l?.po_number,l?.techpack_number].filter(Boolean).join(' ').toLowerCase().includes(bq); }) : boardItems;
+        const act=shownBoard.filter(w=>w.status!=='done');
+        const nTodo=shownBoard.filter(w=>(w.status||'open')==='open').length;
+        const nProg=shownBoard.filter(w=>w.status==='in_progress').length;
+        const nDone=shownBoard.filter(w=>w.status==='done').length;
         const Kpi=({icon,label,value,color})=>(<div className="bg-white border rounded-xl p-3 flex items-center gap-3"><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{icon}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div></div></div>);
         return (
         <div className="space-y-4">
@@ -12068,12 +12075,13 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
             <Kpi icon="⚙️" label="In Progress" value={nProg} color="bg-amber-100" />
             <Kpi icon="✓" label="Done" value={nDone} color="bg-emerald-100" />
           </div>
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <input value={boardSearch} onChange={e=>setBoardSearch(e.target.value)} placeholder="Search item, client, PO, pattern, note…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
             <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none"><input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)} className="accent-indigo-600" /> Show done ({nDone})</label>
           </div>
           <div className="flex gap-4 items-start">
             <div className="flex-1 min-w-0 space-y-3">
-              <KanbanBoard items={showDone?boardItems:boardItems.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
+              <KanbanBoard items={showDone?shownBoard:shownBoard.filter(w=>w.status!=='done')} onMove={moveStatus} hideDone={!showDone}
                 renderCard={(w)=>{ const lead=leadFor(w.lead_id); const qty=qtyForWork(w); const cut=Number(w.cut_qty||0); const pct=qty>0?Math.min(100,Math.round(cut/qty*100)):0; const due=workDue(w); const di=deadlineInfo(due, w.status==='done'); const isSel=selId===w.id; return (<div className={isSel?'ring-2 ring-indigo-400 rounded-md -m-0.5 p-0.5':''}>
                   <button onClick={()=>setSelId(w.id)} className="text-left w-full">
                     <div className="font-semibold text-sm leading-tight hover:text-indigo-700">{w.item||w.title||'—'}</div>
@@ -12313,6 +12321,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   const [detail,setDetail]=useState(null);
   const [selId,setSelId]=useState(null);         // job selected for the right detail panel
   const [showDone,setShowDone]=useState(false);  // hide Done column unless toggled
+  const [search,setSearch]=useState('');         // board search — matches anything on a card
   const leadFor=(id)=> id?(leads||[]).find(l=>l.id===id):null;
   const prodById={}; (prodJobs||[]).forEach(j=>{ if(j) prodById[j.id]=j; });
   const workDue=(w)=>{ const pj=prodById[w.source_job_id]; const l=leadFor(w.lead_id); return pj?.due_date||l?.delivery_date||l?.expected_close||null; };
@@ -12359,7 +12368,12 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   // batches the team released, instead of looking empty.
   const releasedByWork={}; (batches||[]).forEach(bt=>{ if(bt.worklist_id && bt.status!=='returned') releasedByWork[bt.worklist_id]=(releasedByWork[bt.worklist_id]||0)+(Number(batchGarmentTotal(bt))||0); });
   const PRESS_COLS=[['open','To Do','bg-slate-200 text-slate-700'],['in_progress','In Progress','bg-amber-100 text-amber-700'],['done','Done','bg-emerald-100 text-emerald-700']];
-  const pressCol=(key)=> (key==='open' ? rows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? rows.filter(w=>w.status==='in_progress') : rows.filter(w=>w.status==='done')).slice().sort(byDueAsc(workDue));
+  // Board search — matches anything on a card (item, client, notes, lead title/
+  // client/PO/techpack, status, source).
+  const pwQ=search.trim().toLowerCase();
+  const matchRow=(w)=>{ if(!pwQ) return true; const l=leadFor(w.lead_id); const st=w.status==='done'?'done':w.status==='in_progress'?'in progress':'to do'; return [w.item,w.title,w.client_name,w.notes,st,w.source_type,l?.title,l?.client_name,l?.po_number,l?.techpack_number].filter(Boolean).join(' ').toLowerCase().includes(pwQ); };
+  const visRows=pwQ ? rows.filter(matchRow) : rows;
+  const pressCol=(key)=> (key==='open' ? visRows.filter(w=>w.status!=='done'&&w.status!=='in_progress') : key==='in_progress' ? visRows.filter(w=>w.status==='in_progress') : visRows.filter(w=>w.status==='done')).slice().sort(byDueAsc(workDue));
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
   async function addAdhocPrompt(){ const t=(prompt(`New ad-hoc ${title} task:`)||'').trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); load(); }
@@ -12468,10 +12482,13 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
           </div>
           <button onClick={addAdhocPrompt} className="px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shrink-0">+ Add task</button>
         </div>
-        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mt-3 flex-wrap">
-          <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({rows.length})</button>
-          {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
-          <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
+        <div className="flex items-center justify-between gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm flex-wrap">
+            <button onClick={()=>setTab('worklist')} className={`px-3 py-1.5 rounded-md ${tab==='worklist'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Board ({rows.length})</button>
+            {showBatches && <button onClick={()=>setTab('released')} className={`px-3 py-1.5 rounded-md ${tab==='released'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📦 Released ({batches.length})</button>}
+            <button onClick={()=>setTab('reports')} className={`px-3 py-1.5 rounded-md ${tab==='reports'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>📊 Reports</button>
+          </div>
+          {tab==='worklist' && <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search item, client, PO, note, status…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />}
         </div>
       </div>
 
@@ -13459,7 +13476,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openAc
     .filter(j=>!filterStatus||j.status===filterStatus)
     .filter(j=>{ const due = effectiveDueOf(j); if(filterDeadline==='overdue') return deadlineInfo(due,false).overdue; if(filterDeadline==='week'){ const d=daysUntil(due); return d!==null&&d>=0&&d<=7; } return true; })
     .filter(j=>{ if(filterOwner==='__mine') return ownerIdFor(j)===profile.id; if(filterOwner==='__unassigned') return !ownerIdFor(j); if(filterOwner) return ownerIdFor(j)===filterOwner; return true; })
-    .filter(j=>!search||`${j.number} ${j.client_name} ${j.item}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(j=>{ if(!search) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(SAMPLING_STATUSES.find(s=>s.key===j.status)||{}).label||''; const owner=l?(profiles||[]).find(p=>p.id===l.manager_id):null; return `${j.number||''} ${j.client_name||''} ${j.item||''} ${j.notes||''} ${st} ${owner?.name||''} ${l?.title||''} ${l?.po_number||''} ${l?.techpack_number||''}`.toLowerCase().includes(search.toLowerCase()); })
     .slice()
     .sort(compareJobs);
   async function move(j,st){
