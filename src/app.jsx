@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 764 · Delivery Receipts: sales representatives, sales associates and sales managers can now create DRs and edit drafts (released DRs stay editable only by Admin / Production Supervisor).";
+const BUILD = "Live build 765 · Fix: Toolbox Meetings now appears under Executive for the CEO (admin) and the AGM — the admin nav group and the AGM's allowed views were missing it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46686,7 +46686,7 @@ function App(){
       // Assistant General Manager — company-wide visibility. Lands on the
       // Operations Command Center. Can open everything operational + HR + finance
       // visibility; money-write/banking/approval views are gated inside each view.
-      allowed = new Set(['ops-command','scorecard','checkin','goals','inbox','my-tasks','profile',
+      allowed = new Set(['ops-command','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
@@ -46814,6 +46814,9 @@ function App(){
     // Every staff member can open the Daily Check-in page (to submit their
     // department's status). The nav link only shows for department-head roles.
     allowed.add('checkin');
+    // Toolbox meeting view — any staff member who's assigned an action item can
+    // open it from their notification. The nav link only shows for admin / AGM.
+    allowed.add('toolbox');
     // Training is invite-only — grant it only to enrolled participants.
     if((trainingParticipants||[]).includes(profile.id)) allowed.add('training');
     // Manual Purchase Request intake lives in the Sales module — only sales
@@ -47598,7 +47601,7 @@ function App(){
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
       { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
+      { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
