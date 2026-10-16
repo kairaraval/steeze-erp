@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 759 · Production fix: logged daily output (Embroidery/Printing/Knitting) and released batches (Subli/Trad Sorting) now show on the board cards — the entries were saving, they just weren't reflected on the board.";
+const BUILD = "Live build 760 · Daily Check-in: added Sublimation Pressing and Sublimation Sorting as departments — their heads can now submit the daily check-in and they show on the dashboard.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6793,6 +6793,8 @@ const CHECKIN_DEPTS = [
   { key:'qc',          label:'Quality Control',        roles:['qc_leader','qc_personnel','qc'] },
   { key:'graphics',    label:'Graphic Design',         roles:['graphic'] },
   { key:'printing',    label:'Printing',               roles:['printing'] },
+  { key:'subli_pressing', label:'Sublimation Pressing', roles:['subli_pressing_head'] },
+  { key:'subli_sorting',  label:'Sublimation Sorting',  roles:['subli_sorting_head'] },
   { key:'sewing',      label:'Sewing',                 roles:['sewing_lead'] },
   { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
   { key:'packing',     label:'Packing',                roles:['packing_head'] },
