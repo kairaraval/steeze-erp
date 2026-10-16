@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 760 · Daily Check-in: added Sublimation Pressing and Sublimation Sorting as departments — their heads can now submit the daily check-in and they show on the dashboard.";
+const BUILD = "Live build 761 · Sampling Board: added a 📊 Plan button (same planner as Production) so the prod supervisor can plan a sample across departments — the processes get scheduled onto the printing/embroidery/cutting/sewing/pressing/sorting boards, tagged 🧪 Sampling.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5889,7 +5889,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
                       {jobType==='graphic'&&lead&&lead.title&&j.item&&j.item!==lead.title && <div className="text-[11px] text-slate-600 leading-snug mt-0.5" title="Design request / task">📝 {j.item}</div>}
                       <div className="text-xs text-slate-500 truncate">{j.client_name}</div>
                       <div className="flex items-center gap-1 mt-1 flex-wrap">
-                        <span className={`inline-block text-[8px] uppercase px-1.5 py-0.5 rounded font-bold ${j.source==='production'?'bg-indigo-100 text-indigo-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Production':'🎨 Graphic'}</span>
+                        <span className={`inline-block text-[8px] uppercase px-1.5 py-0.5 rounded font-bold ${j.source==='production'?'bg-indigo-100 text-indigo-700':j.source==='sampling'?'bg-cyan-100 text-cyan-700':'bg-pink-100 text-pink-700'}`} title={j.source==='production'?'Came from the Production Board':j.source==='sampling'?'Came from the Sampling Board':'Came from Graphic Design'}>{j.source==='production'?'⚙ Production':j.source==='sampling'?'🧪 Sampling':'🎨 Graphic'}</span>
                         {j.graphic_type && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-semibold">{j.graphic_type}</span>}
                         {lead && openTechpack && <button onClick={(e)=>{e.stopPropagation(); openTechpack(lead);}} className="inline-flex items-center gap-1 text-[9px] uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button>}
                       </div>
@@ -9258,7 +9258,7 @@ const PLAN_PROCESS_DEFS = [
 const PLAN_TABLES_WITH_DELETED = new Set(['printing_jobs','embroidery_jobs','knitting_jobs','packing_jobs','sewing_jobs','subcon_tasks']);
 
 // Idempotent: create the board item for a process if it doesn't exist yet.
-async function createPlanProcessItem(profile, job, def){
+async function createPlanProcessItem(profile, job, def, srcType='production'){
   try{
     let sel = sb.from(def.table).select('id').eq('source_job_id', job.id);
     if(def.kind==='process') sel = sel.eq('process', def.process);
@@ -9270,10 +9270,10 @@ async function createPlanProcessItem(profile, job, def){
       await sb.from('subcon_tasks').insert({ stage:def.stage, source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null, qty:Number(job.quantity)||0, due_date:job.due_date||null, done:false, created_by:profile.id });
     } else if(def.kind==='deptjob'){
       const prefix = def.table==='printing_jobs'?'PR-P-':def.table==='embroidery_jobs'?'EMB-':'KNT-';
-      await sb.from(def.table).insert({ number:prefix+Date.now().toString().slice(-5), source_job_id:job.id, lead_id:job.lead_id||null, client_name:job.client_name||'', item:job.item||'', items:job.items||[], quantity:job.quantity||0, attachments:job.attachments||[], status:'to do', due_date:job.due_date||null, notes:job.notes||'', source:'production' });
+      await sb.from(def.table).insert({ number:prefix+Date.now().toString().slice(-5), source_job_id:job.id, lead_id:job.lead_id||null, client_name:job.client_name||'', item:job.item||'', items:job.items||[], quantity:job.quantity||0, attachments:job.attachments||[], status:'to do', due_date:job.due_date||null, notes:job.notes||'', source:srcType });
     } else if(def.kind==='sewing'){ await maybeAutoCreateSewingJob(profile, job); }
     else if(def.kind==='packing'){ await maybeAutoCreatePackingJob(profile, job); }
-    else { const base={ source_type:'production', source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null }; if(def.kind==='process') base.process=def.process; await sb.from(def.table).insert(base); }
+    else { const base={ source_type:srcType, source_job_id:job.id, lead_id:job.lead_id||null, item:job.item||null, client_name:job.client_name||null }; if(def.kind==='process') base.process=def.process; await sb.from(def.table).insert(base); }
   }catch(e){ console.warn('plan process create failed', def.key, e?.message||e); }
 }
 function planProcDone(def, row){ if(!row) return false; if(def.kind==='subcon') return !!row.done; if(row.end_at) return true; if(def.done) return def.done.includes(row.status); return row.status==='done'; }
@@ -9292,7 +9292,7 @@ function ganttBarColor(statusKey){
   return m ? `bg-${m[1]}-500` : 'bg-indigo-500';
 }
 
-function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload }){
+function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload, jobTable='production_jobs', srcType='production' }){
   const [entries,setEntries]=useState([]);
   const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
@@ -9321,7 +9321,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   const [delQty,setDelQty]=useState(''); const [delNote,setDelNote]=useState('');
   const deliveredSum = deliveries.reduce((s,d)=>s+Number(d.qty||0),0);
   const remainingToDeliver = Math.max(0, total - deliveredSum);
-  async function saveDeliveries(next){ setDeliveries(next); try{ await sb.from('production_jobs').update({ deliveries: next }).eq('id', job.id); reload && reload(); }catch(e){ setMsg(e.message||String(e)); } }
+  async function saveDeliveries(next){ setDeliveries(next); try{ await sb.from(jobTable).update({ deliveries: next }).eq('id', job.id); reload && reload(); }catch(e){ setMsg(e.message||String(e)); } }
   async function addDelivery(){ const q=Number(delQty); if(!(q>0)){ setMsg('Enter a delivered quantity greater than 0.'); return; } setMsg(''); await saveDeliveries([...deliveries, { date: delDate||todayManila(), qty:q, note:(delNote||'').trim()||undefined }]); setDelQty(''); setDelNote(''); }
   async function removeDelivery(i){ await saveDeliveries(deliveries.filter((_,j)=>j!==i)); }
 
@@ -9377,15 +9377,15 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
       if(on){
         const next=planProcs.includes(def.key)?planProcs:[...planProcs,def.key];
         setPlanProcs(next);
-        await sb.from('production_jobs').update({ plan_processes: next }).eq('id',job.id);
-        await createPlanProcessItem(profile, job, def);
+        await sb.from(jobTable).update({ plan_processes: next }).eq('id',job.id);
+        await createPlanProcessItem(profile, job, def, srcType);
       } else {
         const row=proc[def.key];
         const started = row && (row.run_since || row.start_at || (Number(row.work_ms)||0)>0 || planProcState(def,row)!=='todo');
         if(started && !confirm(`${def.label} already has work logged. Remove it from the plan and delete it from the ${def.label} board?`)){ setProcBusy(false); return; }
         const next=planProcs.filter(k=>k!==def.key);
         setPlanProcs(next);
-        await sb.from('production_jobs').update({ plan_processes: next }).eq('id',job.id);
+        await sb.from(jobTable).update({ plan_processes: next }).eq('id',job.id);
         if(row){ try{ if(PLAN_TABLES_WITH_DELETED.has(def.table)) await sb.from(def.table).update({ deleted_at:new Date().toISOString() }).eq('id',row.id); else await sb.from(def.table).delete().eq('id',row.id); }catch(e){ alert(e?.message||e); } }
       }
       await loadProcesses(); reload&&reload();
@@ -9404,7 +9404,7 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
   async function saveStageDue(stKey, val){
     const next = {...stageDue}; if(val) next[stKey]=val; else delete next[stKey];
     setStageDue(next);
-    try{ await sb.from('production_jobs').update({ stage_plan: next }).eq('id', job.id); reload&&reload(); }
+    try{ await sb.from(jobTable).update({ stage_plan: next }).eq('id', job.id); reload&&reload(); }
     catch(e){ setMsg('Could not save stage deadline: '+(e.message||e)); }
   }
   async function saveSchedule(stKey, field, val){
@@ -9412,14 +9412,14 @@ function ProductionPlanModal({ job, profile, profiles, subcons, onClose, reload 
     if(val) cur[field]=val; else delete cur[field];
     if(!cur.start && !cur.end) delete next[stKey]; else next[stKey]=cur;
     setSchedule(next);
-    try{ await sb.from('production_jobs').update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
+    try{ await sb.from(jobTable).update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
     catch(e){ setMsg('Could not save schedule: '+(e.message||e)); }
   }
   async function saveScheduleRange(stKey, start, end){
     const next = {...schedule};
     if(!start && !end) delete next[stKey]; else next[stKey]={ start, end };
     setSchedule(next);
-    try{ await sb.from('production_jobs').update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
+    try{ await sb.from(jobTable).update({ status_schedule: next }).eq('id', job.id); reload&&reload(); }
     catch(e){ setMsg('Could not save schedule: '+(e.message||e)); }
   }
   // Click-to-paint: figure out which day a click on a status track lands on.
@@ -11938,7 +11938,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   async function delItem(w){ if(!confirm('Remove this from the cutting worklist?')) return; const { error }=await sb.from('cutting_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } reload(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); reload(); }
   async function addAdhocPrompt(){ const t=(prompt('New ad-hoc cutting job — what are we cutting?')||'').trim(); if(!t) return; const { error }=await sb.from('cutting_worklist').insert({ source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); reload(); }
-  const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
+  const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:src==='sampling'?['Sampling','bg-cyan-100 text-cyan-700']:['Production','bg-emerald-100 text-emerald-700'];
   // ── Cutting board helpers (new look) ──
   const selected=(cuttingWorklist||[]).find(w=>w.id===selId)||null;
   function patternApproved(w){ if(!w.pattern_number) return false; return !!(patSrc||[]).find(x=>(x.pattern_code||'').trim().toLowerCase()===String(w.pattern_number).trim().toLowerCase() && !x.deleted_at); }
@@ -12363,7 +12363,7 @@ function ProcessWorklistView({ profile, profiles, prodJobs, leads, employees, su
   async function delItem(w){ if(!confirm(`Remove this from the ${title} worklist?`)) return; const { error }=await sb.from('process_worklist').delete().eq('id',w.id); if(error){ alert(error.message); return; } load(); }
   async function addManual(){ const t=newTask.trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setNewTask(''); load(); }
   async function addAdhocPrompt(){ const t=(prompt(`New ad-hoc ${title} task:`)||'').trim(); if(!t) return; const { error }=await sb.from('process_worklist').insert({ process, source_type:'manual', title:t, item:t, created_by:profile.id }); if(error){ alert(error.message); return; } setTab('worklist'); load(); }
-  const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:['Production','bg-emerald-100 text-emerald-700'];
+  const srcBadge=(src)=> src==='manual'?['Ad-hoc','bg-slate-200 text-slate-600']:src==='sampling'?['Sampling','bg-cyan-100 text-cyan-700']:['Production','bg-emerald-100 text-emerald-700'];
   // ── Board helpers (mirrors the In-House Cutting board) ──
   const selected=rows.find(w=>w.id===selId)||null;
   const progOf=(w)=> showPress ? (pressedByWork[w.id]||0) : showBatches ? (releasedByWork[w.id]||0) : Number(w.qty_done||0);
@@ -13384,7 +13384,9 @@ function HrEscalationModal({ init, profile, profiles, employees, onClose, onSave
   );
 }
 
-function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, openTechpack, onCreateDR }){
+function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openActivity, openTechpack, onCreateDR }){
+  const [planning,setPlanning]=useState(null); // sampling job whose planning board is open
+  const canPlan = ['admin','production','production_supervisor','production_assistant','manager','agm'].includes(profile.role);
   function buildDrCtxFromSample(j, lead){
     return {
       kind: 'sample',
@@ -13540,6 +13542,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
             <td className="px-3 py-2">{owner ? <div className="flex items-center" title={`Sales owner: ${owner.name||owner.email}`}><Avatar profile={owner} size="sm" /></div> : <span className="text-xs text-slate-300">— unassigned —</span>}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
+              {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
               {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
@@ -13594,6 +13597,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
                         <td className="px-3 py-2.5"><select value={j.status} onChange={e=>move(j,e.target.value)} className="text-xs border rounded px-2 py-1 bg-white">{SAMPLING_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
+              {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
                           {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
                         </td>
@@ -13612,6 +13616,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, reload, openActivity, o
       )}
 
       {creating && <SamplingJobForm existing={null} profile={profile} leads={leads} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
+      {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} jobTable="sampling_jobs" srcType="sampling" onClose={()=>setPlanning(null)} reload={reload} />}
     </div>
   );
 }
@@ -47580,7 +47585,7 @@ function App(){
         {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
-        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} subcons={subcons} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>openLeadFromDept({ lead:l, job:(graphicJobs||[]).find(j=>j.lead_id===l.id && !j.deleted_at), jobType:'graphic', canSendToPrinting:true })} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pricing' && <PricingView profile={profile} />}
