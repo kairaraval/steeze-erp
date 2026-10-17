@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 769 · Fix: a PR whose linked project was moved to Trash lost its techpack / BOM header entirely. The PR now still resolves the trashed lead so the techpack + BOM show, with a '⚠ project in Trash' flag.";
+const BUILD = "Live build 770 · Fix (samples too): a sample PR whose linked sample job was trashed also lost its techpack/BOM header. Now the trashed sample is resolved so the techpack shows (its live lead's techpack), with a '⚠ sample in Trash' flag.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30845,8 +30845,17 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   },[leadId, (leads||[]).length]);
   const linkedLead = (leadId ? (leads||[]).find(l=>l.id===leadId) : null) || trashedLead;
   // Sample-sourced PRs link to a sampling job (not a lead) — resolve it so the
-  // header shows the same project context for samples too.
-  const linkedSample = existing?.linked_sample_id ? (sampleJobs||[]).find(s=>s.id===existing.linked_sample_id) : null;
+  // header shows the same project context for samples too. If the sample job was
+  // trashed, fetch it directly so the techpack/BOM still shows.
+  const sampleId = existing?.linked_sample_id || null;
+  const [trashedSample,setTrashedSample]=useState(null);
+  useEffect(()=>{ let on=true;
+    if(sampleId && !(sampleJobs||[]).some(s=>s.id===sampleId)){
+      sb.from('sampling_jobs').select('*').eq('id',sampleId).maybeSingle().then(({data})=>{ if(on) setTrashedSample(data||null); }).catch(()=>{});
+    } else setTrashedSample(null);
+    return ()=>{ on=false; };
+  },[sampleId, (sampleJobs||[]).length]);
+  const linkedSample = (sampleId ? (sampleJobs||[]).find(s=>s.id===sampleId) : null) || trashedSample;
   const client = linkedLead && linkedLead.client_id ? (clients||[]).find(c=>c.id===linkedLead.client_id) : null;
   const techpackNumber = linkedLead?.techpack?.prodFormNo || linkedLead?.techpack_number || '';
   const styleName = linkedLead?.techpack?.styleName || linkedLead?.title || '';
@@ -31056,7 +31065,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
             <div className="bg-gradient-to-r from-fuchsia-50 to-teal-50 border border-fuchsia-200 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Sample materials request (BOM) for</div>
-                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{linkedSample.item || linkedSample.number || 'Sample'}</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{linkedSample.item || linkedSample.number || 'Sample'}{linkedSample.deleted_at && <span className="ml-2 align-middle text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700" title="The linked sample job was moved to Trash.">⚠ sample in Trash</span>}</div>
                 <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
                   <span>👤 Client: <strong>{clientName}</strong></span>
                   {mgr && <span>🧑‍💼 Sales: <strong>{mgr.name||mgr.email}</strong></span>}
