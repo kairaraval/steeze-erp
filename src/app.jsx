@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 770 · Fix (samples too): a sample PR whose linked sample job was trashed also lost its techpack/BOM header. Now the trashed sample is resolved so the techpack shows (its live lead's techpack), with a '⚠ sample in Trash' flag.";
+const BUILD = "Live build 771 · Purchase Requests now show a red '⚠ project/sample in Trash' flag on the card and list when a PR's linked project or sample was deleted — so purchasing double-checks before cancelling or ordering.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30478,6 +30478,9 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     const moreCount = Math.max(0, lines.length-1);
     const totalQty = lines.reduce((s,l)=>s+(Number(l.qty)||0), 0);
     const noTechpack = !!r.linked_lead_id && !!lead && !lead.techpack;
+    // Linked project/sample was trashed (id set but not in the live list) — a
+    // red flag so purchasing double-checks before cancelling or ordering.
+    const trashedKind = (!!r.linked_lead_id && !lead) ? 'project' : ((!!r.linked_sample_id && !sample) ? 'sample' : null);
     // Project title for the card: prefer the linked lead's own title, else the client + item.
     const projectTitle = lead?.title || sample?.item || (clientName!=='—'&&clientName!=='Manual request'? `${clientName}` : firstItemName);
     // Required-by: the client's due date on the lead (falls back to sample due).
@@ -30488,7 +30491,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     // Stock shortfall across inventory lines (needs ordering — can't come fully from stock).
     let shortCount=0;
     lines.forEach(l=>{ if(!l.item_id) return; const it=(items||[]).find(i=>i.id===l.item_id); const cov=lineCoverage(l, it, prReservations); if(cov && (cov.state==='partial'||cov.state==='none')) shortCount++; });
-    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack, projectTitle, requiredBy, priority, matCount, estTotal, shortCount };
+    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack, trashedKind, projectTitle, requiredBy, priority, matCount, estTotal, shortCount };
   }
   async function setPRStatus(pr, s){
     const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
@@ -30588,6 +30591,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       <div className="flex items-center gap-1 mt-1 flex-wrap">
                         {d.shortCount>0 && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700" title="Can't be fully covered from stock — needs ordering">⚠ short {d.shortCount} item{d.shortCount===1?'':'s'}</span>}
                         {d.noTechpack && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="This project has no techpack yet">⚠ no techpack</span>}
+                        {d.trashedKind && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700" title={`The linked ${d.trashedKind} was moved to Trash. Double-check before cancelling or ordering — it may have been deleted by mistake.`}>⚠ {d.trashedKind} in Trash</span>}
                       </div>
                     </button>
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t flex-wrap">
@@ -30630,7 +30634,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
               <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
               <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span></td>
               <td className="px-3 py-2">{d.clientName==='—'? <span className="text-slate-400">—</span> : d.clientName}</td>
-              <td className="px-3 py-2"><div className="truncate max-w-[18rem]" title={d.firstItemName}>{d.firstItemName}</div>{d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}</td>
+              <td className="px-3 py-2"><div className="truncate max-w-[18rem]" title={d.firstItemName}>{d.firstItemName}</div>{d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}{d.trashedKind && <div className="text-[10px] font-bold uppercase text-rose-600 mt-0.5" title={`The linked ${d.trashedKind} was moved to Trash — double-check before cancelling or ordering.`}>⚠ {d.trashedKind} in Trash</div>}</td>
               <td className="px-3 py-2 text-right font-medium">{d.totalQty || '—'}</td>
               <td className="px-3 py-2 text-xs font-mono">{d.tpNo || <span className="text-slate-400">—</span>}</td>
               <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
