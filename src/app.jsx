@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 771 · Purchase Requests now show a red '⚠ project/sample in Trash' flag on the card and list when a PR's linked project or sample was deleted — so purchasing double-checks before cancelling or ordering.";
+const BUILD = "Live build 772 · Materials Queue now shows when each material was added (📅 Added date · days in queue), with amber/red aging, and each supplier card flags its oldest item — so you can tell if the queue is up to date.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31438,7 +31438,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
                 <span className="text-slate-400 text-sm">{isOpen?'▾':'▸'}</span>
                 <div className="min-w-0">
                   <div className="font-bold text-slate-900 truncate">{isUnassigned ? '⚠ Unassigned (no supplier set in Inventory)' : `🏭 ${b.supplier?.company||'(unknown supplier)'}`}</div>
-                  <div className="text-xs text-slate-600">{b.items.length} item{b.items.length===1?'':'s'} · from {b.prIds.size} PR{b.prIds.size===1?'':'s'} · est. <strong className="text-emerald-700">{peso(b.total)}</strong></div>
+                  <div className="text-xs text-slate-600">{b.items.length} item{b.items.length===1?'':'s'} · from {b.prIds.size} PR{b.prIds.size===1?'':'s'} · est. <strong className="text-emerald-700">{peso(b.total)}</strong>{(()=>{ const dates=b.items.map(it=>it.pr.date||it.pr.created_at).filter(Boolean); if(!dates.length) return null; const oldest=dates.slice().sort()[0]; const days=Math.floor((Date.now()-new Date(oldest).getTime())/86400000); if(days<7) return null; return <span className={`ml-1 font-semibold ${days>=14?'text-rose-600':'text-amber-600'}`}>· oldest {days}d</span>; })()}</div>
                 </div>
               </button>
               <div className="flex items-center gap-2">
@@ -31463,6 +31463,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
                     <div className="col-span-5">
                       <div className="font-medium">{line.description||'—'}</div>
                       {inventoryItem && <div className="text-[10px] text-slate-500">{inventoryItem.sku} · {inventoryItem.name}{inventoryItem.color?` · ${inventoryItem.color}`:''}</div>}
+                      {(()=>{ const added=pr.date||pr.created_at; if(!added) return null; const days=Math.floor((Date.now()-new Date(added).getTime())/86400000); const col=days>=14?'text-rose-600 font-semibold':days>=7?'text-amber-600':'text-slate-400'; return <div className={`text-[10px] ${col}`}>📅 Added {fmtDate(added)}{days>=1?` · ${days}d in queue`:' · today'}</div>; })()}
                       {isUnassigned && <select defaultValue="" onChange={e=>assignSupplier(pr, lineIdx, e.target.value)} className="mt-1 text-[11px] border border-amber-300 rounded px-1.5 py-1 bg-white"><option value="">+ assign supplier…</option>{(suppliers||[]).slice().sort((a,b)=>(a.company||'').localeCompare(b.company||'')).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select>}
                     </div>
                     <div className="col-span-2 text-right text-slate-700"><strong>{line.qty}</strong></div>
