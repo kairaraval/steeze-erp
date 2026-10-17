@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 776 · Colour swatches now open full-size INLINE (in-app zoom viewer with ← → between colours), instead of a new browser tab.";
+const BUILD = "Live build 777 · Inbox fixes for Marketing notifications: Clear now works (it was hitting the wrong table + the activity table lacked an archived_by column), and the content title now shows instead of a generic 'Marketing content' label.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14144,6 +14144,13 @@ function SamplingJobForm({ existing, profile, leads, onClose, onSaved }){
 function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, productionJobs, sampleJobs, salesOrders, mentions, onOpen, onGoToTask, reload }){
   const [filter,setFilter]=useState('all');
   const [busyIds,setBusyIds]=useState(new Set());
+  // Marketing mentions point at a marketing_content post (content_id) — load the
+  // post titles so the inbox shows the content title instead of a generic label.
+  const [mktTitles,setMktTitles]=useState({});
+  useEffect(()=>{ if(!(mentions||[]).some(m=>m.source==='marketing')) return; let on=true;
+    sb.from('marketing_content').select('id,title').then(({data})=>{ if(!on) return; const map={}; (data||[]).forEach(r=>{ map[r.id]=r.title; }); setMktTitles(map); }).catch(()=>{});
+    return ()=>{ on=false; };
+  },[mentions]);
   const [selected,setSelected]=useState(()=>new Set()); // dedupKeys ticked for bulk clear
   function toggleSelect(key){ setSelected(prev=>{ const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; }); }
   // archived_by holds the profile ids of users who have CLEARED a conversation
@@ -14182,6 +14189,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     if(src==='sales_order') return 'sales_order_activity';
     if(src==='pr') return 'pr_activity';
     if(src==='notification') return 'notifications';
+    if(src==='marketing') return 'marketing_content_activity';
     return 'dept_job_activity';
   }
   const groupedCounts = {};     // key -> total count of mentions in that thread
@@ -14227,7 +14235,8 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
       return { company:'', title:'Daily Delivery Schedule', label:'Daily Delivery Schedule', tag:'Logistics', icon:'🚚', color:'text-orange-600' };
     }
     if(m.source==='marketing'){
-      return { company:'', title:'Marketing content', label:'Content discussion', tag:'Marketing', icon:'📣', color:'text-pink-600' };
+      const t=mktTitles[m.content_id];
+      return { company:'', title: t||'Marketing content', label: t?`Content · ${t}`:'Content discussion', tag:'Marketing', icon:'📣', color:'text-pink-600' };
     }
     const list=m.source==='graphic'?graphicJobs:m.source==='printing'?printingJobs:m.source==='sampling'?sampleJobs:productionJobs;
     const j=list.find(x=>x.id===m.job_id);
