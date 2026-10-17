@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 768 · For Bank Payment: clicking 'Done (paid)' now asks which of OUR banks funded it + a reference (check no./transfer ref). The source bank shows on the RFP list (💳). Note: the 'Pay to (bank)' column is the supplier's receiving account, not ours.";
+const BUILD = "Live build 769 · Fix: a PR whose linked project was moved to Trash lost its techpack / BOM header entirely. The PR now still resolves the trashed lead so the techpack + BOM show, with a '⚠ project in Trash' flag.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30833,8 +30833,17 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
   // Project link — an additional/top-up PR can be tied to an existing lead so
   // its costs roll up to the right deal. Editable only when creating.
   const [leadId,setLeadId]=useState(existing?.linked_lead_id||prefillLeadId||'');
-  // Resolve linked lead → client → techpack for the header banner.
-  const linkedLead = leadId ? (leads||[]).find(l=>l.id===leadId) : null;
+  // Resolve linked lead → client → techpack for the header banner. If the lead
+  // was trashed, it's no longer in the live `leads` list — fetch it directly so
+  // the techpack / BOM still shows (with a "in Trash" note) instead of vanishing.
+  const [trashedLead,setTrashedLead]=useState(null);
+  useEffect(()=>{ let on=true;
+    if(leadId && !(leads||[]).some(l=>l.id===leadId)){
+      sb.from('leads').select('*').eq('id',leadId).maybeSingle().then(({data})=>{ if(on) setTrashedLead(data||null); }).catch(()=>{});
+    } else setTrashedLead(null);
+    return ()=>{ on=false; };
+  },[leadId, (leads||[]).length]);
+  const linkedLead = (leadId ? (leads||[]).find(l=>l.id===leadId) : null) || trashedLead;
   // Sample-sourced PRs link to a sampling job (not a lead) — resolve it so the
   // header shows the same project context for samples too.
   const linkedSample = existing?.linked_sample_id ? (sampleJobs||[]).find(s=>s.id===existing.linked_sample_id) : null;
@@ -31004,7 +31013,7 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
             <div className="bg-gradient-to-r from-indigo-50 to-teal-50 border border-indigo-200 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Materials request (BOM) for</div>
-                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{styleName}</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 truncate">{styleName}{linkedLead.deleted_at && <span className="ml-2 align-middle text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700" title="The linked project was moved to Trash. Restore it from Settings → Trash to fully reconnect.">⚠ project in Trash</span>}</div>
                 <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
                   {client && <span>👤 Client: <strong>{client.company}</strong></span>}
                   {(()=>{ const mgr=(profiles||[]).find(p=>p.id===linkedLead.manager_id); return mgr ? <span>🧑‍💼 Sales: <strong>{mgr.name||mgr.email}</strong></span> : null; })()}
