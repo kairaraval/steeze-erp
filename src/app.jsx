@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 775 · Materials Library colour swatches are now shown large (and at higher resolution) with fewer per row, and each is clickable to open full-size — so you can actually see the fabric detail.";
+const BUILD = "Live build 776 · Colour swatches now open full-size INLINE (in-app zoom viewer with ← → between colours), instead of a new browser tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -4679,6 +4679,7 @@ function MaterialsLibraryView({ profile, suppliers }){
   const [fSupplier,setFSupplier]=useState('');
   const [editing,setEditing]=useState(null);    // {new:true} | {raw} | {prefill}
   const [lightbox,setLightbox]=useState('');
+  const [swatchZoom,setSwatchZoom]=useState(null); // index of swatch open full-size (inline)
   const [tagCard,setTagCard]=useState(null);    // material card to print a tag for
   const canEdit=matLibCanEdit(profile);
   const supName=(r)=>{ if(r.supplier_name) return r.supplier_name; const s=(suppliers||[]).find(x=>x.id===r.supplier_id); return s?(s.company||s.name||''):''; };
@@ -4823,13 +4824,15 @@ function MaterialsLibraryView({ profile, suppliers }){
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {lightbox.swatches.map((s,i)=>(
           <div key={i} className="border rounded-lg overflow-hidden bg-slate-50">
-            <button onClick={()=>openSignedAttachment(s.path)} className="w-full h-80 bg-white flex items-center justify-center overflow-hidden cursor-zoom-in hover:opacity-90" title="Open full-size">
+            <button onClick={()=>setSwatchZoom(i)} className="w-full h-80 bg-white flex items-center justify-center overflow-hidden cursor-zoom-in hover:opacity-90" title="Click to view full-size">
               <TImg path={s.path} thumb={1000} maxH="320px" />
             </button>
             {s.color && <div className="text-center text-sm font-semibold text-slate-700 py-2">{s.color}</div>}
           </div>
         ))}
-      </div></Modal>}
+      </div>
+      {swatchZoom!=null && <MediaLightbox kind="image" path={lightbox.swatches[swatchZoom]?.path} name={lightbox.swatches[swatchZoom]?.color?`${lightbox.name} · ${lightbox.swatches[swatchZoom].color}`:lightbox.name} items={lightbox.swatches.map(s=>({ path:s.path, name:(s.color?`${lightbox.name} · ${s.color}`:lightbox.name), kind:'image' }))} startIndex={swatchZoom} onClose={()=>setSwatchZoom(null)} />}
+      </Modal>}
     </div>
   );
 }
