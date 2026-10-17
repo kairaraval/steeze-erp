@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 773 · Materials readiness on the floor: every production project now shows a live Materials status (Awaiting → Ordered/in transit → Partial → ✅ Ready) from Purchasing's PRs & POs, with a 📦 Materials button for the item breakdown. The In-House Cutting and Subcon Cutting boards show the same ✅/⏳ chip so cutters know if materials are in before starting.";
+const BUILD = "Live build 774 · In-House Cutting: the materials chip is now clickable — opens the full breakdown (which materials are in, on PO, or not ordered) so cutters can see what's already available when a project is only partially ready.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12223,6 +12223,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
   const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
   const [boardSearch,setBoardSearch]=useState(''); // worklist board search
+  const [matFor,setMatFor]=useState(null); // cutting item whose materials breakdown is open
   const [newTask,setNewTask]=useState('');
   const [detail,setDetail]=useState(null);   // worklist item open for size/consumption breakdown
   const [selId,setSelId]=useState(null);     // job selected for the right detail panel
@@ -12412,7 +12413,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                   <div className="flex flex-wrap gap-1 mt-1">
                     <CutBadge ok={patternApproved(w)} okText="Pattern approved" noText="Pattern pending" />
                     <CutBadge ok={fabricAvailable(w)} okText="Fabric issued" noText="Awaiting fabric" />
-                    {(()=>{ const ms=projectMaterialsStatus(w.lead_id, requests, orders); if(ms.state==='none') return null; const [lbl,cls]=MAT_META[ms.state]; return <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`} title={`Purchasing: ${ms.ready}/${ms.total} material line${ms.total===1?'':'s'} in`}>{lbl}</span>; })()}
+                    {(()=>{ const ms=projectMaterialsStatus(w.lead_id, requests, orders); if(ms.state==='none') return null; const [lbl,cls]=MAT_META[ms.state]; return <button onClick={(e)=>{ e.stopPropagation(); setMatFor(w); }} className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${cls} hover:opacity-80`} title="Click to see which materials are in and which aren't">{lbl}{ms.total>0?` ${ms.ready}/${ms.total}`:''}</button>; })()}
                   </div>
                   {due && <div className={`text-[11px] mt-1 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
                   {w.status==='in_progress' && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>Cut</span><span>{cut}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
@@ -12471,6 +12472,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
       )}
 
       {detail && <CuttingItemModal item={detail} patterns={patSrc} lead={leadFor(detail.lead_id)} profile={profile} profiles={profiles} openTechpack={openTechpack} onClose={()=>setDetail(null)} onSaved={()=>{ setDetail(null); reload(); }} />}
+      {matFor && <MaterialsStatusModal job={matFor} leadTitle={leadFor(matFor.lead_id)?.title} requests={requests} orders={orders} onClose={()=>setMatFor(null)} />}
     </div>
   );
 }
