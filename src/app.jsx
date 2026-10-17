@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 772 · Materials Queue now shows when each material was added (📅 Added date · days in queue), with amber/red aging, and each supplier card flags its oldest item — so you can tell if the queue is up to date.";
+const BUILD = "Live build 773 · Materials readiness on the floor: every production project now shows a live Materials status (Awaiting → Ordered/in transit → Partial → ✅ Ready) from Purchasing's PRs & POs, with a 📦 Materials button for the item breakdown. The In-House Cutting and Subcon Cutting boards show the same ✅/⏳ chip so cutters know if materials are in before starting.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10319,7 +10319,7 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
 // Lighter per-project subcon tracker (who's doing it, qty sent/returned, balance,
 // due, done). Used for Subcon Cutting (its own page) and embedded for Subcon
 // Sewing plan tasks. Tasks appear when the stage is ticked on a project's Plan.
-function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, clients, prodJobs, reload, embedded }){
+function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, clients, prodJobs, requests, orders, reload, embedded }){
   const stageWord = stage==='sewing'?'sewing':'cutting';
   const canEdit = ['admin','production','production_supervisor','production_assistant','cutting_dept','sewing_lead'].includes(profile.role) || (typeof subconSewingCanEdit==='function' && subconSewingCanEdit(profile));
   const [tasks,setTasks]=useState([]); const [busy,setBusy]=useState(true);
@@ -10360,7 +10360,7 @@ function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, cl
           {!busy && rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No subcon {stageWord} {tab==='done'?'completed':'tasks'} yet. Tick “Subcon {stageWord==='sewing'?'Sewing':'Cutting'}” on a project's Plan, or add one above.</td></tr>}
           {!busy && rows.map(t=>{ const bal=Math.max(0,(Number(t.qty_out)||0)-(Number(t.qty_returned)||0)); const overdue=t.due_date && t.due_date<todayISO && bal>0 && !t.done; return (
             <tr key={t.id} className={`border-t hover:bg-slate-50 ${overdue?'bg-rose-50/40':''}`}>
-              <td className="px-3 py-2 font-medium">{projLabel(t)}</td>
+              <td className="px-3 py-2 font-medium">{projLabel(t)}{(()=>{ const ms=projectMaterialsStatus(t.lead_id, requests, orders); if(ms.state==='none') return null; const [lbl,cls]=MAT_META[ms.state]; return <div className={`inline-block mt-0.5 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`} title={`Purchasing: ${ms.ready}/${ms.total} material line${ms.total===1?'':'s'} in`}>{lbl}</div>; })()}</td>
               <td className="px-3 py-2">{canEdit ? <select className="input !py-1 text-xs" value={t.subcon_id||''} onChange={e=>upd(t,{ subcon_id:e.target.value||null })}><option value="">— pick subcon —</option>{(subcons||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select> : (subconName(t.subcon_id)||'—')}</td>
               <td className="px-3 py-2 text-right text-slate-500">{Number(t.qty||0).toLocaleString()}</td>
               <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" value={t.qty_out||''} onChange={e=>upd(t,{ qty_out:Number(e.target.value)||0 })} /> : Number(t.qty_out||0).toLocaleString()}</td>
@@ -10388,7 +10388,77 @@ function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, cl
   );
 }
 
-function ProductionBoard({ profile, profiles, jobs, leads, items, requests, activityCounts, reload, openActivity, openTechpack, onCreateDR, subcons, readOnly }){
+// ── Materials readiness for a production project ──────────────────────────────
+// Reads the project's Purchase Requests + their POs so the floor can tell, at a
+// glance, whether materials are in (so cutting can start). Live — no new column.
+const MAT_META = {
+  ready:    ['✅ Materials ready',        'bg-emerald-100 text-emerald-700'],
+  partial:  ['⏳ Partially ready',        'bg-amber-100 text-amber-700'],
+  ordered:  ['🚚 Ordered · in transit',  'bg-blue-100 text-blue-700'],
+  awaiting: ['📦 Awaiting materials',     'bg-rose-100 text-rose-700'],
+  none:     ['— No materials request',    'bg-slate-100 text-slate-500'],
+};
+function projectMaterialsStatus(leadId, requests, orders){
+  if(!leadId) return { state:'none', ready:0, ordered:0, pending:0, total:0, lines:[] };
+  const prs=(requests||[]).filter(r=> r.linked_lead_id===leadId && !r.deleted_at && r.status!=='cancelled' && r.status!=='rejected');
+  if(!prs.length) return { state:'none', ready:0, ordered:0, pending:0, total:0, lines:[] };
+  const poById=new Map((orders||[]).map(o=>[o.id,o]));
+  const lines=[];
+  prs.forEach(pr=>{
+    if(pr.status==='fulfilled_stock'){
+      const descs=(pr.lines||[]).map(l=>l.description).filter(Boolean);
+      lines.push({ pr:pr.number, desc: descs.length?descs.join(', '):'(from stock)', state:'stock', po:null });
+      return;
+    }
+    (pr.lines||[]).forEach(l=>{
+      if(!((Number(l.qty)||0)>0 || l.linked_po_id)) return;
+      let state='pending', po=null;
+      if(l.linked_po_id){ po=poById.get(l.linked_po_id)||null; state=(po && (po.status==='received'||po.received_at))?'received':'ordered'; }
+      lines.push({ pr:pr.number, desc:l.description||'(item)', state, po });
+    });
+  });
+  const total=lines.length;
+  const ready=lines.filter(d=>d.state==='received'||d.state==='stock').length;
+  const ordered=lines.filter(d=>d.state==='ordered').length;
+  const pending=lines.filter(d=>d.state==='pending').length;
+  let state;
+  if(total===0) state='awaiting';
+  else if(ready===total) state='ready';
+  else if(ready>0) state='partial';
+  else if(ordered>0 && pending===0) state='ordered';
+  else state='awaiting';
+  return { state, ready, ordered, pending, total, lines };
+}
+function MaterialsStatusModal({ job, leadTitle, requests, orders, onClose }){
+  const st=projectMaterialsStatus(job.lead_id, requests, orders);
+  const [label,cls]=MAT_META[st.state]||MAT_META.none;
+  const lineMeta={ stock:['From stock','bg-emerald-100 text-emerald-700'], received:['Received','bg-emerald-100 text-emerald-700'], ordered:['On PO · awaiting','bg-blue-100 text-blue-700'], pending:['Not ordered yet','bg-rose-100 text-rose-700'] };
+  return (
+    <Modal title={`📦 Materials — ${job.item||job.number||''}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-sm text-slate-600">{leadTitle||job.client_name||''}</div>
+          <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${cls}`}>{label}</span>
+        </div>
+        {st.total>0 && <div className="text-xs text-slate-500">{st.ready}/{st.total} line{st.total===1?'':'s'} in{st.ordered?` · ${st.ordered} in transit`:''}{st.pending?` · ${st.pending} not ordered`:''}</div>}
+        {st.state==='none' ? (
+          <div className="bg-slate-50 border border-dashed rounded-lg p-6 text-center text-slate-400 text-sm">No Purchase Request linked to this project yet.</div>
+        ) : (
+          <div className="border rounded-lg divide-y">
+            {st.lines.map((d,i)=>{ const [ll,lc]=lineMeta[d.state]||lineMeta.pending; return (
+              <div key={i} className="px-3 py-2 flex items-center justify-between gap-2 text-sm">
+                <div className="min-w-0"><div className="truncate">{d.desc}</div><div className="text-[10px] text-slate-400">{d.pr}{d.po?` · PO ${d.po.number}${d.po.received_at?` · received ${fmtDate(d.po.received_at)}`:''}`:''}</div></div>
+                <span className={`shrink-0 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${lc}`}>{ll}</span>
+              </div>
+            ); })}
+          </div>
+        )}
+        {st.state==='ready' && <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-800 font-semibold">✅ All materials are in — this project can proceed to cutting.</div>}
+      </div>
+    </Modal>
+  );
+}
+function ProductionBoard({ profile, profiles, jobs, leads, items, requests, orders, activityCounts, reload, openActivity, openTechpack, onCreateDR, subcons, readOnly }){
   // Helper to build the DR prefill context from a production job + linked lead.
   // Triggered by the "Create DR" button below; the App passes setDrCreateCtx
   // as onCreateDR so the DR modal opens with everything ready to go.
@@ -10420,8 +10490,17 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
   const [calMonth,setCalMonth]=useState(()=>{ const d=new Date(); return { y:d.getFullYear(), m:d.getMonth() }; });
   function shiftMonth(delta){ setCalMonth(c=>{ const d=new Date(c.y, c.m+delta, 1); return { y:d.getFullYear(), m:d.getMonth() }; }); }
   const [planning,setPlanning]=useState(null); // production job whose planning board is open
+  const [matFor,setMatFor]=useState(null);     // job whose materials-status modal is open
   const [collapsed,setCollapsed]=useState({}); // status.key -> true if collapsed
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
+  // Materials-status chip: shows Purchasing's progress on the project's BOM so
+  // the supervisor knows if cutting can start. Click to see the line breakdown.
+  function MatBadge({ job, compact }){
+    const ms=projectMaterialsStatus(job.lead_id, requests, orders);
+    if(ms.state==='none') return null;
+    const [label,cls]=MAT_META[ms.state];
+    return <button onClick={(e)=>{ e.stopPropagation(); setMatFor(job); }} className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls} hover:opacity-80`} title="Materials status from Purchasing — click for the item breakdown">{compact? label.split(' ')[0] : label}</button>;
+  }
   const isAdmin=profile.role==='admin';
   const isAssistant=isAssistantRole(profile.role);
   // Production board delete is now admin-only. Managers can still edit /
@@ -10646,6 +10725,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                 <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
               </button>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+              <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
               {!readOnly && onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromJob(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Delivery Receipt for this job">🚚 DR</button>}
               {!readOnly && canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
             </td>
@@ -10719,6 +10799,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
                             <span>💬</span>{cmtCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">{cmtCount}</span>}
                           </button>
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                          <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
                           {!readOnly && onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromJob(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Delivery Receipt for this job">🚚 DR</button>}
                           {!readOnly && canDelete && <button onClick={()=>del(j)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete production job">Delete</button>}
                         </td>
@@ -10786,6 +10867,7 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, acti
       })()}
 
       {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} onClose={()=>setPlanning(null)} reload={reload} />}
+      {matFor && <MaterialsStatusModal job={matFor} leadTitle={(leads||[]).find(l=>l.id===matFor.lead_id)?.title} requests={requests} orders={orders} onClose={()=>setMatFor(null)} />}
     </div>
   );
 }
@@ -12136,7 +12218,7 @@ function QCDetailModal({ w, profile, profiles, employees, leads, openTechpack, o
   );
 }
 
-function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, leads, items, stockMovements, openTechpack, reload }){
+function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, leads, items, requests, orders, stockMovements, openTechpack, reload }){
   const [tab,setTab]=useState('worklist');
   const replCount=useReplacementCount('Cutting');
   const [search,setSearch]=useState('');
@@ -12330,6 +12412,7 @@ function CuttingView({ profile, profiles, patterns, cuttingWorklist, prodJobs, l
                   <div className="flex flex-wrap gap-1 mt-1">
                     <CutBadge ok={patternApproved(w)} okText="Pattern approved" noText="Pattern pending" />
                     <CutBadge ok={fabricAvailable(w)} okText="Fabric issued" noText="Awaiting fabric" />
+                    {(()=>{ const ms=projectMaterialsStatus(w.lead_id, requests, orders); if(ms.state==='none') return null; const [lbl,cls]=MAT_META[ms.state]; return <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`} title={`Purchasing: ${ms.ready}/${ms.total} material line${ms.total===1?'':'s'} in`}>{lbl}</span>; })()}
                   </div>
                   {due && <div className={`text-[11px] mt-1 ${di.overdue?'text-rose-600 font-semibold':'text-slate-500'}`}>📅 {fmtDate(due)}{di.label?` · ${di.label}`:''}</div>}
                   {w.status==='in_progress' && <div className="mt-1.5"><div className="flex items-center justify-between text-[10px] text-slate-500"><span>Cut</span><span>{cut}/{qty||'—'} · {pct}%</span></div><div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:pct+'%'}} /></div></div>}
@@ -47900,12 +47983,12 @@ function App(){
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
         {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
-        {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
+        {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
-        {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
         {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
