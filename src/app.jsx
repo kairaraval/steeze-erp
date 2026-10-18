@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 783 · Sales Pipeline: per-lead ✅ Checklist (to-dos with optional due dates) on the lead details, plus a '✅ To-dos (N)' tracker in the pipeline header that lists every open item across all your leads — grouped by lead, overdue flagged, with Open-lead links and tick-to-done.";
+const BUILD = "Live build 784 · Estimate & Invoice PDFs now print the preparer's e-signature above the 'Prepared by' line (set yours in My Profile → signature). Falls back to a blank line to sign by hand if none is set.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2249,7 +2249,7 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
               <div><span className="font-bold">ACCEPTANCE:</span> {ESTIMATE_TERMS.acceptance}</div>
             </div>
             <div className="grid grid-cols-2 gap-4 mt-5">
-              <SignatureBox role="Prepared by" name={preparer?.name} />
+              <SignatureBox role="Prepared by" name={preparer?.name} signature={preparer?.signature_data} />
               <SignatureBox role="Accepted by (Client)" />
             </div>
             <div className="flex justify-between text-[9px] text-slate-500 border-t pt-1 mt-4">
@@ -2662,7 +2662,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
             {notes && (<div className="mt-3 border border-slate-400 p-2"><div className="text-[9px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Notes</div><div className="text-[10px] whitespace-pre-line">{notes}</div></div>)}
             {(DOC_NOTES.invoice||'').trim() && (<div className="mt-3 text-[9px] text-slate-600 whitespace-pre-line">{DOC_NOTES.invoice}</div>)}
             <div className="grid grid-cols-2 gap-4 mt-6">
-              <SignatureBox role="Prepared by" name={profile?.name} />
+              <SignatureBox role="Prepared by" name={profile?.name} signature={profile?.signature_data} />
               <SignatureBox role="Received by (Client)" />
             </div>
             <div className="flex justify-between text-[9px] text-slate-500 border-t pt-1 mt-4">
@@ -29404,10 +29404,12 @@ function DocPrintHeader({ title, leftBlocks, rightBlocks }){
 }
 
 // One signature box: blank line + role + name (if known) + Date: ___ underneath.
-function SignatureBox({ role, name }){
+function SignatureBox({ role, name, signature }){
   return (
     <div className="text-center">
-      <div className="border-b border-slate-500 h-16"></div>
+      <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">
+        {signature && <img src={signature} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}
+      </div>
       <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div>
       {name && <div className="text-[11px] text-slate-700 mt-0.5">{name}</div>}
       <div className="text-[10px] text-slate-400 mt-0.5">Date: ______________</div>
