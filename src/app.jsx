@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 779 · The desktop top header (date/time · 🔔 · profile) is now pinned — it stays visible while the content scrolls beneath it; each board's own sticky header tucks in right below it.";
+const BUILD = "Live build 780 · Petty Cash: current-cycle expense lines (incl. bulk-uploaded) are now editable — fix the price, description, category, vendor or receipt, and delete a line. You can also add more expenses even after the float is used up (it warns about over-spend).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39026,6 +39026,27 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
     } catch(e){ setMsg('Upload failed: '+(e.message||e)); }
     setUploadingId(null);
   }
+  // ── Inline edit of an already-charged expense (current cycle) ──────────────
+  const [editId,setEditId]=useState(null);
+  const [editD,setEditD]=useState({});
+  const [editUploading,setEditUploading]=useState(false);
+  function setED(k,v){ setEditD(d=>({...d,[k]:v})); }
+  function startEditExp(e){ setEditId(e.id); setEditD({ date:e.date||today, description:e.description||'', gl_account_code:e.gl_account_code||'', category:e.category||'', cost_center_id:e.cost_center_id||'', vendor:e.vendor||'', input_vat:e.input_vat??'', amount:e.amount??'', receipt_url:e.receipt_url||null }); }
+  function cancelEditExp(){ setEditId(null); setEditD({}); }
+  async function editReceiptUpload(file){ if(!file) return; setEditUploading(true); try{ const ext=(file.name.split('.').pop()||'jpg'); const key=`expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`; const { error }=await sb.storage.from(BUCKET).upload(key,file,{upsert:false,contentType:file.type||undefined}); if(error) throw error; setED('receipt_url',key); }catch(e){ alert('Upload failed: '+(e.message||e)); } setEditUploading(false); }
+  async function saveEditExp(id){
+    if(!(Number(editD.amount)>0)){ alert('Amount must be greater than 0.'); return; }
+    if(!(editD.description||'').trim()){ alert('Description is required.'); return; }
+    const cat = (chartAccounts||[]).find(x=>x.code===editD.gl_account_code)?.name || editD.category || 'Other';
+    const { error }=await sb.from('expenses').update({ date:editD.date||null, description:editD.description.trim(), gl_account_code:editD.gl_account_code||null, category:cat, cost_center_id:editD.cost_center_id||null, vendor:(editD.vendor||'').trim()||null, input_vat:Number(editD.input_vat)||0, amount:Number(editD.amount)||0, receipt_url:editD.receipt_url||null }).eq('id',id);
+    if(error){ alert(error.message); return; }
+    setEditId(null); setEditD({}); onSaved&&onSaved();
+  }
+  async function deleteExp(e){
+    if(!confirm(`Remove "${e.description||'this expense'}" (${peso(e.amount)}) from this petty cash? This can't be undone in-app.`)) return;
+    const { error }=await sb.from('expenses').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',e.id);
+    if(error){ alert(error.message); return; } onSaved&&onSaved();
+  }
   async function addExpense(){
     const valid = rows.filter(r=> (Number(r.amount)||0) > 0);
     if(!valid.length){ setMsg('Add at least one line with an amount.'); return; }
@@ -39203,8 +39224,8 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
         {/* Add expense inline form */}
         {!addOpen ? (
           <div className="flex gap-2 flex-wrap">
-            <button onClick={()=>{ resetForm(); setAddOpen(true); }} disabled={outstanding<=0.01} className="flex-1 min-w-[180px] py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">{outstanding<=0.01 ? 'Float exhausted — no more expenses can be charged' : '+ Add expenses'}</button>
-            <button onClick={()=>{ setBulkOpen(o=>!o); setBulkMsg(''); }} disabled={outstanding<=0.01} className="py-2 px-4 rounded-lg bg-white border border-violet-300 text-violet-700 font-semibold hover:bg-violet-50 disabled:opacity-40">⇪ Bulk upload</button>
+            <button onClick={()=>{ resetForm(); setAddOpen(true); }} className="flex-1 min-w-[180px] py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">+ Add expenses{outstanding<=0.01?' (float used up — will over-spend)':''}</button>
+            <button onClick={()=>{ setBulkOpen(o=>!o); setBulkMsg(''); }} className="py-2 px-4 rounded-lg bg-white border border-violet-300 text-violet-700 font-semibold hover:bg-violet-50">⇪ Bulk upload</button>
           </div>
         ) : (
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 space-y-2">
@@ -39276,6 +39297,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                   <th className="text-left px-3 py-2">Vendor</th>
                   <th className="text-right px-3 py-2">Amount</th>
                   <th className="text-right px-3 py-2">Balance after</th>
+                  <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>{(()=>{
@@ -39286,9 +39308,32 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                 const withBal = oldestFirst.map(e => { running -= Number(e.amount||0); return { ...e, _balAfter: running }; });
                 const inPeriod = (e)=> periodFilter==null ? true : periodFilter==='current' ? !e.pc_liquidated_at : e.pc_liquidated_at===periodFilter;
                 const shown = withBal.slice().reverse().filter(inPeriod);
-                if(shown.length===0) return (<tr><td colSpan={6} className="text-center py-6 text-sm text-slate-400">No expenses in this period.</td></tr>);
-                return shown.map(e => (
-                  <tr key={e.id} className="border-t hover:bg-slate-50">
+                if(shown.length===0) return (<tr><td colSpan={7} className="text-center py-6 text-sm text-slate-400">No expenses in this period.</td></tr>);
+                return shown.map(e => {
+                  // Current-cycle (not yet liquidated) lines are editable — fix a
+                  // price, description, category, vendor or receipt after upload.
+                  const editable = !e.pc_liquidated_at;
+                  if(editId===e.id){
+                    return (
+                    <tr key={e.id} className="border-t bg-indigo-50/40 align-top">
+                      <td className="px-2 py-1.5"><input type="date" className="input !py-1 text-xs" value={editD.date||''} onChange={ev=>setED('date',ev.target.value)} /></td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center gap-1.5">
+                          {editD.receipt_url ? <button onClick={()=>openReceipt(editD.receipt_url)} className="text-[11px] text-emerald-600 hover:underline shrink-0">✓ receipt</button>
+                            : <label className="text-[11px] text-indigo-600 hover:underline cursor-pointer shrink-0">{editUploading?'…':'📎'}<input type="file" accept="image/*,application/pdf" className="hidden" onChange={ev=>{ editReceiptUpload(ev.target.files?.[0]); ev.target.value=''; }} /></label>}
+                          <input className="input !py-1" value={editD.description||''} onChange={ev=>setED('description',ev.target.value)} placeholder="description" />
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5"><select className="input !py-1 text-xs" value={editD.gl_account_code||''} onChange={ev=>setED('gl_account_code',ev.target.value)}><option value="">— account —</option>{coaExpenseOptions(chartAccounts)}</select></td>
+                      <td className="px-2 py-1.5"><input className="input !py-1 text-xs" value={editD.vendor||''} onChange={ev=>setED('vendor',ev.target.value)} placeholder="vendor" /></td>
+                      <td className="px-2 py-1.5"><input type="number" step="0.01" className="input !py-1 text-right" value={editD.amount} onChange={ev=>setED('amount',ev.target.value)} /></td>
+                      <td className="px-2 py-1.5 text-right text-slate-300">—</td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right"><button onClick={()=>saveEditExp(e.id)} className="text-xs font-semibold text-emerald-600 hover:underline mr-2">Save</button><button onClick={cancelEditExp} className="text-xs text-slate-500 hover:underline">Cancel</button></td>
+                    </tr>
+                    );
+                  }
+                  return (
+                  <tr key={e.id} className="border-t hover:bg-slate-50 group">
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
@@ -39302,8 +39347,10 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                     <td className="px-3 py-2 text-xs text-slate-600">{e.vendor||'—'}</td>
                     <td className="px-3 py-2 text-right font-semibold text-rose-700">−{peso(e.amount)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-slate-700">{peso(e._balAfter)}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">{editable ? <><button onClick={()=>startEditExp(e)} className="text-xs text-indigo-600 hover:underline mr-2 opacity-0 group-hover:opacity-100">Edit</button><button onClick={()=>deleteExp(e)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100">Delete</button></> : <span className="text-[10px] text-slate-300 uppercase" title="Posted to the Expense Log on liquidation">liquidated</span>}</td>
                   </tr>
-                ));
+                  );
+                });
               })()}</tbody>
             </table>
           )}
