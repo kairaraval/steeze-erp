@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 778 · New desktop top header: live date · day · time on the left, and a 🔔 notification bell (with unread count) + your profile avatar, name & role on the right.";
+const BUILD = "Live build 779 · The desktop top header (date/time · 🔔 · profile) is now pinned — it stays visible while the content scrolls beneath it; each board's own sticky header tucks in right below it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47978,10 +47978,11 @@ function App(){
         </div>
       </aside>
 
-      {/* Main */}
-      <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
-        {/* Desktop top header — live date/time on the left; notifications + profile on the right. */}
-        <div className="hidden md:flex bg-white border-b border-slate-200 items-center justify-between gap-4 px-6 py-2">
+      {/* Main — fixed-height flex column so the top header stays pinned while the
+          content (and each view's own sticky sub-header) scrolls beneath it. */}
+      <main className="no-print md:ml-60 pt-12 md:pt-0 h-screen flex flex-col overflow-hidden">
+        {/* Desktop top header — pinned. Live date/time on the left; notifications + profile on the right. */}
+        <div className="hidden md:flex shrink-0 bg-white border-b border-slate-200 items-center justify-between gap-4 px-6 py-2">
           <TopClock />
           <div className="flex items-center gap-3">
             <button onClick={()=>navTo('inbox')} className="relative p-1.5 rounded-lg hover:bg-slate-100" title="Inbox / notifications">
@@ -47994,6 +47995,7 @@ function App(){
             </button>
           </div>
         </div>
+        <div className="flex-1 overflow-y-auto min-h-0">
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='goals' && profile.role==='admin' && <GoalsBoardView profile={profile} soPayments={soPayments} salesOrders={salesOrders} clients={clients} employees={employees} />}
@@ -48106,6 +48108,7 @@ function App(){
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
+        </div>
       </main>
 
       {reqPurchasingOpen && <RequestForPurchasingModal profile={profile} items={items} onClose={()=>setReqPurchasingOpen(false)} onSaved={()=>{ setReqPurchasingOpen(false); try{ loadAll(); }catch(_){} setToast({ title:'Sent to Purchasing', body:'Your request was sent. Purchasing will review it.' }); }} />}
