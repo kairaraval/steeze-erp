@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 781 · Petty Cash list redesigned: KPI cards (Open Batches · Unliquidated Balance · Liquidated Expenses · Returned Cash), tabbed status filter with counts, search + custodian filter, and a cleaner Reference/Purpose/Issued/Liquidated/Returned/Balance table (click a row to open full details).";
+const BUILD = "Live build 782 · Sampling Board now shows the same live Materials status chip as Production (from the sample's PR + POs) — click it for the item breakdown so you know if a sample's materials are in.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10414,9 +10414,9 @@ const MAT_META = {
   awaiting: ['📦 Awaiting materials',     'bg-rose-100 text-rose-700'],
   none:     ['— No materials request',    'bg-slate-100 text-slate-500'],
 };
-function projectMaterialsStatus(leadId, requests, orders){
-  if(!leadId) return { state:'none', ready:0, ordered:0, pending:0, total:0, lines:[] };
-  const prs=(requests||[]).filter(r=> r.linked_lead_id===leadId && !r.deleted_at && r.status!=='cancelled' && r.status!=='rejected');
+function projectMaterialsStatus(matchId, requests, orders, field='linked_lead_id'){
+  if(!matchId) return { state:'none', ready:0, ordered:0, pending:0, total:0, lines:[] };
+  const prs=(requests||[]).filter(r=> r[field]===matchId && !r.deleted_at && r.status!=='cancelled' && r.status!=='rejected');
   if(!prs.length) return { state:'none', ready:0, ordered:0, pending:0, total:0, lines:[] };
   const poById=new Map((orders||[]).map(o=>[o.id,o]));
   const lines=[];
@@ -10445,8 +10445,8 @@ function projectMaterialsStatus(leadId, requests, orders){
   else state='awaiting';
   return { state, ready, ordered, pending, total, lines };
 }
-function MaterialsStatusModal({ job, leadTitle, requests, orders, onClose }){
-  const st=projectMaterialsStatus(job.lead_id, requests, orders);
+function MaterialsStatusModal({ job, matchId, field='linked_lead_id', leadTitle, requests, orders, onClose }){
+  const st=projectMaterialsStatus(matchId!=null?matchId:job.lead_id, requests, orders, field);
   const [label,cls]=MAT_META[st.state]||MAT_META.none;
   const lineMeta={ stock:['From stock','bg-emerald-100 text-emerald-700'], received:['Received','bg-emerald-100 text-emerald-700'], ordered:['On PO · awaiting','bg-blue-100 text-blue-700'], pending:['Not ordered yet','bg-rose-100 text-rose-700'] };
   return (
@@ -13742,9 +13742,17 @@ function HrEscalationModal({ init, profile, profiles, employees, onClose, onSave
   );
 }
 
-function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openActivity, openTechpack, onCreateDR }){
+function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orders, reload, openActivity, openTechpack, onCreateDR }){
   const [planning,setPlanning]=useState(null); // sampling job whose planning board is open
+  const [matFor,setMatFor]=useState(null);     // sample job whose materials status is open
   const canPlan = ['admin','production','production_supervisor','production_assistant','manager','agm'].includes(profile.role);
+  // Materials status chip for a sample — reads the sample's PR + POs (linked_sample_id).
+  function MatBadge({ job }){
+    const ms=projectMaterialsStatus(job.id, requests, orders, 'linked_sample_id');
+    if(ms.state==='none') return null;
+    const [label,cls]=MAT_META[ms.state];
+    return <button onClick={(e)=>{ e.stopPropagation(); setMatFor(job); }} className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls} hover:opacity-80`} title="Materials status from Purchasing — click for the item breakdown">{label}{ms.total>0?` ${ms.ready}/${ms.total}`:''}</button>;
+  }
   function buildDrCtxFromSample(j, lead){
     return {
       kind: 'sample',
@@ -13901,6 +13909,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openAc
             <td className="px-3 py-2 text-right whitespace-nowrap">
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
+              <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
               {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
@@ -13956,6 +13965,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openAc
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
                           <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
+              <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
                           {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
                         </td>
@@ -13975,6 +13985,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, reload, openAc
 
       {creating && <SamplingJobForm existing={null} profile={profile} leads={leads} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload(); }} />}
       {planning && <ProductionPlanModal job={planning} profile={profile} profiles={profiles} subcons={subcons} jobTable="sampling_jobs" srcType="sampling" onClose={()=>setPlanning(null)} reload={reload} />}
+      {matFor && <MaterialsStatusModal job={matFor} matchId={matFor.id} field="linked_sample_id" leadTitle={(leads||[]).find(l=>l.id===matFor.lead_id)?.title} requests={requests} orders={orders} onClose={()=>setMatFor(null)} />}
     </div>
   );
 }
@@ -48094,7 +48105,7 @@ function App(){
         {PROCESS_BOARDS.map(pb=> view===pb.key && <ProcessWorklistView key={pb.key} profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} employees={employees} subcons={subcons} openTechpack={openTechpackView} process={pb.process} title={pb.title} icon={pb.icon} seedStatus={pb.seedStatus} />)}
         {view==='replacements' && <ReplacementQueueView profile={profile} profiles={profiles} employees={employees} />}
         {view==='qc' && <QCView profile={profile} profiles={profiles} employees={employees} prodJobs={prodJobs} sampleJobs={sampleJobs} leads={leads} qcReports={qcReports} openTechpack={openTechpackView} reload={loadAll} />}
-        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} subcons={subcons} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
+        {view==='sampling' && <SamplingBoard profile={profile} profiles={profiles} jobs={sampleJobs} leads={leads} subcons={subcons} requests={requests} orders={orders} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} />}
         {view==='graphic' && <GraphicView profile={profile} profiles={profiles} clients={clients} onOpenLead={(l)=>openLeadFromDept({ lead:l, job:(graphicJobs||[]).find(j=>j.lead_id===l.id && !j.deleted_at), jobType:'graphic', canSendToPrinting:true })} reload={loadAll} deptBoard={<DeptBoard profile={profile} profiles={profiles} title="Graphic Design" icon="🎨" table="graphic_design_jobs" jobType="graphic" statuses={GRAPHIC_STATUSES} doneStatuses={GRAPHIC_DONE} jobs={graphicJobs} leads={leads} graphicTypes={GRAPHIC_REQUEST_TYPES} canSendToPrinting={true} showResources={true} replacementDept="Graphic Design" reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} openLead={openLeadFromDept} />} leads={leads} />}
         {view==='sales-resources' && <SalesResourcesView profile={profile} />}
         {view==='pricing' && <PricingView profile={profile} />}
