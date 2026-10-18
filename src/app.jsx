@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 780 · Petty Cash: current-cycle expense lines (incl. bulk-uploaded) are now editable — fix the price, description, category, vendor or receipt, and delete a line. You can also add more expenses even after the float is used up (it warns about over-spend).";
+const BUILD = "Live build 781 · Petty Cash list redesigned: KPI cards (Open Batches · Unliquidated Balance · Liquidated Expenses · Returned Cash), tabbed status filter with counts, search + custodian filter, and a cleaner Reference/Purpose/Issued/Liquidated/Returned/Balance table (click a row to open full details).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39395,6 +39395,8 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
     return Number(row.amount||0) - Number(row.amount_liquidated||0) - Number(row.amount_returned||0);
   }
   const [filter,setFilter]=useState('open'); // default to open so the work-in-progress shows
+  const [search,setSearch]=useState('');
+  const [custFilter,setCustFilter]=useState('');
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canEdit = isAdmin || isAccounting;
@@ -39515,13 +39517,31 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   const ctaLabel = isPetty ? '+ New Petty Cash' : '+ Issue Cash Advance';
   const custodianHeader = isPetty ? 'Outstanding by custodian' : 'Outstanding by employee';
 
+  // ── KPI figures (match the mockup) ──
+  const openBatches = ofKind.filter(c=>c.status==='open');
+  const kpiOpenCount = openBatches.length;
+  const kpiUnliquidated = openBatches.reduce((s,c)=>s+onHandOf(c),0);                 // cash on hand remaining across open batches
+  const kpiLiquidated = openBatches.reduce((s,c)=>s+(isPetty?spentOn(c):Number(c.amount_liquidated||0)),0);
+  const kpiReturned = ofKind.reduce((s,c)=>s+Number(c.amount_returned||0),0);
+  // Custodian dropdown options (by id, with a name).
+  const custMap=new Map(); ofKind.forEach(c=>{ const id=c.custodian_id||('n:'+(c.custodian_name||'')); if(!custMap.has(id)) custMap.set(id,{ id:c.custodian_id||'', key:id, name:(profiles.find(p=>p.id===c.custodian_id)?.name)||c.custodian_name||'—' }); });
+  const custOptions=Array.from(custMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
+  // Tab counts.
+  const tabCount=(k)=> k===''?ofKind.length:ofKind.filter(c=>c.status===k).length;
+  // Apply status + custodian + search filters.
+  const q=search.trim().toLowerCase();
+  const fRows = ofKind
+    .filter(c=>!filter||c.status===filter)
+    .filter(c=>!custFilter || (c.custodian_id||('n:'+(c.custodian_name||'')))===custFilter)
+    .filter(c=>!q || `${c.number||''} ${c.purpose||''} ${(profiles.find(p=>p.id===c.custodian_id)?.name)||c.custodian_name||''} ${expensesFor(c).map(e=>e.description||'').join(' ')}`.toLowerCase().includes(q));
+  const Kpi=({icon,label,value,sub,color})=>(<div className="bg-white border rounded-xl p-4 flex items-start gap-3"><div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0 ${color}`}>{icon}</div><div className="min-w-0"><div className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className="text-2xl font-extrabold text-slate-900 leading-tight">{value}</div>{sub&&<div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}</div></div>);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold">{headerTitle}</h1>
-            <p className="text-slate-500 text-sm">{ofKind.length} {isPetty?'replenishment':'CA'}{ofKind.length===1?'':'s'} · Open balance out: <strong className="text-rose-700">{peso(totalOpen)}</strong> · <em>{headerSub}</em></p>
+            <p className="text-slate-500 text-sm">{isPetty?'Track cash issued, expenses and liquidation by custodian.':headerSub}</p>
           </div>
           <div className="flex items-center gap-2">
             {canEdit && !isPetty && <button onClick={()=>setBulkOpen(true)} className="px-3 py-2 rounded-lg bg-white border border-violet-300 text-violet-700 text-sm font-semibold hover:bg-violet-50">⇪ Bulk upload</button>}
@@ -39530,77 +39550,69 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
         </div>
       </div>
 
-      {/* Per-custodian open balances */}
-      {Object.keys(custodianOpen).length>0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <div className="text-xs font-semibold text-amber-800 mb-2 uppercase tracking-wider">Outstanding by custodian</div>
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(custodianOpen).map(([k,amt])=>{
-              const p = profiles.find(x=>x.id===k); const name = p ? (p.name||p.email) : k;
-              return <div key={k} className="bg-white border rounded px-2 py-1 text-xs"><strong>{name}</strong> <span className="text-rose-700 font-bold">{peso(amt)}</span></div>;
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-1 mb-4">
-        <button onClick={()=>setFilter('')} className={`text-xs px-3 py-1.5 rounded ${filter===''?'bg-indigo-600 text-white font-semibold':'bg-slate-100'}`}>All</button>
-        {STATUSES.map(s=>(
-          <button key={s.key} onClick={()=>setFilter(filter===s.key?'':s.key)} className={`text-xs px-3 py-1.5 rounded ${filter===s.key?'bg-indigo-600 text-white font-semibold':'bg-slate-100'}`}>{s.label}</button>
-        ))}
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <Kpi icon="📄" label={isPetty?'Open Batches':'Open advances'} value={kpiOpenCount} color="bg-blue-100" />
+        <Kpi icon="⏳" label="Unliquidated Balance" value={peso(kpiUnliquidated)} sub="Cash on hand to reconcile" color="bg-amber-100" />
+        <Kpi icon="🧾" label="Liquidated Expenses" value={peso(kpiLiquidated)} sub="Across open batches" color="bg-emerald-100" />
+        <Kpi icon="↩" label="Returned Cash" value={peso(kpiReturned)} color="bg-violet-100" />
       </div>
 
-      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+      {/* Tabs + search + custodian filter */}
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b flex items-center justify-between gap-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+            <button onClick={()=>setFilter('')} className={`px-3 py-1.5 rounded-md ${filter===''?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({tabCount('')})</button>
+            {STATUSES.map(s=>(<button key={s.key} onClick={()=>setFilter(s.key)} className={`px-3 py-1.5 rounded-md ${filter===s.key?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{s.label} ({tabCount(s.key)})</button>))}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search reference, purpose, custodian, expenses…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+            <select value={custFilter} onChange={e=>setCustFilter(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All custodians</option>{custOptions.map(c=><option key={c.key} value={c.key}>{c.name}</option>)}</select>
+          </div>
+        </div>
+        {custFilter && <div className="px-4 pt-2"><span className="inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 rounded-full px-2 py-1 font-semibold">Custodian: {custOptions.find(c=>c.key===custFilter)?.name}<button onClick={()=>setCustFilter('')} className="text-indigo-400 hover:text-rose-500">✕</button></span></div>}
+        <div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
           <th className="text-left px-3 py-2">Date</th>
-          <th className="text-left px-3 py-2">CA#</th>
+          <th className="text-left px-3 py-2">Reference</th>
           <th className="text-left px-3 py-2">Custodian</th>
           <th className="text-left px-3 py-2">Purpose</th>
           <th className="text-right px-3 py-2">Issued</th>
           <th className="text-right px-3 py-2">Liquidated</th>
           <th className="text-right px-3 py-2">Returned</th>
-          <th className="text-right px-3 py-2">Outstanding</th>
+          <th className="text-right px-3 py-2">Balance</th>
           <th className="text-left px-3 py-2">Status</th>
-          <th></th>
+          <th className="text-right px-3 py-2">Actions</th>
         </tr></thead>
-        <tbody>{rows.map(c=>{
+        <tbody>{fRows.map(c=>{
           const meta=caMeta(c.status);
           const custodian = profiles.find(p=>p.id===c.custodian_id);
-          // For Petty Cash, "Liquidated" is the running sum of linked
-          // expenses; for Cash Advances it stays as the existing column.
           const linkedSpent = isPetty ? spentOn(c) : Number(c.amount_liquidated||0);
           const outstanding = onHandOf(c);
-          // Petty cash clicks open the detail/add-expense modal. Cash
-          // advance clicks still open the edit form like before.
           const onRowClick = () => isPetty ? setDetail(c) : setEditing(c);
           return (
             <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={onRowClick}>
-              <td className="px-3 py-2 text-xs">{fmtDate(c.date)}</td>
-              <td className="px-3 py-2 font-mono text-xs">{c.number||c.id.slice(0,6)}</td>
-              <td className="px-3 py-2">{custodian?(custodian.name||custodian.email):c.custodian_name||'—'}</td>
-              <td className="px-3 py-2 max-w-xs truncate">{c.purpose||'—'}</td>
-              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}{isPetty && c.carried_from && <div className="text-[10px] font-normal text-slate-400 whitespace-nowrap">{peso(c.carry_in)} carried + {peso(c.replenished_in)} new</div>}</td>
-              <td className="px-3 py-2 text-right text-emerald-700">{peso(linkedSpent)}</td>
-              <td className="px-3 py-2 text-right text-blue-700">{peso(c.amount_returned)}</td>
-              <td className={`px-3 py-2 text-right font-bold ${outstanding>0.01?'text-rose-700':'text-emerald-700'}`}>{peso(outstanding)}</td>
-              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
-              <td className="px-3 py-2 text-right whitespace-nowrap">
-                {isPetty ? (
-                  c.status==='open' && canEdit && <>
-                    <button onClick={(e)=>{e.stopPropagation(); setDetail(c);}} className="text-xs text-indigo-600 hover:underline mr-2">+ Add expense</button>
-                    <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Recognise spend to Expense Log + request replenishment from Admin">Liquidate →</button>
-                  </>
-                ) : (
-                  c.status==='open' && canEdit
-                    ? <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate →</button>
-                    : <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-indigo-600 hover:underline mr-2" title="View liquidation details, receipts & settlement">👁 View</button>
-                )}
+              <td className="px-3 py-2.5 text-xs whitespace-nowrap">{fmtDate(c.date)}</td>
+              <td className="px-3 py-2.5 font-mono text-xs text-indigo-600">{c.number||c.id.slice(0,6)}</td>
+              <td className="px-3 py-2.5">{custodian?(custodian.name||custodian.email):c.custodian_name||'—'}</td>
+              <td className="px-3 py-2.5 max-w-xs"><div className="truncate">{c.purpose||'—'}</div>{isPetty && c.carried_from && <div className="text-[10px] font-normal text-slate-400 whitespace-nowrap">{peso(c.carry_in)} carryover + {peso(c.replenished_in)} new cash</div>}</td>
+              <td className="px-3 py-2.5 text-right font-semibold">{peso(c.amount)}</td>
+              <td className="px-3 py-2.5 text-right text-emerald-700">{peso(linkedSpent)}</td>
+              <td className="px-3 py-2.5 text-right text-blue-700">{peso(c.amount_returned)}</td>
+              <td className={`px-3 py-2.5 text-right font-bold ${outstanding>0.01?'text-slate-800':'text-emerald-700'}`}>{peso(outstanding)}</td>
+              <td className="px-3 py-2.5"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                <button onClick={(e)=>{e.stopPropagation(); onRowClick();}} className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-indigo-600 font-semibold hover:bg-indigo-50 mr-1">View</button>
+                {isPetty && c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); liquidatePetty(c);}} className="text-xs text-emerald-600 hover:underline mr-2" title="Recognise spend to Expense Log + request replenishment from Admin">Liquidate</button>}
+                {!isPetty && c.status==='open' && canEdit && <button onClick={(e)=>{e.stopPropagation(); setLiquidating(c);}} className="text-xs text-emerald-600 hover:underline mr-2">Liquidate</button>}
                 {isAdmin && <button onClick={(e)=>{e.stopPropagation(); deleteCA(c);}} className="text-xs text-rose-500 hover:underline" title="Send to Trash (admin only)">Delete</button>}
               </td>
             </tr>
           );
-        })}{rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No {isPetty?'petty cash':'cash advances'} in this filter.</td></tr>}</tbody>
-      </table></div></div>
+        })}{fRows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No {isPetty?'cash batches':'cash advances'} in this filter.</td></tr>}</tbody>
+      </table></div>
+      <div className="px-4 py-2 text-[11px] text-slate-400 border-t">Balance = Issued − Liquidated − Returned</div>
+      </div>
 
       {(creating||editing) && <CashAdvanceFormModal existing={editing} kind={kind} profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {bulkOpen && <CashAdvanceBulkModal profile={profile} profiles={profiles} bankAccounts={bankAccounts} onClose={()=>setBulkOpen(false)} onSaved={()=>{ setBulkOpen(false); reload(); }} />}
