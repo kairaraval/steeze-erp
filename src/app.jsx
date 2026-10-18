@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 777 · Inbox fixes for Marketing notifications: Clear now works (it was hitting the wrong table + the activity table lacked an archived_by column), and the content title now shows instead of a generic 'Marketing content' label.";
+const BUILD = "Live build 778 · New desktop top header: live date · day · time on the left, and a 🔔 notification bell (with unread count) + your profile avatar, name & role on the right.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -96,6 +96,15 @@ const CLOSED_STAGES = [...SOLD_STAGES, 'lost'];
 // a deal closed early on the 1st pushes it into the previous month. Always stamp
 // business dates (won_at etc.) with the Philippine calendar date.
 function todayManila(){ try { return new Date().toLocaleDateString('en-CA',{ timeZone:'Asia/Manila' }); } catch(_){ return new Date(Date.now()+8*3600*1000).toISOString().slice(0,10); } }
+// Live date + day + time shown in the app's top header bar.
+function TopClock(){
+  const [now,setNow]=useState(new Date());
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()), 15000); return ()=>clearInterval(t); },[]);
+  const date=now.toLocaleDateString('en-US',{ month:'short', day:'numeric', year:'numeric' });
+  const day=now.toLocaleDateString('en-US',{ weekday:'short' });
+  const time=now.toLocaleTimeString('en-US',{ hour:'numeric', minute:'2-digit' });
+  return <div className="flex items-center gap-2 text-sm"><span className="text-slate-400">📅</span><span className="font-semibold text-slate-800">{date}</span><span className="text-slate-400">{day}</span><span className="font-semibold text-slate-800">{time}</span></div>;
+}
 // Likelihood a deal in each open stage will close — drives the WEIGHTED forecast.
 const STAGE_PROBABILITY = { new:0.10, qualified:0.25, proposal:0.45, negotiation:0.65, sampling:0.80 };
 function stageProb(stage){ return STAGE_PROBABILITY[stage] ?? 0; }
@@ -47971,6 +47980,20 @@ function App(){
 
       {/* Main */}
       <main className="no-print md:ml-60 pt-12 md:pt-0 min-h-screen">
+        {/* Desktop top header — live date/time on the left; notifications + profile on the right. */}
+        <div className="hidden md:flex bg-white border-b border-slate-200 items-center justify-between gap-4 px-6 py-2">
+          <TopClock />
+          <div className="flex items-center gap-3">
+            <button onClick={()=>navTo('inbox')} className="relative p-1.5 rounded-lg hover:bg-slate-100" title="Inbox / notifications">
+              <span className="text-lg leading-none">🔔</span>
+              {unreadInbox>0 && <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[9px] font-bold rounded-full px-1 min-w-[16px] text-center leading-4">{unreadInbox>99?'99+':unreadInbox}</span>}
+            </button>
+            <button onClick={()=>navTo('profile')} className="flex items-center gap-2 pl-3 border-l border-slate-200 hover:bg-slate-50 rounded-lg py-1 pr-2" title="My Profile">
+              <Avatar profile={profile} size="sm" />
+              <div className="text-left leading-tight hidden lg:block"><div className="text-sm font-semibold text-slate-800 truncate max-w-[160px]">{profile.name||profile.email}</div><div className="text-[11px] text-slate-500">{roleLabel(profile.role)}</div></div>
+            </button>
+          </div>
+        </div>
         {loadErr && <div className="bg-rose-50 text-rose-700 text-xs px-6 py-2 border-b border-rose-200">{loadErr}</div>}
         {view==='dashboard' && <Dashboard profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} soPayments={soPayments} salesOrders={salesOrders} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='goals' && profile.role==='admin' && <GoalsBoardView profile={profile} soPayments={soPayments} salesOrders={salesOrders} clients={clients} employees={employees} />}
