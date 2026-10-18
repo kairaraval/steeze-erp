@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 782 · Sampling Board now shows the same live Materials status chip as Production (from the sample's PR + POs) — click it for the item breakdown so you know if a sample's materials are in.";
+const BUILD = "Live build 783 · Sales Pipeline: per-lead ✅ Checklist (to-dos with optional due dates) on the lead details, plus a '✅ To-dos (N)' tracker in the pipeline header that lists every open item across all your leads — grouped by lead, overdue flagged, with Open-lead links and tick-to-done.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3068,6 +3068,14 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   const canTicket = profile.role==='admin'||isManagerRole(profile.role)||profile.role==='assistant'||lead.manager_id===profile.id;
   const notesDirty = (notesDraft||'') !== (lead.notes||'');
   useEffect(()=>{ setNotesDraft(lead.notes||''); setNotesMsg(''); },[lead.id, lead.notes]);
+  // Per-lead checklist (ad-hoc to-dos).
+  const [checklist,setChecklist]=useState(Array.isArray(lead.checklist)?lead.checklist:[]);
+  const [newChk,setNewChk]=useState(''); const [newChkDue,setNewChkDue]=useState('');
+  useEffect(()=>{ setChecklist(Array.isArray(lead.checklist)?lead.checklist:[]); },[lead.id, JSON.stringify(lead.checklist)]);
+  async function saveChecklist(next){ setChecklist(next); const { error }=await sb.from('leads').update({ checklist: next }).eq('id', lead.id); if(error){ alert(error.message); return; } reload && reload(); }
+  async function addChk(){ const t=newChk.trim(); if(!t) return; await saveChecklist([...checklist, { id:'c'+Date.now()+Math.floor(Math.random()*1000), text:t, done:false, due_date:newChkDue||null, created_at:new Date().toISOString(), created_by:profile.id }]); setNewChk(''); setNewChkDue(''); }
+  async function toggleChk(id){ await saveChecklist(checklist.map(c=>c.id===id?{...c, done:!c.done, done_at:!c.done?new Date().toISOString():null, done_by:!c.done?profile.id:null}:c)); }
+  async function removeChk(id){ await saveChecklist(checklist.filter(c=>c.id!==id)); }
   async function saveNotes(){
     setNotesBusy(true); setNotesMsg('');
     const { error } = await sb.from('leads').update({ notes: notesDraft }).eq('id', lead.id);
@@ -3182,6 +3190,30 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
             {(canEdit || isAssistantRole(profile.role)) && (
               <div className="flex justify-end mt-1.5">
                 <button disabled={notesBusy||!notesDirty} onClick={saveNotes} className="text-xs px-3 py-1 rounded bg-amber-600 text-white font-semibold hover:bg-amber-700 disabled:opacity-50">{notesBusy?'Saving…':(notesDirty?'💾 Save note':'✓ Saved')}</button>
+              </div>
+            )}
+          </div>
+          {/* Per-lead checklist — ad-hoc to-dos for this lead. Aggregated in the
+              pipeline's "To-dos" tracker so nothing slips across many leads. */}
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">✅ Checklist{checklist.length>0?` · ${checklist.filter(c=>!c.done).length} open`:''}</div>
+            </div>
+            {checklist.length===0 && <div className="text-xs text-slate-400 mb-1.5">No to-dos yet for this lead.</div>}
+            <div className="space-y-1">
+              {checklist.slice().sort((a,b)=>(a.done===b.done)?String(a.due_date||'').localeCompare(String(b.due_date||'')):(a.done?1:-1)).map(c=>{ const overdue=!c.done && c.due_date && c.due_date<todayManila(); return (
+                <div key={c.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={!!c.done} disabled={!canEdit} onChange={()=>toggleChk(c.id)} className="accent-emerald-600" />
+                  <span className={`flex-1 ${c.done?'line-through text-slate-400':''}`}>{c.text}{c.due_date && <span className={`ml-2 text-[11px] ${overdue?'text-rose-600 font-semibold':'text-slate-400'}`}>📅 {fmtDate(c.due_date)}{overdue?' · overdue':''}</span>}</span>
+                  {canEdit && <button onClick={()=>removeChk(c.id)} className="text-slate-300 hover:text-rose-500 text-xs">✕</button>}
+                </div>
+              ); })}
+            </div>
+            {canEdit && (
+              <div className="flex items-center gap-2 mt-2">
+                <input value={newChk} onChange={e=>setNewChk(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') addChk(); }} placeholder="Add a to-do for this lead…" className="flex-1 text-sm px-2 py-1 rounded border border-slate-300" />
+                <input type="date" value={newChkDue} onChange={e=>setNewChkDue(e.target.value)} className="text-xs px-1.5 py-1 rounded border border-slate-300" title="Optional due date" />
+                <button onClick={addChk} disabled={!newChk.trim()} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">+ Add</button>
               </div>
             )}
           </div>
@@ -15098,6 +15130,10 @@ function GraphicTicketQueue({ profile, profiles, leads, clients, onOpenLead, rel
 function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLead, onNew, reload, onOpenTechpack }){
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
   const [importing,setImporting]=useState(false);
+  const [todosOpen,setTodosOpen]=useState(false); // cross-lead checklist tracker
+  // Open (unchecked) checklist items across the visible leads, soonest-due first.
+  const openTodos = (leads||[]).filter(l=>!l.deleted_at).flatMap(l=> (Array.isArray(l.checklist)?l.checklist:[]).filter(c=>!c.done).map(c=>({ ...c, lead:l }))).sort((a,b)=> String(a.due_date||'9999-12-31').localeCompare(String(b.due_date||'9999-12-31')));
+  async function markTodoDone(lead, id){ const next=(Array.isArray(lead.checklist)?lead.checklist:[]).map(c=>c.id===id?{...c, done:true, done_at:new Date().toISOString(), done_by:profile.id}:c); const { error }=await sb.from('leads').update({ checklist: next }).eq('id', lead.id); if(error){ alert(error.message); return; } reload && reload(); }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('pipelineLayout')||'board'; }catch(e){ return 'board'; } });
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('pipelineLayout',v); }catch(e){} }
   const [collapsed,setCollapsed]=useState({}); // stage.key -> true if collapsed
@@ -15258,6 +15294,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
             ) : (
               <label className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border rounded-lg px-3 py-2 whitespace-nowrap"><input type="checkbox" checked={mineOnly} onChange={e=>setMineOnly(e.target.checked)} /> My leads only</label>
             )}
+            <button onClick={()=>setTodosOpen(true)} className="px-4 py-2 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-50 whitespace-nowrap" title="See every open checklist item across your leads">✅ To-dos{openTodos.length>0?` (${openTodos.length})`:''}</button>
             {isAdmin && <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 whitespace-nowrap">⇪ Import CSV</button>}
             <button onClick={onNew} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">+ New lead</button>
           </div>
@@ -15412,6 +15449,36 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
       })}</div>
       )}
       {importing && <LeadImportModal profiles={profiles} clients={clients} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
+      {todosOpen && <Modal title={`✅ Lead to-dos · ${openTodos.length} open`} onClose={()=>setTodosOpen(false)} wide>
+        {openTodos.length===0 ? (
+          <div className="text-center py-10 text-slate-400 text-sm">No open checklist items across your leads. Add to-dos inside a lead's details.</div>
+        ) : (()=>{
+          const byLead={}; openTodos.forEach(t=>{ (byLead[t.lead.id]=byLead[t.lead.id]||{ lead:t.lead, items:[] }).items.push(t); });
+          const groups=Object.values(byLead).sort((a,b)=>{ const ad=a.items.map(i=>i.due_date||'9999').sort()[0]; const bd=b.items.map(i=>i.due_date||'9999').sort()[0]; return String(ad).localeCompare(String(bd)); });
+          const today=todayManila();
+          return (
+            <div className="space-y-3">
+              {groups.map(g=>{ const client=(clients||[]).find(c=>c.id===g.lead.client_id); return (
+                <div key={g.lead.id} className="border rounded-xl overflow-hidden">
+                  <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between gap-2">
+                    <div className="min-w-0"><div className="font-semibold text-slate-900 truncate">{g.lead.title||'—'}</div><div className="text-[11px] text-slate-500 truncate">{client?.company||g.lead.client_name||''} · {(STAGES.find(s=>s.key===g.lead.stage)||{}).label||g.lead.stage}</div></div>
+                    <button onClick={()=>{ setTodosOpen(false); onOpenLead && onOpenLead(g.lead); }} className="shrink-0 text-xs px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Open lead →</button>
+                  </div>
+                  <div className="divide-y">
+                    {g.items.map(it=>{ const overdue=it.due_date && it.due_date<today; return (
+                      <div key={it.id} className="px-3 py-2 flex items-center gap-2 text-sm">
+                        <input type="checkbox" onChange={()=>markTodoDone(g.lead, it.id)} className="accent-emerald-600" title="Mark done" />
+                        <span className="flex-1">{it.text}</span>
+                        {it.due_date && <span className={`text-[11px] ${overdue?'text-rose-600 font-semibold':'text-slate-400'}`}>📅 {fmtDate(it.due_date)}{overdue?' · overdue':''}</span>}
+                      </div>
+                    ); })}
+                  </div>
+                </div>
+              ); })}
+            </div>
+          );
+        })()}
+      </Modal>}
     </div>
   );
 }
