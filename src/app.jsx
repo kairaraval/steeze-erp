@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 793 · HR → Request for Payment: HR can raise payment requests (HMO, events, venues) with quotations attached + payee bank details; these flow into Finance's RFP queue for voucher creation.";
+const BUILD = "Live build 794 · Toolbox Meetings: 🖨 Print / Preview — generates a clean printable minutes sheet (header, details, minutes, issues, decisions, action-items table, sign-off) to print or save as PDF.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6988,6 +6988,7 @@ function ToolboxMeetingModal({ meeting, profile, profiles, employees, onClose, o
   const [atts,setAtts]=useState(Array.isArray(meeting?.attachments)?meeting.attachments:[]);
   const [row,setRow]=useState(meeting||null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [printing,setPrinting]=useState(false);
   const origOwners = useRef(new Map((Array.isArray(meeting?.action_items)?meeting.action_items:[]).map(a=>[a.id, a.owner_id||null])));
   const today=todayManila();
   const staff=(profiles||[]).filter(p=>!p.deleted_at).slice().sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
@@ -7081,6 +7082,7 @@ function ToolboxMeetingModal({ meeting, profile, profiles, employees, onClose, o
           {msg && <div className={`text-xs ${msg.startsWith('Saved')?'text-emerald-600':'text-rose-600'}`}>{msg}</div>}
           <div className="flex gap-2 flex-wrap pt-1 border-t">
             {canEdit && <button disabled={busy} onClick={save} className="py-2 px-3 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':(isEdit?'Save changes':'Create meeting')}</button>}
+            {isEdit && <button onClick={()=>setPrinting(true)} className="py-2 px-3 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Preview</button>}
             {isEdit && isCeo && !row?.ceo_reviewed_at && <button onClick={markReviewed} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">✓ Mark reviewed</button>}
             {isEdit && row?.ceo_reviewed_at && <span className="text-xs text-emerald-600 self-center font-semibold">✓ Reviewed by {nameOf(row.ceo_reviewed_by)} · {fmtDate(row.ceo_reviewed_at)}</span>}
             {isEdit && canEdit && <button onClick={del} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 ml-auto">🗑 Delete</button>}
@@ -7092,8 +7094,67 @@ function ToolboxMeetingModal({ meeting, profile, profiles, employees, onClose, o
                   : <div className="text-xs text-slate-400">Save the meeting to start a discussion thread.</div>}
         </div>
       </div>
+      {printing && <ToolboxMeetingPrintModal
+        data={{ number:row?.number, meeting_date:date, department, facilitator_id:facilitatorId, attendee_count:attCount, attendees, topic, minutes, issues, decisions, action_items:items, ceo_reviewed_by:row?.ceo_reviewed_at?row.ceo_reviewed_by:null, ceo_reviewed_at:row?.ceo_reviewed_at, attachments:atts }}
+        profiles={profiles} onClose={()=>setPrinting(false)} />}
     </Modal>
   );
+}
+function ToolboxMeetingPrintModal({ data, profiles, onClose }){
+  const d=data||{};
+  const nameOf=(id)=> (profiles||[]).find(p=>p.id===id)?.name || '—';
+  const items=Array.isArray(d.action_items)?d.action_items.filter(a=>(a.text||'').trim()):[];
+  const atts=Array.isArray(d.attachments)?d.attachments:[];
+  const Field=({label,value})=> (value===''||value==null) ? null : (
+    <div style={{marginBottom:'10px'}}>
+      <div style={{fontSize:'10px',textTransform:'uppercase',letterSpacing:'1px',color:'#666',fontWeight:700,marginBottom:'2px'}}>{label}</div>
+      <div style={{fontSize:'13px',whiteSpace:'pre-wrap'}}>{value}</div>
+    </div>
+  );
+  return (<Modal title={`Toolbox Meeting · ${d.number||''}`} onClose={onClose} wide>
+    <style>{`@media print{ body *{visibility:hidden !important;} .tbm-print,.tbm-print *{visibility:visible !important;} .tbm-print{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
+    <div className="no-print flex items-center justify-between gap-3 mb-3"><div className="text-xs text-slate-500">Preview below — prints on A4/Letter.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+    <div className="tbm-print" style={{fontFamily:'Arial, Helvetica, sans-serif',color:'#000',padding:'8px 6px'}}>
+      <div style={{textAlign:'center',borderBottom:'2px solid #000',paddingBottom:'8px',marginBottom:'14px'}}>
+        <div style={{fontSize:'20px',fontWeight:800,letterSpacing:'1px'}}>STEEZE</div>
+        <div style={{fontSize:'14px',fontWeight:700,marginTop:'2px'}}>Toolbox Meeting Minutes</div>
+        <div style={{fontSize:'11px',color:'#555',marginTop:'2px'}}>{d.number||''}</div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 24px',marginBottom:'14px'}}>
+        <Field label="Date" value={d.meeting_date?fmtDate(d.meeting_date):''} />
+        <Field label="Department" value={d.department} />
+        <Field label="Facilitated by" value={d.facilitator_id?nameOf(d.facilitator_id):''} />
+        <Field label="Attendees (count)" value={d.attendee_count!==''&&d.attendee_count!=null?String(d.attendee_count):''} />
+        <Field label="Topic" value={d.topic} />
+        <Field label="Attendees / names" value={d.attendees} />
+      </div>
+      <Field label="Minutes · key points discussed" value={d.minutes} />
+      <Field label="Issues raised from the floor" value={d.issues} />
+      <Field label="Decisions made" value={d.decisions} />
+      {items.length>0 && <div style={{marginTop:'6px',marginBottom:'10px'}}>
+        <div style={{fontSize:'10px',textTransform:'uppercase',letterSpacing:'1px',color:'#666',fontWeight:700,marginBottom:'4px'}}>Action items</div>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+          <thead><tr style={{background:'#f1f5f9'}}>
+            <th style={{textAlign:'left',border:'1px solid #cbd5e1',padding:'4px 6px'}}>What to do</th>
+            <th style={{textAlign:'left',border:'1px solid #cbd5e1',padding:'4px 6px',width:'22%'}}>Owner</th>
+            <th style={{textAlign:'left',border:'1px solid #cbd5e1',padding:'4px 6px',width:'16%'}}>Due</th>
+            <th style={{textAlign:'center',border:'1px solid #cbd5e1',padding:'4px 6px',width:'14%'}}>Status</th>
+          </tr></thead>
+          <tbody>{items.map((a,i)=>(<tr key={i}>
+            <td style={{border:'1px solid #cbd5e1',padding:'4px 6px'}}>{a.text}</td>
+            <td style={{border:'1px solid #cbd5e1',padding:'4px 6px'}}>{a.owner_id?nameOf(a.owner_id):'—'}</td>
+            <td style={{border:'1px solid #cbd5e1',padding:'4px 6px'}}>{a.due_date?fmtDate(a.due_date):'—'}</td>
+            <td style={{border:'1px solid #cbd5e1',padding:'4px 6px',textAlign:'center'}}>{a.done?'✓ Done':'Open'}</td>
+          </tr>))}</tbody>
+        </table>
+      </div>}
+      {atts.length>0 && <Field label="Supporting documents" value={atts.map(a=>a.name||'file').join(', ')} />}
+      <div style={{marginTop:'28px',display:'flex',justifyContent:'space-between',gap:'40px'}}>
+        <div style={{flex:1}}><div style={{borderTop:'1px solid #000',paddingTop:'4px',fontSize:'11px',textAlign:'center'}}>Facilitated by{d.facilitator_id?` — ${nameOf(d.facilitator_id)}`:''}</div></div>
+        <div style={{flex:1}}><div style={{borderTop:'1px solid #000',paddingTop:'4px',fontSize:'11px',textAlign:'center'}}>{d.ceo_reviewed_at?`Reviewed — ${nameOf(d.ceo_reviewed_by)} · ${fmtDate(d.ceo_reviewed_at)}`:'Reviewed by'}</div></div>
+      </div>
+    </div>
+  </Modal>);
 }
 
 function DailyCheckinView({ profile, profiles, reload }){
