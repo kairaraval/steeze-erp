@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 799 · Subcon Sewing: “↩ Returned by subcon” now opens the return form in one click (no more confirm pop-up). Record partial returns, all-good, or good + variance (with reason) and the date received — logged against the subcon so the weekly payroll pays only the good pieces.";
+const BUILD = "Live build 800 · Subcon Payroll › Weekly payroll: paid payrolls no longer flood the list — it defaults to the 'For payment' queue, with KPI cards (For payment / Paid / Awaiting approval) and counts on each filter. Switch to Paid or All to see history.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46021,7 +46021,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
   const [viewingProject,setViewingProject]=useState(null);
   const [summaryWeek,setSummaryWeek]=useState('');
   const [payrollWeek,setPayrollWeek]=useState('');       // '' = all weeks
-  const [payrollStatus,setPayrollStatus]=useState('');   // '' | 'for_payment' | 'paid'
+  const [payrollStatus,setPayrollStatus]=useState('for_payment'); // default hides paid so the queue doesn't flood
   const canEditPayrollRow = profile.role==='admin' || profile.role==='production_supervisor' || canRunSubconPayroll(profile);
 
   const sendRows = (subconSends||[])
@@ -46235,17 +46235,32 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
       )}
 
       {tab==='payroll' && (()=>{
-        const pweeks = Array.from(new Set((subconPayrolls||[]).map(p=>p.week_ending).filter(Boolean))).sort().reverse();
-        const filtered = (subconPayrolls||[])
-          .filter(p=> !payrollWeek || p.week_ending===payrollWeek)
+        const live = (subconPayrolls||[]).filter(p=>!p.deleted_at);
+        const pweeks = Array.from(new Set(live.map(p=>p.week_ending).filter(Boolean))).sort().reverse();
+        const inWeek = (p)=> !payrollWeek || p.week_ending===payrollWeek;
+        const isForPayment = (p)=> p.status!=='paid' && p.status!=='cancelled';
+        const filtered = live
+          .filter(inWeek)
           .filter(p=> payrollStatus==='' ? true
             : payrollStatus==='paid' ? p.status==='paid'
-            : /* for_payment */ (p.status!=='paid' && p.status!=='cancelled'));
-        const fTotal = filtered.reduce((s,p)=>s+Number(p.total_amount||0),0);
-        const pendingApproval = (subconPayrolls||[]).filter(p=>p.status==='pending_approval');
+            : /* for_payment */ isForPayment(p))
+          .sort((a,b)=> String(b.week_ending||'').localeCompare(String(a.week_ending||'')) || String(a.number||'').localeCompare(String(b.number||'')));
+        const fTotal = filtered.reduce((s,p)=>s+subconNet(p),0);
+        // Counts for the filter chips + KPI strip (respect the week filter).
+        const weekScope = live.filter(inWeek);
+        const forPayList = weekScope.filter(isForPayment);
+        const paidList = weekScope.filter(p=>p.status==='paid');
+        const forPayTotal = forPayList.reduce((s,p)=>s+subconNet(p),0);
+        const paidTotal = paidList.reduce((s,p)=>s+subconNet(p),0);
+        const pendingApproval = live.filter(p=>p.status==='pending_approval');
         const canApprove = profile.role==='production_supervisor' || profile.role==='admin';
         return (
         <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3"><div className="text-[10px] uppercase text-amber-700 font-semibold">For payment{payrollWeek?'':' · all weeks'}</div><div className="text-2xl font-bold text-amber-800">{peso(forPayTotal)}</div><div className="text-[11px] text-amber-700">{forPayList.length} payroll{forPayList.length===1?'':'s'}</div></div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-[10px] uppercase text-emerald-700 font-semibold">Paid{payrollWeek?'':' · all weeks'}</div><div className="text-2xl font-bold text-emerald-800">{peso(paidTotal)}</div><div className="text-[11px] text-emerald-700">{paidList.length} payroll{paidList.length===1?'':'s'}</div></div>
+            <div className="bg-white border rounded-xl p-3 col-span-2 sm:col-span-1"><div className="text-[10px] uppercase text-slate-400 font-semibold">Awaiting approval</div><div className="text-2xl font-bold text-slate-800">{pendingApproval.filter(inWeek).length}</div><div className="text-[11px] text-slate-400">need sign-off</div></div>
+          </div>
           {canApprove && pendingApproval.length>0 && (
             <div className="bg-amber-50 border border-amber-300 rounded-xl p-3">
               <div className="text-xs font-bold uppercase tracking-wider text-amber-800 mb-2">🔔 Awaiting your approval ({pendingApproval.length})</div>
@@ -46270,12 +46285,12 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
               {pweeks.map(w=><option key={w} value={w}>{fmtDate(w)}</option>)}
             </select>
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs ml-1">
-              {[['','All'],['for_payment','For payment'],['paid','Paid']].map(([k,l])=>(
-                <button key={k} onClick={()=>setPayrollStatus(k)} className={`px-2.5 py-1 rounded-md ${payrollStatus===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+              {[['for_payment','For payment',forPayList.length],['paid','Paid',paidList.length],['','All',weekScope.length]].map(([k,l,n])=>(
+                <button key={k} onClick={()=>setPayrollStatus(k)} className={`px-2.5 py-1 rounded-md ${payrollStatus===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l} <span className="opacity-60">{n}</span></button>
               ))}
             </div>
             <div className="flex-1"></div>
-            <div className="text-xs text-slate-500">{filtered.length} payroll{filtered.length===1?'':'s'} · <strong className="text-slate-700">{peso(fTotal)}</strong></div>
+            <div className="text-xs text-slate-500">Showing {filtered.length} · <strong className="text-slate-700">{peso(fTotal)}</strong></div>
           </div>
           <div className="bg-white rounded-xl border overflow-x-auto">
           <table className="w-full text-sm">
@@ -46291,7 +46306,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
               </tr>
             </thead>
             <tbody>{filtered.length === 0 ? (
-              <tr><td colSpan="7" className="px-3 py-10 text-center text-slate-400">{(subconPayrolls||[]).length===0 ? "No payrolls yet. Click + Generate weekly payroll to roll up this week's returns." : 'No payrolls match this filter.'}</td></tr>
+              <tr><td colSpan="7" className="px-3 py-10 text-center text-slate-400">{live.length===0 ? "No payrolls yet. Click + Generate weekly payroll to roll up this week's returns." : payrollStatus==='for_payment' ? '🎉 Nothing to pay — every payroll in view has been paid.' : 'No payrolls match this filter.'}</td></tr>
             ) : filtered.map(p => {
               const subcon = (subcons||[]).find(x => x.id === p.subcon_id);
               const statusCls = p.status==='paid' ? 'bg-emerald-100 text-emerald-700'
