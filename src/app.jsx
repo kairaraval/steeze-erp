@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 789 · Production/Sampling activity: the thread's open-board button now opens THAT project's plan board directly (not the whole board), so you land on the exact project you were tagged about.";
+const BUILD = "Live build 790 · Project activity thread now shows a project-details panel on the left (item, qty, breakdown, deadline, status, sales owner, PO/techpack # + View techpack) beside the conversation, so you know what you're tagged about.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1237,10 +1237,53 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   );
 }
 function Thread(props){
+  const { sidePanel, ...rest } = props;
+  if(sidePanel){
+    // Two-column layout: project details on the left, activity thread on the
+    // right — so when you're tagged in a project you can see exactly what it is.
+    return (
+      <Modal title="Activity" onClose={props.onClose} xwide>
+        <div className="flex flex-col md:flex-row gap-5">
+          <div className="md:w-80 md:shrink-0 md:border-r md:pr-5">{sidePanel}</div>
+          <div className="flex-1 min-w-0"><ThreadBody {...rest} /></div>
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal title="Activity" onClose={props.onClose}>
       <ThreadBody {...props} />
     </Modal>
+  );
+}
+// Project summary panel shown beside a dept-job activity thread.
+function DeptJobSummary({ job, jobType, lead, profiles, openTechpack }){
+  const j=job||{}; const owner = lead?.manager_id ? (profiles||[]).find(p=>p.id===lead.manager_id) : null;
+  const deadline = j.due_date || lead?.delivery_date || lead?.expected_close || '';
+  const hasTp = lead && (lead.techpack || lead.techpack_number);
+  const Row=({label,children})=> (children===''||children==null) ? null : (
+    <div className="flex justify-between gap-3 py-1.5 border-b border-slate-100 last:border-0">
+      <span className="text-[11px] uppercase tracking-wide text-slate-400 shrink-0">{label}</span>
+      <span className="text-sm text-slate-800 text-right font-medium min-w-0 break-words">{children}</span>
+    </div>
+  );
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold mb-1">{jobType==='sampling'?'🧪 Sample project':'⚙ Production project'}</div>
+      <div className="text-base font-bold leading-tight mb-0.5">{j.item||lead?.title||'—'}</div>
+      <div className="text-sm text-slate-500 mb-3">{j.client_name||lead?.client_name||''}</div>
+      <div className="bg-slate-50 rounded-lg px-3 py-1">
+        <Row label="Ref">{j.number||'—'}</Row>
+        <Row label="Quantity">{prodQtyDisplay(j)}</Row>
+        {Array.isArray(j.items)&&j.items.length>0 && <Row label="Breakdown">{j.items.map(it=>`${it.quantity} ${it.itemType}`).join(' · ')}</Row>}
+        <Row label="Deadline">{deadline?fmtDate(deadline):'—'}</Row>
+        <Row label="Status">{(j.status||'').replace(/_/g,' ')||'—'}</Row>
+        {owner && <Row label="Sales owner">{owner.name||owner.email}</Row>}
+        {lead?.po_number && <Row label="PO #">{lead.po_number}</Row>}
+        {lead?.techpack_number && <Row label="Techpack #">{lead.techpack_number}</Row>}
+      </div>
+      {hasTp && openTechpack && <button onClick={()=>openTechpack(lead)} className="mt-3 w-full py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700">📋 View techpack</button>}
+    </div>
   );
 }
 
@@ -48438,7 +48481,9 @@ function App(){
       {sendGraphicLead && <SendToGraphicModal profile={profile} profiles={profiles} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
-      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={(deptActivity.jobType==='production'||deptActivity.jobType==='sampling')?'📋 Open project plan board':'Go to board'} onOpenSource={()=>{ const jt=deptActivity.jobType; const job=deptActivity.job;
+      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title}
+          sidePanel={<DeptJobSummary job={deptActivity.job} jobType={deptActivity.jobType} lead={(leads||[]).find(l=>l.id===(deptActivity.job.lead_id||deptActivity.job.source_lead_id))} profiles={profiles} openTechpack={openTechpackView} />}
+          openSourceLabel={(deptActivity.jobType==='production'||deptActivity.jobType==='sampling')?'📋 Open project plan board':'Go to board'} onOpenSource={()=>{ const jt=deptActivity.jobType; const job=deptActivity.job;
             // Production & sampling: open THIS project's plan board directly so the
             // supervisor lands on the exact project they were tagged about — not the
             // whole board where the project is hard to find.
