@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 796 · Subcon Sewing is now full-circle: a “Send-outs & deliveries → payroll” tab where prod supervisors/admin record batches sent to subcons (pull from a production job) and log dated deliveries. These feed the weekly subcon payroll (Friday cutoff) automatically — no more re-encoding.";
+const BUILD = "Live build 797 · Subcon Sewing: “↩ Log delivery” now also sits on the Floor-tracking rows — log items received back (good qty, variance + reason, and the date received) for a subcon right where you track the project; it attaches to that subcon's open send batch and feeds weekly payroll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10320,9 +10320,23 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   }
   const statusMeta=(k)=>PRODUCTION_STATUSES.find(s=>s.key===k);
 
+  // Find the open payroll send-batch for a floor row's project+subcon, so we can
+  // log a dated return straight from the floor view (good + variance qty).
+  function openSendFor(p, s){
+    return (subconSends||[]).filter(x=>!x.deleted_at && x.status!=='cancelled' && x.subcon_id===s.subcon_id && ((p.lead_id && x.lead_id===p.lead_id) || (p.job && x.production_job_id===p.job.id)))
+      .map(x=>({ x, t:subconSendTotals(x, subconReturns) }))
+      .filter(o=>o.t.outstanding>0)
+      .sort((a,b)=>String(a.x.date_sent||'').localeCompare(String(b.x.date_sent||'')))[0]?.x || null;
+  }
+  function logDeliveryFor(p, s){
+    const send=openSendFor(p,s);
+    if(send){ setLogReturnFor(send); return; }
+    if(confirm(`No open send-out batch found for ${s.subcon} on this project yet.\n\nRecord what was sent to this subcon first? (That batch is what deliveries + payroll attach to.)`)){ setSbTab('payroll'); setCreatingSend(true); }
+  }
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
+      {canLogPayroll && s.subcon_id && !p.projectDone && <button onClick={()=>logDeliveryFor(p,s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items received back — good qty, variance, and the date received">↩ Log delivery</button>}
       {!p.projectDone && <button onClick={()=>toggleDone(p,s)} className={`text-xs font-semibold mr-2 ${s.done?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{s.done?'Undo':'✓ Done'}</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
