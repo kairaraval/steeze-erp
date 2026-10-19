@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 785 · Lead checklists are now per-person — each sales manager/admin/rep sees only the to-dos they created (on the lead and in the To-dos tracker). Fixes seeing someone else's checklist.";
+const BUILD = "Live build 786 · Marketing Content Planner: new 🗓 Calendar view — scheduled posts show on their day (coloured by status), with a 'Ready to schedule' side list where you pick a date to drop ready content onto the calendar.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21537,6 +21537,9 @@ function MarketingHub({ profile, profiles, openContentId }){
     }
   },[openContentId, content]);
   async function movePost(post, status){ if(!canEditContent) return; const { error }=await sb.from('marketing_content').update({ status, updated_at:new Date().toISOString() }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
+  // Calendar: schedule a post onto a date (bumps it to 'scheduled'); or clear it.
+  const [calMonth,setCalMonth]=useState(()=> todayManila().slice(0,7));
+  async function schedulePost(post, date){ if(!canEditContent) return; const patch={ scheduled_date: date||null, updated_at:new Date().toISOString() }; if(date && (post.status==='idea'||post.status==='drafting'||post.status==='ready')) patch.status='scheduled'; if(!date && post.status==='scheduled') patch.status='ready'; const { error }=await sb.from('marketing_content').update(patch).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delPost(post){ if(!confirm(`Delete "${post.title||'this post'}"?`)) return; const { error }=await sb.from('marketing_content').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',post.id); if(error){ alert(error.message); return; } load(); }
   async function delCampaign(c){ if(!confirm(`Delete campaign "${c.name}"? Its content stays but loses the campaign link.`)) return; const { error }=await sb.from('marketing_campaigns').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',c.id); if(error){ alert(error.message); return; } load(); }
   const q=search.toLowerCase();
@@ -21565,7 +21568,7 @@ function MarketingHub({ profile, profiles, openContentId }){
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">📣 Marketing</h1><p className="text-slate-500 text-sm">Content planner + campaigns · plan, draft, schedule, track</p></div>
           <div className="flex items-center gap-2 flex-wrap">
-            {tab==='content' && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button></div>}
+            {tab==='content' && <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm"><button onClick={()=>setLayout('board')} className={`px-3 py-1.5 rounded-md ${layout==='board'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>▦ Board</button><button onClick={()=>setLayout('list')} className={`px-3 py-1.5 rounded-md ${layout==='list'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>☰ List</button><button onClick={()=>setLayout('calendar')} className={`px-3 py-1.5 rounded-md ${layout==='calendar'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>🗓 Calendar</button></div>}
             {canEditContent && tab==='content' && <button onClick={()=>setCreatingPost(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Content</button>}
             {canEdit && tab==='campaigns' && <button onClick={()=>setCreatingCampaign(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Campaign</button>}
             {canEdit && tab==='analytics' && <button onClick={()=>setCreatingMetric(true)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Log metrics</button>}
@@ -21602,7 +21605,54 @@ function MarketingHub({ profile, profiles, openContentId }){
               </div>
             ); })}
           </div>
-        ) : (
+        ) : layout==='calendar' ? (()=>{
+          const [y,m]=calMonth.split('-').map(Number);
+          const first=new Date(y, m-1, 1); const startDow=first.getDay();
+          const daysInMonth=new Date(y, m, 0).getDate();
+          const cells=[]; for(let i=0;i<startDow;i++) cells.push(null); for(let d=1;d<=daysInMonth;d++) cells.push(d);
+          const byDate={}; filtered.forEach(p=>{ if(p.scheduled_date){ const k=String(p.scheduled_date).slice(0,10); (byDate[k]=byDate[k]||[]).push(p); } });
+          const ready=filtered.filter(p=>p.status==='ready' && !p.scheduled_date);
+          const monthLabel=first.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+          const shift=(n)=>{ const d=new Date(y,m-1+n,1); setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); };
+          const today=todayManila();
+          return (
+          <div className="flex gap-4 items-start">
+            <div className="flex-1 min-w-0 bg-white border rounded-xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <button onClick={()=>shift(-1)} className="px-2.5 py-1 rounded hover:bg-slate-100 text-slate-600">‹</button>
+                <div className="font-bold text-slate-800">{monthLabel}</div>
+                <div className="flex items-center gap-1"><button onClick={()=>setCalMonth(todayManila().slice(0,7))} className="text-xs px-2 py-1 rounded border hover:bg-slate-50">Today</button><button onClick={()=>shift(1)} className="px-2.5 py-1 rounded hover:bg-slate-100 text-slate-600">›</button></div>
+              </div>
+              <div className="grid grid-cols-7 gap-1 text-[10px] uppercase text-slate-400 font-semibold mb-1">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div key={d} className="text-center">{d}</div>)}</div>
+              <div className="grid grid-cols-7 gap-1">
+                {cells.map((d,i)=>{ if(d==null) return <div key={i} className="min-h-[92px]" />; const key=`${calMonth}-${String(d).padStart(2,'0')}`; const posts=byDate[key]||[]; const isToday=key===today; return (
+                  <div key={i} className={`min-h-[92px] border rounded-lg p-1 ${isToday?'border-indigo-400 bg-indigo-50/40':'border-slate-200'}`}>
+                    <div className={`text-[10px] font-semibold ${isToday?'text-indigo-700':'text-slate-400'}`}>{d}</div>
+                    <div className="space-y-0.5 mt-0.5">
+                      {posts.map(p=>{ const ch=mktChan(p.channel); const st=mktStat(p.status); return (
+                        <button key={p.id} onClick={()=>setEditingPost(p)} className={`block w-full text-left text-[10px] px-1 py-0.5 rounded truncate ${st.color}`} title={`${p.title||''} · ${st.label}`}>{ch.icon} {p.title||'—'}</button>
+                      ); })}
+                    </div>
+                  </div>
+                ); })}
+              </div>
+            </div>
+            <div className="w-64 shrink-0 bg-white border rounded-xl p-3">
+              <div className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-2">✅ Ready to schedule ({ready.length})</div>
+              {ready.length===0 ? <div className="text-xs text-slate-400">No ready content waiting. Tag a post's status as “Ready” and it appears here to schedule onto the calendar.</div> : (
+                <div className="space-y-2 max-h-[70vh] overflow-y-auto">
+                  {ready.map(p=>{ const ch=mktChan(p.channel); const camp=campName(p.campaign_id); return (
+                    <div key={p.id} className="border rounded-lg p-2 bg-emerald-50/30">
+                      <button onClick={()=>setEditingPost(p)} className="text-left w-full"><div className="text-[9px] uppercase font-bold">{ch.icon} {ch.label}</div><div className="text-xs font-semibold leading-tight">{p.title||'—'}</div>{camp && <div className="text-[10px] text-indigo-600">🎯 {camp}</div>}</button>
+                      {canEditContent && <input type="date" onChange={e=>{ if(e.target.value) schedulePost(p, e.target.value); }} className="mt-1.5 text-[11px] border rounded px-1 py-0.5 w-full" title="Pick a date to schedule this post" />}
+                    </div>
+                  ); })}
+                </div>
+              )}
+            </div>
+          </div>
+          );
+        })() : (
           <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Title</th><th className="text-left px-3 py-2">Channel</th><th className="text-left px-3 py-2">Campaign</th><th className="text-left px-3 py-2">Scheduled</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Files</th><th></th></tr></thead>
             <tbody>{filtered.map(p=>{ const ch=mktChan(p.channel); const st=mktStat(p.status); const hasLink=p.link&&/^https?:\/\//i.test(String(p.link).trim()); const atts=Array.isArray(p.attachments)?p.attachments:[]; return (
