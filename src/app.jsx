@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 798 · Subcon Sewing: renamed to “↩ Returned by subcon” — on each floor row, log what the subcon returned (good qty, variance + reason, date received). If there's no send-out batch yet it auto-creates one from the row (carries over the pcs out) so returns + payroll have something to attach to.";
+const BUILD = "Live build 799 · Subcon Sewing: “↩ Returned by subcon” now opens the return form in one click (no more confirm pop-up). Record partial returns, all-good, or good + variance (with reason) and the date received — logged against the subcon so the weekly payroll pays only the good pieces.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10331,8 +10331,10 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   async function logDeliveryFor(p, s){
     let send=openSendFor(p,s);
     if(!send){
+      // Silently set up the send-out record from this floor row so the return
+      // form has a batch to attach to (the subcon, garment, qty-out and rate).
+      // The user shouldn't have to think about this — one click → return form.
       const outQty=Number(s.out||s.qty||0)||0;
-      if(!confirm(`Record what ${s.subcon} returned on "${p.label}".\n\nThere's no send-out batch for them on this project yet — create one${outQty?` (carries over the ${num(outQty)} pcs out)`:''} so the returns + payroll have something to attach to?`)) return;
       try{
         const sub=(subcons||[]).find(x=>x.id===s.subcon_id);
         const monthKey=todayManila().slice(0,7);
@@ -10342,7 +10344,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         const payload={ number, date_sent:(p.projDue||todayManila()), subcon_id:s.subcon_id, lead_id:p.lead_id||null, production_job_id:p.job?.id||null, client_name:(p.client||p.job?.client_name||null), garment:(s.itemList||p.item||'Sewing').slice(0,180), quantity_sent:outQty, rate_per_garment:Number(sub?.default_rate||0), status:'in_progress', notes:'Auto-created from Subcon Sewing floor tracking', prepared_by:profile.id, created_by:profile.id };
         const { data:ins, error }=await sb.from('subcon_sends').insert(payload).select('*').single();
         if(error) throw error; send=ins; reload&&reload();
-      }catch(e){ alert('Could not create the send-out: '+(e.message||e)); return; }
+      }catch(e){ alert('Could not open the return form: '+(e.message||e)); return; }
     }
     setLogReturnFor(send);
   }
