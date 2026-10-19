@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 797 · Subcon Sewing: “↩ Log delivery” now also sits on the Floor-tracking rows — log items received back (good qty, variance + reason, and the date received) for a subcon right where you track the project; it attaches to that subcon's open send batch and feeds weekly payroll.";
+const BUILD = "Live build 798 · Subcon Sewing: renamed to “↩ Returned by subcon” — on each floor row, log what the subcon returned (good qty, variance + reason, date received). If there's no send-out batch yet it auto-creates one from the row (carries over the pcs out) so returns + payroll have something to attach to.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10328,15 +10328,28 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       .filter(o=>o.t.outstanding>0)
       .sort((a,b)=>String(a.x.date_sent||'').localeCompare(String(b.x.date_sent||'')))[0]?.x || null;
   }
-  function logDeliveryFor(p, s){
-    const send=openSendFor(p,s);
-    if(send){ setLogReturnFor(send); return; }
-    if(confirm(`No open send-out batch found for ${s.subcon} on this project yet.\n\nRecord what was sent to this subcon first? (That batch is what deliveries + payroll attach to.)`)){ setSbTab('payroll'); setCreatingSend(true); }
+  async function logDeliveryFor(p, s){
+    let send=openSendFor(p,s);
+    if(!send){
+      const outQty=Number(s.out||s.qty||0)||0;
+      if(!confirm(`Record what ${s.subcon} returned on "${p.label}".\n\nThere's no send-out batch for them on this project yet — create one${outQty?` (carries over the ${num(outQty)} pcs out)`:''} so the returns + payroll have something to attach to?`)) return;
+      try{
+        const sub=(subcons||[]).find(x=>x.id===s.subcon_id);
+        const monthKey=todayManila().slice(0,7);
+        const { data:monthRows }=await sb.from('subcon_sends').select('number').like('number', `SCS-${monthKey}-%`);
+        let max=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+        const number=`SCS-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        const payload={ number, date_sent:(p.projDue||todayManila()), subcon_id:s.subcon_id, lead_id:p.lead_id||null, production_job_id:p.job?.id||null, client_name:(p.client||p.job?.client_name||null), garment:(s.itemList||p.item||'Sewing').slice(0,180), quantity_sent:outQty, rate_per_garment:Number(sub?.default_rate||0), status:'in_progress', notes:'Auto-created from Subcon Sewing floor tracking', prepared_by:profile.id, created_by:profile.id };
+        const { data:ins, error }=await sb.from('subcon_sends').insert(payload).select('*').single();
+        if(error) throw error; send=ins; reload&&reload();
+      }catch(e){ alert('Could not create the send-out: '+(e.message||e)); return; }
+    }
+    setLogReturnFor(send);
   }
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
-      {canLogPayroll && s.subcon_id && !p.projectDone && <button onClick={()=>logDeliveryFor(p,s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items received back — good qty, variance, and the date received">↩ Log delivery</button>}
+      {canLogPayroll && s.subcon_id && !p.projectDone && <button onClick={()=>logDeliveryFor(p,s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Returned by subcon</button>}
       {!p.projectDone && <button onClick={()=>toggleDone(p,s)} className={`text-xs font-semibold mr-2 ${s.done?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{s.done?'Undo':'✓ Done'}</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
@@ -10421,7 +10434,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
                   <td className="px-3 py-2 text-right text-xs">{peso(s.rate_per_garment)}</td>
                   <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${sm[1]}`}>{sm[0]}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {canLogPayroll && s.status!=='cancelled' && t.outstanding>0 && <button onClick={()=>setLogReturnFor(s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Log delivery</button>}
+                    {canLogPayroll && s.status!=='cancelled' && t.outstanding>0 && <button onClick={()=>setLogReturnFor(s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Returned by subcon</button>}
                     <button onClick={()=>setViewingSend(s)} className="text-xs text-indigo-600 hover:underline">View</button>
                   </td>
                 </tr>
@@ -45297,7 +45310,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, existing, onClo
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title={`${isEdit?'Edit return':'Log return'} — ${send.number}`} onClose={onClose} wide>
+    <Modal title={`${isEdit?'Edit returned items':'Returned by subcon'} — ${send.number}`} onClose={onClose} wide>
       <div className="space-y-3 text-sm">
         <div className="bg-slate-50 border rounded p-3 text-xs grid grid-cols-2 md:grid-cols-4 gap-3">
           <div><div className="text-slate-500 uppercase font-semibold">Subcon</div><div className="font-bold">{subcon?.name||'—'}</div></div>
@@ -45349,7 +45362,7 @@ function SubconReturnModal({ profile, send, subcons, allReturns, existing, onClo
         {msg && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded p-2">{msg}</div>}
         <div className="text-[10px] text-slate-500">Variance pieces (defect / lost / damaged / undelivered) do NOT count toward this subcon's weekly payroll — only good-condition returns pay.</div>
         <div className="flex gap-2 pt-2 border-t">
-          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{isEdit?'Save changes':'↩ Log return'}</button>
+          <button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{isEdit?'Save changes':'↩ Save returned items'}</button>
           <div className="flex-1"></div>
           <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200">Close</button>
         </div>
@@ -45394,7 +45407,7 @@ function SubconSendDetailModal({ send, subcons, allReturns, profiles, onClose, o
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-semibold text-slate-700 uppercase">Return history</div>
             {totals.outstanding > 0 && canManageSubcon(profile) && (
-              <button onClick={onAddReturn} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">↩ Log return</button>
+              <button onClick={onAddReturn} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-semibold hover:bg-emerald-700">↩ Returned by subcon</button>
             )}
           </div>
           {totals.returns.length === 0 ? (
