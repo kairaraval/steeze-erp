@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 786 · Marketing Content Planner: new 🗓 Calendar view — scheduled posts show on their day (coloured by status), with a 'Ready to schedule' side list where you pick a date to drop ready content onto the calendar.";
+const BUILD = "Live build 787 · Marketing calendar: hover any day and click ＋ to add a new post pre-dated to that day (opens the content form with the date + Scheduled filled in).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -21190,15 +21190,15 @@ function marketingCanEdit(profile){ const r=profile?.role; return r==='admin' ||
 function marketingCanEditContent(profile){ const r=profile?.role; return r==='admin' || isManagerRole(r) || r==='video_editor'; }
 function marketingCanEditResources(profile){ const r=profile?.role; return r==='admin' || isManagerRole(r) || r==='video_editor'; }
 
-function ContentPostModal({ profile, profiles, campaigns, existing, onClose, onSaved }){
+function ContentPostModal({ profile, profiles, campaigns, existing, prefill, onClose, onSaved }){
   const isEdit=!!existing;
   // Persist the Notes textarea height across sessions so it doesn't reset.
   const notesRef=useRef(null);
   useEffect(()=>{ try{ const h=localStorage.getItem('mkt_notes_h'); if(h && notesRef.current) notesRef.current.style.height=h; }catch(_){} },[]);
   function saveNotesH(){ try{ if(notesRef.current) localStorage.setItem('mkt_notes_h', notesRef.current.style.height || (notesRef.current.offsetHeight+'px')); }catch(_){} }
   const [f,setF]=useState({
-    title: existing?.title||'', channel: existing?.channel||'facebook', status: existing?.status||'idea',
-    scheduled_date: existing?.scheduled_date||'', campaign_id: existing?.campaign_id||'',
+    title: existing?.title||'', channel: existing?.channel||'facebook', status: existing?.status||(prefill?.scheduled_date?'scheduled':'idea'),
+    scheduled_date: existing?.scheduled_date||prefill?.scheduled_date||'', campaign_id: existing?.campaign_id||'',
     copy: existing?.copy||'', hashtags: existing?.hashtags||'', link: existing?.link||'', notes: existing?.notes||'',
     reach: existing?.reach??'', engagement: existing?.engagement??'', clicks: existing?.clicks??'',
   });
@@ -21508,6 +21508,7 @@ function MarketingHub({ profile, profiles, openContentId }){
   const [resCatFilter,setResCatFilter]=useState('');
   const [editingPost,setEditingPost]=useState(null);
   const [creatingPost,setCreatingPost]=useState(false);
+  const [newPostDate,setNewPostDate]=useState(null); // prefill date for "+ post on this day"
   const [editingCampaign,setEditingCampaign]=useState(null);
   const [creatingCampaign,setCreatingCampaign]=useState(false);
   const [editingMetric,setEditingMetric]=useState(null);
@@ -21626,8 +21627,11 @@ function MarketingHub({ profile, profiles, openContentId }){
               <div className="grid grid-cols-7 gap-1 text-[10px] uppercase text-slate-400 font-semibold mb-1">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div key={d} className="text-center">{d}</div>)}</div>
               <div className="grid grid-cols-7 gap-1">
                 {cells.map((d,i)=>{ if(d==null) return <div key={i} className="min-h-[92px]" />; const key=`${calMonth}-${String(d).padStart(2,'0')}`; const posts=byDate[key]||[]; const isToday=key===today; return (
-                  <div key={i} className={`min-h-[92px] border rounded-lg p-1 ${isToday?'border-indigo-400 bg-indigo-50/40':'border-slate-200'}`}>
-                    <div className={`text-[10px] font-semibold ${isToday?'text-indigo-700':'text-slate-400'}`}>{d}</div>
+                  <div key={i} className={`group min-h-[92px] border rounded-lg p-1 ${isToday?'border-indigo-400 bg-indigo-50/40':'border-slate-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className={`text-[10px] font-semibold ${isToday?'text-indigo-700':'text-slate-400'}`}>{d}</div>
+                      {canEditContent && <button onClick={()=>{ setNewPostDate(key); setCreatingPost(true); }} title="Add a post on this day" className="text-[12px] leading-none text-indigo-500 opacity-0 group-hover:opacity-100 hover:text-indigo-700 font-bold">＋</button>}
+                    </div>
                     <div className="space-y-0.5 mt-0.5">
                       {posts.map(p=>{ const ch=mktChan(p.channel); const st=mktStat(p.status); return (
                         <button key={p.id} onClick={()=>setEditingPost(p)} className={`block w-full text-left text-[10px] px-1 py-0.5 rounded truncate ${st.color}`} title={`${p.title||''} · ${st.label}`}>{ch.icon} {p.title||'—'}</button>
@@ -21780,7 +21784,7 @@ function MarketingHub({ profile, profiles, openContentId }){
       })()}
 
       {(creatingMetric||editingMetric) && <MetricSnapshotModal profile={profile} existing={editingMetric} onClose={()=>{ setCreatingMetric(false); setEditingMetric(null); }} onSaved={()=>{ setCreatingMetric(false); setEditingMetric(null); load(); }} />}
-      {(creatingPost||editingPost) && <ContentPostModal profile={profile} profiles={profiles} campaigns={campaigns} existing={editingPost} onClose={()=>{ setCreatingPost(false); setEditingPost(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); load(); }} />}
+      {(creatingPost||editingPost) && <ContentPostModal profile={profile} profiles={profiles} campaigns={campaigns} existing={editingPost} prefill={newPostDate?{scheduled_date:newPostDate}:null} onClose={()=>{ setCreatingPost(false); setEditingPost(null); setNewPostDate(null); }} onSaved={()=>{ setCreatingPost(false); setEditingPost(null); setNewPostDate(null); load(); }} />}
       {(creatingCampaign||editingCampaign) && <MarketingCampaignModal profile={profile} existing={editingCampaign} onClose={()=>{ setCreatingCampaign(false); setEditingCampaign(null); }} onSaved={()=>{ setCreatingCampaign(false); setEditingCampaign(null); load(); }} />}
       {(creatingResource||editingResource) && <MarketingResourceModal profile={profile} existing={editingResource} onClose={()=>{ setCreatingResource(false); setEditingResource(null); }} onSaved={()=>{ setCreatingResource(false); setEditingResource(null); load(); }} />}
     </div>
