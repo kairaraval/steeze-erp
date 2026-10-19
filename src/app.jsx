@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 791 · Inbox: system notifications now show a real title (e.g. “Purchase Request” / “Payment Request”) instead of “Notification”, and clicking a purchase-request alert opens that exact PR.";
+const BUILD = "Live build 792 · Purchase Requests: department/manual requests now show who requested them (🙋 name) on the card, list, and inside the PR — so Purchasing can tag the requestor with questions.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30794,12 +30794,16 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
     // Required-by: the client's due date on the lead (falls back to sample due).
     const requiredBy = lead?.expected_close || lead?.delivery_date || sample?.due_date || null;
     const priority = r.urgency || 'normal';
+    // Who raised this PR — so Purchasing can tag them with questions. Especially
+    // important for department / manual requests that have no client/project.
+    const requestor = r.requested_by ? (profiles||[]).find(p=>p.id===r.requested_by) : null;
+    const requestorName = requestor ? (requestor.name||requestor.email) : '';
     const matCount = lines.length;
     const estTotal = lines.reduce((s,l)=> s + (Number(l.est_cost)|| (Number(l.qty)||0)*(Number(l.unit_cost)||Number(l.price)||0)), 0);
     // Stock shortfall across inventory lines (needs ordering — can't come fully from stock).
     let shortCount=0;
     lines.forEach(l=>{ if(!l.item_id) return; const it=(items||[]).find(i=>i.id===l.item_id); const cov=lineCoverage(l, it, prReservations); if(cov && (cov.state==='partial'||cov.state==='none')) shortCount++; });
-    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack, trashedKind, projectTitle, requiredBy, priority, matCount, estTotal, shortCount };
+    return { src, clientName, tpNo, firstItemName, moreCount, totalQty, noTechpack, trashedKind, projectTitle, requiredBy, priority, requestorName, matCount, estTotal, shortCount };
   }
   async function setPRStatus(pr, s){
     const { error } = await sb.from('purchase_requests').update({ status:s }).eq('id', pr.id);
@@ -30890,6 +30894,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                       <div className="text-sm font-bold leading-tight truncate" title={d.projectTitle}>📁 {d.projectTitle}</div>
                       {d.clientName && d.clientName!=='—' && d.clientName!==d.projectTitle && <div className="text-[11px] font-medium text-slate-700 truncate" title={d.clientName}>👤 {d.clientName}</div>}
                       <div className="text-[11px] text-slate-500 mt-0.5 truncate">{d.firstItemName}{d.moreCount>0?` +${d.moreCount} more`:''}{d.totalQty?` · ${d.totalQty} pc`:''}</div>
+                      {d.requestorName && (d.src==='department'||d.src==='manual') && <div className="text-[11px] font-medium text-cyan-700 truncate mt-0.5" title={`Requested by ${d.requestorName} — tag them if you have questions`}>🙋 Requested by {d.requestorName}</div>}
                       <div className="flex items-center gap-x-2 mt-1 flex-wrap text-[10px] text-slate-500">
                         {d.tpNo && <span className="font-mono text-slate-400">TP {d.tpNo}</span>}
                         {d.requiredBy && <span>· due {fmtDate(d.requiredBy)}</span>}
@@ -30941,7 +30946,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
               <td className="px-3 py-2 font-mono text-xs">{r.number||r.id.slice(0,6)}</td>
               <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
               <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color}`}>{sm.icon} {sm.label}</span></td>
-              <td className="px-3 py-2">{d.clientName==='—'? <span className="text-slate-400">—</span> : d.clientName}</td>
+              <td className="px-3 py-2">{(d.src==='manual' && d.requestorName) ? <span className="text-cyan-700 font-medium" title={`Requested by ${d.requestorName} — tag them if you have questions`}>🙋 {d.requestorName}</span> : (d.clientName==='—'? <span className="text-slate-400">—</span> : d.clientName)}</td>
               <td className="px-3 py-2"><div className="truncate max-w-[18rem]" title={d.firstItemName}>{d.firstItemName}</div>{d.moreCount>0 && <div className="text-[10px] text-slate-500">+ {d.moreCount} more line{d.moreCount===1?'':'s'}</div>}{d.trashedKind && <div className="text-[10px] font-bold uppercase text-rose-600 mt-0.5" title={`The linked ${d.trashedKind} was moved to Trash — double-check before cancelling or ordering.`}>⚠ {d.trashedKind} in Trash</div>}</td>
               <td className="px-3 py-2 text-right font-medium">{d.totalQty || '—'}</td>
               <td className="px-3 py-2 text-xs font-mono">{d.tpNo || <span className="text-slate-400">—</span>}</td>
@@ -31311,9 +31316,16 @@ function PurchaseRequestForm({ profile, profiles, existing, prefillLeadId, items
     : `New purchase request${client?` — ${client.company}`:''}`;
 
   const openLeadsForPR=(leads||[]).filter(l=>!['lost'].includes(l.stage) || l.id===leadId).slice().sort((a,b)=>String(b.stage_changed_at||b.created_at||'').localeCompare(String(a.stage_changed_at||a.created_at||'')));
+  const prRequestor = isEdit && existing?.requested_by ? (profiles||[]).find(p=>p.id===existing.requested_by) : null;
   return (
     <Modal title={titleText} onClose={onClose} wide>
       <div className="space-y-3">
+        {prRequestor && (
+          <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 flex items-center gap-2 text-sm">
+            <Avatar profile={prRequestor} size="sm" />
+            <div><span className="text-[11px] uppercase tracking-wide text-cyan-700 font-semibold">Requested by</span> <span className="font-semibold text-slate-800">{prRequestor.name||prRequestor.email}</span>{prRequestor.role && <span className="text-xs text-slate-500"> · {roleLabel ? roleLabel(prRequestor.role) : prRequestor.role}</span>}<div className="text-[11px] text-cyan-700">Tag them in the activity thread below if you have questions.</div></div>
+          </div>
+        )}
         {!isEdit && (
           <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
             <label className="text-[10px] uppercase text-indigo-700 font-semibold">Link to a project / deal <span className="text-slate-400 normal-case">· optional — use this to add more materials to an existing order</span></label>
