@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 792 · Purchase Requests: department/manual requests now show who requested them (🙋 name) on the card, list, and inside the PR — so Purchasing can tag the requestor with questions.";
+const BUILD = "Live build 793 · HR → Request for Payment: HR can raise payment requests (HMO, events, venues) with quotations attached + payee bank details; these flow into Finance's RFP queue for voucher creation.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35245,6 +35245,157 @@ function CustomerLedgerDetailModal({ client, sos, payments, invoices, profile, p
 }
 
 
+/* ─────────── HR / DEPT REQUEST FOR PAYMENT ─────────── */
+// Lets HR (and other departments) raise a Request for Payment that flows into
+// Finance's RFP queue — e.g. HMO premiums, Christmas-party venue, etc. They can
+// attach quotations and give the payee's bank details so Finance can cut a
+// voucher without chasing information.
+const HR_PAYMENT_CATEGORIES = ['HMO / Health Insurance','Employee Engagement / Event','Venue / Catering','Government Remittance','Training / Seminar','Office / Admin','Medical / Clinic','Other'];
+async function nextRfpNumber(){
+  const monthKey=todayManila().slice(0,7);
+  const { data:monthRows }=await sb.from('rfps').select('number').like('number', `RFP-${monthKey}-%`);
+  let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+  return `RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
+}
+function HRPaymentRequestModal({ profile, existing, onClose, onSaved }){
+  const isEdit=!!existing?.id;
+  const [f,setF]=useState({
+    category: existing?.category || HR_PAYMENT_CATEGORIES[0],
+    supplier_name: existing?.supplier_name || '',
+    particulars: existing?.particulars || '',
+    amount: existing?.amount!=null ? String(existing.amount) : '',
+    due_date: existing?.due_date || '',
+    payment_method: existing?.payment_method || 'check',
+    bank_name: existing?.bank_name || '',
+    bank_account_name: existing?.bank_account_name || '',
+    bank_account_number: existing?.bank_account_number || '',
+    attachments: Array.isArray(existing?.attachments)?existing.attachments:[],
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  // Returned RFPs can be re-submitted; otherwise only drafts not yet acted on are editable.
+  const canResubmit = isEdit && existing.status==='returned';
+  async function save(){
+    if(!f.supplier_name.trim()){ setMsg('Enter who we are paying (payee / supplier).'); return; }
+    if(!(Number(f.amount)>0)){ setMsg('Enter a valid amount.'); return; }
+    if(!f.particulars.trim()){ setMsg('Describe what this payment is for.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const particulars = `${f.category ? '['+f.category+'] ' : ''}${f.particulars.trim()}`;
+      const payload = {
+        supplier_name: f.supplier_name.trim(), amount: Number(f.amount), particulars,
+        payment_method: f.payment_method||null, due_date: f.due_date||null,
+        bank_name: f.bank_name.trim()||null, bank_account_name: f.bank_account_name.trim()||null,
+        bank_account_number: f.bank_account_number.trim()||null,
+        attachments: Array.isArray(f.attachments)?f.attachments:[],
+      };
+      let rfpId = existing?.id;
+      if(canResubmit){
+        const { error } = await sb.from('rfps').update({ ...payload, status:'pending_finance', rejected_by:null, rejected_at:null, rejected_reason:null, returned_by:null, returned_at:null, return_note:null }).eq('id', existing.id);
+        if(error) throw error;
+      } else if(isEdit){
+        const { error } = await sb.from('rfps').update(payload).eq('id', existing.id);
+        if(error) throw error;
+      } else {
+        const number = await nextRfpNumber();
+        const { data, error } = await sb.from('rfps').insert({ ...payload, number, date:todayManila(), status:'pending_finance', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
+        if(error) throw error; rfpId=data?.id;
+        // Notify Finance / Accounting.
+        try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 New Request for Payment from ${profile.name||profile.email} — ${f.supplier_name.trim()} · ${peso(Number(f.amount))} (${data?.number||''})`, link_view:'rfps', ref_type:'rfp', ref_id:rfpId })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      }
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={isEdit?`Request for Payment · ${existing.number||''}`:'+ New Request for Payment'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">This goes straight to Finance's payment queue. Attach the quotation/invoice and fill in the payee's bank details so Accounting can cut the voucher without following up.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{HR_PAYMENT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
+        </div>
+        <TpLbl t="Pay to (payee / supplier) *"><input className="input" value={f.supplier_name} onChange={e=>up('supplier_name',e.target.value)} placeholder="e.g. Maxicare Healthcare Corp." /></TpLbl>
+        <TpLbl t="What is this for? *"><textarea className="input min-h-[52px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="e.g. Q4 HMO premium for 42 employees / Christmas party venue reservation (50% downpayment)" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Needed by"><input type="date" className="input" value={f.due_date} onChange={e=>up('due_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Payment method"><select className="input" value={f.payment_method} onChange={e=>up('payment_method',e.target.value)}><option value="check">Check</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option></select></TpLbl>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold mb-2">💳 Payee account details <span className="normal-case font-normal text-slate-400">· so Finance can transfer / issue the check</span></div>
+          <div className="grid grid-cols-3 gap-2">
+            <TpLbl t="Bank"><input className="input" value={f.bank_name} onChange={e=>up('bank_name',e.target.value)} placeholder="e.g. BDO" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.bank_account_name} onChange={e=>up('bank_account_name',e.target.value)} placeholder="Account holder" /></TpLbl>
+            <TpLbl t="Account number"><input className="input" value={f.bank_account_number} onChange={e=>up('bank_account_number',e.target.value)} placeholder="000-0000-0000" /></TpLbl>
+          </div>
+        </div>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="rfp" label="📎 Quotation / invoice / supporting documents" inline />
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-1">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Sending…':canResubmit?'Re-submit to Finance':isEdit?'Save changes':'🧾 Send to Finance'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function HRPaymentRequestsView({ profile, profiles, rfps, reload }){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [search,setSearch]=useState('');
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const isAdmin = profile.role==='admin';
+  // HR / dept payment requests = manual RFPs (not tied to a PO). Admin sees all
+  // such requests; everyone else sees the ones they raised.
+  const mine = (rfps||[]).filter(r=>!r.deleted_at && !r.po_id && (isAdmin || r.requested_by===profile.id));
+  const rows = mine
+    .filter(r=> !search || `${r.number||''} ${r.supplier_name||''} ${r.particulars||''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=>String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||'')));
+  const openCount = rows.filter(r=>['pending_finance','pending_admin','approved','partial','returned'].includes(r.status)).length;
+  const paidTotal = rows.filter(r=>r.status==='paid').reduce((s,r)=>s+Number(r.amount||0),0);
+  const canEdit=(r)=> r.requested_by===profile.id && ['pending_finance','returned'].includes(r.status);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🧾 Request for Payment</h1>
+            <p className="text-slate-500 text-sm">Ask Accounting to pay HMO, events, venues and other bills. {openCount} open · {peso(paidTotal)} paid</p>
+          </div>
+          <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New payment request</button>
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payee / purpose / RFP #…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 w-full md:w-96 mt-3" />
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">RFP #</th><th className="text-left px-3 py-2">Date</th>
+          <th className="text-left px-3 py-2">Pay to</th><th className="text-left px-3 py-2">Purpose</th>
+          <th className="text-right px-3 py-2">Amount</th>{isAdmin && <th className="text-left px-3 py-2">Requested by</th>}
+          <th className="text-center px-3 py-2">Docs</th><th className="text-center px-3 py-2">Status</th><th></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan={isAdmin?9:8} className="text-center text-slate-400 py-8">No payment requests yet. Click "+ New payment request".</td></tr>}
+          {rows.map(r=>{ const m=rfpMeta(r.status); const nAtt=(Array.isArray(r.attachments)?r.attachments.length:0); return (
+            <tr key={r.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-mono text-xs">{r.number||'—'}</td>
+              <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
+              <td className="px-3 py-2 font-medium">{r.supplier_name||'—'}</td>
+              <td className="px-3 py-2"><div className="truncate max-w-[22rem]" title={r.particulars}>{r.particulars||'—'}</div>{r.status==='returned'&&r.return_note && <div className="text-[11px] text-purple-700 mt-0.5">↩ {r.return_note}</div>}{r.status==='rejected'&&r.rejected_reason && <div className="text-[11px] text-rose-600 mt-0.5">✕ {r.rejected_reason}</div>}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}</td>
+              {isAdmin && <td className="px-3 py-2 text-xs">{nameOf(r.requested_by)}</td>}
+              <td className="px-3 py-2 text-center text-xs">{nAtt>0?`📎 ${nAtt}`:<span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">{canEdit(r) ? <button onClick={()=>setEditing(r)} className="text-xs text-indigo-600 hover:underline">{r.status==='returned'?'Fix & resend':'Edit'}</button> : <button onClick={()=>setEditing(r)} className="text-xs text-slate-500 hover:underline">View</button>}</td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {creating && <HRPaymentRequestModal profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload&&reload(); }} />}
+      {editing && <HRPaymentRequestModal profile={profile} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+
 /* ─────────── RFP QUEUE + VOUCHERS ─────────── */
 const RFP_STATUSES = [
   { key:'pending_purchasing', label:'Needs Proof',    color:'bg-fuchsia-100 text-fuchsia-700' },
@@ -47329,7 +47480,7 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets']);
       fallback = 'hr-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -47998,7 +48149,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
@@ -48146,7 +48297,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -48414,6 +48565,7 @@ function App(){
         {view==='ledger' && (profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer') && <CustomerLedgerView clients={clients} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} profile={profile} profiles={profiles} bankAccounts={bankAccounts} leads={leads} onOpenLead={(l)=>setDetailLead(l)} onOpenSO={(so)=>setInboxOpenSO(so)} reload={loadAll} />}
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
+        {view==='hr-payments' && <HRPaymentRequestsView profile={profile} profiles={profiles} rfps={rfps} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
