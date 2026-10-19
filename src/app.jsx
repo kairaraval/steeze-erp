@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 794 · Toolbox Meetings: 🖨 Print / Preview — generates a clean printable minutes sheet (header, details, minutes, issues, decisions, action-items table, sign-off) to print or save as PDF.";
+const BUILD = "Live build 795 · Toolbox Meetings: 🖨 Preview button on each row in the list — open the printable minutes sheet directly without entering the editor.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6908,6 +6908,7 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [open,setOpen]=useState(null);       // meeting object (edit) or 'new'
+  const [preview,setPreview]=useState(null); // meeting object → print preview
   const [fStatus,setFStatus]=useState('');
   const [q,setQ]=useState('');
   const canEdit = ['admin','agm'].includes(profile.role);
@@ -6944,7 +6945,7 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
       ) : (
         <div className="space-y-2.5">
           {filtered.map(m=>{ const items=Array.isArray(m.action_items)?m.action_items:[]; const doneN=items.filter(a=>a.done).length; const od=items.filter(a=>!a.done && a.due_date && a.due_date<today).length; const st=TBM_STATUS[m.status]||TBM_STATUS.routine; const atts=(Array.isArray(m.attachments)?m.attachments:[]).length; return (
-            <button key={m.id} onClick={()=>setOpen(m)} className="w-full text-left bg-white border rounded-xl p-3.5 hover:border-indigo-300 hover:bg-indigo-50/30 transition">
+            <div key={m.id} role="button" tabIndex={0} onClick={()=>setOpen(m)} className="w-full text-left bg-white border rounded-xl p-3.5 hover:border-indigo-300 hover:bg-indigo-50/30 transition cursor-pointer">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap min-w-0">
                   <span className="font-mono text-[11px] text-slate-400">{m.number||'—'}</span>
@@ -6952,7 +6953,10 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
                   <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${st[1]}`}>{st[0]}</span>
                   {m.ceo_reviewed_at && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700" title={`Reviewed ${fmtDate(m.ceo_reviewed_at)}`}>✓ CEO reviewed</span>}
                 </div>
-                <div className="text-xs text-slate-500 shrink-0">{fmtDate(m.meeting_date)}</div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <button onClick={e=>{ e.stopPropagation(); setPreview(m); }} className="text-xs font-semibold text-slate-600 hover:text-indigo-600 border border-slate-200 rounded-lg px-2.5 py-1 hover:border-indigo-300" title="Preview / print this meeting">🖨 Preview</button>
+                  <div className="text-xs text-slate-500">{fmtDate(m.meeting_date)}</div>
+                </div>
               </div>
               <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500 flex-wrap">
                 {m.department && <span>🏭 {m.department}</span>}
@@ -6961,11 +6965,12 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
                 {items.length>0 && <span className={od>0?'text-rose-600 font-semibold':''}>✅ {doneN}/{items.length} action items{od>0?` · ${od} overdue`:''}</span>}
                 {atts>0 && <span>📎 {atts}</span>}
               </div>
-            </button>
+            </div>
           ); })}
         </div>
       )}
       {open && <ToolboxMeetingModal meeting={open==='new'?null:open} profile={profile} profiles={profiles} employees={employees} onClose={()=>setOpen(null)} onSaved={()=>{ load(); }} />}
+      {preview && <ToolboxMeetingPrintModal data={preview} profiles={profiles} onClose={()=>setPreview(null)} />}
     </div>
   );
 }
