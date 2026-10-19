@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 784 · Estimate & Invoice PDFs now print the preparer's e-signature above the 'Prepared by' line (set yours in My Profile → signature). Falls back to a blank line to sign by hand if none is set.";
+const BUILD = "Live build 785 · Lead checklists are now per-person — each sales manager/admin/rep sees only the to-dos they created (on the lead and in the To-dos tracker). Fixes seeing someone else's checklist.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3076,6 +3076,9 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   async function addChk(){ const t=newChk.trim(); if(!t) return; await saveChecklist([...checklist, { id:'c'+Date.now()+Math.floor(Math.random()*1000), text:t, done:false, due_date:newChkDue||null, created_at:new Date().toISOString(), created_by:profile.id }]); setNewChk(''); setNewChkDue(''); }
   async function toggleChk(id){ await saveChecklist(checklist.map(c=>c.id===id?{...c, done:!c.done, done_at:!c.done?new Date().toISOString():null, done_by:!c.done?profile.id:null}:c)); }
   async function removeChk(id){ await saveChecklist(checklist.filter(c=>c.id!==id)); }
+  // Checklists are PER-PERSON: each user only sees/manages the to-dos they added
+  // (others' items stay stored on the lead, just hidden from this view).
+  const myChecklist = checklist.filter(c=>(c.created_by||null)===profile.id);
   async function saveNotes(){
     setNotesBusy(true); setNotesMsg('');
     const { error } = await sb.from('leads').update({ notes: notesDraft }).eq('id', lead.id);
@@ -3197,11 +3200,11 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               pipeline's "To-dos" tracker so nothing slips across many leads. */}
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
             <div className="flex items-center justify-between mb-1.5">
-              <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">✅ Checklist{checklist.length>0?` · ${checklist.filter(c=>!c.done).length} open`:''}</div>
+              <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">✅ My checklist{myChecklist.length>0?` · ${myChecklist.filter(c=>!c.done).length} open`:''}</div>
             </div>
-            {checklist.length===0 && <div className="text-xs text-slate-400 mb-1.5">No to-dos yet for this lead.</div>}
+            {myChecklist.length===0 && <div className="text-xs text-slate-400 mb-1.5">No to-dos yet for this lead.</div>}
             <div className="space-y-1">
-              {checklist.slice().sort((a,b)=>(a.done===b.done)?String(a.due_date||'').localeCompare(String(b.due_date||'')):(a.done?1:-1)).map(c=>{ const overdue=!c.done && c.due_date && c.due_date<todayManila(); return (
+              {myChecklist.slice().sort((a,b)=>(a.done===b.done)?String(a.due_date||'').localeCompare(String(b.due_date||'')):(a.done?1:-1)).map(c=>{ const overdue=!c.done && c.due_date && c.due_date<todayManila(); return (
                 <div key={c.id} className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={!!c.done} disabled={!canEdit} onChange={()=>toggleChk(c.id)} className="accent-emerald-600" />
                   <span className={`flex-1 ${c.done?'line-through text-slate-400':''}`}>{c.text}{c.due_date && <span className={`ml-2 text-[11px] ${overdue?'text-rose-600 font-semibold':'text-slate-400'}`}>📅 {fmtDate(c.due_date)}{overdue?' · overdue':''}</span>}</span>
@@ -15131,8 +15134,9 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   const [mineOnly,setMineOnly]=useState(true); const [search,setSearch]=useState('');
   const [importing,setImporting]=useState(false);
   const [todosOpen,setTodosOpen]=useState(false); // cross-lead checklist tracker
-  // Open (unchecked) checklist items across the visible leads, soonest-due first.
-  const openTodos = (leads||[]).filter(l=>!l.deleted_at).flatMap(l=> (Array.isArray(l.checklist)?l.checklist:[]).filter(c=>!c.done).map(c=>({ ...c, lead:l }))).sort((a,b)=> String(a.due_date||'9999-12-31').localeCompare(String(b.due_date||'9999-12-31')));
+  // My open checklist items across the visible leads, soonest-due first. Each
+  // person only sees the to-dos THEY created (checklists are per-person).
+  const openTodos = (leads||[]).filter(l=>!l.deleted_at).flatMap(l=> (Array.isArray(l.checklist)?l.checklist:[]).filter(c=>!c.done && (c.created_by||null)===profile.id).map(c=>({ ...c, lead:l }))).sort((a,b)=> String(a.due_date||'9999-12-31').localeCompare(String(b.due_date||'9999-12-31')));
   async function markTodoDone(lead, id){ const next=(Array.isArray(lead.checklist)?lead.checklist:[]).map(c=>c.id===id?{...c, done:true, done_at:new Date().toISOString(), done_by:profile.id}:c); const { error }=await sb.from('leads').update({ checklist: next }).eq('id', lead.id); if(error){ alert(error.message); return; } reload && reload(); }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('pipelineLayout')||'board'; }catch(e){ return 'board'; } });
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('pipelineLayout',v); }catch(e){} }
