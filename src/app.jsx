@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 788 · Asset Register: 🏷 Print tag — printable asset sticker (code, name, serial, assignee, dept, acquired) to stick on equipment; plus attach warranty receipts / ORs / manuals to each asset (🧾 count shown in the list).";
+const BUILD = "Live build 789 · Production/Sampling activity: the thread's open-board button now opens THAT project's plan board directly (not the whole board), so you land on the exact project you were tagged about.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46748,6 +46748,7 @@ function App(){
   const openTechpackEdit=(lead)=>{ setTechpackReadOnly(false); setTechpackOnClose(null); setTechpackLead(lead); };
   const openTechpackView=(lead,onCloseCb=null)=>{ setTechpackReadOnly(true); setTechpackOnClose(()=> onCloseCb || null); setTechpackLead(lead); };
   const [deptActivity,setDeptActivity]=useState(null); // { job, jobType, title }
+  const [planJob,setPlanJob]=useState(null); // { job, jobTable, srcType } — opens the project's plan board from an activity thread
   // Collapsible sidebar groups — remembered across reloads.
   const [collapsedGroups,setCollapsedGroups]=useState(()=>{
     try { return new Set(JSON.parse(localStorage.getItem('steeze.sidebar.collapsed')||'[]')); }
@@ -48437,7 +48438,13 @@ function App(){
       {sendGraphicLead && <SendToGraphicModal profile={profile} profiles={profiles} lead={sendGraphicLead} clients={clients} onClose={()=>setSendGraphicLead(null)} onSent={(n)=>{ setSendGraphicLead(null); loadAll(); alert('Sent to Graphic Design'+(n?` with ${n} attachment(s)`:'')+'.'); }} />}
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
-      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={'Go to board'} onOpenSource={()=>{ const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod', embroidery:'embroidery', knitting:'knitting', pattern:'pattern', cutting:'cutting', sewing:'sewing', packing:'packing', qc:'qc' }; setDeptActivity(null); setView(map[deptActivity.jobType]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
+      {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title} openSourceLabel={(deptActivity.jobType==='production'||deptActivity.jobType==='sampling')?'📋 Open project plan board':'Go to board'} onOpenSource={()=>{ const jt=deptActivity.jobType; const job=deptActivity.job;
+            // Production & sampling: open THIS project's plan board directly so the
+            // supervisor lands on the exact project they were tagged about — not the
+            // whole board where the project is hard to find.
+            if((jt==='production'||jt==='sampling') && job && job.id){ const live=(jt==='production'?prodJobs:sampleJobs).find(x=>x.id===job.id)||job; setDeptActivity(null); setPlanJob({ job:live, jobTable: jt==='production'?'production_jobs':'sampling_jobs', srcType: jt }); return; }
+            const map={ graphic:'graphic', printing:'printing', sampling:'sampling', production:'prod', embroidery:'embroidery', knitting:'knitting', pattern:'pattern', cutting:'cutting', sewing:'sewing', packing:'packing', qc:'qc' }; setDeptActivity(null); setView(map[jt]||'prod'); }} afterChange={loadAll} onClose={()=>setDeptActivity(null)} />}
+      {planJob && <ProductionPlanModal job={planJob.job} profile={profile} profiles={profiles} subcons={subcons} jobTable={planJob.jobTable} srcType={planJob.srcType} onClose={()=>setPlanJob(null)} reload={loadAll} />}
       {/* SO opened via deep-link / inbox click. Renders the full SO modal
          (which has its own Activity tab built in). */}
       {inboxOpenSO && <SalesOrderEditModal so={(salesOrders||[]).find(s=>s.id===inboxOpenSO.id)||inboxOpenSO} profile={profile} profiles={profiles} payments={(soPayments||[]).filter(p=>p.sales_order_id===inboxOpenSO.id)} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} onClose={()=>setInboxOpenSO(null)} onSaved={()=>{ setInboxOpenSO(null); loadAll(); }} onPay={()=>{}} onVerifyPayment={()=>{}} onOpenLead={(l)=>{ setInboxOpenSO(null); setDetailLead(l); }} />}
