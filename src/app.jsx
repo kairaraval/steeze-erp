@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 790 · Project activity thread now shows a project-details panel on the left (item, qty, breakdown, deadline, status, sales owner, PO/techpack # + View techpack) beside the conversation, so you know what you're tagged about.";
+const BUILD = "Live build 791 · Inbox: system notifications now show a real title (e.g. “Purchase Request” / “Payment Request”) instead of “Notification”, and clicking a purchase-request alert opens that exact PR.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14326,8 +14326,25 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
       return { company:'', title:'Purchase Request', label:'Manual purchase request', tag:'Purchasing', icon:'🛒', color:'text-indigo-600' };
     }
     if(m.source==='notification'){
-      const title = m.ref_type==='loan' ? 'Employee Loan' : 'Notification';
-      return { company:'', title, label:m.text||'Notification', tag:'Alert', icon:'🔔', color:'text-amber-600' };
+      // Give system notifications a real title/tag/icon based on what they link
+      // to, instead of a generic "Notification".
+      const NT={
+        purchase_request:{t:'Purchase Request',tag:'Purchasing',icon:'🛒',color:'text-indigo-600'},
+        loan:{t:'Employee Loan',tag:'HR',icon:'💵',color:'text-emerald-600'},
+        rfp:{t:'Payment Request',tag:'Finance',icon:'💸',color:'text-emerald-600'},
+        graphic_ticket:{t:'Graphic Ticket',tag:'Graphic Design',icon:'🎨',color:'text-pink-600'},
+        replacement_request:{t:'Replacement Request',tag:'Production',icon:'🔁',color:'text-rose-600'},
+        toolbox:{t:'Toolbox Action Item',tag:'Executive',icon:'🧰',color:'text-amber-600'},
+        hr_movement:{t:'Personnel Action',tag:'HR',icon:'📄',color:'text-emerald-600'},
+        hr_escalation:{t:'HR Concern',tag:'HR',icon:'🧑‍⚖️',color:'text-rose-600'},
+        eval_review:{t:'Evaluation to Rate',tag:'HR',icon:'📝',color:'text-indigo-600'},
+        react_lead:{t:'Reaction',tag:'Lead',icon:'💬',color:'text-indigo-600'},
+        react_so:{t:'Reaction',tag:'Sales Order',icon:'💬',color:'text-emerald-600'},
+        react_pr:{t:'Reaction',tag:'Purchasing',icon:'💬',color:'text-indigo-600'},
+        react_dept:{t:'Reaction',tag:'Production',icon:'💬',color:'text-emerald-600'},
+      };
+      const n=NT[m.ref_type]||{t:'Notification',tag:'Alert',icon:'🔔',color:'text-amber-600'};
+      return { company:'', title:n.t, label:m.text||n.t, tag:n.tag, icon:n.icon, color:n.color };
     }
     if(m.source==='delivery'){
       return { company:'', title:'Daily Delivery Schedule', label:'Daily Delivery Schedule', tag:'Logistics', icon:'🚚', color:'text-orange-600' };
@@ -47683,7 +47700,7 @@ function App(){
     if(m.source==='notification'){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setActivityLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
-      if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
@@ -47731,7 +47748,7 @@ function App(){
     if(m.source==='notification'){
       if(m.ref_type==='react_lead'){ const l=leads.find(x=>x.id===m.ref_id); if(l){ setDetailLead(l); return; } }
       if(m.ref_type==='react_so'){ const so=(salesOrders||[]).find(x=>x.id===m.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
-      if(m.ref_type==='react_pr'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
+      if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.link_view) setView(m.link_view); return;
