@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 795 · Toolbox Meetings: 🖨 Preview button on each row in the list — open the printable minutes sheet directly without entering the editor.";
+const BUILD = "Live build 796 · Subcon Sewing is now full-circle: a “Send-outs & deliveries → payroll” tab where prod supervisors/admin record batches sent to subcons (pull from a production job) and log dated deliveries. These feed the weekly subcon payroll (Friday cutoff) automatically — no more re-encoding.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10208,9 +10208,26 @@ const SUBCON_SEW_NEXT='quality check (qc)';
 function prodStatusIdx(k){ return PRODUCTION_STATUSES.findIndex(s=>s.key===k); }
 function canDoneSubconProject(p){ return ['admin','production_supervisor'].includes(p?.role); }
 
-function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }){
+function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs, subconSends, subconReturns, subconProjects, reload }){
   const canEdit = subconSewingCanEdit(profile);
   const canDone = canDoneSubconProject(profile);
+  // Who can create payroll-feeding send-outs / log dated deliveries on this board.
+  const canLogPayroll = ['admin','production_supervisor'].includes(profile?.role);
+  // Bridge to the Subcon Payroll pipeline (subcon_sends / subcon_returns).
+  const [sbTab,setSbTab]=useState('floor'); // 'floor' = production tracker · 'payroll' = send-outs feeding payroll
+  const [creatingSend,setCreatingSend]=useState(false);
+  const [editingSend,setEditingSend]=useState(null);
+  const [viewingSend,setViewingSend]=useState(null);
+  const [logReturnFor,setLogReturnFor]=useState(null);
+  const [editingReturn,setEditingReturn]=useState(null);
+  const [sendSearch,setSendSearch]=useState('');
+  const [sendTab,setSendTab]=useState('active'); // active | completed | all
+  const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
+  const sendList=(subconSends||[]).filter(s=>!s.deleted_at)
+    .filter(s=> sendTab==='all' ? true : sendTab==='completed' ? (s.status==='fully_returned'||s.status==='cancelled') : (s.status==='in_progress'||s.status==='partial_returned'))
+    .filter(s=> !sendSearch || `${s.number||''} ${s.garment||''} ${s.client_name||''} ${subconNm(s.subcon_id)}`.toLowerCase().includes(sendSearch.toLowerCase()))
+    .sort((a,b)=>String(b.date_sent||'').localeCompare(String(a.date_sent||'')));
+  const SEND_STATUS_META={ in_progress:['Out',' bg-indigo-100 text-indigo-700'], partial_returned:['Partial','bg-amber-100 text-amber-700'], fully_returned:['Complete','bg-emerald-100 text-emerald-700'], cancelled:['Cancelled','bg-slate-200 text-slate-600'] };
   const [mode,setMode]=useState('project');   // 'subcon' | 'project'
   const [tab,setTab]=useState('active');       // 'active' | 'done' | 'all'
   const [batches,setBatches]=useState([]);
@@ -10345,9 +10362,62 @@ function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">🧵 Subcon Sewing</h1><p className="text-slate-500 text-sm">Projects sent “Out to Sewing Subcon” on the Production Board — who's on each, and each subcon's projects.</p></div>
-          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Assign subcon</button>}
+          <div className="flex gap-2">
+            {canLogPayroll && <button onClick={()=>{ setSbTab('payroll'); setCreatingSend(true); }} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Record a batch sent to a subcon — this feeds the weekly payroll">📦 Send to subcon</button>}
+            {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Assign subcon</button>}
+          </div>
+        </div>
+        <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
+          <button onClick={()=>setSbTab('floor')} className={`px-3 py-1.5 rounded-md ${sbTab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor tracking</button>
+          <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>📦 Send-outs & deliveries → payroll</button>
         </div>
       </div>
+
+      {sbTab==='payroll' && (
+        <div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 mb-3">
+            Each send-out here is what feeds the <strong>weekly subcon payroll</strong>. Record what you send to a subcon (garment, qty, per-garment rate), then log each delivery back with its date. At the Friday cutoff, Accounting generates the payroll from these good returns — no re-encoding. Pull a garment + qty straight from a Production Board job when you create a send.
+          </div>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+              {[['active','Out / partial'],['completed','Completed'],['all','All']].map(([k,l])=>(<button key={k} onClick={()=>setSendTab(k)} className={`px-3 py-1.5 rounded-md ${sendTab===k?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>{l}</button>))}
+            </div>
+            <input value={sendSearch} onChange={e=>setSendSearch(e.target.value)} placeholder="Search SCS # / subcon / garment / client…" className="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+            {canLogPayroll && <button onClick={()=>setCreatingSend(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+              <th className="text-left px-3 py-2">SCS #</th><th className="text-left px-3 py-2">Sent</th><th className="text-left px-3 py-2">Subcon</th>
+              <th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Client</th>
+              <th className="text-right px-3 py-2">Qty out</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Outstanding</th>
+              <th className="text-right px-3 py-2">Rate</th><th className="text-center px-3 py-2">Status</th><th></th>
+            </tr></thead>
+            <tbody>
+              {sendList.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No send-outs {sendTab==='all'?'yet':'in this view'}. {canLogPayroll?'Click “Send to subcon” to record one.':''}</td></tr>}
+              {sendList.map(s=>{ const t=subconSendTotals(s, subconReturns); const sm=SEND_STATUS_META[s.status]||SEND_STATUS_META.in_progress; return (
+                <tr key={s.id} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-2 font-mono text-xs">{s.number||'—'}</td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(s.date_sent)}</td>
+                  <td className="px-3 py-2 font-medium">{subconNm(s.subcon_id)}</td>
+                  <td className="px-3 py-2">{s.garment}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{s.client_name||'—'}</td>
+                  <td className="px-3 py-2 text-right">{num(s.quantity_sent)}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700">{num(t.returnedGood)}{t.variance>0 && <span className="text-[10px] text-rose-500" title="variance (unpaid)"> +{num(t.variance)}v</span>}</td>
+                  <td className="px-3 py-2 text-right font-semibold"><span className={t.outstanding>0?'text-amber-700':'text-emerald-700'}>{num(t.outstanding)}</span></td>
+                  <td className="px-3 py-2 text-right text-xs">{peso(s.rate_per_garment)}</td>
+                  <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${sm[1]}`}>{sm[0]}</span></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {canLogPayroll && s.status!=='cancelled' && t.outstanding>0 && <button onClick={()=>setLogReturnFor(s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Log delivery</button>}
+                    <button onClick={()=>setViewingSend(s)} className="text-xs text-indigo-600 hover:underline">View</button>
+                  </td>
+                </tr>
+              ); })}
+            </tbody>
+          </table></div></div>
+        </div>
+      )}
+
+      {sbTab==='floor' && (<div className="sbfloor-wrap">
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
         <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Active Subcons</div><div className="text-2xl font-bold">{activeSubcons}</div></div>
@@ -10426,8 +10496,14 @@ function SubconSewingView({ profile, subcons, leads, clients, prodJobs, reload }
           </div>
         ); })}</div>
       ))}
+      </div>)}
 
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
+      {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
+      {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
+      {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
+      {editingReturn && <SubconReturnModal profile={profile} send={(subconSends||[]).find(s=>s.id===editingReturn.send_id)} subcons={subcons} allReturns={subconReturns} existing={editingReturn} onClose={()=>setEditingReturn(null)} onSaved={()=>{ setEditingReturn(null); reload&&reload(); }} />}
+      {viewingSend && <SubconSendDetailModal send={viewingSend} subcons={subcons} allReturns={subconReturns} profiles={profiles} profile={profile} onClose={()=>setViewingSend(null)} onAddReturn={()=>{ setLogReturnFor(viewingSend); setViewingSend(null); }} onEditReturn={(r)=>{ setEditingReturn(r); setViewingSend(null); }} onDeleteReturn={async(r)=>{ if(!confirm('Delete this return log?')) return; const { error }=await sb.from('subcon_returns').delete().eq('id',r.id); if(error){ alert(error.message); return; } setViewingSend(null); reload&&reload(); }} onEdit={canLogPayroll?()=>{ setEditingSend(viewingSend); setViewingSend(null); }:null} onDelete={async()=>{ if(!confirm(`Delete send batch ${viewingSend.number}?`)) return; const { error }=await sb.from('subcon_sends').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, status:'cancelled' }).eq('id',viewingSend.id); if(error){ alert(error.message); return; } setViewingSend(null); reload&&reload(); }} />}
     </div>
   );
 }
@@ -48560,7 +48636,7 @@ function App(){
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
-        {view==='subcon-sewing' && <SubconSewingView profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} reload={loadAll} />}
+        {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
