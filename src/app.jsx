@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 787 · Marketing calendar: hover any day and click ＋ to add a new post pre-dated to that day (opens the content form with the date + Scheduled filled in).";
+const BUILD = "Live build 788 · Asset Register: 🏷 Print tag — printable asset sticker (code, name, serial, assignee, dept, acquired) to stick on equipment; plus attach warranty receipts / ORs / manuals to each asset (🧾 count shown in the list).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40107,6 +40107,7 @@ function AssetsView({ profile, assets, profiles, reload }){
   const [search,setSearch]=useState('');
   const [catFilter,setCatFilter]=useState('');
   const [editing,setEditing]=useState(null);   // asset row or {} for new
+  const [tagAsset,setTagAsset]=useState(null);
   const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   const live = (assets||[]).filter(a=>!a.deleted_at);
   const rows = live
@@ -40141,9 +40142,10 @@ function AssetsView({ profile, assets, profiles, reload }){
           <th className="text-left px-3 py-2">Dept</th><th className="text-right px-3 py-2">Cost</th>
           <th className="text-right px-3 py-2">Monthly dep.</th><th className="text-right px-3 py-2">Accum.</th>
           <th className="text-right px-3 py-2">Book value</th><th className="text-center px-3 py-2">Status</th>
+          <th className="text-center px-3 py-2"></th>
         </tr></thead>
         <tbody>
-          {rows.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No assets {search||catFilter?'match':'yet'}. {canEdit && 'Click “+ Add asset”.'}</td></tr>}
+          {rows.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No assets {search||catFilter?'match':'yet'}. {canEdit && 'Click “+ Add asset”.'}</td></tr>}
           {rows.map(a=>{ const d=assetDep(a); const m=assetStatusMeta(a.status); return (
             <tr key={a.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(a)}>
               <td className="px-3 py-2 font-mono text-xs">{a.asset_code||'—'}</td>
@@ -40156,11 +40158,16 @@ function AssetsView({ profile, assets, profiles, reload }){
               <td className="px-3 py-2 text-right text-amber-700">{peso(d.accumulated)}</td>
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(d.bookValue)}</td>
               <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+              <td className="px-3 py-2 text-center whitespace-nowrap" onClick={e=>e.stopPropagation()}>
+                {(Array.isArray(a.attachments)&&a.attachments.length>0) && <span title={`${a.attachments.length} receipt/warranty doc(s)`} className="text-[11px] mr-1">🧾{a.attachments.length}</span>}
+                <button onClick={()=>setTagAsset(a)} className="text-[11px] text-slate-600 hover:underline font-semibold">🏷 Tag</button>
+              </td>
             </tr>
           ); })}
         </tbody>
       </table></div></div>
       {editing && <AssetFormModal asset={editing} profile={profile} profiles={profiles} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
+      {tagAsset && <AssetTagModal asset={tagAsset} onClose={()=>setTagAsset(null)} />}
     </div>
   );
 }
@@ -40174,8 +40181,10 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
     purchase_date: asset.purchase_date||todayManila(),
     cost: asset.cost??'', salvage_value: asset.salvage_value??0, useful_life_years: asset.useful_life_years??5,
     status: asset.status||'in_use', notes: asset.notes||'',
+    attachments: Array.isArray(asset.attachments)?asset.attachments:[],
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [tagAsset,setTagAsset]=useState(null);
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
   const preview = assetDep({ cost:f.cost, salvage_value:f.salvage_value, useful_life_years:f.useful_life_years, purchase_date:f.purchase_date, status:f.status });
   async function save(){
@@ -40189,6 +40198,7 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
       purchase_date: f.purchase_date||null, cost: Number(f.cost)||0,
       salvage_value: Number(f.salvage_value)||0, useful_life_years: Number(f.useful_life_years)||0,
       status: f.status, notes: f.notes.trim()||null,
+      attachments: Array.isArray(f.attachments)?f.attachments:[],
     };
     let error;
     if(isEdit){ ({ error } = await sb.from('assets').update(payload).eq('id', asset.id)); }
@@ -40232,14 +40242,50 @@ function AssetFormModal({ asset, profile, profiles, onClose, onSaved }){
           <div><div className="text-[10px] uppercase text-slate-500">Book value</div><div className="font-bold text-emerald-700">{peso(preview.bookValue)}</div></div>
         </div>
         <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="assets" label="🧾 Warranty, receipts & documents — attach the official receipt, warranty card, delivery receipt or manual" inline />
+          <div className="text-[11px] text-amber-700 mt-1">Keep the OR/invoice here so warranty claims are easy to pull up later.</div>
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save asset':'Add asset'}</button>
+          {isEdit && <button onClick={()=>setTagAsset(asset)} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🏷 Print tag</button>}
           {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
         </div>
       </div>
+      {tagAsset && <AssetTagModal asset={{...tagAsset, ...f}} onClose={()=>setTagAsset(null)} />}
     </Modal>
   );
+}
+function AssetTagModal({ asset, onClose }){
+  const a=asset||{};
+  const rows=[
+    ['Serial no.', a.serial_number],
+    ['Category', a.category],
+    ['Assigned to', a.assigned_to_name],
+    ['Department', a.department],
+    ['Location', a.location],
+    ['Acquired', a.purchase_date],
+  ].filter(r=>r[1]);
+  return (<Modal title={`Asset tag · ${a.name||''}`} onClose={onClose}>
+    <style>{`@media print{ @page{size:3.5in 2in;margin:0.12in;} body *{visibility:hidden !important;} .asset-tag-sheet,.asset-tag-sheet *{visibility:visible !important;} .asset-tag-sheet{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
+    <div className="space-y-3">
+      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Sticker size 3.5 × 2 in (business-card stock). Peel & stick on the equipment.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+      <div className="asset-tag-sheet flex justify-center">
+        <div style={{border:'2px solid #000',borderRadius:'8px',padding:'12px 16px',width:'3.3in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <div style={{fontSize:'11px',fontWeight:800,letterSpacing:'2px'}}>STEEZE</div>
+            <div style={{fontSize:'8px',letterSpacing:'1px',color:'#666'}}>PROPERTY — DO NOT REMOVE</div>
+          </div>
+          <div style={{fontFamily:'monospace',fontSize:'22px',fontWeight:800,letterSpacing:'1px',margin:'4px 0 2px'}}>{a.asset_code||'—'}</div>
+          <div style={{fontSize:'15px',fontWeight:700,lineHeight:1.1,marginBottom:'5px'}}>{a.name||''}</div>
+          <table style={{width:'100%',fontSize:'10px',borderTop:'1px solid #ccc',paddingTop:'3px'}}><tbody>
+            {rows.map((r,i)=>(<tr key={i}><td style={{color:'#555',paddingRight:'8px',whiteSpace:'nowrap',verticalAlign:'top'}}>{r[0]}</td><td style={{fontWeight:600,textAlign:'right'}}>{r[1]}</td></tr>))}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </Modal>);
 }
 
 /* ─────────── JOURNAL ENTRIES / JOURNAL VOUCHERS ─────────── */
