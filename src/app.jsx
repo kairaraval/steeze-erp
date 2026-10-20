@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 803 · Check Monitoring: check numbers now show plain (no thousands commas) so they don't read like money.";
+const BUILD = "Live build 804 · BIR Form 2307: printable certificate now follows the official January 2018 (ENCS) layout — Part I Payee, Part II Payor, Part III quarterly month columns, declaration + Payor/Conforme signatory blocks. Backing POs kept as an annex.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43049,6 +43049,32 @@ function BIRHelpersView({ profile, orders, salesOrders, suppliers, vouchers }){
 // captures the BIR-required fields so the supplier accepts it.
 function BIR2307PrintView({ data, profile, onClose }){
   const { supplier, subtotal, wht, rate, month, pos, monthKey } = data;
+  // Period + which month of the quarter this falls in (the real form is quarterly
+  // with three month columns; we fill the column matching this month).
+  const [yy,mm] = String(monthKey||'').split('-').map(Number);
+  const lastDay = (yy&&mm) ? new Date(yy, mm, 0).getDate() : 31;
+  const pad=(n)=>String(n).padStart(2,'0');
+  const periodFrom = (yy&&mm) ? `${pad(mm)}/01/${yy}` : '';
+  const periodTo   = (yy&&mm) ? `${pad(mm)}/${pad(lastDay)}/${yy}` : '';
+  const qCol = (mm? ((mm-1)%3) : 0); // 0,1,2 → 1st/2nd/3rd month of the quarter
+  const atc = rate===2 ? 'WC160' : 'WC158';
+  const nature = rate===2 ? 'Income payments subject to EWT — services' : 'Income payments subject to EWT — goods';
+  const STEEZE_ZIP = '1747';
+  const monthCols = [0,1,2].map(i=> i===qCol ? peso(subtotal) : '');
+  // Split a TIN "008-794-398-000" into the 4 boxes.
+  const tinBoxes=(tin)=>{ const parts=String(tin||'').split('-'); return [parts[0]||'', parts[1]||'', parts[2]||'', parts[3]||'']; };
+  const payeeTin=tinBoxes(supplier?.tin); const payorTin=tinBoxes(STEEZE_TIN);
+  const Cell=({label,value,className=''})=> (
+    <div className={`border border-slate-900 px-1.5 py-0.5 ${className}`}>
+      <div className="text-[7pt] text-slate-600 leading-tight">{label}</div>
+      <div className="text-[9pt] font-semibold min-h-[14px] leading-tight">{value||' '}</div>
+    </div>
+  );
+  const TinRow=({boxes})=> (
+    <div className="flex items-center gap-1 mt-0.5">
+      {boxes.map((b,i)=>(<React.Fragment key={i}><span className="border border-slate-900 px-2 py-0.5 text-[9pt] font-mono font-semibold min-w-[48px] text-center">{b||' '}</span>{i<3 && <span className="text-slate-500">-</span>}</React.Fragment>))}
+    </div>
+  );
   return (
     <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
       <PortraitPagePrintStyle />
@@ -43065,91 +43091,153 @@ function BIR2307PrintView({ data, profile, onClose }){
 
       <div className="tp-print py-6">
         <div className="po-page" style={{fontSize:'10pt', color:'#222'}}>
-          <div className="text-center mb-4 border-b-2 border-slate-900 pb-3">
-            <div className="text-[11px] uppercase text-slate-500 tracking-widest">Republic of the Philippines · Department of Finance · Bureau of Internal Revenue</div>
-            <div className="text-base font-bold mt-1">BIR Form No. 2307</div>
-            <div className="text-xs">Certificate of Creditable Tax Withheld at Source</div>
-            <div className="text-[10px] text-slate-500 mt-1">For the period {month}</div>
-          </div>
-
-          {/* Payor (us) */}
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <div className="border border-slate-400 p-3">
-              <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART I — Payor (Withholding Agent)</div>
-              <div className="text-[11px]"><strong>Name:</strong> Steeze Corporation</div>
-              <div className="text-[11px]"><strong>TIN:</strong> {STEEZE_TIN}</div>
-              <div className="text-[11px]"><strong>Address:</strong> {STEEZE_ADDRESS}</div>
+          {/* ── Masthead ── */}
+          <div className="flex items-stretch border-2 border-slate-900 mb-0">
+            <div className="flex flex-col justify-center items-center px-2 border-r border-slate-900 text-center" style={{width:'86px'}}>
+              <div className="text-[6.5pt] leading-tight">(To be filled up by the BIR)</div>
+              <div className="text-[6.5pt] mt-0.5">BCS/Item: _______</div>
             </div>
-            <div className="border border-slate-400 p-3">
-              <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART II — Payee (Income Recipient)</div>
-              <div className="text-[11px]"><strong>Name:</strong> {supplier?.company||'—'}</div>
-              <div className="text-[11px]"><strong>TIN:</strong> {supplier?.tin||'—'}</div>
-              <div className="text-[11px]"><strong>Address:</strong> {supplier?.address||'—'}</div>
+            <div className="flex-1 text-center px-2 py-1">
+              <div className="text-[7.5pt]">Republic of the Philippines</div>
+              <div className="text-[7.5pt]">Department of Finance</div>
+              <div className="text-[7.5pt]">Bureau of Internal Revenue</div>
+              <div className="text-[12pt] font-bold mt-0.5">Certificate of Creditable Tax<br/>Withheld at Source</div>
+            </div>
+            <div className="flex flex-col justify-between items-center px-2 py-1 border-l border-slate-900 text-center" style={{width:'120px'}}>
+              <div className="text-[6.5pt] text-left w-full">BIR Form No.</div>
+              <div className="text-[20pt] font-extrabold leading-none">2307</div>
+              <div className="text-[6.5pt]">January 2018 (ENCS)</div>
+              <div className="text-[6.5pt]">Page 1</div>
             </div>
           </div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-0.5 text-[7pt] italic">Fill in all applicable spaces. Mark all appropriate boxes with an "X".</div>
 
-          {/* Income payments + tax withheld */}
-          <div className="mb-3">
-            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">PART III — Income Payment & Tax Withheld</div>
-            <table className="w-full border border-slate-900 border-collapse" style={{fontSize:'9pt'}}>
-              <thead className="bg-slate-200">
-                <tr>
-                  <th className="border border-slate-900 px-2 py-1.5 text-left">ATC</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-left">Nature of Income Payment</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-right">Amount of Income Payment</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-right">Rate</th>
-                  <th className="border border-slate-900 px-2 py-1.5 text-right">Tax Withheld</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td className="border border-slate-400 px-2 py-1.5">{rate===2?'WC160':'WC158'}</td>
-                  <td className="border border-slate-400 px-2 py-1.5">{rate===2?'Income payments to certain contractors':'Income payments by top withholding agents for purchase of goods'}</td>
-                  <td className="border border-slate-400 px-2 py-1.5 text-right">{peso(subtotal)}</td>
-                  <td className="border border-slate-400 px-2 py-1.5 text-right">{rate}%</td>
-                  <td className="border border-slate-400 px-2 py-1.5 text-right font-bold">{peso(wht)}</td>
-                </tr>
-                <tr className="bg-slate-100">
-                  <td colSpan="2" className="border border-slate-900 px-2 py-2 text-right font-bold uppercase text-xs">TOTAL</td>
-                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold">{peso(subtotal)}</td>
-                  <td className="border border-slate-900 px-2 py-2"></td>
-                  <td className="border border-slate-900 px-2 py-2 text-right font-extrabold">{peso(wht)}</td>
-                </tr>
-              </tbody>
+          {/* 1 Period */}
+          <div className="border-x-2 border-b border-slate-900 flex">
+            <div className="px-2 py-1 text-[8pt] flex-1"><span className="font-bold">1</span> For the Period&nbsp;&nbsp; From <span className="font-mono font-semibold border-b border-slate-900 px-3">{periodFrom}</span> &nbsp; To <span className="font-mono font-semibold border-b border-slate-900 px-3">{periodTo}</span> <span className="text-[6.5pt] text-slate-500">(MM/DD/YYYY)</span></div>
+          </div>
+
+          {/* ── Part I – Payee ── */}
+          <div className="border-x-2 border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold">Part I – Payee Information</div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
+            <div className="text-[8pt]"><span className="font-bold">2</span> Taxpayer Identification Number (TIN)</div>
+            <TinRow boxes={payeeTin} />
+          </div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
+            <div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">3</span> Payee's Name (Last Name, First Name, Middle Name for Individual OR Registered Name for Non-Individual)</div>
+            <div className="text-[10pt] font-semibold uppercase min-h-[16px]">{supplier?.company||' '}</div>
+          </div>
+          <div className="border-x-2 border-b border-slate-900 flex">
+            <div className="flex-1 px-2 py-1 border-r border-slate-900"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">4</span> Registered Address</div><div className="text-[9pt] min-h-[16px]">{supplier?.address||' '}</div></div>
+            <div className="px-2 py-1" style={{width:'110px'}}><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">4A</span> ZIP Code</div><div className="text-[9pt] font-semibold min-h-[16px]">{supplier?.zip||' '}</div></div>
+          </div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-1"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">5</span> Foreign Address, if applicable</div><div className="text-[9pt] min-h-[14px]">&nbsp;</div></div>
+
+          {/* ── Part II – Payor (us) ── */}
+          <div className="border-x-2 border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold">Part II – Payor Information</div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
+            <div className="text-[8pt]"><span className="font-bold">6</span> Taxpayer Identification Number (TIN)</div>
+            <TinRow boxes={payorTin} />
+          </div>
+          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
+            <div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">7</span> Payor's Name (Registered Name for Non-Individual)</div>
+            <div className="text-[10pt] font-semibold uppercase">STEEZE CORPORATION</div>
+          </div>
+          <div className="border-x-2 border-b border-slate-900 flex">
+            <div className="flex-1 px-2 py-1 border-r border-slate-900"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">8</span> Registered Address</div><div className="text-[9pt]">{STEEZE_ADDRESS}</div></div>
+            <div className="px-2 py-1" style={{width:'110px'}}><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">8A</span> ZIP Code</div><div className="text-[9pt] font-semibold">{STEEZE_ZIP}</div></div>
+          </div>
+
+          {/* ── Part III – Details ── */}
+          <div className="border-x-2 border-b border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold text-center">Part III – Details of Monthly Income Payments and Taxes Withheld</div>
+          <table className="w-full border-collapse" style={{fontSize:'7.5pt'}}>
+            <thead>
+              <tr className="bg-slate-100">
+                <th className="border border-slate-900 border-l-2 px-1 py-1 text-center align-middle" rowSpan="2" style={{width:'33%'}}>Income Payments Subject to Expanded Withholding Tax</th>
+                <th className="border border-slate-900 px-1 py-1 text-center align-middle" rowSpan="2" style={{width:'9%'}}>ATC</th>
+                <th className="border border-slate-900 px-1 py-1 text-center" colSpan="3">AMOUNT OF INCOME PAYMENTS</th>
+                <th className="border border-slate-900 px-1 py-1 text-center align-middle" rowSpan="2">Total</th>
+                <th className="border border-slate-900 border-r-2 px-1 py-1 text-center align-middle" rowSpan="2">Tax Withheld<br/>for the Quarter</th>
+              </tr>
+              <tr className="bg-slate-100 text-[6.8pt]">
+                <th className="border border-slate-900 px-1 py-0.5">1st Month<br/>of the Quarter</th>
+                <th className="border border-slate-900 px-1 py-0.5">2nd Month<br/>of the Quarter</th>
+                <th className="border border-slate-900 px-1 py-0.5">3rd Month<br/>of the Quarter</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="border border-slate-900 border-l-2 px-1 py-1">{nature}</td>
+                <td className="border border-slate-900 px-1 py-1 text-center font-mono">{atc}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[0]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[1]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[2]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{peso(subtotal)}</td>
+                <td className="border border-slate-900 border-r-2 px-1 py-1 text-right">{peso(wht)}</td>
+              </tr>
+              {[0,1].map(i=>(<tr key={i}>
+                <td className="border border-slate-900 border-l-2 px-1 py-2">&nbsp;</td>
+                <td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 border-r-2 px-1"></td>
+              </tr>))}
+              <tr className="bg-slate-100 font-bold">
+                <td className="border border-slate-900 border-l-2 px-1 py-1 text-right uppercase text-[7pt]">Total</td>
+                <td className="border border-slate-900"></td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[0]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[1]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[2]}</td>
+                <td className="border border-slate-900 px-1 py-1 text-right">{peso(subtotal)}</td>
+                <td className="border border-slate-900 border-r-2 px-1 py-1 text-right">{peso(wht)}</td>
+              </tr>
+              <tr>
+                <td className="border border-slate-900 border-l-2 px-1 py-1 text-[7pt]" colSpan="7">Money Payments Subject to Withholding of Business Tax (Government &amp; Private)</td>
+              </tr>
+              <tr>
+                <td className="border border-slate-900 border-l-2 px-1 py-2">&nbsp;</td>
+                <td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900 border-r-2"></td>
+              </tr>
+              <tr className="bg-slate-100 font-bold">
+                <td className="border border-slate-900 border-l-2 px-1 py-1 text-right uppercase text-[7pt]">Total</td>
+                <td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900 border-r-2"></td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* ── Declaration + signatories ── */}
+          <div className="border-2 border-t-0 border-slate-900 px-2 py-1 text-[7pt] leading-snug text-justify">
+            We declare under the penalties of perjury that this certificate has been made in good faith, verified by us, and to the best of our knowledge and belief, is true and correct, pursuant to the provisions of the National Internal Revenue Code, as amended, and the regulations issued under authority thereof. Further, we give our consent to the processing of our information as contemplated under the Data Privacy Act of 2012 (R.A. No. 10173) for legitimate and lawful purposes.
+          </div>
+          <div className="flex border-2 border-t-0 border-slate-900">
+            <div className="flex-1 border-r border-slate-900 px-2 pt-6 pb-1 text-center">
+              <div className="border-t border-slate-900 pt-0.5 text-[7pt]">Signature over Printed Name of Payor/Payor's Authorized Representative/Tax Agent</div>
+              <div className="text-[6.5pt] text-slate-500">(Indicate Title/Designation and TIN)</div>
+            </div>
+            <div className="flex-1 px-2 pt-1 pb-1 text-[6.8pt]">
+              <div>Tax Agent Accreditation No./Attorney's Roll No. (if applicable): ______________</div>
+              <div className="mt-2">Date of Issue (MM/DD/YYYY): ___________</div>
+              <div className="mt-1">Date of Expiry (MM/DD/YYYY): ___________</div>
+            </div>
+          </div>
+          <div className="border-2 border-t-0 border-slate-900 px-2 py-0.5 text-[7.5pt] font-bold">CONFORME:</div>
+          <div className="flex border-2 border-t-0 border-slate-900">
+            <div className="flex-1 border-r border-slate-900 px-2 pt-6 pb-1 text-center">
+              <div className="border-t border-slate-900 pt-0.5 text-[7pt]">Signature over Printed Name of Payee/Payee's Authorized Representative/Tax Agent</div>
+              <div className="text-[6.5pt] text-slate-500">(Indicate Title/Designation and TIN)</div>
+            </div>
+            <div className="flex-1 px-2 pt-1 pb-1 text-[6.8pt]">
+              <div>Tax Agent Accreditation No./Attorney's Roll No. (if applicable): ______________</div>
+              <div className="mt-2">Date of Issue (MM/DD/YYYY): ___________</div>
+              <div className="mt-1">Date of Expiry (MM/DD/YYYY): ___________</div>
+            </div>
+          </div>
+
+          {/* ── Annex: backing POs (not part of the BIR form) ── */}
+          {pos && pos.length>0 && <div className="mt-4 no-print-break">
+            <div className="text-[8px] uppercase font-bold text-slate-500 tracking-wider mb-1">Annex — backing transactions for {month} ({pos.length} PO{pos.length===1?'':'s'}) · not part of the BIR form</div>
+            <table className="w-full border border-slate-400 border-collapse" style={{fontSize:'8pt'}}>
+              <thead className="bg-slate-100"><tr><th className="border border-slate-400 px-2 py-1 text-left">PO#</th><th className="border border-slate-400 px-2 py-1 text-left">Date</th><th className="border border-slate-400 px-2 py-1 text-right">Amount</th></tr></thead>
+              <tbody>{pos.map(p=>{ const sub=(p.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0); return (<tr key={p.id}><td className="border border-slate-400 px-2 py-1 font-mono">{p.number}</td><td className="border border-slate-400 px-2 py-1">{fmtDate(p.date)}</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(sub)}</td></tr>); })}</tbody>
             </table>
-          </div>
-
-          {/* Backing POs */}
-          <div className="mb-3">
-            <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider mb-1">Backing transactions ({pos.length} PO{pos.length===1?'':'s'})</div>
-            <table className="w-full border border-slate-400 border-collapse" style={{fontSize:'8.5pt'}}>
-              <thead className="bg-slate-100">
-                <tr><th className="border border-slate-400 px-2 py-1 text-left">PO#</th><th className="border border-slate-400 px-2 py-1 text-left">Date</th><th className="border border-slate-400 px-2 py-1 text-right">Amount</th></tr>
-              </thead>
-              <tbody>{pos.map(p=>{
-                const sub = (p.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0);
-                return (
-                  <tr key={p.id}><td className="border border-slate-400 px-2 py-1">{p.number}</td><td className="border border-slate-400 px-2 py-1">{fmtDate(p.date)}</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(sub)}</td></tr>
-                );
-              })}</tbody>
-            </table>
-          </div>
-
-          {/* Signatures */}
-          <div className="grid grid-cols-2 gap-4 mt-5">
-            <div className="text-center">
-              <div className="border-t border-slate-900 mt-12 pt-1 text-[9px] text-slate-600 uppercase tracking-wider">Authorized Representative (Payor)</div>
-              <div className="text-[10px] font-bold mt-1">Steeze Corporation</div>
-            </div>
-            <div className="text-center">
-              <div className="border-t border-slate-900 mt-12 pt-1 text-[9px] text-slate-600 uppercase tracking-wider">Conforme (Payee)</div>
-              <div className="text-[10px] font-bold mt-1">{supplier?.company||''}</div>
-            </div>
-          </div>
-
-          <div className="text-center text-[9px] text-slate-500 mt-4 border-t pt-2">
-            This certificate is issued pursuant to Sections 57 and 58 of the National Internal Revenue Code, as amended.
-          </div>
+          </div>}
         </div>
       </div>
     </div>
