@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 802 · New 🏦 Check Monitoring (Finance): track every check we issue per bank + booklet — outstanding/cleared/cancelled/voided, next free check number, and each booklet's remaining count. PNB booklets #1 (2000002357–400) and #2 (2000002401–500) are pre-loaded.";
+const BUILD = "Live build 803 · Check Monitoring: check numbers now show plain (no thousands commas) so they don't read like money.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35633,7 +35633,7 @@ function CheckFormModal({ profile, existing, prefillBankId, bankAccounts, bookle
           <TpLbl t="Bank account *"><select className="input" value={f.bank_id} onChange={e=>up('bank_id',e.target.value)} disabled={isEdit}>{bankOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></TpLbl>
           <TpLbl t="Check number *"><input className="input font-mono" value={f.check_no} onChange={e=>up('check_no',e.target.value.replace(/[^0-9]/g,''))} placeholder="e.g. 2000002357" /></TpLbl>
         </div>
-        <div className="text-[11px]">{dup ? <span className="text-rose-600">⚠ Already recorded for this bank.</span> : bk ? <span className="text-slate-500">Booklet #{bk.booklet_no} ({Number(bk.start_no).toLocaleString()}–{Number(bk.end_no).toLocaleString()}){!isEdit && <> · next free: <button type="button" className="text-indigo-600 font-semibold" onClick={()=>up('check_no',String(nextCheckNo(f.bank_id,booklets,checks)))}>{Number(nextCheckNo(f.bank_id,booklets,checks)).toLocaleString()}</button></>}</span> : (f.check_no? <span className="text-amber-600">Not inside any booklet for this bank.</span>:null)}</div>
+        <div className="text-[11px]">{dup ? <span className="text-rose-600">⚠ Already recorded for this bank.</span> : bk ? <span className="text-slate-500">Booklet #{bk.booklet_no} ({bk.start_no}–{bk.end_no}){!isEdit && <> · next free: <button type="button" className="text-indigo-600 font-semibold font-mono" onClick={()=>up('check_no',String(nextCheckNo(f.bank_id,booklets,checks)))}>{String(nextCheckNo(f.bank_id,booklets,checks))}</button></>}</span> : (f.check_no? <span className="text-amber-600">Not inside any booklet for this bank.</span>:null)}</div>
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Date issued"><input type="date" className="input" value={f.date_issued} onChange={e=>up('date_issued',e.target.value)} /></TpLbl>
           <TpLbl t="Amount"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
@@ -35742,7 +35742,7 @@ function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, rel
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3"><div className="text-[10px] uppercase text-amber-700 font-semibold">Outstanding</div><div className="text-2xl font-bold text-amber-800">{peso(outTotal)}</div><div className="text-[11px] text-amber-700">{outstanding.length} check{outstanding.length===1?'':'s'} not yet cleared</div></div>
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-[10px] uppercase text-emerald-700 font-semibold">Cleared</div><div className="text-2xl font-bold text-emerald-800">{peso(clearedTotal)}</div><div className="text-[11px] text-emerald-700">{cnt('cleared')} cleared</div></div>
         <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Checks remaining</div><div className="text-2xl font-bold text-slate-800">{totalAvail.toLocaleString()}</div><div className="text-[11px] text-slate-400">unused across booklets</div></div>
-        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Next check no.</div>{(banksWithBooklets.length?banksWithBooklets:[]).filter(b=>!bankFilter||b.id===bankFilter).map(b=>{ const n=nextCheckNo(b.id, checkBooklets, checks); return <div key={b.id} className="text-sm"><span className="text-slate-500">{b.name}:</span> <span className="font-mono font-bold">{n===''?'— none —':Number(n).toLocaleString()}</span></div>; })}</div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Next check no.</div>{(banksWithBooklets.length?banksWithBooklets:[]).filter(b=>!bankFilter||b.id===bankFilter).map(b=>{ const n=nextCheckNo(b.id, checkBooklets, checks); return <div key={b.id} className="text-sm"><span className="text-slate-500">{b.name}:</span> <span className="font-mono font-bold">{n===''?'— none —':String(n)}</span></div>; })}</div>
       </div>
 
       {bookletStats.length>0 && <div className="bg-white border rounded-xl p-3 mb-4">
@@ -35751,7 +35751,7 @@ function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, rel
           {bookletStats.map(({b,size,used,avail})=>(
             <div key={b.id} className={`border rounded-lg p-2.5 ${b.active===false?'bg-slate-50 opacity-70':''}`}>
               <div className="flex items-center justify-between"><div className="font-semibold text-sm">{bankNm(b.bank_id)} · Booklet #{b.booklet_no||'—'}</div>{canEdit && <button onClick={()=>setBookletEdit(b)} className="text-[11px] text-indigo-600 hover:underline">Edit</button>}</div>
-              <div className="font-mono text-xs text-slate-500">{Number(b.start_no).toLocaleString()}–{Number(b.end_no).toLocaleString()}</div>
+              <div className="font-mono text-xs text-slate-500">{b.start_no}–{b.end_no}</div>
               <div className="flex items-center gap-2 mt-1.5 text-xs"><span className="text-slate-500">{used}/{size} used</span><div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-indigo-500" style={{width:`${size?Math.round(used/size*100):0}%`}}></div></div><span className={`font-semibold ${avail>0?'text-emerald-700':'text-rose-600'}`}>{avail} left</span></div>
             </div>
           ))}
@@ -35769,7 +35769,7 @@ function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, rel
           {rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">{live.length===0?'No checks recorded yet. Click “+ Record check”.':statusFilter==='issued'?'🎉 No outstanding checks — all cleared.':'No checks match.'}</td></tr>}
           {rows.map(c=>{ const m=checkStatusMeta(c.status); return (
             <tr key={c.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(c)}>
-              <td className="px-3 py-2 font-mono text-xs font-bold">{Number(c.check_no).toLocaleString()}</td>
+              <td className="px-3 py-2 font-mono text-xs font-bold">{c.check_no}</td>
               <td className="px-3 py-2">{bankNm(c.bank_id)}</td>
               <td className="px-3 py-2 text-xs">{c.date_issued?fmtDate(c.date_issued):'—'}</td>
               <td className="px-3 py-2">{c.payee||'—'}</td>
