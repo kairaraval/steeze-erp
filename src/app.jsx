@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 808 · Estimate PDF: the browser’s Save-As filename now defaults to “<Client> - <EST number>” (e.g. “CASA - EST-2026-10-061”) so saving the PDF is one click.";
+const BUILD = "Live build 809 · PDF Save-As filenames now auto-name across documents: Invoice, Delivery Receipt, Transmittal, PO, PR, Vouchers, BIR 2307, subcon payslip, commission, asset/material tags, toolbox minutes — each as “Name - Number” so saving is one click.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -484,6 +484,17 @@ function renderCommentText(text, profiles){
   return parts;
 }
 
+// Print, with the browser's "Save as PDF" filename defaulting to `filename`
+// (restored afterwards). Illegal filename chars are stripped.
+function printAs(filename){
+  const prev = (typeof document!=='undefined') ? document.title : '';
+  const clean = String(filename||'').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').trim();
+  try{ if(clean) document.title = clean; }catch(_){}
+  const restore=()=>{ try{ document.title=prev; }catch(_){} window.removeEventListener('afterprint',restore); };
+  window.addEventListener('afterprint', restore);
+  setTimeout(()=>{ try{ document.title=prev; }catch(_){} }, 60000);
+  window.print();
+}
 async function signedUrl(path, transform){ const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, 3600, transform?{transform}:undefined); if(error) throw error; return data.signedUrl; }
 async function uploadFile(scope, file){
   const safe=file.name.replace(/[^\w.\-]/g,'_'); const path=`${scope}/${Date.now()}_${safe}`;
@@ -2648,7 +2659,7 @@ function InvoiceModal({ profile, so, lead, client, existing, onClose, reload }){
             <div className="text-xs text-slate-500">{client?.company||so?.client_name||'—'} · Amount due {peso(amountDue)}</div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+            <button onClick={()=>printAs(`${client?.company||so?.client_name||'Client'} - ${number}`)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
             <button onClick={()=> canEdit ? setView('edit') : onClose()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">{canEdit?'← Back':'Close'}</button>
           </div>
         </div>
@@ -4745,7 +4756,7 @@ function MatLibTagModal({ card, onClose }){
           {colors.map(cl=><button key={cl} onClick={()=>setColor(cl)} className={chip(color===cl)}>{cl}</button>)}
         </div>
       </div>}
-      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Prints on ¼ bond paper (5.5 × 4.25 in).</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Prints on ¼ bond paper (5.5 × 4.25 in).</div><button onClick={()=>printAs(`Material tag - ${c.name||''}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
       <div className="mat-tag-sheet flex justify-center">
         <div style={{border:'2px solid #000',borderRadius:'8px',padding:'16px 20px',width:'5in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'10px'}}>
@@ -7128,7 +7139,7 @@ function ToolboxMeetingPrintModal({ data, profiles, onClose }){
   );
   return (<Modal title={`Toolbox Meeting · ${d.number||''}`} onClose={onClose} wide>
     <style>{`@media print{ body *{visibility:hidden !important;} .tbm-print,.tbm-print *{visibility:visible !important;} .tbm-print{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
-    <div className="no-print flex items-center justify-between gap-3 mb-3"><div className="text-xs text-slate-500">Preview below — prints on A4/Letter.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+    <div className="no-print flex items-center justify-between gap-3 mb-3"><div className="text-xs text-slate-500">Preview below — prints on A4/Letter.</div><button onClick={()=>printAs(`Toolbox Meeting - ${d.number||''}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
     <div className="tbm-print" style={{fontFamily:'Arial, Helvetica, sans-serif',color:'#000',padding:'8px 6px'}}>
       <div style={{textAlign:'center',borderBottom:'2px solid #000',paddingBottom:'8px',marginBottom:'14px'}}>
         <div style={{fontSize:'20px',fontWeight:800,letterSpacing:'1px'}}>STEEZE</div>
@@ -26049,7 +26060,7 @@ function PayrollPayslips({ sewers, entries, money, entryEarnings, entryDescribe,
           <button onClick={()=>shift(-1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">← Previous</button>
           <button onClick={()=>shift(1)} className="text-xs px-3 py-2 rounded border bg-white hover:bg-slate-50">Next →</button>
           <div className="flex-1"></div>
-          <button onClick={()=>window.print()} className="text-xs px-3 py-2 rounded bg-rose-600 text-white font-semibold hover:bg-rose-700">🖨 Print payslip(s)</button>
+          <button onClick={()=>printAs(`Payslips ${from||''}${to?' to '+to:''}`)} className="text-xs px-3 py-2 rounded bg-rose-600 text-white font-semibold hover:bg-rose-700">🖨 Print payslip(s)</button>
         </div>
         <div className="flex flex-wrap gap-1 text-xs mt-3 text-slate-500"><span className="self-center">Quick:</span>
           {[['thisWeek','This week'],['lastWeek','Last week'],['last2Weeks','Last 2 weeks'],['last30','Last 30 days']].map(([k,l])=><button key={k} onClick={()=>setRange(k)} className="px-2 py-0.5 rounded hover:bg-slate-100">{l}</button>)}
@@ -29740,7 +29751,7 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
           <div className="text-xs text-slate-500">{supplier?.company||'—'} · {peso(total)}</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
+          <button onClick={()=>printAs(`${supplier?.company||'Supplier'} - ${po.number||'PO'}`)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -29916,7 +29927,7 @@ function PRPrintView({ pr, leads, profiles, profile, onClose }){
           <div className="text-xs text-slate-500">{linkedLead?.title||'no linked lead'} · {peso(total)}</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
+          <button onClick={()=>printAs(`${linkedLead?.title?linkedLead.title+' - ':''}${pr.number||'PR'}`)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -34548,7 +34559,7 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
           <div className="text-xs text-slate-500">{sorted.length} item{sorted.length===1?'':'s'} · {peso(total)} · for review before payout</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
+          <button onClick={()=>printAs(`Commission - ${repNm||''}`)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print / Save PDF</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -37440,7 +37451,7 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, costCent
         {v.approved_by && approvedBy && (
           <div className="text-xs text-emerald-700 self-center px-3 py-2 bg-emerald-50 rounded-lg border border-emerald-200">✓ Approved by <strong>{approvedBy.name||approvedBy.email}</strong> on {fmtDate((v.signed_at||v.approved_at||'').slice(0,10))}</div>
         )}
-        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this voucher</button>
+        <button onClick={()=>printAs(`${v.payee||'Payee'} - ${v.number||'Voucher'}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this voucher</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
@@ -37711,7 +37722,7 @@ function APVoucherModal({ ap, profile, profiles, rfps, orders, suppliers, vouche
         </div>
       </div>
       <div className="no-print flex gap-2 mt-3">
-        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print voucher</button>
+        <button onClick={()=>printAs(`${ap.supplier_name||'Payee'} - ${ap.number||'Voucher'}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print voucher</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
@@ -40902,7 +40913,7 @@ function AssetTagModal({ asset, onClose }){
   return (<Modal title={`Asset tag · ${a.name||''}`} onClose={onClose}>
     <style>{`@media print{ @page{size:3.5in 2in;margin:0.12in;} body *{visibility:hidden !important;} .asset-tag-sheet,.asset-tag-sheet *{visibility:visible !important;} .asset-tag-sheet{position:absolute;left:0;top:0;width:100%;} .no-print{display:none !important;} }`}</style>
     <div className="space-y-3">
-      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Sticker size 3.5 × 2 in (business-card stock). Peel & stick on the equipment.</div><button onClick={()=>window.print()} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+      <div className="no-print flex items-center justify-between gap-3"><div className="text-xs text-slate-500">Sticker size 3.5 × 2 in (business-card stock). Peel & stick on the equipment.</div><button onClick={()=>printAs(`Asset tag - ${a.asset_code||a.name||''}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
       <div className="asset-tag-sheet flex justify-center">
         <div style={{border:'2px solid #000',borderRadius:'8px',padding:'12px 16px',width:'3.3in',fontFamily:'Arial, Helvetica, sans-serif',color:'#000'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
@@ -41949,7 +41960,7 @@ function JournalViewModal({ entry, bankAccounts, profile, profiles, canEdit, onE
         </div>
       )}
       <div className="no-print flex gap-2 mt-3">
-        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print</button>
+        <button onClick={()=>printAs(`Journal Voucher - ${entry.number||''}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print</button>
         {canEdit && !isCancelled && <button onClick={onEdit} className="py-2 px-4 rounded-lg bg-amber-100 text-amber-700 font-semibold hover:bg-amber-200">Edit</button>}
         {canEdit && !isCancelled && <button onClick={cancelEntry} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Cancel entry</button>}
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
@@ -43100,7 +43111,7 @@ function BIR2307PrintView({ data, profile, onClose }){
           <div className="text-xs text-slate-500">Official form overlay · {peso(wht)} withheld at {rate}% · prints on Legal (8.5×14")</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
+          <button onClick={()=>printAs(`${supplier?.company||'Supplier'} - 2307 - ${month}`)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
@@ -43782,7 +43793,7 @@ function DeliveryReceiptViewModal({ dr, drItems, clients, profiles, salesOrders,
       </div>
 
       <div className="no-print flex gap-2 mt-3">
-        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this DR</button>
+        <button onClick={()=>printAs(`${client?.company||dr.client_name||'Client'} - ${dr.number||'DR'}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this DR</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
@@ -44640,7 +44651,7 @@ function TransmittalViewModal({ trn, transmittalItems, clients, profiles, salesO
         )}
 
         <div className="flex gap-2">
-          <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this transmittal</button>
+          <button onClick={()=>printAs(`${client?.company||'Client'} - ${trn.number||'Transmittal'}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print this transmittal</button>
           <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
         </div>
       </div>
@@ -46212,7 +46223,7 @@ function SubconPayrollViewModal({ payroll, subcons, payrollItems, profile, profi
         {canEditPayroll && (payroll.status==='finalized' || payroll.status==='paid') && <button disabled={busy} onClick={reopen} className="px-3 py-2 rounded-lg bg-indigo-100 text-indigo-700 font-semibold hover:bg-indigo-700/10">↺ Reopen as draft</button>}
         {canEditPayroll && <button disabled={busy} onClick={voidIt} className="px-3 py-2 rounded-lg bg-rose-100 text-rose-700 font-semibold hover:bg-rose-200">🗑 Void</button>}
         {profile.role==='admin' && <button disabled={busy} onClick={hardDelete} className="px-3 py-2 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700">⚠ Delete permanently</button>}
-        <button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print payslip</button>
+        <button onClick={()=>printAs(`${subcon?.name||'Subcon'} - ${payroll.number||'Payroll'}`)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">🖨 Print payslip</button>
         <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Close</button>
       </div>
     </Modal>
