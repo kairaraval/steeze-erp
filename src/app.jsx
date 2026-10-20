@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 809 · PDF Save-As filenames now auto-name across documents: Invoice, Delivery Receipt, Transmittal, PO, PR, Vouchers, BIR 2307, subcon payslip, commission, asset/material tags, toolbox minutes — each as “Name - Number” so saving is one click.";
+const BUILD = "Live build 810 · Multi-SO payment: you can now attach a deposit slip / proof (snap or paste a screenshot). The one slip is saved to every order in that batch for Accounting to verify.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34016,7 +34016,11 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
   const [sel,setSel]=useState({});   // soId -> amount string
   const [f,setF]=useState({ date:todayManila(), method:'bank_transfer', reference:'', bank_id:(bankAccounts||[])[0]?.id||'', notes:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [proofs,setProofs]=useState([]); // [{ file, preview }] — one deposit slip covers the whole batch
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  function addProofs(fileList){ const files=Array.from(fileList||[]).filter(f=>f&&f.type&&f.type.startsWith('image')); if(!files.length) return; setProofs(prev=>[...prev, ...files.map(file=>({ file, preview:URL.createObjectURL(file) }))]); }
+  function removeProof(i){ setProofs(prev=>prev.filter((_,x)=>x!==i)); }
+  useEffect(()=>{ function onPaste(e){ const imgs=Array.from(e.clipboardData?.items||[]).filter(it=>it.type.startsWith('image')).map(it=>it.getAsFile()).filter(Boolean); if(imgs.length){ addProofs(imgs); e.preventDefault(); } } document.addEventListener('paste', onPaste); return ()=>document.removeEventListener('paste', onPaste); }, []);
   function toggle(s){ setSel(prev=>{ const n={...prev}; if(n[s.id]!=null) delete n[s.id]; else n[s.id]=String(Number(s.balance_due||0)); return n; }); }
   function setAmt(id,v){ setSel(prev=>({...prev,[id]:v})); }
   const selectedIds=Object.keys(sel);
@@ -34027,10 +34031,24 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
     if(f.method==='bank_transfer' && !f.bank_id){ setMsg('Pick the bank the client deposited to.'); return; }
     setBusy(true); setMsg('');
     try{
+      // Upload the deposit slip(s) once — the same proof is attached to every
+      // SO payment in this batch (it's one real deposit covering several orders).
+      const atts=[];
+      for(const p of proofs){
+        const file=p.file;
+        const nameExt=(file.name||'').includes('.')?(file.name.split('.').pop()||''):'';
+        const ext=(nameExt||(file.type||'').split('/')[1]||'png').toLowerCase();
+        const key=`sopay/batch/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+        const { error:upErr }=await sb.storage.from(BUCKET).upload(key, file, { upsert:false, contentType:file.type||undefined });
+        if(upErr) throw upErr;
+        atts.push({ name:file.name||'deposit-slip.'+ext, path:key, type:file.type||'' });
+      }
+      let attachment_url=null; const attachment_path=atts[0]?.path||null;
+      if(attachment_path){ try{ attachment_url=await signedUrl(attachment_path); }catch(_){} }
       const mentionIds=(profiles||[]).filter(p=>['accounting','admin','accounting_officer'].includes(p.role) && p.id!==profile.id).map(p=>p.id);
       for(const id of selectedIds){
         const amt=Number(sel[id])||0;
-        const { error }=await sb.from('sales_order_payments').insert({ sales_order_id:id, date:f.date, amount:amt, method:f.method, reference:f.reference||null, notes:f.notes||null, bank_id:f.method==='bank_transfer'?(f.bank_id||null):null, status:'pending', received_by:profile.id });
+        const { error }=await sb.from('sales_order_payments').insert({ sales_order_id:id, date:f.date, amount:amt, method:f.method, reference:f.reference||null, notes:f.notes||null, bank_id:f.method==='bank_transfer'?(f.bank_id||null):null, attachments:atts, attachment_url, attachment_path, status:'pending', received_by:profile.id });
         if(error) throw error;
         try{ await sb.from('sales_order_activity').insert({ sales_order_id:id, actor_id:profile.id, type:'system', mentions:mentionIds, text:`📩 Logged a ${payMethodLabel(f.method)} payment of ${peso(amt)}${f.reference?` (ref ${f.reference})`:''} — part of a multi-order payment, pending verification.` }); }catch(_){}
       }
@@ -34072,6 +34090,14 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
           </table>
         </div>
         <TpLbl t="Notes (optional)"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. one deposit for SO-1 + SO-2" /></TpLbl>
+        <div className="border rounded-lg p-3 bg-slate-50">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-1">📎 Deposit slip / proof of payment</div>
+          <input type="file" accept="image/*" multiple capture="environment" onChange={e=>{ addProofs(e.target.files); e.target.value=''; }} className="text-xs w-full" />
+          <div className="text-[11px] text-indigo-600 mt-1">…or <strong>paste a screenshot</strong> ({navigator.platform&&navigator.platform.indexOf('Mac')===0?'⌘V':'Ctrl+V'}). One slip is attached to all the orders in this payment.</div>
+          {proofs.length>0 && <div className="mt-2 flex flex-wrap gap-2">{proofs.map((p,i)=>(
+            <div key={i} className="relative"><img src={p.preview} alt="deposit slip" className="h-24 w-24 object-cover rounded border" /><button type="button" onClick={()=>removeProof(i)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-rose-500 text-white text-xs leading-none flex items-center justify-center shadow" title="Remove">✕</button></div>
+          ))}</div>}
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex items-center gap-2 pt-2 border-t">
           <div className="text-sm">Selected: <b>{selectedIds.length}</b> order{selectedIds.length===1?'':'s'} · <b className="text-emerald-700">{peso(total)}</b></div>
