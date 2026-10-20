@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 817 · Subcon Sewing floor is now self-contained: “Returned by subcon” logs good + variance + date right on the board (updates RETURNED/BALANCE) and does NOT auto-create anything in Subcon Payroll. OUT is editable per subcon, plus a row filter (All / Still out / All returned).";
+const BUILD = "Live build 818 · Subcon Sewing: removed per-row Done; added “💰 Add to payroll” (partial deliveries OK) that stages returned pcs. The 2nd tab is now “💰 For payroll” — supervisor reviews subcon/qty/rate, then sends to Subcon Payroll. Sent items show separately; unpaid stay in the queue.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10262,12 +10262,16 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const [showPlanTasks,setShowPlanTasks]=useState(false);
   const [floorReturn,setFloorReturn]=useState(null); // { p, s } — log a return on the floor
   const [rowFilter,setRowFilter]=useState('all');     // 'all' | 'open' | 'returned'
+  const [queue,setQueue]=useState([]);                // subcon_payroll_queue (staged for payroll)
+  const [addPayroll,setAddPayroll]=useState(null);    // { p, s } — add returned pcs to the payroll queue
+  const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'sent'
   const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
   async function load(){ setBusy(true);
     try{ const { data }=await sb.from('sorting_batches').select('*').eq('destination_type','subcon').is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
     try{ const { data }=await sb.from('subcon_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
+    try{ const { data }=await sb.from('subcon_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
     setBusy(false);
   }
   useEffect(()=>{ load(); },[]);
@@ -10302,13 +10306,16 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.subcon=s.subcon_id?subconName(s.subcon_id):(s.subconNameRaw||'Subcon');
         s.itemList=Array.from(s.items).filter(Boolean).join(', ');
         s.manualOnly=s.batchCount===0;
+        // Pieces already added to the payroll queue (staged or sent) for this subcon+project.
+        s.staged=(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===s.subcon_id && q.lead_id===p.lead_id).reduce((t,q)=>t+Number(q.qty||0),0);
+        s.payable=Math.max(0, Number(s.returned||0) - s.staged); // good returns not yet added to payroll
         return s;
       }).sort((a,b)=>a.subcon.localeCompare(b.subcon));
       p.out=p.rows.reduce((x,s)=>x+s.out,0); p.returned=p.rows.reduce((x,s)=>x+s.returned,0); p.balance=p.rows.reduce((x,s)=>x+s.balance,0);
       p.overdue=p.rows.some(s=>s.overdue);
       return p;
     });
-  }, [assigns, batches, subcons, leads, clients, prodJobs]);
+  }, [assigns, batches, subcons, leads, clients, prodJobs, queue]);
 
   const q=search.trim().toLowerCase();
   const matchP=(p)=> !q || `${p.label} ${p.number} ${p.rows.map(s=>s.subcon+' '+s.itemList).join(' ')}`.toLowerCase().includes(q);
@@ -10366,11 +10373,44 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
     }
     load(); reload&&reload();
   }
+  // Add returned pieces to the For-payroll staging list (partial is fine).
+  async function addToPayrollQueue(p, s, { qty, rate, return_date }){
+    const sub=(subcons||[]).find(x=>x.id===s.subcon_id);
+    const { error }=await sb.from('subcon_payroll_queue').insert({ subcon_id:s.subcon_id, lead_id:p.lead_id||null, item_label:(s.itemList||null), garment:(s.itemList||p.item||null), qty:Number(qty)||0, rate: (rate===''||rate==null)? (sub?.default_rate??null) : Number(rate), return_date: return_date||todayManila(), status:'staged', source_assignment_id: s.assignment?.id||null, added_by:profile.id });
+    if(error) throw error; load(); reload&&reload();
+  }
+  async function updateQueueRow(id, patch){ try{ await sb.from('subcon_payroll_queue').update(patch).eq('id', id); load(); }catch(e){ alert(e.message||e); } }
+  async function removeQueueRow(q){ if(!confirm('Remove this item from the For-payroll list?')) return; await sb.from('subcon_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', q.id); load(); reload&&reload(); }
+  // Send staged items to the Subcon Payroll module: create a send + a good-return
+  // per item so the weekly payroll generation picks them up.
+  async function sendQueueToPayroll(rows){
+    if(!rows || !rows.length) return;
+    const bad=rows.filter(q=>!(Number(q.rate)>0));
+    if(bad.length){ if(!confirm(`${bad.length} item(s) have no rate (₱0). They'll go in at ₱0 — set the rate first, or continue?`)) return; }
+    if(!confirm(`Send ${rows.length} item(s) to Subcon Payroll?\n\nThey'll appear in the weekly payroll for approval & payment.`)) return;
+    try{
+      for(const q of rows){
+        const monthKey=todayManila().slice(0,7);
+        const { data:mr }=await sb.from('subcon_sends').select('number').like('number',`SCS-${monthKey}-%`);
+        let mx=0;(mr||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>mx)mx=n;}});
+        const number=`SCS-${monthKey}-${String(mx+1).padStart(3,'0')}`;
+        const l=(leads||[]).find(x=>x.id===q.lead_id); const cli=l?((clients||[]).find(c=>c.id===l.client_id)?.company||l.client_name):null;
+        const { data:send, error:se }=await sb.from('subcon_sends').insert({ number, date_sent:(q.return_date||todayManila()), subcon_id:q.subcon_id, lead_id:q.lead_id||null, client_name:cli||null, garment:(q.garment||q.item_label||'Sewing').slice(0,180), quantity_sent:Number(q.qty)||0, rate_per_garment:Number(q.rate||0), status:'in_progress', notes:'From Subcon Sewing — added for payroll', prepared_by:profile.id, created_by:profile.id }).select('id').single();
+        if(se) throw se;
+        const { error:re }=await sb.from('subcon_returns').insert({ send_id:send.id, date_returned:(q.return_date||todayManila()), quantity_returned:Number(q.qty)||0, variance_qty:0, received_by_name:profile.name||null, received_by_user:profile.id, notes:'Good returns from Subcon Sewing' });
+        if(re) throw re;
+        await sb.from('subcon_sends').update({ status:'fully_returned' }).eq('id', send.id);
+        await sb.from('subcon_payroll_queue').update({ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id, sent_send_id:send.id }).eq('id', q.id);
+      }
+      load(); reload&&reload(); alert('Sent to Subcon Payroll. Review it in the Subcon Payroll module → Weekly payroll.');
+    }catch(e){ alert('Send failed: '+(e.message||e)); }
+  }
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
       {s.subcon_id && !p.projectDone && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Returned by subcon</button>}
-      {!p.projectDone && <button onClick={()=>toggleDone(p,s)} className={`text-xs font-semibold mr-2 ${s.done?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{s.done?'Undo':'✓ Done'}</button>}
+      {s.subcon_id && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
+      {s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
     </td>
@@ -10412,59 +10452,64 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">🧵 Subcon Sewing</h1><p className="text-slate-500 text-sm">Projects sent “Out to Sewing Subcon” on the Production Board — who's on each, and each subcon's projects.</p></div>
           <div className="flex gap-2">
-            {canLogPayroll && <button onClick={()=>{ setSbTab('payroll'); setCreatingSend(true); }} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Record a batch sent to a subcon — this feeds the weekly payroll">📦 Send to subcon</button>}
             {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Assign subcon</button>}
           </div>
         </div>
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
           <button onClick={()=>setSbTab('floor')} className={`px-3 py-1.5 rounded-md ${sbTab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor tracking</button>
-          <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>📦 Send-outs & deliveries → payroll</button>
+          <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 For payroll{(queue||[]).filter(q=>!q.deleted_at&&q.status==='staged').length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&q.status==='staged').length})`:''}</button>
         </div>
       </div>
 
-      {sbTab==='payroll' && (
-        <div>
-          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 mb-3">
-            Each send-out here is what feeds the <strong>weekly subcon payroll</strong>. Record what you send to a subcon (garment, qty, per-garment rate), then log each delivery back with its date. At the Friday cutoff, Accounting generates the payroll from these good returns — no re-encoding. Pull a garment + qty straight from a Production Board job when you create a send.
-          </div>
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
-              {[['active','Out / partial'],['completed','Completed'],['all','All']].map(([k,l])=>(<button key={k} onClick={()=>setSendTab(k)} className={`px-3 py-1.5 rounded-md ${sendTab===k?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>{l}</button>))}
+      {sbTab==='payroll' && (()=>{
+        const staged=(queue||[]).filter(q=>!q.deleted_at && q.status==='staged');
+        const sent=(queue||[]).filter(q=>!q.deleted_at && q.status==='sent');
+        const shown=payrollSub==='sent'?sent:staged;
+        const projNm=(leadId)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name||l.client_name):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
+        const totalPcs=staged.reduce((t,q)=>t+Number(q.qty||0),0);
+        const totalAmt=staged.reduce((t,q)=>t+Number(q.qty||0)*Number(q.rate||0),0);
+        return (
+        <div className="space-y-3">
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800">Everything the supervisor adds from the floor lands here. Double-check the subcon, quantity and rate, then <strong>send to Subcon Payroll</strong>. Partial deliveries are fine — only what you add here gets paid; the rest stays on the floor until returned.</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+              <button onClick={()=>setPayrollSub('staged')} className={`px-3 py-1 rounded-md ${payrollSub==='staged'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>For payroll ({staged.length})</button>
+              <button onClick={()=>setPayrollSub('sent')} className={`px-3 py-1 rounded-md ${payrollSub==='sent'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sent ({sent.length})</button>
             </div>
-            <input value={sendSearch} onChange={e=>setSendSearch(e.target.value)} placeholder="Search SCS # / subcon / garment / client…" className="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
-            {canLogPayroll && <button onClick={()=>setCreatingSend(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
+            <div className="flex-1"></div>
+            {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(totalPcs)} pcs · <b className="text-slate-700">{peso(totalAmt)}</b></div>}
+            {payrollSub==='staged' && canLogPayroll && staged.length>0 && <button onClick={()=>sendQueueToPayroll(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">📤 Send all to Subcon Payroll ({staged.length})</button>}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
-              <th className="text-left px-3 py-2">SCS #</th><th className="text-left px-3 py-2">Sent</th><th className="text-left px-3 py-2">Subcon</th>
-              <th className="text-left px-3 py-2">Garment</th><th className="text-left px-3 py-2">Client</th>
-              <th className="text-right px-3 py-2">Qty out</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Outstanding</th>
-              <th className="text-right px-3 py-2">Rate</th><th className="text-center px-3 py-2">Status</th><th></th>
+              <th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Item</th>
+              <th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>
+              <th className="text-left px-3 py-2">Return date</th><th></th>
             </tr></thead>
             <tbody>
-              {sendList.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No send-outs {sendTab==='all'?'yet':'in this view'}. {canLogPayroll?'Click “Send to subcon” to record one.':''}</td></tr>}
-              {sendList.map(s=>{ const t=subconSendTotals(s, subconReturns); const sm=SEND_STATUS_META[s.status]||SEND_STATUS_META.in_progress; return (
-                <tr key={s.id} className="border-t hover:bg-slate-50">
-                  <td className="px-3 py-2 font-mono text-xs">{s.number||'—'}</td>
-                  <td className="px-3 py-2 text-xs">{fmtDate(s.date_sent)}</td>
-                  <td className="px-3 py-2 font-medium">{subconNm(s.subcon_id)}</td>
-                  <td className="px-3 py-2">{s.garment}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500">{s.client_name||'—'}</td>
-                  <td className="px-3 py-2 text-right">{num(s.quantity_sent)}</td>
-                  <td className="px-3 py-2 text-right text-emerald-700">{num(t.returnedGood)}{t.variance>0 && <span className="text-[10px] text-rose-500" title="variance (unpaid)"> +{num(t.variance)}v</span>}</td>
-                  <td className="px-3 py-2 text-right font-semibold"><span className={t.outstanding>0?'text-amber-700':'text-emerald-700'}>{num(t.outstanding)}</span></td>
-                  <td className="px-3 py-2 text-right text-xs">{peso(s.rate_per_garment)}</td>
-                  <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${sm[1]}`}>{sm[0]}</span></td>
+              {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">{payrollSub==='sent'?'Nothing sent to payroll yet.':'Nothing staged. On the Floor tracking tab, log returns then click “💰 Add to payroll”.'}</td></tr>}
+              {shown.map(q=>(
+                <tr key={q.id} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium">{subconNm(q.subcon_id)}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{projNm(q.lead_id)}</td>
+                  <td className="px-3 py-2 text-xs">{q.item_label||q.garment||'—'}</td>
+                  <td className="px-3 py-2 text-right">{payrollSub==='staged'&&canLogPayroll ? <input type="number" min="0" defaultValue={q.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(q.qty)) updateQueueRow(q.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : num(q.qty)}</td>
+                  <td className="px-3 py-2 text-right">{payrollSub==='staged'&&canLogPayroll ? <input type="number" min="0" step="0.01" defaultValue={q.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==q.rate) updateQueueRow(q.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : peso(q.rate)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(Number(q.qty||0)*Number(q.rate||0))}</td>
+                  <td className="px-3 py-2 text-xs">{q.return_date?fmtDate(q.return_date):'—'}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {canLogPayroll && s.status!=='cancelled' && t.outstanding>0 && <button onClick={()=>setLogReturnFor(s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Returned by subcon</button>}
-                    <button onClick={()=>setViewingSend(s)} className="text-xs text-indigo-600 hover:underline">View</button>
+                    {payrollSub==='staged' && canEdit && <button onClick={()=>removeQueueRow(q)} className="text-xs text-rose-500 hover:underline mr-2">Remove</button>}
+                    {payrollSub==='staged' && canLogPayroll && <button onClick={()=>sendQueueToPayroll([q])} className="text-xs text-violet-700 hover:underline font-semibold">📤 Send</button>}
+                    {payrollSub==='sent' && <span className="text-[10px] text-emerald-600 font-semibold">✓ in payroll</span>}
                   </td>
                 </tr>
-              ); })}
+              ))}
             </tbody>
           </table></div></div>
+          {payrollSub==='staged' && canLogPayroll && <div className="text-[11px] text-slate-400">Sending creates the payroll record for that subcon. Finalize & pay it in the <strong>Subcon Payroll</strong> module → Weekly payroll.</div>}
         </div>
-      )}
+        );
+      })()}
 
       {sbTab==='floor' && (<div className="sbfloor-wrap">
 
@@ -10555,6 +10600,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
 
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
       {floorReturn && <SubconFloorReturnModal p={floorReturn.p} s={floorReturn.s} onSave={(vals)=>saveFloorReturn(floorReturn.p, floorReturn.s, vals)} onClose={()=>setFloorReturn(null)} />}
+      {addPayroll && <SubconAddToPayrollModal p={addPayroll.p} s={addPayroll.s} subcons={subcons} onSave={(vals)=>addToPayrollQueue(addPayroll.p, addPayroll.s, vals)} onClose={()=>setAddPayroll(null)} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
@@ -10600,6 +10646,44 @@ function SubconFloorReturnModal({ p, s, onSave, onClose }){
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-1 border-t">
           <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'↩ Log return'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+// Add returned pieces to the For-payroll staging list (partial deliveries OK).
+function SubconAddToPayrollModal({ p, s, subcons, onSave, onClose }){
+  const sub=(subcons||[]).find(x=>x.id===s.subcon_id);
+  const [f,setF]=useState({ qty:String(s.payable||''), rate: (sub?.default_rate!=null?String(sub.default_rate):''), return_date: todayManila() });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  async function save(){
+    const qty=Number(f.qty)||0;
+    if(qty<=0){ setMsg('Enter how many pieces to add to payroll.'); return; }
+    if(qty>Number(s.payable||0)+0.001){ setMsg(`Only ${Number(s.payable||0).toLocaleString()} returned pcs are not yet on the payroll list.`); return; }
+    setBusy(true); setMsg('');
+    try{ await onSave({ qty, rate:f.rate, return_date:f.return_date }); onClose(); }
+    catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`💰 Add to payroll — ${s.subcon}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">{p.label}{s.itemList?` · ${s.itemList}`:''}</div>
+        <div className="bg-slate-50 border rounded p-3 grid grid-cols-3 gap-3 text-xs text-center">
+          <div><div className="uppercase text-slate-500 font-semibold">Returned</div><div className="text-lg font-bold text-emerald-700">{Number(s.returned||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Already added</div><div className="text-lg font-bold text-violet-700">{Number(s.staged||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Can add now</div><div className="text-lg font-bold text-amber-700">{Number(s.payable||0).toLocaleString()}</div></div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Pcs to pay *"><input type="number" min="0" className="input text-right" value={f.qty} onChange={e=>up('qty',e.target.value)} /></TpLbl>
+          <TpLbl t="Rate / pc"><input type="number" min="0" step="0.01" className="input text-right" value={f.rate} onChange={e=>up('rate',e.target.value)} placeholder="₱" /></TpLbl>
+          <TpLbl t="Return date"><input type="date" className="input" value={f.return_date} onChange={e=>up('return_date',e.target.value)} /></TpLbl>
+        </div>
+        <div className="text-[10px] text-slate-500">This adds the pieces to the <strong>For payroll</strong> tab. Nothing is paid until you review and send it to Subcon Payroll.</div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-1 border-t">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Adding…':'💰 Add to payroll'}</button>
           <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
         </div>
       </div>
