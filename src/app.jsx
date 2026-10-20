@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 815 · BIR 2307: the period date and both TINs now place each digit centered inside its own box (not on the divider lines), so the numbers are clearly readable.";
+const BUILD = "Live build 816 · BIR 2307: moved the Tax Withheld amount left so it sits fully inside its column (was touching the right border).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43186,13 +43186,13 @@ function BIR2307PrintView({ data, profile, onClose }){
           <F l={272} t={385} w={68} a="right" s={10}>{monthCols[1]}</F>
           <F l={344} t={385} w={66} a="right" s={10}>{monthCols[2]}</F>
           <F l={413} t={385} w={66} a="right" s={10}>{amt(subtotal)}</F>
-          <F l={486} t={385} w={96} a="right" s={10}>{amt(wht)}</F>
+          <F l={486} t={385} w={84} a="right" s={10}>{amt(wht)}</F>
           {/* Part III — Total row */}
           <F l={200} t={537} w={68} a="right" s={10} bold>{monthCols[0]}</F>
           <F l={272} t={537} w={68} a="right" s={10} bold>{monthCols[1]}</F>
           <F l={344} t={537} w={66} a="right" s={10} bold>{monthCols[2]}</F>
           <F l={413} t={537} w={66} a="right" s={10} bold>{amt(subtotal)}</F>
-          <F l={486} t={537} w={96} a="right" s={10} bold>{amt(wht)}</F>
+          <F l={486} t={537} w={84} a="right" s={10} bold>{amt(wht)}</F>
           {/* Signatories */}
           <F l={30} t={784} w={552} a="center" s={9} bold>STEEZE CORPORATION</F>
           <F l={30} t={864} w={552} a="center" s={9} bold>{supplier?.company||''}</F>
