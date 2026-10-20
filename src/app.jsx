@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 801 · Subcon Payroll › Projects: fully-returned/closed projects no longer flood the view — defaults to Active, with Active / Done / All filter chips (+counts). Same clean-up as the Weekly payroll tab.";
+const BUILD = "Live build 802 · New 🏦 Check Monitoring (Finance): track every check we issue per bank + booklet — outstanding/cleared/cancelled/voided, next free check number, and each booklet's remaining count. PNB booklets #1 (2000002357–400) and #2 (2000002401–500) are pre-loaded.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35567,6 +35567,230 @@ function HRPaymentRequestsView({ profile, profiles, rfps, reload }){
   );
 }
 
+/* ─────────── CHECK MONITORING ─────────── */
+const CHECK_STATUSES = [
+  { key:'issued',    label:'Outstanding', color:'bg-amber-100 text-amber-700',  hint:'Released to payee — not yet cleared by the bank' },
+  { key:'cleared',   label:'Cleared',     color:'bg-emerald-100 text-emerald-700', hint:'Encashed / debited from our account' },
+  { key:'cancelled', label:'Cancelled',   color:'bg-slate-200 text-slate-600',  hint:'Called back after release — payment did not push through' },
+  { key:'void',      label:'Voided',      color:'bg-rose-100 text-rose-700',    hint:'Physical check spoiled — number used up, never valid' },
+  { key:'stale',     label:'Stale',       color:'bg-purple-100 text-purple-700',hint:'Uncashed beyond 6 months — ask the bank to reissue' },
+];
+function checkStatusMeta(k){ return CHECK_STATUSES.find(s=>s.key===k)||CHECK_STATUSES[0]; }
+function canManageChecks(p){ return ['admin','accounting','accounting_officer'].includes(p?.role); }
+// Smallest unused check number across a bank's active booklets ('' if none left).
+function nextCheckNo(bankId, booklets, checks){
+  const used=new Set((checks||[]).filter(c=>!c.deleted_at && c.bank_id===bankId).map(c=>Number(c.check_no)));
+  const bks=(booklets||[]).filter(b=>!b.deleted_at && b.active!==false && b.bank_id===bankId).sort((a,b)=>Number(a.start_no)-Number(b.start_no));
+  for(const b of bks){ for(let n=Number(b.start_no); n<=Number(b.end_no); n++){ if(!used.has(n)) return n; } }
+  return '';
+}
+function bookletForNo(no, bankId, booklets){ return (booklets||[]).find(b=>!b.deleted_at && b.bank_id===bankId && Number(no)>=Number(b.start_no) && Number(no)<=Number(b.end_no))||null; }
+
+function CheckFormModal({ profile, existing, prefillBankId, bankAccounts, booklets, checks, onClose, onSaved }){
+  const isEdit=!!existing?.id;
+  const checkingBanks=(bankAccounts||[]).filter(b=>(booklets||[]).some(k=>!k.deleted_at && k.bank_id===b.id)) ;
+  const bankOpts = checkingBanks.length? checkingBanks : (bankAccounts||[]);
+  const [f,setF]=useState({
+    bank_id: existing?.bank_id || prefillBankId || bankOpts[0]?.id || '',
+    check_no: existing?.check_no!=null ? String(existing.check_no) : '',
+    date_issued: existing?.date_issued || todayManila(),
+    payee: existing?.payee || '',
+    amount: existing?.amount!=null ? String(existing.amount) : '',
+    particulars: existing?.particulars || '',
+    status: existing?.status || 'issued',
+    date_cleared: existing?.date_cleared || '',
+    reference: existing?.reference || '',
+    notes: existing?.notes || '',
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  // Auto-suggest the next number when creating / switching bank.
+  useEffect(()=>{ if(isEdit) return; const n=nextCheckNo(f.bank_id, booklets, checks); if(n!=='') setF(p=>({...p, check_no:String(n)})); }, [f.bank_id]);
+  const noNum=Number(f.check_no);
+  const bk=f.check_no?bookletForNo(noNum, f.bank_id, booklets):null;
+  const dup=(checks||[]).find(c=>!c.deleted_at && c.bank_id===f.bank_id && Number(c.check_no)===noNum && c.id!==existing?.id);
+  async function save(){
+    if(!f.bank_id){ setMsg('Pick the bank account.'); return; }
+    if(!(noNum>0)){ setMsg('Enter the check number.'); return; }
+    if(dup){ setMsg(`Check #${f.check_no} is already recorded for this bank.`); return; }
+    if(!bk){ setMsg('That number is not inside any booklet for this bank. Add the booklet first, or check the number.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ bank_id:f.bank_id, booklet_id:bk?.id||null, check_no:noNum, status:f.status,
+      date_issued:f.date_issued||null, payee:f.payee.trim()||null, amount:f.amount===''?null:Number(f.amount),
+      particulars:f.particulars.trim()||null, date_cleared:(f.status==='cleared'?(f.date_cleared||todayManila()):(f.date_cleared||null)),
+      reference:f.reference.trim()||null, notes:f.notes.trim()||null, updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('checks').update(payload).eq('id', existing.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('checks').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm(`Delete the record for check #${existing.check_no}? (Frees the number again.)`)) return; const { error }=await sb.from('checks').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', existing.id); if(error){ alert(error.message); return; } onSaved(); }
+  const bankNm=(id)=>(bankAccounts||[]).find(b=>b.id===id)?.name||'—';
+  return (
+    <Modal title={isEdit?`Check #${existing.check_no} · ${bankNm(existing.bank_id)}`:'+ Record a check'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Bank account *"><select className="input" value={f.bank_id} onChange={e=>up('bank_id',e.target.value)} disabled={isEdit}>{bankOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></TpLbl>
+          <TpLbl t="Check number *"><input className="input font-mono" value={f.check_no} onChange={e=>up('check_no',e.target.value.replace(/[^0-9]/g,''))} placeholder="e.g. 2000002357" /></TpLbl>
+        </div>
+        <div className="text-[11px]">{dup ? <span className="text-rose-600">⚠ Already recorded for this bank.</span> : bk ? <span className="text-slate-500">Booklet #{bk.booklet_no} ({Number(bk.start_no).toLocaleString()}–{Number(bk.end_no).toLocaleString()}){!isEdit && <> · next free: <button type="button" className="text-indigo-600 font-semibold" onClick={()=>up('check_no',String(nextCheckNo(f.bank_id,booklets,checks)))}>{Number(nextCheckNo(f.bank_id,booklets,checks)).toLocaleString()}</button></>}</span> : (f.check_no? <span className="text-amber-600">Not inside any booklet for this bank.</span>:null)}</div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date issued"><input type="date" className="input" value={f.date_issued} onChange={e=>up('date_issued',e.target.value)} /></TpLbl>
+          <TpLbl t="Amount"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{CHECK_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Pay to (payee)"><input className="input" value={f.payee} onChange={e=>up('payee',e.target.value)} placeholder="Who the check is for" /></TpLbl>
+        <TpLbl t="Particulars / purpose"><input className="input" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="What it's for" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          {(f.status==='cleared'||f.status==='stale') && <TpLbl t="Date cleared"><input type="date" className="input" value={f.date_cleared} onChange={e=>up('date_cleared',e.target.value)} /></TpLbl>}
+          <TpLbl t="Reference (RFP/voucher #)"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="Optional" /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save check':'Record check'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function CheckBookletModal({ profile, existing, bankAccounts, onClose, onSaved }){
+  const isEdit=!!existing?.id;
+  const [f,setF]=useState({ bank_id:existing?.bank_id||(bankAccounts||[])[0]?.id||'', booklet_no:existing?.booklet_no||'', start_no:existing?.start_no!=null?String(existing.start_no):'', end_no:existing?.end_no!=null?String(existing.end_no):'', active:existing?.active!==false, notes:existing?.notes||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function save(){
+    if(!f.bank_id){ setMsg('Pick the bank.'); return; }
+    const sn=Number(f.start_no), en=Number(f.end_no);
+    if(!(sn>0)||!(en>0)||en<sn){ setMsg('Enter a valid start and end number (end ≥ start).'); return; }
+    setBusy(true); setMsg('');
+    const payload={ bank_id:f.bank_id, booklet_no:f.booklet_no.trim()||null, start_no:sn, end_no:en, active:!!f.active, notes:f.notes.trim()||null };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('check_booklets').update(payload).eq('id', existing.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('check_booklets').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm('Delete this booklet? (Checks already recorded from it stay.)')) return; const { error }=await sb.from('check_booklets').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', existing.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?'Edit booklet':'+ Add check booklet'} onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Bank account *"><select className="input" value={f.bank_id} onChange={e=>up('bank_id',e.target.value)}>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></TpLbl>
+        <TpLbl t="Booklet # / label"><input className="input" value={f.booklet_no} onChange={e=>up('booklet_no',e.target.value)} placeholder="e.g. 1" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="First check no. *"><input className="input font-mono" value={f.start_no} onChange={e=>up('start_no',e.target.value.replace(/[^0-9]/g,''))} placeholder="2000002357" /></TpLbl>
+          <TpLbl t="Last check no. *"><input className="input font-mono" value={f.end_no} onChange={e=>up('end_no',e.target.value.replace(/[^0-9]/g,''))} placeholder="2000002400" /></TpLbl>
+        </div>
+        {f.start_no&&f.end_no&&Number(f.end_no)>=Number(f.start_no) && <div className="text-[11px] text-slate-500">{(Number(f.end_no)-Number(f.start_no)+1).toLocaleString()} checks in this booklet.</div>}
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.active} onChange={e=>up('active',e.target.checked)} className="accent-indigo-600" /> Active (draw new checks from this booklet)</label>
+        <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save booklet':'Add booklet'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, reload }){
+  const canEdit=canManageChecks(profile);
+  const [editing,setEditing]=useState(null);   // check row / {} for new
+  const [bookletEdit,setBookletEdit]=useState(null);
+  const [bankFilter,setBankFilter]=useState('');
+  const [statusFilter,setStatusFilter]=useState('issued');
+  const [search,setSearch]=useState('');
+  const banksWithBooklets=(bankAccounts||[]).filter(b=>(checkBooklets||[]).some(k=>!k.deleted_at && k.bank_id===b.id));
+  const bankNm=(id)=>(bankAccounts||[]).find(b=>b.id===id)?.name||'—';
+  const live=(checks||[]).filter(c=>!c.deleted_at).filter(c=>!bankFilter||c.bank_id===bankFilter);
+  const scope=live.filter(c=> !search || `${c.check_no||''} ${c.payee||''} ${c.particulars||''} ${c.reference||''}`.toLowerCase().includes(search.toLowerCase()));
+  const rows=scope.filter(c=> !statusFilter || c.status===statusFilter).sort((a,b)=>Number(b.check_no)-Number(a.check_no));
+  const cnt=(k)=>scope.filter(c=>c.status===k).length;
+  const outstanding=scope.filter(c=>c.status==='issued');
+  const outTotal=outstanding.reduce((s,c)=>s+Number(c.amount||0),0);
+  const clearedTotal=scope.filter(c=>c.status==='cleared').reduce((s,c)=>s+Number(c.amount||0),0);
+  // Booklet availability (respect bank filter).
+  const bookletStats=(checkBooklets||[]).filter(b=>!b.deleted_at && (!bankFilter||b.bank_id===bankFilter)).map(b=>{
+    const size=Number(b.end_no)-Number(b.start_no)+1;
+    const used=(checks||[]).filter(c=>!c.deleted_at && c.bank_id===b.bank_id && Number(c.check_no)>=Number(b.start_no) && Number(c.check_no)<=Number(b.end_no)).length;
+    return { b, size, used, avail:size-used };
+  }).sort((a,b)=>String(bankNm(a.b.bank_id)).localeCompare(bankNm(b.b.bank_id))||Number(a.b.start_no)-Number(b.b.start_no));
+  const totalAvail=bookletStats.reduce((s,x)=>s+x.avail,0);
+  async function quickStatus(c, status){ const patch={ status, updated_at:new Date().toISOString() }; if(status==='cleared' && !c.date_cleared) patch.date_cleared=todayManila(); const { error }=await sb.from('checks').update(patch).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🏦 Check Monitoring</h1><p className="text-slate-500 text-sm">Every check we issue — outstanding, cleared, voided — with each booklet's remaining numbers.</p></div>
+          {canEdit && <div className="flex gap-2">
+            <button onClick={()=>setBookletEdit({})} className="px-3 py-2 rounded-lg bg-white border text-slate-700 text-sm font-semibold hover:bg-slate-50">+ Booklet</button>
+            <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Record check</button>
+          </div>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={bankFilter} onChange={e=>setBankFilter(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200"><option value="">All banks</option>{(banksWithBooklets.length?banksWithBooklets:bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+            {[['issued','Outstanding',cnt('issued')],['cleared','Cleared',cnt('cleared')],['cancelled','Cancelled',cnt('cancelled')],['void','Voided',cnt('void')],['','All',scope.length]].map(([k,l,n])=>(
+              <button key={k} onClick={()=>setStatusFilter(k)} className={`px-2.5 py-1 rounded-md ${statusFilter===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l} <span className="opacity-60">{n}</span></button>
+            ))}
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search check # / payee / purpose…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3"><div className="text-[10px] uppercase text-amber-700 font-semibold">Outstanding</div><div className="text-2xl font-bold text-amber-800">{peso(outTotal)}</div><div className="text-[11px] text-amber-700">{outstanding.length} check{outstanding.length===1?'':'s'} not yet cleared</div></div>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-[10px] uppercase text-emerald-700 font-semibold">Cleared</div><div className="text-2xl font-bold text-emerald-800">{peso(clearedTotal)}</div><div className="text-[11px] text-emerald-700">{cnt('cleared')} cleared</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Checks remaining</div><div className="text-2xl font-bold text-slate-800">{totalAvail.toLocaleString()}</div><div className="text-[11px] text-slate-400">unused across booklets</div></div>
+        <div className="bg-white border rounded-xl p-3"><div className="text-[10px] uppercase text-slate-400 font-semibold">Next check no.</div>{(banksWithBooklets.length?banksWithBooklets:[]).filter(b=>!bankFilter||b.id===bankFilter).map(b=>{ const n=nextCheckNo(b.id, checkBooklets, checks); return <div key={b.id} className="text-sm"><span className="text-slate-500">{b.name}:</span> <span className="font-mono font-bold">{n===''?'— none —':Number(n).toLocaleString()}</span></div>; })}</div>
+      </div>
+
+      {bookletStats.length>0 && <div className="bg-white border rounded-xl p-3 mb-4">
+        <div className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold mb-2">📒 Booklets</div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {bookletStats.map(({b,size,used,avail})=>(
+            <div key={b.id} className={`border rounded-lg p-2.5 ${b.active===false?'bg-slate-50 opacity-70':''}`}>
+              <div className="flex items-center justify-between"><div className="font-semibold text-sm">{bankNm(b.bank_id)} · Booklet #{b.booklet_no||'—'}</div>{canEdit && <button onClick={()=>setBookletEdit(b)} className="text-[11px] text-indigo-600 hover:underline">Edit</button>}</div>
+              <div className="font-mono text-xs text-slate-500">{Number(b.start_no).toLocaleString()}–{Number(b.end_no).toLocaleString()}</div>
+              <div className="flex items-center gap-2 mt-1.5 text-xs"><span className="text-slate-500">{used}/{size} used</span><div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-indigo-500" style={{width:`${size?Math.round(used/size*100):0}%`}}></div></div><span className={`font-semibold ${avail>0?'text-emerald-700':'text-rose-600'}`}>{avail} left</span></div>
+            </div>
+          ))}
+        </div>
+      </div>}
+
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Check #</th><th className="text-left px-3 py-2">Bank</th>
+          <th className="text-left px-3 py-2">Issued</th><th className="text-left px-3 py-2">Payee</th>
+          <th className="text-left px-3 py-2">Particulars</th><th className="text-right px-3 py-2">Amount</th>
+          <th className="text-left px-3 py-2">Cleared</th><th className="text-center px-3 py-2">Status</th><th></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">{live.length===0?'No checks recorded yet. Click “+ Record check”.':statusFilter==='issued'?'🎉 No outstanding checks — all cleared.':'No checks match.'}</td></tr>}
+          {rows.map(c=>{ const m=checkStatusMeta(c.status); return (
+            <tr key={c.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(c)}>
+              <td className="px-3 py-2 font-mono text-xs font-bold">{Number(c.check_no).toLocaleString()}</td>
+              <td className="px-3 py-2">{bankNm(c.bank_id)}</td>
+              <td className="px-3 py-2 text-xs">{c.date_issued?fmtDate(c.date_issued):'—'}</td>
+              <td className="px-3 py-2">{c.payee||'—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-500"><div className="truncate max-w-[16rem]" title={c.particulars}>{c.particulars||'—'}</div>{c.reference && <div className="text-[10px] text-slate-400">{c.reference}</div>}</td>
+              <td className="px-3 py-2 text-right font-semibold">{c.amount!=null?peso(c.amount):'—'}</td>
+              <td className="px-3 py-2 text-xs">{c.date_cleared?fmtDate(c.date_cleared):'—'}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`} title={m.hint}>{m.label}</span></td>
+              <td className="px-3 py-2 text-right whitespace-nowrap" onClick={e=>e.stopPropagation()}>
+                {canEdit && c.status==='issued' && <button onClick={()=>quickStatus(c,'cleared')} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Mark as cleared by the bank">✓ Cleared</button>}
+                {canEdit && <button onClick={()=>setEditing(c)} className="text-xs text-indigo-600 hover:underline">Edit</button>}
+              </td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <CheckFormModal profile={profile} existing={editing.id?editing:null} prefillBankId={bankFilter||undefined} bankAccounts={bankAccounts} booklets={checkBooklets} checks={checks} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+      {bookletEdit && <CheckBookletModal profile={profile} existing={bookletEdit.id?bookletEdit:null} bankAccounts={bankAccounts} onClose={()=>setBookletEdit(null)} onSaved={()=>{ setBookletEdit(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+
 /* ─────────── RFP QUEUE + VOUCHERS ─────────── */
 const RFP_STATUSES = [
   { key:'pending_purchasing', label:'Needs Proof',    color:'bg-fuchsia-100 text-fuchsia-700' },
@@ -47108,6 +47332,8 @@ function App(){
   const [subconPayrolls,setSubconPayrolls]=useState([]);
   const [subconPayrollItems,setSubconPayrollItems]=useState([]);
   const [subconProjects,setSubconProjects]=useState([]);
+  const [checks,setChecks]=useState([]);
+  const [checkBooklets,setCheckBooklets]=useState([]);
   // Sales commissions ledger (one row per earned half: booking | collection).
   // Used by the Commissions view + Voucher generation for monthly payouts.
   const [salesCommissions,setSalesCommissions]=useState([]);
@@ -47537,6 +47763,9 @@ function App(){
     setSubconPayrolls(sbp && !sbp.error ? (sbp.data||[]) : []);
     setSubconPayrollItems(sbpi && !sbpi.error ? (sbpi.data||[]) : []);
     setSubconProjects(sbproj && !sbproj.error ? (sbproj.data||[]) : []);
+    // Check monitoring (graceful empty if SQL not yet run).
+    try { const ck = await sb.from('checks').select('*').is('deleted_at',null).order('check_no',{ascending:false}); setChecks(ck && !ck.error ? (ck.data||[]) : []); } catch(_){ setChecks([]); }
+    try { const cb = await sb.from('check_booklets').select('*').is('deleted_at',null).order('start_no'); setCheckBooklets(cb && !cb.error ? (cb.data||[]) : []); } catch(_){ setCheckBooklets([]); }
     setSalesCommissions(sccm && !sccm.error ? (sccm.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
@@ -47667,7 +47896,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -48239,6 +48468,7 @@ function App(){
     ['cash-advances','Cash Advances','🧾'],
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
+    ['checks','Check Monitoring','🏦'],
     ['assets','Asset Register','🏷'],
     ['journal','Journal Entries','📓'],
     ['general-ledger','General Ledger','📒'],
@@ -48769,6 +48999,7 @@ function App(){
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
         {view==='hr-payments' && <HRPaymentRequestsView profile={profile} profiles={profiles} rfps={rfps} reload={loadAll} />}
+        {view==='checks' && <CheckMonitoringView profile={profile} bankAccounts={bankAccounts} checks={checks} checkBooklets={checkBooklets} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
