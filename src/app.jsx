@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 805 · BIR Form 2307 now prints the exact official form — our data is overlaid on a scan of the real January 2018 (ENCS) certificate (Legal 8.5×14in). Supplier TIN/address, period, Part III amounts and signatory names drop into the real boxes.";
+const BUILD = "Live build 806 · BIR 2307: numbers now sit correctly inside the boxes — TIN digits land in their cell groups (3-3-3-branch), the ZIP stays in the ZIP box, and Part III amounts clear the form’s pre-printed dashes.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43061,6 +43061,16 @@ function BIR2307PrintView({ data, profile, onClose }){
   const STEEZE_ZIP='1747';
   const amt=(n)=>Number(n||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
   const monthCols=[0,1,2].map(i=> i===qCol ? amt(subtotal) : '');
+  // TIN split into the form's four cell groups (3-3-3-branch). Centers (pt) of
+  // each group's boxes so digits land inside, with the form's own dashes between.
+  const TIN_C=[218,265,312];
+  const tinParts=(t)=>String(t||'').split('-');
+  const Tin=({t,top})=>{ const p=tinParts(t); return (<>
+    {p[0]!==undefined && <F l={TIN_C[0]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[0]}</F>}
+    {p[1]!==undefined && <F l={TIN_C[1]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[1]}</F>}
+    {p[2]!==undefined && <F l={TIN_C[2]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[2]}</F>}
+    {p[3]!==undefined && <F l={342} t={top} w={44} a="left" s={9} mono ls={1}>{p[3]}</F>}
+  </>); };
   // pt → inch for exact placement on the legal page.
   const IN=(x)=>`${(x/72).toFixed(4)}in`;
   const F=({l,t,w,a='left',s=8.5,bold,mono,ls,children})=> (
@@ -43087,29 +43097,29 @@ function BIR2307PrintView({ data, profile, onClose }){
           <F l={150} t={120} w={104} a="center" s={9} mono ls={1}>{periodFrom}</F>
           <F l={382} t={120} w={110} a="center" s={9} mono ls={1}>{periodTo}</F>
           {/* Part I — Payee (supplier) */}
-          <F l={158} t={148} w={150} a="center" s={9} mono ls={1}>{supplier?.tin||''}</F>
+          <Tin t={supplier?.tin} top={148} />
           <F l={66} t={173} w={515} s={9.5} bold>{(supplier?.company||'').toUpperCase()}</F>
           <F l={36} t={201} w={495} s={8.5}>{supplier?.address||''}</F>
-          <F l={540} t={201} w={56} a="center" s={8.5}>{supplier?.zip||''}</F>
+          <F l={537} t={201} w={52} a="left" s={8.5}>{supplier?.zip||''}</F>
           {/* Part II — Payor (us) */}
-          <F l={158} t={268} w={150} a="center" s={9} mono ls={1}>{STEEZE_TIN}</F>
+          <Tin t={STEEZE_TIN} top={268} />
           <F l={62} t={291} w={515} s={9.5} bold>STEEZE CORPORATION</F>
           <F l={36} t={320} w={495} s={8.5}>{STEEZE_ADDRESS}</F>
-          <F l={540} t={320} w={56} a="center" s={8.5}>{STEEZE_ZIP}</F>
-          {/* Part III — EWT detail row */}
+          <F l={537} t={320} w={52} a="left" s={8.5}>{STEEZE_ZIP}</F>
+          {/* Part III — EWT detail row (right-aligned, clear of the pre-printed dashes) */}
           <F l={20} t={384} w={148} s={7.5}>{nature}</F>
           <F l={170} t={384} w={42} a="center" s={8} mono>{atc}</F>
-          <F l={214} t={386} w={64} a="right" s={8}>{monthCols[0]}</F>
-          <F l={283} t={386} w={67} a="right" s={8}>{monthCols[1]}</F>
-          <F l={355} t={386} w={65} a="right" s={8}>{monthCols[2]}</F>
-          <F l={425} t={386} w={65} a="right" s={8}>{amt(subtotal)}</F>
-          <F l={494} t={386} w={98} a="right" s={8}>{amt(wht)}</F>
+          <F l={206} t={386} w={62} a="right" s={8}>{monthCols[0]}</F>
+          <F l={278} t={386} w={62} a="right" s={8}>{monthCols[1]}</F>
+          <F l={348} t={386} w={62} a="right" s={8}>{monthCols[2]}</F>
+          <F l={417} t={386} w={62} a="right" s={8}>{amt(subtotal)}</F>
+          <F l={490} t={386} w={92} a="right" s={8}>{amt(wht)}</F>
           {/* Part III — Total row */}
-          <F l={214} t={538} w={64} a="right" s={8} bold>{monthCols[0]}</F>
-          <F l={283} t={538} w={67} a="right" s={8} bold>{monthCols[1]}</F>
-          <F l={355} t={538} w={65} a="right" s={8} bold>{monthCols[2]}</F>
-          <F l={425} t={538} w={65} a="right" s={8} bold>{amt(subtotal)}</F>
-          <F l={494} t={538} w={98} a="right" s={8} bold>{amt(wht)}</F>
+          <F l={206} t={538} w={62} a="right" s={8} bold>{monthCols[0]}</F>
+          <F l={278} t={538} w={62} a="right" s={8} bold>{monthCols[1]}</F>
+          <F l={348} t={538} w={62} a="right" s={8} bold>{monthCols[2]}</F>
+          <F l={417} t={538} w={62} a="right" s={8} bold>{amt(subtotal)}</F>
+          <F l={490} t={538} w={92} a="right" s={8} bold>{amt(wht)}</F>
           {/* Signatories */}
           <F l={30} t={784} w={552} a="center" s={9} bold>STEEZE CORPORATION</F>
           <F l={30} t={864} w={552} a="center" s={9} bold>{supplier?.company||''}</F>
