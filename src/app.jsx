@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 818 · Subcon Sewing: removed per-row Done; added “💰 Add to payroll” (partial deliveries OK) that stages returned pcs. The 2nd tab is now “💰 For payroll” — supervisor reviews subcon/qty/rate, then sends to Subcon Payroll. Sent items show separately; unpaid stay in the queue.";
+const BUILD = "Live build 819 · Subcon Sewing: click a subcon name to open its full log — totals plus every return logged (date, good, variance, reason) and every batch added to payroll (qty, rate, status), all in one view.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10265,6 +10265,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const [queue,setQueue]=useState([]);                // subcon_payroll_queue (staged for payroll)
   const [addPayroll,setAddPayroll]=useState(null);    // { p, s } — add returned pcs to the payroll queue
   const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'sent'
+  const [rowDetail,setRowDetail]=useState(null);       // { p, s } — open a subcon's full log
   const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
@@ -10419,7 +10420,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const rowOk=(s)=> rowFilter==='all' ? true : rowFilter==='open' ? (s.balance>0) : (s.out>0 && s.balance<=0);
   const subRow=(p,s,i,showProject)=>(
     <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
-      <td className="px-3 py-2 font-medium">{showProject?p.label:s.subcon}{s.out>0&&s.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">all returned</span>}{s.done && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>}{!s.done&&s.manualOnly && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
+      <td className="px-3 py-2 font-medium"><button onClick={()=>setRowDetail({p,s})} className="text-left hover:text-indigo-600 hover:underline" title="Open — see all returns + payroll entries for this subcon">{showProject?p.label:s.subcon}</button>{s.out>0&&s.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">all returned</span>}{s.manualOnly && s.out===0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
       <td className="px-3 py-2 text-xs text-slate-500">{s.itemList||'—'}</td>
       <td className="px-3 py-2 text-right">{s.qty?num(s.qty):'—'}</td>
       <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
@@ -10601,6 +10602,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
       {floorReturn && <SubconFloorReturnModal p={floorReturn.p} s={floorReturn.s} onSave={(vals)=>saveFloorReturn(floorReturn.p, floorReturn.s, vals)} onClose={()=>setFloorReturn(null)} />}
       {addPayroll && <SubconAddToPayrollModal p={addPayroll.p} s={addPayroll.s} subcons={subcons} onSave={(vals)=>addToPayrollQueue(addPayroll.p, addPayroll.s, vals)} onClose={()=>setAddPayroll(null)} />}
+      {rowDetail && <SubconRowDetailModal p={rowDetail.p} s={rowDetail.s} queue={(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===rowDetail.s.subcon_id && q.lead_id===rowDetail.p.lead_id)} profiles={profiles} canLog={canEdit && !rowDetail.p.projectDone} onAddReturn={()=>{ setFloorReturn({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onAddPayroll={()=>{ setAddPayroll({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onClose={()=>setRowDetail(null)} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
@@ -10647,6 +10649,58 @@ function SubconFloorReturnModal({ p, s, onSave, onClose }){
         <div className="flex gap-2 pt-1 border-t">
           <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'↩ Log return'}</button>
           <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+// Full log for one subcon on a project: every return logged + every batch added
+// to payroll, in one place.
+function SubconRowDetailModal({ p, s, queue, profiles, canLog, onAddReturn, onAddPayroll, onClose }){
+  const nm=(id)=>{ const u=(profiles||[]).find(x=>x.id===id); return u?(u.name||u.email):''; };
+  const returns=(s.assignment&&Array.isArray(s.assignment.returns))?s.assignment.returns.slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))):[];
+  const staged=(queue||[]).filter(q=>q.status==='staged');
+  const sent=(queue||[]).filter(q=>q.status==='sent');
+  const num=(n)=>Number(n||0).toLocaleString();
+  const Stat=({label,value,cls})=>(<div className="border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500 font-semibold">{label}</div><div className={`text-lg font-bold ${cls||''}`}>{value}</div></div>);
+  return (
+    <Modal title={`🧵 ${s.subcon} — ${p.label}`} onClose={onClose} wide>
+      <div className="space-y-4">
+        {s.itemList && <div className="text-xs text-slate-500">{s.itemList}</div>}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          <Stat label="Assigned" value={s.qty?num(s.qty):'—'} />
+          <Stat label="Out" value={num(s.out)} cls="text-indigo-700" />
+          <Stat label="Returned" value={num(s.returned)} cls="text-emerald-700" />
+          <Stat label="Variance" value={num(s.variance)} cls="text-rose-600" />
+          <Stat label="Balance" value={num(s.balance)} cls={s.balance>0?'text-amber-700':'text-emerald-700'} />
+          <Stat label="On payroll" value={num(s.staged)} cls="text-violet-700" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-xs font-bold uppercase tracking-wide text-slate-600">↩ Returns logged</div>
+            {canLog && <button onClick={onAddReturn} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">+ Log return</button>}
+          </div>
+          {returns.length===0 && (s.returnedBatch>0
+            ? <div className="text-xs text-slate-500 border rounded-lg p-3">{num(s.returnedBatch)} pcs recorded returned from production batches (no per-date log).</div>
+            : <div className="text-xs text-slate-400 border border-dashed rounded-lg p-3 text-center">No returns logged yet.</div>)}
+          {returns.length>0 && <div className="border rounded-lg overflow-hidden"><table className="w-full text-xs">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Date</th><th className="text-right px-3 py-1.5">Good</th><th className="text-right px-3 py-1.5">Variance</th><th className="text-left px-3 py-1.5">Reason</th><th className="text-left px-3 py-1.5">By</th></tr></thead>
+            <tbody>{returns.map((r,i)=>(<tr key={i} className="border-t"><td className="px-3 py-1.5">{r.date?fmtDate(r.date):'—'}</td><td className="px-3 py-1.5 text-right font-semibold text-emerald-700">{num(r.good)}</td><td className="px-3 py-1.5 text-right text-rose-600">{r.variance?num(r.variance):'—'}</td><td className="px-3 py-1.5">{r.reason||'—'}</td><td className="px-3 py-1.5 text-slate-500">{nm(r.by)}</td></tr>))}</tbody>
+          </table></div>}
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-xs font-bold uppercase tracking-wide text-slate-600">💰 Added to payroll</div>
+            {canLog && s.payable>0 && <button onClick={onAddPayroll} className="text-xs px-2.5 py-1 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700">+ Add to payroll ({num(s.payable)})</button>}
+          </div>
+          {(staged.length+sent.length)===0
+            ? <div className="text-xs text-slate-400 border border-dashed rounded-lg p-3 text-center">Nothing added to payroll yet.</div>
+            : <div className="border rounded-lg overflow-hidden"><table className="w-full text-xs">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Date</th><th className="text-right px-3 py-1.5">Qty</th><th className="text-right px-3 py-1.5">Rate</th><th className="text-right px-3 py-1.5">Amount</th><th className="text-center px-3 py-1.5">Status</th></tr></thead>
+                <tbody>{[...staged,...sent].map(q=>(<tr key={q.id} className="border-t"><td className="px-3 py-1.5">{q.return_date?fmtDate(q.return_date):fmtDate(q.created_at)}</td><td className="px-3 py-1.5 text-right font-semibold">{num(q.qty)}</td><td className="px-3 py-1.5 text-right">{peso(q.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(Number(q.qty||0)*Number(q.rate||0))}</td><td className="px-3 py-1.5 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${q.status==='sent'?'bg-emerald-100 text-emerald-700':'bg-violet-100 text-violet-700'}`}>{q.status==='sent'?'✓ in payroll':'staged'}</span></td></tr>))}</tbody>
+              </table></div>}
         </div>
       </div>
     </Modal>
