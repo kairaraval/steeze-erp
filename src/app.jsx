@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 814 · BIR 2307: overlaid text enlarged for readability (TIN, names, address, ZIP, period and Part III amounts) and the income label shortened so it fits its column.";
+const BUILD = "Live build 815 · BIR 2307: the period date and both TINs now place each digit centered inside its own box (not on the divider lines), so the numbers are clearly readable.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43135,14 +43135,15 @@ function BIR2307PrintView({ data, profile, onClose }){
   const monthCols=[0,1,2].map(i=> i===qCol ? amt(subtotal) : '');
   // TIN split into the form's four cell groups (3-3-3-branch). Centers (pt) of
   // each group's boxes so digits land inside, with the form's own dashes between.
-  const TIN_C=[218,265,312];
-  const tinParts=(t)=>String(t||'').split('-');
-  const Tin=({t,top})=>{ const p=tinParts(t); return (<>
-    {p[0]!==undefined && <F l={TIN_C[0]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[0]}</F>}
-    {p[1]!==undefined && <F l={TIN_C[1]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[1]}</F>}
-    {p[2]!==undefined && <F l={TIN_C[2]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[2]}</F>}
-    {p[3]!==undefined && <F l={342} t={top} w={44} a="left" s={10.5} mono ls={1}>{p[3]}</F>}
-  </>); };
+  // Exact center x (pt) of each TIN box so every digit sits inside its own cell,
+  // not on a divider line. 3-3-3 + branch, measured off the real form.
+  const DIG=(s)=>String(s||'').replace(/[^0-9]/g,'').split('');
+  const TIN_CELLS=[204.8,216.6,229.2, 252.2,264.0,276.4, 299.8,311.7,323.9, 347.8,361.4,375.7];
+  const Tin=({t,top})=> (<>{DIG(t).slice(0,12).map((d,i)=>(<F key={i} l={TIN_CELLS[i]-8} t={top} w={16} a="center" s={10.5} mono>{d}</F>))}</>);
+  // Date boxes: 8 digit cells each for From / To (MM DD YYYY, no slash cells).
+  const FROM_CELLS=[151.9,164.6,177.3,190.1,202.8,215.6,228.3,241.0];
+  const TO_CELLS=[391.0,403.7,416.4,429.2,441.9,454.7,467.4,480.1];
+  const DateCells=({s,cells,top})=> (<>{DIG(s).slice(0,8).map((d,i)=> cells[i]!=null ? <F key={i} l={cells[i]-8} t={top} w={16} a="center" s={10.5} mono>{d}</F> : null)}</>);
   // pt → inch for exact placement on the legal page.
   const IN=(x)=>`${(x/72).toFixed(4)}in`;
   const F=({l,t,w,a='left',s=8.5,bold,mono,ls,children})=> (
@@ -43166,8 +43167,8 @@ function BIR2307PrintView({ data, profile, onClose }){
         <div className="bir2307-page bg-white shadow-xl" style={{position:'relative',width:'8.5in',height:'14in',WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}>
           <img src="/bir2307.png" alt="BIR Form 2307" style={{position:'absolute',inset:0,width:'100%',height:'100%'}} />
           {/* 1 — Period */}
-          <F l={150} t={119} w={104} a="center" s={10.5} mono ls={1}>{periodFrom}</F>
-          <F l={382} t={119} w={110} a="center" s={10.5} mono ls={1}>{periodTo}</F>
+          <DateCells s={periodFrom} cells={FROM_CELLS} top={119} />
+          <DateCells s={periodTo} cells={TO_CELLS} top={119} />
           {/* Part I — Payee (supplier) */}
           <Tin t={supplier?.tin} top={148} />
           <F l={66} t={172} w={515} s={11} bold>{(supplier?.company||'').toUpperCase()}</F>
