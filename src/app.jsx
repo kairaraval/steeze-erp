@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 804 · BIR Form 2307: printable certificate now follows the official January 2018 (ENCS) layout — Part I Payee, Part II Payor, Part III quarterly month columns, declaration + Payor/Conforme signatory blocks. Backing POs kept as an annex.";
+const BUILD = "Live build 805 · BIR Form 2307 now prints the exact official form — our data is overlaid on a scan of the real January 2018 (ENCS) certificate (Legal 8.5×14in). Supplier TIN/address, period, Part III amounts and signatory names drop into the real boxes.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43044,206 +43044,90 @@ function BIRHelpersView({ profile, orders, salesOrders, suppliers, vouchers }){
   );
 }
 
-// Printable BIR Form 2307 — Certificate of Creditable Tax Withheld at Source.
-// Simplified layout, single-page A4. The real form has more boxes but this
-// captures the BIR-required fields so the supplier accepts it.
+// Printable BIR Form 2307 — overlays our data onto a pixel-faithful scan of the
+// official January 2018 (ENCS) form (served at /bir2307.png). Coordinates are in
+// PDF points on the real 612×1008pt (legal) page, so the output matches the form
+// exactly. Prints on Legal (8.5×14in).
 function BIR2307PrintView({ data, profile, onClose }){
   const { supplier, subtotal, wht, rate, month, pos, monthKey } = data;
-  // Period + which month of the quarter this falls in (the real form is quarterly
-  // with three month columns; we fill the column matching this month).
   const [yy,mm] = String(monthKey||'').split('-').map(Number);
   const lastDay = (yy&&mm) ? new Date(yy, mm, 0).getDate() : 31;
-  const pad=(n)=>String(n).padStart(2,'0');
-  const periodFrom = (yy&&mm) ? `${pad(mm)}/01/${yy}` : '';
-  const periodTo   = (yy&&mm) ? `${pad(mm)}/${pad(lastDay)}/${yy}` : '';
-  const qCol = (mm? ((mm-1)%3) : 0); // 0,1,2 → 1st/2nd/3rd month of the quarter
+  const pad2=(n)=>String(n).padStart(2,'0');
+  const periodFrom = (yy&&mm) ? `${pad2(mm)}/01/${yy}` : '';
+  const periodTo   = (yy&&mm) ? `${pad2(mm)}/${pad2(lastDay)}/${yy}` : '';
+  const qCol = (mm? ((mm-1)%3) : 0);
   const atc = rate===2 ? 'WC160' : 'WC158';
-  const nature = rate===2 ? 'Income payments subject to EWT — services' : 'Income payments subject to EWT — goods';
-  const STEEZE_ZIP = '1747';
-  const monthCols = [0,1,2].map(i=> i===qCol ? peso(subtotal) : '');
-  // Split a TIN "008-794-398-000" into the 4 boxes.
-  const tinBoxes=(tin)=>{ const parts=String(tin||'').split('-'); return [parts[0]||'', parts[1]||'', parts[2]||'', parts[3]||'']; };
-  const payeeTin=tinBoxes(supplier?.tin); const payorTin=tinBoxes(STEEZE_TIN);
-  const Cell=({label,value,className=''})=> (
-    <div className={`border border-slate-900 px-1.5 py-0.5 ${className}`}>
-      <div className="text-[7pt] text-slate-600 leading-tight">{label}</div>
-      <div className="text-[9pt] font-semibold min-h-[14px] leading-tight">{value||' '}</div>
-    </div>
-  );
-  const TinRow=({boxes})=> (
-    <div className="flex items-center gap-1 mt-0.5">
-      {boxes.map((b,i)=>(<React.Fragment key={i}><span className="border border-slate-900 px-2 py-0.5 text-[9pt] font-mono font-semibold min-w-[48px] text-center">{b||' '}</span>{i<3 && <span className="text-slate-500">-</span>}</React.Fragment>))}
-    </div>
+  const nature = rate===2 ? 'Income payments subject to EWT (services)' : 'Income payments subject to EWT (goods)';
+  const STEEZE_ZIP='1747';
+  const amt=(n)=>Number(n||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const monthCols=[0,1,2].map(i=> i===qCol ? amt(subtotal) : '');
+  // pt → inch for exact placement on the legal page.
+  const IN=(x)=>`${(x/72).toFixed(4)}in`;
+  const F=({l,t,w,a='left',s=8.5,bold,mono,ls,children})=> (
+    <div style={{position:'absolute',left:IN(l),top:IN(t),width:w?IN(w):undefined,textAlign:a,fontSize:`${s}pt`,fontFamily:mono?'"Courier New",monospace':'Arial,Helvetica,sans-serif',fontWeight:bold?700:400,lineHeight:1,color:'#000',whiteSpace:'nowrap',overflow:'hidden',letterSpacing:ls?`${ls}px`:undefined}}>{children}</div>
   );
   return (
     <div className="tp-root fixed inset-0 bg-slate-100 z-50 overflow-auto">
       <PortraitPagePrintStyle />
+      <style>{'@media print{ @page{ size:8.5in 14in; margin:0 } .bir2307-page{ box-shadow:none !important } }'}</style>
       <div className="no-print sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between gap-3 flex-wrap z-10">
         <div className="min-w-0">
           <div className="font-bold text-slate-900 truncate">🧾 BIR Form 2307 — {supplier?.company||'Unknown'} · {month}</div>
-          <div className="text-xs text-slate-500">WHT certificate · {peso(wht)} withheld at {rate}%</div>
+          <div className="text-xs text-slate-500">Official form overlay · {peso(wht)} withheld at {rate}% · prints on Legal (8.5×14")</div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">🖨 Print</button>
           <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Close</button>
         </div>
       </div>
-
-      <div className="tp-print py-6">
-        <div className="po-page" style={{fontSize:'10pt', color:'#222'}}>
-          {/* ── Masthead ── */}
-          <div className="flex items-stretch border-2 border-slate-900 mb-0">
-            <div className="flex flex-col justify-center items-center px-2 border-r border-slate-900 text-center" style={{width:'86px'}}>
-              <div className="text-[6.5pt] leading-tight">(To be filled up by the BIR)</div>
-              <div className="text-[6.5pt] mt-0.5">BCS/Item: _______</div>
-            </div>
-            <div className="flex-1 text-center px-2 py-1">
-              <div className="text-[7.5pt]">Republic of the Philippines</div>
-              <div className="text-[7.5pt]">Department of Finance</div>
-              <div className="text-[7.5pt]">Bureau of Internal Revenue</div>
-              <div className="text-[12pt] font-bold mt-0.5">Certificate of Creditable Tax<br/>Withheld at Source</div>
-            </div>
-            <div className="flex flex-col justify-between items-center px-2 py-1 border-l border-slate-900 text-center" style={{width:'120px'}}>
-              <div className="text-[6.5pt] text-left w-full">BIR Form No.</div>
-              <div className="text-[20pt] font-extrabold leading-none">2307</div>
-              <div className="text-[6.5pt]">January 2018 (ENCS)</div>
-              <div className="text-[6.5pt]">Page 1</div>
-            </div>
-          </div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-0.5 text-[7pt] italic">Fill in all applicable spaces. Mark all appropriate boxes with an "X".</div>
-
-          {/* 1 Period */}
-          <div className="border-x-2 border-b border-slate-900 flex">
-            <div className="px-2 py-1 text-[8pt] flex-1"><span className="font-bold">1</span> For the Period&nbsp;&nbsp; From <span className="font-mono font-semibold border-b border-slate-900 px-3">{periodFrom}</span> &nbsp; To <span className="font-mono font-semibold border-b border-slate-900 px-3">{periodTo}</span> <span className="text-[6.5pt] text-slate-500">(MM/DD/YYYY)</span></div>
-          </div>
-
-          {/* ── Part I – Payee ── */}
-          <div className="border-x-2 border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold">Part I – Payee Information</div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
-            <div className="text-[8pt]"><span className="font-bold">2</span> Taxpayer Identification Number (TIN)</div>
-            <TinRow boxes={payeeTin} />
-          </div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
-            <div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">3</span> Payee's Name (Last Name, First Name, Middle Name for Individual OR Registered Name for Non-Individual)</div>
-            <div className="text-[10pt] font-semibold uppercase min-h-[16px]">{supplier?.company||' '}</div>
-          </div>
-          <div className="border-x-2 border-b border-slate-900 flex">
-            <div className="flex-1 px-2 py-1 border-r border-slate-900"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">4</span> Registered Address</div><div className="text-[9pt] min-h-[16px]">{supplier?.address||' '}</div></div>
-            <div className="px-2 py-1" style={{width:'110px'}}><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">4A</span> ZIP Code</div><div className="text-[9pt] font-semibold min-h-[16px]">{supplier?.zip||' '}</div></div>
-          </div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-1"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">5</span> Foreign Address, if applicable</div><div className="text-[9pt] min-h-[14px]">&nbsp;</div></div>
-
-          {/* ── Part II – Payor (us) ── */}
-          <div className="border-x-2 border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold">Part II – Payor Information</div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
-            <div className="text-[8pt]"><span className="font-bold">6</span> Taxpayer Identification Number (TIN)</div>
-            <TinRow boxes={payorTin} />
-          </div>
-          <div className="border-x-2 border-b border-slate-900 px-2 py-1">
-            <div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">7</span> Payor's Name (Registered Name for Non-Individual)</div>
-            <div className="text-[10pt] font-semibold uppercase">STEEZE CORPORATION</div>
-          </div>
-          <div className="border-x-2 border-b border-slate-900 flex">
-            <div className="flex-1 px-2 py-1 border-r border-slate-900"><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">8</span> Registered Address</div><div className="text-[9pt]">{STEEZE_ADDRESS}</div></div>
-            <div className="px-2 py-1" style={{width:'110px'}}><div className="text-[7.5pt] text-slate-600"><span className="font-bold text-slate-900">8A</span> ZIP Code</div><div className="text-[9pt] font-semibold">{STEEZE_ZIP}</div></div>
-          </div>
-
-          {/* ── Part III – Details ── */}
-          <div className="border-x-2 border-b border-slate-900 bg-slate-200 px-2 py-0.5 text-[8pt] font-bold text-center">Part III – Details of Monthly Income Payments and Taxes Withheld</div>
-          <table className="w-full border-collapse" style={{fontSize:'7.5pt'}}>
-            <thead>
-              <tr className="bg-slate-100">
-                <th className="border border-slate-900 border-l-2 px-1 py-1 text-center align-middle" rowSpan="2" style={{width:'33%'}}>Income Payments Subject to Expanded Withholding Tax</th>
-                <th className="border border-slate-900 px-1 py-1 text-center align-middle" rowSpan="2" style={{width:'9%'}}>ATC</th>
-                <th className="border border-slate-900 px-1 py-1 text-center" colSpan="3">AMOUNT OF INCOME PAYMENTS</th>
-                <th className="border border-slate-900 px-1 py-1 text-center align-middle" rowSpan="2">Total</th>
-                <th className="border border-slate-900 border-r-2 px-1 py-1 text-center align-middle" rowSpan="2">Tax Withheld<br/>for the Quarter</th>
-              </tr>
-              <tr className="bg-slate-100 text-[6.8pt]">
-                <th className="border border-slate-900 px-1 py-0.5">1st Month<br/>of the Quarter</th>
-                <th className="border border-slate-900 px-1 py-0.5">2nd Month<br/>of the Quarter</th>
-                <th className="border border-slate-900 px-1 py-0.5">3rd Month<br/>of the Quarter</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="border border-slate-900 border-l-2 px-1 py-1">{nature}</td>
-                <td className="border border-slate-900 px-1 py-1 text-center font-mono">{atc}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[0]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[1]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[2]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{peso(subtotal)}</td>
-                <td className="border border-slate-900 border-r-2 px-1 py-1 text-right">{peso(wht)}</td>
-              </tr>
-              {[0,1].map(i=>(<tr key={i}>
-                <td className="border border-slate-900 border-l-2 px-1 py-2">&nbsp;</td>
-                <td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 px-1"></td><td className="border border-slate-900 border-r-2 px-1"></td>
-              </tr>))}
-              <tr className="bg-slate-100 font-bold">
-                <td className="border border-slate-900 border-l-2 px-1 py-1 text-right uppercase text-[7pt]">Total</td>
-                <td className="border border-slate-900"></td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[0]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[1]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{monthCols[2]}</td>
-                <td className="border border-slate-900 px-1 py-1 text-right">{peso(subtotal)}</td>
-                <td className="border border-slate-900 border-r-2 px-1 py-1 text-right">{peso(wht)}</td>
-              </tr>
-              <tr>
-                <td className="border border-slate-900 border-l-2 px-1 py-1 text-[7pt]" colSpan="7">Money Payments Subject to Withholding of Business Tax (Government &amp; Private)</td>
-              </tr>
-              <tr>
-                <td className="border border-slate-900 border-l-2 px-1 py-2">&nbsp;</td>
-                <td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900 border-r-2"></td>
-              </tr>
-              <tr className="bg-slate-100 font-bold">
-                <td className="border border-slate-900 border-l-2 px-1 py-1 text-right uppercase text-[7pt]">Total</td>
-                <td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900"></td><td className="border border-slate-900 border-r-2"></td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* ── Declaration + signatories ── */}
-          <div className="border-2 border-t-0 border-slate-900 px-2 py-1 text-[7pt] leading-snug text-justify">
-            We declare under the penalties of perjury that this certificate has been made in good faith, verified by us, and to the best of our knowledge and belief, is true and correct, pursuant to the provisions of the National Internal Revenue Code, as amended, and the regulations issued under authority thereof. Further, we give our consent to the processing of our information as contemplated under the Data Privacy Act of 2012 (R.A. No. 10173) for legitimate and lawful purposes.
-          </div>
-          <div className="flex border-2 border-t-0 border-slate-900">
-            <div className="flex-1 border-r border-slate-900 px-2 pt-6 pb-1 text-center">
-              <div className="border-t border-slate-900 pt-0.5 text-[7pt]">Signature over Printed Name of Payor/Payor's Authorized Representative/Tax Agent</div>
-              <div className="text-[6.5pt] text-slate-500">(Indicate Title/Designation and TIN)</div>
-            </div>
-            <div className="flex-1 px-2 pt-1 pb-1 text-[6.8pt]">
-              <div>Tax Agent Accreditation No./Attorney's Roll No. (if applicable): ______________</div>
-              <div className="mt-2">Date of Issue (MM/DD/YYYY): ___________</div>
-              <div className="mt-1">Date of Expiry (MM/DD/YYYY): ___________</div>
-            </div>
-          </div>
-          <div className="border-2 border-t-0 border-slate-900 px-2 py-0.5 text-[7.5pt] font-bold">CONFORME:</div>
-          <div className="flex border-2 border-t-0 border-slate-900">
-            <div className="flex-1 border-r border-slate-900 px-2 pt-6 pb-1 text-center">
-              <div className="border-t border-slate-900 pt-0.5 text-[7pt]">Signature over Printed Name of Payee/Payee's Authorized Representative/Tax Agent</div>
-              <div className="text-[6.5pt] text-slate-500">(Indicate Title/Designation and TIN)</div>
-            </div>
-            <div className="flex-1 px-2 pt-1 pb-1 text-[6.8pt]">
-              <div>Tax Agent Accreditation No./Attorney's Roll No. (if applicable): ______________</div>
-              <div className="mt-2">Date of Issue (MM/DD/YYYY): ___________</div>
-              <div className="mt-1">Date of Expiry (MM/DD/YYYY): ___________</div>
-            </div>
-          </div>
-
-          {/* ── Annex: backing POs (not part of the BIR form) ── */}
-          {pos && pos.length>0 && <div className="mt-4 no-print-break">
-            <div className="text-[8px] uppercase font-bold text-slate-500 tracking-wider mb-1">Annex — backing transactions for {month} ({pos.length} PO{pos.length===1?'':'s'}) · not part of the BIR form</div>
-            <table className="w-full border border-slate-400 border-collapse" style={{fontSize:'8pt'}}>
-              <thead className="bg-slate-100"><tr><th className="border border-slate-400 px-2 py-1 text-left">PO#</th><th className="border border-slate-400 px-2 py-1 text-left">Date</th><th className="border border-slate-400 px-2 py-1 text-right">Amount</th></tr></thead>
-              <tbody>{pos.map(p=>{ const sub=(p.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0); return (<tr key={p.id}><td className="border border-slate-400 px-2 py-1 font-mono">{p.number}</td><td className="border border-slate-400 px-2 py-1">{fmtDate(p.date)}</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(sub)}</td></tr>); })}</tbody>
-            </table>
-          </div>}
+      <div className="tp-print flex justify-center py-6">
+        <div className="bir2307-page bg-white shadow-xl" style={{position:'relative',width:'8.5in',height:'14in',WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}>
+          <img src="/bir2307.png" alt="BIR Form 2307" style={{position:'absolute',inset:0,width:'100%',height:'100%'}} />
+          {/* 1 — Period */}
+          <F l={150} t={120} w={104} a="center" s={9} mono ls={1}>{periodFrom}</F>
+          <F l={382} t={120} w={110} a="center" s={9} mono ls={1}>{periodTo}</F>
+          {/* Part I — Payee (supplier) */}
+          <F l={158} t={148} w={150} a="center" s={9} mono ls={1}>{supplier?.tin||''}</F>
+          <F l={66} t={173} w={515} s={9.5} bold>{(supplier?.company||'').toUpperCase()}</F>
+          <F l={36} t={201} w={495} s={8.5}>{supplier?.address||''}</F>
+          <F l={540} t={201} w={56} a="center" s={8.5}>{supplier?.zip||''}</F>
+          {/* Part II — Payor (us) */}
+          <F l={158} t={268} w={150} a="center" s={9} mono ls={1}>{STEEZE_TIN}</F>
+          <F l={62} t={291} w={515} s={9.5} bold>STEEZE CORPORATION</F>
+          <F l={36} t={320} w={495} s={8.5}>{STEEZE_ADDRESS}</F>
+          <F l={540} t={320} w={56} a="center" s={8.5}>{STEEZE_ZIP}</F>
+          {/* Part III — EWT detail row */}
+          <F l={20} t={384} w={148} s={7.5}>{nature}</F>
+          <F l={170} t={384} w={42} a="center" s={8} mono>{atc}</F>
+          <F l={214} t={386} w={64} a="right" s={8}>{monthCols[0]}</F>
+          <F l={283} t={386} w={67} a="right" s={8}>{monthCols[1]}</F>
+          <F l={355} t={386} w={65} a="right" s={8}>{monthCols[2]}</F>
+          <F l={425} t={386} w={65} a="right" s={8}>{amt(subtotal)}</F>
+          <F l={494} t={386} w={98} a="right" s={8}>{amt(wht)}</F>
+          {/* Part III — Total row */}
+          <F l={214} t={538} w={64} a="right" s={8} bold>{monthCols[0]}</F>
+          <F l={283} t={538} w={67} a="right" s={8} bold>{monthCols[1]}</F>
+          <F l={355} t={538} w={65} a="right" s={8} bold>{monthCols[2]}</F>
+          <F l={425} t={538} w={65} a="right" s={8} bold>{amt(subtotal)}</F>
+          <F l={494} t={538} w={98} a="right" s={8} bold>{amt(wht)}</F>
+          {/* Signatories */}
+          <F l={30} t={784} w={552} a="center" s={9} bold>STEEZE CORPORATION</F>
+          <F l={30} t={864} w={552} a="center" s={9} bold>{supplier?.company||''}</F>
         </div>
       </div>
+      {pos && pos.length>0 && <div className="tp-print flex justify-center pb-10" style={{pageBreakBefore:'always'}}>
+        <div className="bg-white shadow-xl p-8" style={{width:'8.5in'}}>
+          <div className="text-sm font-bold mb-2">Annex — backing transactions for {supplier?.company||''} · {month}</div>
+          <div className="text-[11px] text-slate-500 mb-3">Not part of the BIR form — supporting detail for the {peso(subtotal)} income payment / {peso(wht)} withheld.</div>
+          <table className="w-full border border-slate-400 border-collapse text-sm">
+            <thead className="bg-slate-100"><tr><th className="border border-slate-400 px-2 py-1 text-left">PO#</th><th className="border border-slate-400 px-2 py-1 text-left">Date</th><th className="border border-slate-400 px-2 py-1 text-right">Amount</th></tr></thead>
+            <tbody>{pos.map(p=>{ const sub=(p.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unit_cost)||0),0); return (<tr key={p.id}><td className="border border-slate-400 px-2 py-1 font-mono">{p.number}</td><td className="border border-slate-400 px-2 py-1">{fmtDate(p.date)}</td><td className="border border-slate-400 px-2 py-1 text-right">{peso(sub)}</td></tr>); })}</tbody>
+          </table>
+        </div>
+      </div>}
     </div>
   );
 }
-
 
 /* ====================== STYLES & BOMs ====================== */
 function StylesView({ styles, items, suppliers, departments, profile, requests, reload }){
