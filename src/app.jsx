@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 810 · Multi-SO payment: you can now attach a deposit slip / proof (snap or paste a screenshot). The one slip is saved to every order in that batch for Accounting to verify.";
+const BUILD = "Live build 811 · Purchase Orders: a draft PO now has “↩ To Queue” — undo it and its purchase requests go back to the Materials Queue (approved), lines un-linked, so you can re-consolidate.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32168,6 +32168,25 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
     if(error){ alert(error.message); return; }
     reload && reload();
   }
+  // Return a DRAFT PO's items back to the Materials Queue: un-link the PR lines
+  // this PO claimed and re-open those PRs (approved), then remove the draft PO.
+  async function returnToQueue(po){
+    const affected=(requests||[]).filter(r=>!r.deleted_at && (r.linked_po_id===po.id || (r.lines||[]).some(l=>l.linked_po_id===po.id)));
+    if(!confirm(`Return draft PO ${po.number||''} to the Materials Queue?\n\nIts ${affected.length} purchase request${affected.length===1?'':'s'} reappear in the queue, and this draft PO is removed.`)) return;
+    try{
+      for(const pr of affected){
+        const newLines=(pr.lines||[]).map(l=> l.linked_po_id===po.id ? { ...l, linked_po_id:null } : l);
+        const update={ lines:newLines };
+        if(pr.status==='ordered' || pr.linked_po_id===po.id){ update.status='approved'; }
+        if(pr.linked_po_id===po.id) update.linked_po_id=null;
+        const { error }=await sb.from('purchase_requests').update(update).eq('id', pr.id);
+        if(error) throw error;
+      }
+      const { error:pe }=await sb.from('purchase_orders').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, status:'cancelled' }).eq('id', po.id);
+      if(pe) throw pe;
+      reload && reload();
+    }catch(e){ alert('Could not return to queue: '+(e.message||String(e))); }
+  }
   useEffect(()=>{ if(openFromPR) setCreating(true); },[openFromPR&&openFromPR.id]);
   const counts=PO_STATUSES.reduce((a,s)=>{ a[s.key]=orders.filter(o=>o.status===s.key).length; return a; },{});
   const suppName=(id)=>suppliers.find(s=>s.id===id)?.company||'—';
@@ -32219,7 +32238,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
               ) : <span className="text-xs text-slate-300">—</span>}
               {!isPaid && o.expected_pay_date && <div className={`text-[10px] mt-0.5 ${o.expected_pay_date<todayManila()?'text-rose-600 font-semibold':'text-slate-400'}`}>pay by {fmtDate(o.expected_pay_date)}{o.payment_terms?` · ${o.payment_terms}`:''}</div>}
             </td>
-            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canCancel && o.status==='draft' && <button onClick={(e)=>{e.stopPropagation(); returnToQueue(o);}} className="text-xs text-indigo-600 hover:underline mr-2" title="Undo this draft PO — its items go back to the Materials Queue">↩ To Queue</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
