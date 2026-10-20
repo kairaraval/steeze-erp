@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 816 · BIR 2307: moved the Tax Withheld amount left so it sits fully inside its column (was touching the right border).";
+const BUILD = "Live build 817 · Subcon Sewing floor is now self-contained: “Returned by subcon” logs good + variance + date right on the board (updates RETURNED/BALANCE) and does NOT auto-create anything in Subcon Payroll. OUT is editable per subcon, plus a row filter (All / Still out / All returned).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10260,6 +10260,8 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const [editing,setEditing]=useState(null);
   const [collapsed,setCollapsed]=useState({});
   const [showPlanTasks,setShowPlanTasks]=useState(false);
+  const [floorReturn,setFloorReturn]=useState(null); // { p, s } — log a return on the floor
+  const [rowFilter,setRowFilter]=useState('all');     // 'all' | 'open' | 'returned'
   const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
@@ -10281,17 +10283,20 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const projects = React.useMemo(()=>{
     const idByName={}; (subcons||[]).forEach(s=>{ idByName[(s.name||'').toLowerCase()]=s.id; });
     const map=new Map();
-    const blankSub=(sk)=>({ subcon_id: sk==='?'?null:sk, items:new Set(), out:0, returned:0, qty:0, dueDates:[], assignment:null, done:false, batchCount:0, subconNameRaw:'' });
+    const blankSub=(sk)=>({ subcon_id: sk==='?'?null:sk, items:new Set(), outBatch:0, returnedBatch:0, qty:0, dueDates:[], assignment:null, done:false, batchCount:0, subconNameRaw:'', assignOut:null, returnsGood:0, variance:0, returnLog:[] });
     const ensure=(leadId, jobHint)=>{ const k=leadId||(jobHint?('job:'+jobHint.id):null); if(!k) return null; if(map.has(k)){ const p=map.get(k); if(!p.job&&jobHint) p.job=jobHint; return p; } const job=jobHint||(prodJobs||[]).find(j=>j.lead_id===leadId&&!j.deleted_at); const p={ key:k, lead_id:leadId||null, job:job||null, subs:new Map(), client:job?.client_name||'', item:job?.item||'', plannedQty:Number(job?.quantity)||0, projDue:job?.due_date||null, number:job?.number||'' }; map.set(k,p); return p; };
     (prodJobs||[]).filter(j=>j.status===SUBCON_SEW_STATUS && !j.deleted_at).forEach(j=>ensure(j.lead_id,j));
-    (assigns||[]).forEach(a=>{ const p=ensure(a.lead_id); if(!p) return; const sk=a.subcon_id||'?'; const s=p.subs.get(sk)||blankSub(sk); s.assignment=a; if(a.item_label) s.items.add(a.item_label); if(a.qty!=null&&a.qty!=='') s.qty=Number(a.qty)||0; if(a.target_return_date) s.dueDates.push(a.target_return_date); if(a.done) s.done=true; p.subs.set(sk,s); });
-    (batches||[]).forEach(b=>{ const p=ensure(b.lead_id); if(!p) return; const sub=b.subcon_id||idByName[(b.subcon_name||'').toLowerCase()]||'?'; const s=p.subs.get(sub)||blankSub(sub); const g=batchGarmentTotal(b); s.out+=g; if(b.status==='returned') s.returned+=g; if(b.item_label) s.items.add(b.item_label); else if(b.item) s.items.add(b.item); if(!s.subconNameRaw&&b.subcon_name) s.subconNameRaw=b.subcon_name; if(b.expected_due_date&&b.status!=='returned') s.dueDates.push(b.expected_due_date); s.batchCount++; if(!p.client&&b.client_name)p.client=b.client_name; if(!p.item&&b.item)p.item=b.item; p.subs.set(sub,s); });
+    (assigns||[]).forEach(a=>{ const p=ensure(a.lead_id); if(!p) return; const sk=a.subcon_id||'?'; const s=p.subs.get(sk)||blankSub(sk); s.assignment=a; if(a.item_label) s.items.add(a.item_label); if(a.qty!=null&&a.qty!=='') s.qty=Number(a.qty)||0; if(a.out_qty!=null&&a.out_qty!=='') s.assignOut=Number(a.out_qty)||0; (Array.isArray(a.returns)?a.returns:[]).forEach(r=>{ s.returnsGood+=Number(r.good||0); s.variance+=Number(r.variance||0); s.returnLog.push(r); if(r.date) s.dueDates.push(r.date); }); if(a.target_return_date) s.dueDates.push(a.target_return_date); if(a.done) s.done=true; p.subs.set(sk,s); });
+    (batches||[]).forEach(b=>{ const p=ensure(b.lead_id); if(!p) return; const sub=b.subcon_id||idByName[(b.subcon_name||'').toLowerCase()]||'?'; const s=p.subs.get(sub)||blankSub(sub); const g=batchGarmentTotal(b); s.outBatch+=g; if(b.status==='returned') s.returnedBatch+=g; if(b.item_label) s.items.add(b.item_label); else if(b.item) s.items.add(b.item); if(!s.subconNameRaw&&b.subcon_name) s.subconNameRaw=b.subcon_name; if(b.expected_due_date&&b.status!=='returned') s.dueDates.push(b.expected_due_date); s.batchCount++; if(!p.client&&b.client_name)p.client=b.client_name; if(!p.item&&b.item)p.item=b.item; p.subs.set(sub,s); });
     return Array.from(map.values()).map(p=>{
       p.label=projLabel(p.lead_id, p.client, p.item);
       const ji=p.job?prodStatusIdx(p.job.status):-1;
       p.projectDone = ji>=0 && ji>SUBCON_IDX;
-      p.rows=Array.from(p.subs.values()).filter(s=>s.subcon_id||s.assignment||s.out>0||s.batchCount>0).map(s=>{
-        s.balance=Math.max(0, s.out - s.returned);
+      p.rows=Array.from(p.subs.values()).filter(s=>s.subcon_id||s.assignment||s.outBatch>0||s.batchCount>0).map(s=>{
+        // OUT: a manually-entered assignment out_qty governs once set, else the batch total.
+        s.out = s.assignOut!=null ? s.assignOut : s.outBatch;
+        s.returned = s.returnedBatch + s.returnsGood;
+        s.balance=Math.max(0, s.out - s.returned - s.variance);
         s.due=(s.dueDates||[]).filter(Boolean).sort()[0]||null;
         s.overdue=!!(s.due && s.due<todayISO && s.balance>0 && !s.done && !p.projectDone);
         s.subcon=s.subcon_id?subconName(s.subcon_id):(s.subconNameRaw||'Subcon');
@@ -10343,50 +10348,42 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   }
   const statusMeta=(k)=>PRODUCTION_STATUSES.find(s=>s.key===k);
 
-  // Find the open payroll send-batch for a floor row's project+subcon, so we can
-  // log a dated return straight from the floor view (good + variance qty).
-  function openSendFor(p, s){
-    return (subconSends||[]).filter(x=>!x.deleted_at && x.status!=='cancelled' && x.subcon_id===s.subcon_id && ((p.lead_id && x.lead_id===p.lead_id) || (p.job && x.production_job_id===p.job.id)))
-      .map(x=>({ x, t:subconSendTotals(x, subconReturns) }))
-      .filter(o=>o.t.outstanding>0)
-      .sort((a,b)=>String(a.x.date_sent||'').localeCompare(String(b.x.date_sent||'')))[0]?.x || null;
-  }
-  async function logDeliveryFor(p, s){
-    let send=openSendFor(p,s);
-    if(!send){
-      // Silently set up the send-out record from this floor row so the return
-      // form has a batch to attach to (the subcon, garment, qty-out and rate).
-      // The user shouldn't have to think about this — one click → return form.
-      const outQty=Number(s.out||s.qty||0)||0;
-      try{
-        const sub=(subcons||[]).find(x=>x.id===s.subcon_id);
-        const monthKey=todayManila().slice(0,7);
-        const { data:monthRows }=await sb.from('subcon_sends').select('number').like('number', `SCS-${monthKey}-%`);
-        let max=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
-        const number=`SCS-${monthKey}-${String(max+1).padStart(3,'0')}`;
-        const payload={ number, date_sent:(p.projDue||todayManila()), subcon_id:s.subcon_id, lead_id:p.lead_id||null, production_job_id:p.job?.id||null, client_name:(p.client||p.job?.client_name||null), garment:(s.itemList||p.item||'Sewing').slice(0,180), quantity_sent:outQty, rate_per_garment:Number(sub?.default_rate||0), status:'in_progress', notes:'Auto-created from Subcon Sewing floor tracking', prepared_by:profile.id, created_by:profile.id };
-        const { data:ins, error }=await sb.from('subcon_sends').insert(payload).select('*').single();
-        if(error) throw error; send=ins; reload&&reload();
-      }catch(e){ alert('Could not open the return form: '+(e.message||e)); return; }
+  // Log a return straight onto the subcon's assignment on the floor — good qty,
+  // variance and the date. This stays on the Subcon Sewing board and does NOT
+  // touch the Subcon Payroll pipeline (that's done manually in the payroll tab).
+  async function saveFloorReturn(p, s, { date, good, variance, reason }){
+    const now=new Date().toISOString();
+    const entry={ id:'r'+Date.now()+Math.floor(Math.random()*1000), date: date||todayManila(), good:Number(good)||0, variance:Number(variance)||0, reason:reason||null, by:profile.id, at:now };
+    if(s.assignment){
+      const next=[ ...(Array.isArray(s.assignment.returns)?s.assignment.returns:[]), entry ];
+      const upd={ returns:next, updated_at:now };
+      if((s.assignment.out_qty==null||s.assignment.out_qty==='') && s.out) upd.out_qty=s.out; // capture OUT so balance is meaningful
+      const { error }=await sb.from('subcon_assignments').update(upd).eq('id', s.assignment.id);
+      if(error) throw error;
+    } else {
+      const { error }=await sb.from('subcon_assignments').insert({ lead_id:p.lead_id, subcon_id:s.subcon_id, item_label:(s.itemList||null), qty: s.qty||null, out_qty: s.out||null, returns:[entry], created_by:profile.id });
+      if(error) throw error;
     }
-    setLogReturnFor(send);
+    load(); reload&&reload();
   }
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
-      {canLogPayroll && s.subcon_id && !p.projectDone && <button onClick={()=>logDeliveryFor(p,s)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Returned by subcon</button>}
+      {s.subcon_id && !p.projectDone && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Returned by subcon</button>}
       {!p.projectDone && <button onClick={()=>toggleDone(p,s)} className={`text-xs font-semibold mr-2 ${s.done?'text-slate-400 hover:text-slate-700':'text-emerald-600 hover:underline'}`}>{s.done?'Undo':'✓ Done'}</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
     </td>
   );
+  // Row-level filter: Open = still has a balance out; Returned = all back.
+  const rowOk=(s)=> rowFilter==='all' ? true : rowFilter==='open' ? (s.balance>0) : (s.out>0 && s.balance<=0);
   const subRow=(p,s,i,showProject)=>(
     <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
-      <td className="px-3 py-2 font-medium">{showProject?p.label:s.subcon}{s.done && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>}{!s.done&&s.manualOnly && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
+      <td className="px-3 py-2 font-medium">{showProject?p.label:s.subcon}{s.out>0&&s.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">all returned</span>}{s.done && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>}{!s.done&&s.manualOnly && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
       <td className="px-3 py-2 text-xs text-slate-500">{s.itemList||'—'}</td>
       <td className="px-3 py-2 text-right">{s.qty?num(s.qty):'—'}</td>
       <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
-      <td className="px-3 py-2 text-right text-emerald-700">{s.returned?num(s.returned):'—'}</td>
+      <td className="px-3 py-2 text-right text-emerald-700">{s.returned?num(s.returned):'—'}{s.variance>0 && <span className="text-[10px] text-rose-500 ml-1" title="variance (defect/lost)">+{num(s.variance)}v</span>}</td>
       <td className="px-3 py-2 text-right font-semibold">{s.out?<span className={s.balance>0?'text-amber-700':'text-emerald-700'}>{num(s.balance)}</span>:'—'}</td>
       <td className="px-3 py-2 text-xs">{s.due ? <span className={s.overdue?'text-rose-700 font-semibold':''}>{fmtDate(s.due)}{s.overdue?' ⚠':''}</span> : '—'}</td>
       <ActionCell p={p} s={s} />
@@ -10497,6 +10494,12 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
           <div className="flex items-center gap-1 text-xs">{TABS.map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg ${tab===k?'bg-slate-800 text-white font-semibold':'bg-white border hover:bg-slate-50'}`}>{l}</button>
           ))}</div>
+          <span className="text-slate-300">|</span>
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs" title="Filter the subcon rows by whether they're still out or all returned">
+            {[['all','All'],['open','🟠 Still out'],['returned','✅ All returned']].map(([k,l])=>(
+              <button key={k} onClick={()=>setRowFilter(k)} className={`px-2.5 py-1 rounded-md ${rowFilter===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+            ))}
+          </div>
         </div>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, subcon, item…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
       </div>
@@ -10528,7 +10531,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
             {!isCol && (p.rows.length===0 ? (
               <div className="p-4 text-center text-xs text-slate-400">No subcon assigned yet.{canEdit && <> <button onClick={()=>setEditing({ lead_id:p.lead_id })} className="text-indigo-600 hover:underline font-medium">Assign a subcon</button></>}</div>
             ) : (
-              <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Subcon')}<tbody>{p.rows.map((s,i)=>subRow(p,s,i,false))}</tbody></table></div>
+              <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Subcon')}<tbody>{p.rows.filter(rowOk).map((s,i)=>subRow(p,s,i,false))}</tbody></table></div>
             ))}
           </div>
         ); })}</div>
@@ -10544,13 +10547,14 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
               <div className="flex items-center gap-2 min-w-0"><span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">🧵</span><span className="font-bold truncate">{g.title}</span><span className="text-xs text-slate-400">· {g.items.length} project{g.items.length===1?'':'s'}</span>{gOver && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}</div>
               <div className="text-xs text-slate-500 whitespace-nowrap">{num(gout)} out · <b className={gbal>0?'text-amber-700':'text-emerald-700'}>{num(gbal)} pending</b></div>
             </button>
-            {!isCol && <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Project')}<tbody>{g.items.map(({p,s},i)=>subRow(p,s,i,true))}</tbody></table></div>}
+            {!isCol && <div className="overflow-x-auto"><table className="w-full text-sm">{headRow('Project')}<tbody>{g.items.filter(({s})=>rowOk(s)).map(({p,s},i)=>subRow(p,s,i,true))}</tbody></table></div>}
           </div>
         ); })}</div>
       ))}
       </div>)}
 
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
+      {floorReturn && <SubconFloorReturnModal p={floorReturn.p} s={floorReturn.s} onSave={(vals)=>saveFloorReturn(floorReturn.p, floorReturn.s, vals)} onClose={()=>setFloorReturn(null)} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
@@ -10560,9 +10564,51 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   );
 }
 
+// Log a dated return straight on the Subcon Sewing floor (good + variance),
+// stored on the subcon's assignment. Does NOT create anything in Subcon Payroll.
+function SubconFloorReturnModal({ p, s, onSave, onClose }){
+  const today=todayManila();
+  const remaining=Math.max(0, Number(s.out||0) - Number(s.returned||0) - Number(s.variance||0));
+  const [f,setF]=useState({ date:today, good:'', variance:'', reason:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  const REASONS=['Defective','Lost','Damaged','Undelivered','Other'];
+  async function save(){
+    const good=Number(f.good)||0, variance=Number(f.variance)||0;
+    if(good===0 && variance===0){ setMsg('Enter a returned (good) qty and/or a variance.'); return; }
+    if(Number(s.out||0)>0 && good+variance>remaining+0.001){ setMsg(`Only ${remaining.toLocaleString()} pcs still out. You're logging ${(good+variance).toLocaleString()}.`); return; }
+    if(variance>0 && !f.reason){ setMsg('Pick a reason for the variance.'); return; }
+    setBusy(true); setMsg('');
+    try{ await onSave({ date:f.date, good, variance, reason: variance>0?f.reason:null }); onClose(); }
+    catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`↩ Returned by ${s.subcon} — ${p.label}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded p-3 grid grid-cols-3 gap-3 text-xs text-center">
+          <div><div className="uppercase text-slate-500 font-semibold">Out</div><div className="text-lg font-bold">{Number(s.out||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Already returned</div><div className="text-lg font-bold text-emerald-700">{Number(s.returned||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Still out</div><div className={`text-lg font-bold ${remaining>0?'text-amber-700':'text-emerald-700'}`}>{remaining.toLocaleString()}</div></div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date received"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Returned (good)"><input type="number" min="0" className="input text-right" value={f.good} onChange={e=>up('good',e.target.value)} placeholder="0" /></TpLbl>
+          <TpLbl t="Variance"><input type="number" min="0" className="input text-right" value={f.variance} onChange={e=>up('variance',e.target.value)} placeholder="0" /></TpLbl>
+        </div>
+        {Number(f.variance)>0 && <TpLbl t="Variance reason *"><select className="input" value={f.reason} onChange={e=>up('reason',e.target.value)}><option value="">— pick —</option>{REASONS.map(r=><option key={r}>{r}</option>)}</select></TpLbl>}
+        <div className="text-[10px] text-slate-500">Good pieces count as returned. Variance (defect/lost/damaged/undelivered) does not. This stays on Subcon Sewing — it does not create a payroll entry.</div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-1 border-t">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'↩ Log return'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose, onSaved }){
   const isEdit=!!(existing&&existing.id);
-  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', qty: (existing?.qty!=null?existing.qty:''), target_return_date: existing?.target_return_date||'', done: !!existing?.done, notes: existing?.notes||'' });
+  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', qty: (existing?.qty!=null?existing.qty:''), out_qty: (existing?.out_qty!=null?existing.out_qty:''), target_return_date: existing?.target_return_date||'', done: !!existing?.done, notes: existing?.notes||'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
   const leadOpts=(leads||[]).map(l=>({ id:l.id, label:`${clientName(l.client_id)||'—'}${l.title?(' · '+l.title):''}` })).sort((a,b)=>a.label.localeCompare(b.label));
@@ -10573,7 +10619,7 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
     if(!f.subcon_id){ setMsg('Pick a subcon.'); return; }
     setBusy(true); setMsg('');
     const now=new Date().toISOString();
-    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, qty: (f.qty===''||f.qty==null)?null:Number(f.qty), target_return_date:f.target_return_date||null, done:!!f.done, done_at: f.done?(existing?.done_at||now):null, done_by: f.done?(existing?.done_by||profile.id):null, notes:f.notes||null, updated_at:now };
+    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, qty: (f.qty===''||f.qty==null)?null:Number(f.qty), out_qty: (f.out_qty===''||f.out_qty==null)?null:Number(f.out_qty), target_return_date:f.target_return_date||null, done:!!f.done, done_at: f.done?(existing?.done_at||now):null, done_by: f.done?(existing?.done_by||profile.id):null, notes:f.notes||null, updated_at:now };
     let error;
     if(isEdit){ ({ error }=await sb.from('subcon_assignments').update(payload).eq('id',existing.id)); }
     else { ({ error }=await sb.from('subcon_assignments').insert({ ...payload, created_by:profile.id })); }
@@ -10582,15 +10628,16 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
   return (
     <Modal title={isEdit?'Edit subcon assignment':'Assign subcon to project'} onClose={onClose}>
       <div className="space-y-3">
-        <p className="text-xs text-slate-500">Assign a subcon sewer to a project. Pieces out / returned fill in automatically from batch-outs; here you set the item, the quantity, and the target return date.</p>
+        <p className="text-xs text-slate-500">Assign a subcon sewer to a project. Set the quantity assigned and the pieces actually sent out (OUT); returns are logged on the board with the "Returned by subcon" button.</p>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Project *</label>
           <select value={f.lead_id} onChange={e=>up('lead_id',e.target.value)} className="input mt-0.5"><option value="">— Select project —</option>{leadOpts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select></div>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Subcon *</label>
           <select value={f.subcon_id} onChange={e=>up('subcon_id',e.target.value)} className="input mt-0.5"><option value="">— Select subcon —</option>{subOpts.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-[10px] uppercase font-semibold text-slate-400">Item / garment</label><input className="input mt-0.5" value={f.item_label} onChange={e=>up('item_label',e.target.value)} placeholder="e.g. Jersey tops" /></div>
-          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Quantity (pcs)</label><input type="number" className="input mt-0.5" value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="e.g. 300" /></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Qty assigned</label><input type="number" className="input mt-0.5" value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="e.g. 300" /></div>
         </div>
+        <div><label className="text-[10px] uppercase font-semibold text-slate-400">Pieces sent out (OUT)</label><input type="number" className="input mt-0.5" value={f.out_qty} onChange={e=>up('out_qty',e.target.value)} placeholder="How many pcs you actually sent to this subcon" /><div className="text-[10px] text-slate-400 mt-0.5">Leave blank to use the batch-out total. Set it to track OUT manually.</div></div>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Target return date</label><input type="date" className="input mt-0.5" value={f.target_return_date||''} onChange={e=>up('target_return_date',e.target.value)} /></div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.done} onChange={e=>up('done',e.target.checked)} className="w-4 h-4" /> Mark this subcon's portion done</label>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Notes</label><textarea className="input mt-0.5 min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. Handling only the tops; JR Sewing on the shorts." /></div>
