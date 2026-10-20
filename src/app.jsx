@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 811 · Purchase Orders: a draft PO now has “↩ To Queue” — undo it and its purchase requests go back to the Materials Queue (approved), lines un-linked, so you can re-consolidate.";
+const BUILD = "Live build 812 · Multi-SO payment: the “Pay now” amount is now an always-editable field per order — type any amount (not just the full balance); typing into a row ticks it automatically.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34102,7 +34102,7 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
                   <td className="px-2 py-1.5 font-mono text-xs">{s.number||s.id.slice(0,6)}</td>
                   <td className="px-2 py-1.5 truncate max-w-[180px]">{s.client_name||'—'}</td>
                   <td className="px-2 py-1.5 text-right font-semibold text-rose-700">{peso(s.balance_due)}</td>
-                  <td className="px-2 py-1.5 text-right">{on ? <input type="number" step="0.01" className="input text-xs text-right" value={sel[s.id]} onChange={e=>setAmt(s.id,e.target.value)} /> : <span className="text-slate-300 text-xs">—</span>}</td>
+                  <td className="px-2 py-1.5 text-right"><input type="number" step="0.01" min="0" value={on?sel[s.id]:''} placeholder="0.00" onFocus={()=>{ if(!on) toggle(s); }} onChange={e=>{ if(!on) toggle(s); setAmt(s.id, e.target.value); }} onClick={e=>e.stopPropagation()} className={`w-28 text-xs text-right border rounded px-2 py-1 ${on?'border-amber-400 bg-white':'border-slate-200 bg-slate-50 text-slate-400'}`} title="Edit the amount to pay for this order" /></td>
                 </tr>
               ); })}
             </tbody>
