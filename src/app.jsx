@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 807 · Check Monitoring: Accounting can attach a photo of the check (deposit slip / supporting docs) on each check; a 📷 shows in the register when a check has one.";
+const BUILD = "Live build 808 · Estimate PDF: the browser’s Save-As filename now defaults to “<Client> - <EST number>” (e.g. “CASA - EST-2026-10-061”) so saving the PDF is one click.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -2201,6 +2201,16 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
 
   const sm = estStatusMeta(status);
   const preparer = profile;
+
+  // Name the PDF "<Client> - <EST number>" so saving from the browser's print
+  // dialog is one click (the Save-As filename defaults to document.title).
+  useEffect(()=>{
+    if(view!=='print') return;
+    const prev=document.title;
+    const cn=String(client?.company||lead?.client_name||'Client').replace(/\s+/g,' ').trim();
+    document.title=`${cn} - ${number}`;
+    return ()=>{ document.title=prev; };
+  }, [view, number, client, lead]);
 
   // ---------- PRINT VIEW ----------
   if(view==='print'){
