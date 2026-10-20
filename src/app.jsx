@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 806 · BIR 2307: numbers now sit correctly inside the boxes — TIN digits land in their cell groups (3-3-3-branch), the ZIP stays in the ZIP box, and Part III amounts clear the form’s pre-printed dashes.";
+const BUILD = "Live build 807 · Check Monitoring: Accounting can attach a photo of the check (deposit slip / supporting docs) on each check; a 📷 shows in the register when a check has one.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35601,6 +35601,7 @@ function CheckFormModal({ profile, existing, prefillBankId, bankAccounts, bookle
     date_cleared: existing?.date_cleared || '',
     reference: existing?.reference || '',
     notes: existing?.notes || '',
+    attachments: Array.isArray(existing?.attachments)?existing.attachments:[],
   });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
@@ -35618,7 +35619,7 @@ function CheckFormModal({ profile, existing, prefillBankId, bankAccounts, bookle
     const payload={ bank_id:f.bank_id, booklet_id:bk?.id||null, check_no:noNum, status:f.status,
       date_issued:f.date_issued||null, payee:f.payee.trim()||null, amount:f.amount===''?null:Number(f.amount),
       particulars:f.particulars.trim()||null, date_cleared:(f.status==='cleared'?(f.date_cleared||todayManila()):(f.date_cleared||null)),
-      reference:f.reference.trim()||null, notes:f.notes.trim()||null, updated_at:new Date().toISOString() };
+      reference:f.reference.trim()||null, notes:f.notes.trim()||null, attachments:Array.isArray(f.attachments)?f.attachments:[], updated_at:new Date().toISOString() };
     let error;
     if(isEdit){ ({ error }=await sb.from('checks').update(payload).eq('id', existing.id)); }
     else { payload.created_by=profile.id; ({ error }=await sb.from('checks').insert(payload)); }
@@ -35646,6 +35647,9 @@ function CheckFormModal({ profile, existing, prefillBankId, bankAccounts, bookle
           <TpLbl t="Reference (RFP/voucher #)"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="Optional" /></TpLbl>
         </div>
         <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+          <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="checks" label="📷 Photo of the check / deposit slip / supporting docs" inline />
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2">
           <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save check':'Record check'}</button>
@@ -35769,7 +35773,7 @@ function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, rel
           {rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">{live.length===0?'No checks recorded yet. Click “+ Record check”.':statusFilter==='issued'?'🎉 No outstanding checks — all cleared.':'No checks match.'}</td></tr>}
           {rows.map(c=>{ const m=checkStatusMeta(c.status); return (
             <tr key={c.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(c)}>
-              <td className="px-3 py-2 font-mono text-xs font-bold">{c.check_no}</td>
+              <td className="px-3 py-2 font-mono text-xs font-bold">{c.check_no}{(Array.isArray(c.attachments)&&c.attachments.length>0) && <span className="ml-1" title={`${c.attachments.length} photo/doc`}>📷</span>}</td>
               <td className="px-3 py-2">{bankNm(c.bank_id)}</td>
               <td className="px-3 py-2 text-xs">{c.date_issued?fmtDate(c.date_issued):'—'}</td>
               <td className="px-3 py-2">{c.payee||'—'}</td>
