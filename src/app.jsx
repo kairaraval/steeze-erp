@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 813 · Sales Resources: new 💳 Payment Channels tab — drag, drop, or paste photos/PDFs (bank & GCash QR codes, deposit instructions) for the sales team to share with clients.";
+const BUILD = "Live build 814 · BIR 2307: overlaid text enlarged for readability (TIN, names, address, ZIP, period and Part III amounts) and the income label shortened so it fits its column.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43129,7 +43129,7 @@ function BIR2307PrintView({ data, profile, onClose }){
   const periodTo   = (yy&&mm) ? `${pad2(mm)}/${pad2(lastDay)}/${yy}` : '';
   const qCol = (mm? ((mm-1)%3) : 0);
   const atc = rate===2 ? 'WC160' : 'WC158';
-  const nature = rate===2 ? 'Income payments subject to EWT (services)' : 'Income payments subject to EWT (goods)';
+  const nature = rate===2 ? 'Services (EWT)' : 'Goods (EWT)';
   const STEEZE_ZIP='1747';
   const amt=(n)=>Number(n||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
   const monthCols=[0,1,2].map(i=> i===qCol ? amt(subtotal) : '');
@@ -43138,10 +43138,10 @@ function BIR2307PrintView({ data, profile, onClose }){
   const TIN_C=[218,265,312];
   const tinParts=(t)=>String(t||'').split('-');
   const Tin=({t,top})=>{ const p=tinParts(t); return (<>
-    {p[0]!==undefined && <F l={TIN_C[0]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[0]}</F>}
-    {p[1]!==undefined && <F l={TIN_C[1]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[1]}</F>}
-    {p[2]!==undefined && <F l={TIN_C[2]-20} t={top} w={40} a="center" s={9} mono ls={1}>{p[2]}</F>}
-    {p[3]!==undefined && <F l={342} t={top} w={44} a="left" s={9} mono ls={1}>{p[3]}</F>}
+    {p[0]!==undefined && <F l={TIN_C[0]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[0]}</F>}
+    {p[1]!==undefined && <F l={TIN_C[1]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[1]}</F>}
+    {p[2]!==undefined && <F l={TIN_C[2]-20} t={top} w={40} a="center" s={10.5} mono ls={1}>{p[2]}</F>}
+    {p[3]!==undefined && <F l={342} t={top} w={44} a="left" s={10.5} mono ls={1}>{p[3]}</F>}
   </>); };
   // pt → inch for exact placement on the legal page.
   const IN=(x)=>`${(x/72).toFixed(4)}in`;
@@ -43166,32 +43166,32 @@ function BIR2307PrintView({ data, profile, onClose }){
         <div className="bir2307-page bg-white shadow-xl" style={{position:'relative',width:'8.5in',height:'14in',WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}>
           <img src="/bir2307.png" alt="BIR Form 2307" style={{position:'absolute',inset:0,width:'100%',height:'100%'}} />
           {/* 1 — Period */}
-          <F l={150} t={120} w={104} a="center" s={9} mono ls={1}>{periodFrom}</F>
-          <F l={382} t={120} w={110} a="center" s={9} mono ls={1}>{periodTo}</F>
+          <F l={150} t={119} w={104} a="center" s={10.5} mono ls={1}>{periodFrom}</F>
+          <F l={382} t={119} w={110} a="center" s={10.5} mono ls={1}>{periodTo}</F>
           {/* Part I — Payee (supplier) */}
           <Tin t={supplier?.tin} top={148} />
-          <F l={66} t={173} w={515} s={9.5} bold>{(supplier?.company||'').toUpperCase()}</F>
-          <F l={36} t={201} w={495} s={8.5}>{supplier?.address||''}</F>
-          <F l={537} t={201} w={52} a="left" s={8.5}>{supplier?.zip||''}</F>
+          <F l={66} t={172} w={515} s={11} bold>{(supplier?.company||'').toUpperCase()}</F>
+          <F l={36} t={200} w={495} s={10}>{supplier?.address||''}</F>
+          <F l={535} t={200} w={56} a="left" s={10}>{supplier?.zip||''}</F>
           {/* Part II — Payor (us) */}
           <Tin t={STEEZE_TIN} top={268} />
-          <F l={62} t={291} w={515} s={9.5} bold>STEEZE CORPORATION</F>
-          <F l={36} t={320} w={495} s={8.5}>{STEEZE_ADDRESS}</F>
-          <F l={537} t={320} w={52} a="left" s={8.5}>{STEEZE_ZIP}</F>
+          <F l={62} t={290} w={515} s={11} bold>STEEZE CORPORATION</F>
+          <F l={36} t={319} w={495} s={10}>{STEEZE_ADDRESS}</F>
+          <F l={535} t={319} w={56} a="left" s={10}>{STEEZE_ZIP}</F>
           {/* Part III — EWT detail row (right-aligned, clear of the pre-printed dashes) */}
-          <F l={20} t={384} w={148} s={7.5}>{nature}</F>
-          <F l={170} t={384} w={42} a="center" s={8} mono>{atc}</F>
-          <F l={206} t={386} w={62} a="right" s={8}>{monthCols[0]}</F>
-          <F l={278} t={386} w={62} a="right" s={8}>{monthCols[1]}</F>
-          <F l={348} t={386} w={62} a="right" s={8}>{monthCols[2]}</F>
-          <F l={417} t={386} w={62} a="right" s={8}>{amt(subtotal)}</F>
-          <F l={490} t={386} w={92} a="right" s={8}>{amt(wht)}</F>
+          <F l={20} t={383} w={148} s={9}>{nature}</F>
+          <F l={170} t={383} w={42} a="center" s={9.5} mono>{atc}</F>
+          <F l={200} t={385} w={68} a="right" s={10}>{monthCols[0]}</F>
+          <F l={272} t={385} w={68} a="right" s={10}>{monthCols[1]}</F>
+          <F l={344} t={385} w={66} a="right" s={10}>{monthCols[2]}</F>
+          <F l={413} t={385} w={66} a="right" s={10}>{amt(subtotal)}</F>
+          <F l={486} t={385} w={96} a="right" s={10}>{amt(wht)}</F>
           {/* Part III — Total row */}
-          <F l={206} t={538} w={62} a="right" s={8} bold>{monthCols[0]}</F>
-          <F l={278} t={538} w={62} a="right" s={8} bold>{monthCols[1]}</F>
-          <F l={348} t={538} w={62} a="right" s={8} bold>{monthCols[2]}</F>
-          <F l={417} t={538} w={62} a="right" s={8} bold>{amt(subtotal)}</F>
-          <F l={490} t={538} w={92} a="right" s={8} bold>{amt(wht)}</F>
+          <F l={200} t={537} w={68} a="right" s={10} bold>{monthCols[0]}</F>
+          <F l={272} t={537} w={68} a="right" s={10} bold>{monthCols[1]}</F>
+          <F l={344} t={537} w={66} a="right" s={10} bold>{monthCols[2]}</F>
+          <F l={413} t={537} w={66} a="right" s={10} bold>{amt(subtotal)}</F>
+          <F l={486} t={537} w={96} a="right" s={10} bold>{amt(wht)}</F>
           {/* Signatories */}
           <F l={30} t={784} w={552} a="center" s={9} bold>STEEZE CORPORATION</F>
           <F l={30} t={864} w={552} a="center" s={9} bold>{supplier?.company||''}</F>
