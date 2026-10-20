@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 812 · Multi-SO payment: the “Pay now” amount is now an always-editable field per order — type any amount (not just the full balance); typing into a row ticks it automatically.";
+const BUILD = "Live build 813 · Sales Resources: new 💳 Payment Channels tab — drag, drop, or paste photos/PDFs (bank & GCash QR codes, deposit instructions) for the sales team to share with clients.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3768,6 +3768,7 @@ const SALES_RES_TABS = [
   { key:'size_charts', label:'Size Charts',   icon:'📐' },
   { key:'sizers',      label:'Sizers',        icon:'📏' },
   { key:'designs',     label:'Designs',       icon:'🎨' },
+  { key:'payment_channels', label:'Payment Channels', icon:'💳' },  // bank/GCash QR codes, deposit instructions
   { key:'swatches',    label:'Fabric Swatches', icon:'🧵' },  // shared with Purchasing Resources
 ];
 // Pricelist: admin only can add/edit. The rest: admin + sales managers + sales assistants.
@@ -3776,6 +3777,7 @@ function salesResCanEdit(category, profile){
   const r = profile?.role;
   if(category === 'pricelist') return r === 'admin';
   if(category === 'swatches') return r === 'admin' || isManagerRole(r) || r === 'assistant' || r === 'sales_representative' || r === 'purchasing' || r === 'purchasing_admin' || r === 'purchasing_personnel';
+  if(category === 'payment_channels') return r === 'admin' || isManagerRole(r) || r === 'assistant' || r === 'sales_representative' || r === 'accounting' || r === 'accounting_officer';
   return r === 'admin' || isManagerRole(r) || r === 'assistant';
 }
 // Preset folders per tab (Size Charts + Designs). Others have no folders.
