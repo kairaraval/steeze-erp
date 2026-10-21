@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 820 · Subcon Sewing: shortened the “Returned by subcon” button to “↩ Log return”.";
+const BUILD = "Live build 821 · Financial Reports → Monthly Summary: the Expenses-by-Category breakdown is now clickable — click any category (or Other) to see every line item under it that month (date, account, description, ref, source, amount).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41510,6 +41510,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
   const [month,setMonth]=useState(()=> new Date().toISOString().slice(0,7)); // YYYY-MM for the Monthly Summary
+  const [expenseDrill,setExpenseDrill]=useState(null); // { name, codes:[] } — drill into a category's line items
   // ── Monthly Summary computations (selected `month`) ──
   const inMonth = (d)=> String(d||'').slice(0,7)===month;
   const profName = (id)=> (profiles||[]).find(p=>p.id===id)?.name || 'Unassigned';
@@ -41612,7 +41613,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
         const monLabel = (()=>{ try { return new Date(month+'-01T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}); } catch(e){ return month; } })();
         const PIE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7','#ec4899','#84cc16','#f97316','#14b8a6','#8b5cf6','#64748b'];
         // Group tiny slices into "Other" for a readable pie.
-        const pieSlices = (()=>{ const top=monthExpenseAccts.slice(0,11); const rest=monthExpenseAccts.slice(11); const arr=top.map((b,i)=>({name:b.name, val:b.balance, color:PIE[i%PIE.length]})); if(rest.length){ arr.push({name:`Other (${rest.length})`, val:rest.reduce((s,b)=>s+b.balance,0), color:PIE[11]}); } return arr; })();
+        const pieSlices = (()=>{ const top=monthExpenseAccts.slice(0,11); const rest=monthExpenseAccts.slice(11); const arr=top.map((b,i)=>({name:b.name, val:b.balance, color:PIE[i%PIE.length], codes:[b.code]})); if(rest.length){ arr.push({name:`Other (${rest.length})`, val:rest.reduce((s,b)=>s+b.balance,0), color:PIE[11], codes:rest.map(b=>b.code)}); } return arr; })();
         let acc=0; const R=70, C=90, SW=34;
         const segs = pieSlices.map(s=>{ const frac=monthExpenseTotal>0?s.val/monthExpenseTotal:0; const seg={...s, frac, dash:frac*2*Math.PI*R, offset:acc*2*Math.PI*R}; acc+=frac; return seg; });
         const Card=({label,val,sub})=> <div className="bg-white border rounded-xl p-4"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</div><div className="text-2xl font-bold mt-1">{val}</div>{sub&&<div className="text-xs text-slate-400 mt-0.5">{sub}</div>}</div>;
@@ -41660,12 +41661,12 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
                       </svg>
                       <div className="flex-1 min-w-[220px] space-y-1.5">
                         {segs.map((s,i)=>(
-                          <div key={i} className="flex items-start gap-2 text-xs">
+                          <button key={i} onClick={()=>setExpenseDrill({ name:s.name, codes:s.codes||[] })} className="w-full flex items-start gap-2 text-xs text-left rounded px-1 py-0.5 hover:bg-slate-50" title="Click to see the items under this category">
                             <span className="w-3 h-3 rounded-sm shrink-0 mt-0.5" style={{background:s.color}}></span>
-                            <span className="flex-1 leading-tight break-words">{s.name}</span>
+                            <span className="flex-1 leading-tight break-words hover:text-indigo-600 hover:underline">{s.name}</span>
                             <span className="text-slate-500 shrink-0 mt-0.5">{Math.round(s.frac*100)}%</span>
                             <span className="font-semibold w-20 text-right shrink-0 mt-0.5">{fmtP(s.val)}</span>
-                          </div>
+                          </button>
                         ))}
                       </div>
                     </div>}
@@ -41696,6 +41697,36 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
                 </div>
               )}
             </div>
+            {expenseDrill && (()=>{
+              const codes=new Set(expenseDrill.codes||[]);
+              const items=monthPostings.filter(x=> codes.has(x.account_code)).map(x=>({ ...x, amt:(Number(x.debit)||0)-(Number(x.credit)||0) })).filter(x=>Math.abs(x.amt)>0.005).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+              const tot=items.reduce((s,x)=>s+x.amt,0);
+              const srcLabel=(src)=>({ voucher:'Voucher', expense:'Expense', journal:'Journal', je:'Journal', bank:'Bank', soPayment:'SO payment', cashAdvance:'Cash advance' }[src]||src||'');
+              return (
+                <Modal title={`${expenseDrill.name} — ${monLabel}`} onClose={()=>setExpenseDrill(null)} wide>
+                  <div className="space-y-2">
+                    <div className="text-sm text-slate-500">{items.length} item{items.length===1?'':'s'} · <strong className="text-slate-800">{fmtP(tot)}</strong></div>
+                    <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto max-h-[60vh]"><table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr>
+                        <th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Source</th><th className="text-right px-3 py-2">Amount</th>
+                      </tr></thead>
+                      <tbody>
+                        {items.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No line items for this category this month.</td></tr>}
+                        {items.map((x,i)=>(<tr key={i} className="border-t hover:bg-slate-50">
+                          <td className="px-3 py-2 text-xs whitespace-nowrap">{fmtDate(x.date)}</td>
+                          <td className="px-3 py-2 text-xs"><span className="font-mono text-slate-400">{x.account_code}</span> {x.account_name}</td>
+                          <td className="px-3 py-2">{x.memo||'—'}</td>
+                          <td className="px-3 py-2 text-xs text-slate-500">{x.ref||'—'}</td>
+                          <td className="px-3 py-2 text-xs text-slate-500">{srcLabel(x.source)}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{fmtP(x.amt)}</td>
+                        </tr>))}
+                      </tbody>
+                      {items.length>0 && <tfoot><tr className="border-t-2 bg-slate-50 font-bold"><td colSpan="5" className="px-3 py-2 text-right uppercase text-[10px] tracking-wider">Total</td><td className="px-3 py-2 text-right">{fmtP(tot)}</td></tr></tfoot>}
+                    </table></div></div>
+                  </div>
+                </Modal>
+              );
+            })()}
           </div>
         );
       })()}
