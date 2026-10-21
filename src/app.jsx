@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 821 · Financial Reports → Monthly Summary: the Expenses-by-Category breakdown is now clickable — click any category (or Other) to see every line item under it that month (date, account, description, ref, source, amount).";
+const BUILD = "Live build 822 · Fixed double-posted bank transactions: removed 9 duplicate rows (CV-2026-09-003 + 7 collections + 1 voucher), and added a guard so recording a payment/payout can’t create an identical bank transaction twice.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -484,6 +484,23 @@ function renderCommentText(text, profiles){
   return parts;
 }
 
+// Insert a bank transaction, but guard against accidental double-submits: if an
+// identical one (same ref, amount, date, direction) was created in the last ~10
+// minutes, reuse it instead of creating a duplicate. Returns { data:{id}, error,
+// deduped }. Legitimate repeat payments logged later than the window still post.
+async function insertBankTxnOnce(payload){
+  try{
+    if(payload && payload.ref_id){
+      const since=new Date(Date.now()-10*60*1000).toISOString();
+      const { data:exact }=await sb.from('bank_transactions').select('id')
+        .eq('ref_type', payload.ref_type||null).eq('ref_id', payload.ref_id)
+        .eq('direction', payload.direction).eq('date', payload.date)
+        .eq('amount', payload.amount).gte('created_at', since).limit(1);
+      if(exact && exact.length){ return { data:{ id:exact[0].id }, error:null, deduped:true }; }
+    }
+  }catch(_){ /* fall through to normal insert */ }
+  return await sb.from('bank_transactions').insert(payload).select('id').single();
+}
 // Print, with the browser's "Save as PDF" filename defaulting to `filename`
 // (restored afterwards). Illegal filename chars are stripped.
 function printAs(filename){
@@ -34358,12 +34375,12 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
       // 1) Create bank transaction (for non-cash). Cash deposits won't create a bank txn here.
       let bankTxId = null;
       if(method !== 'cash' && bankId){
-        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id: bankId, date: payDate, direction: 'in', amount: amt,
           description: `Payment from ${so.client_name||''} for ${so.number}`,
           ref_type: 'sales_order', ref_id: so.id,
           reference_number: reference||null, created_by: profile.id,
-        }).select('id').single();
+        });
         if(btErr) throw btErr;
         bankTxId = btx.id;
       }
@@ -34566,7 +34583,7 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
           if(bankTxId){
             await sb.from('bank_transactions').update({ bank_id:bankId, date, amount:amt, reference_number:reference||null, description:`Payment from ${so.client_name||''} for ${so.number}` }).eq('id', bankTxId);
           } else {
-            const { data:btx, error:be } = await sb.from('bank_transactions').insert({ bank_id:bankId, date, direction:'in', amount:amt, description:`Payment from ${so.client_name||''} for ${so.number}`, ref_type:'sales_order', ref_id:so.id, reference_number:reference||null, created_by:profile.id }).select('id').single();
+            const { data:btx, error:be } = await insertBankTxnOnce({ bank_id:bankId, date, direction:'in', amount:amt, description:`Payment from ${so.client_name||''} for ${so.number}`, ref_type:'sales_order', ref_id:so.id, reference_number:reference||null, created_by:profile.id });
             if(be) throw be; bankTxId=btx.id;
           }
         } else if(method==='cash' && bankTxId){
@@ -37214,12 +37231,12 @@ function StandaloneVoucherModal({ profile, vouchers, bankAccounts, suppliers, co
         } else if(f.bank_id){
           // Pre-existing voucher had no linked bank transaction — create one now
           // so the bank balance reflects this disbursement going forward.
-          const { data: btx } = await sb.from('bank_transactions').insert({
+          const { data: btx } = await insertBankTxnOnce({
             bank_id: f.bank_id, date: f.date, direction: 'out', amount: Number(f.amount),
             description: `${existing.number} — ${f.payee} — ${f.particulars||f.expense_category||''}`.slice(0,200),
             ref_type: 'voucher', ref_id: existing.id,
             reference_number: f.check_number||existing.number, created_by: profile.id,
-          }).select('id').single();
+          });
           if(btx?.id) await sb.from('vouchers').update({ bank_transaction_id: btx.id }).eq('id', existing.id);
         }
         setBusy(false); onSaved();
@@ -37480,11 +37497,11 @@ function VoucherViewModal({ voucher, bankAccounts, suppliers, profiles, costCent
         approval_status: 'approved',
       };
       if(v.bank_id && !v.bank_transaction_id && !v.void_at){
-        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id: v.bank_id, date: v.date, direction: 'out', amount: Number(v.amount||0),
           description: `${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
           ref_type: 'voucher', ref_id: v.id, reference_number: v.check_number||v.number, created_by: profile.id,
-        }).select('id').single();
+        });
         if(btErr) throw btErr;
         patch.bank_transaction_id = btx.id; patch.released_at = now;
       }
@@ -37986,11 +38003,11 @@ function VouchersView({ profile, profiles, vouchers, bankAccounts, suppliers, rf
     try {
       let bankTxId=null;
       if(v.bank_id){
-        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id:v.bank_id, date:v.date, direction:'out', amount:Number(v.amount||0),
           description:`${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
           ref_type:'voucher', ref_id:v.id, reference_number:v.check_number||v.number, created_by:profile.id,
-        }).select('id').single();
+        });
         if(btErr) throw btErr; bankTxId=btx.id;
       }
       const patch={ approval_status:'approved', admin_approved_by:profile.id, admin_approved_at:new Date().toISOString(), released_at:new Date().toISOString() };
@@ -38243,11 +38260,11 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       // Post the disbursement to the bank register if it hasn't been posted yet
       // (officer drafts hold off on the bank movement until final approval).
       if(v.bank_id && !v.bank_transaction_id && !v.void_at){
-        const { data: btx, error: btErr } = await sb.from('bank_transactions').insert({
+        const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id: v.bank_id, date: v.date, direction: 'out', amount: Number(v.amount||0),
           description: `${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200),
           ref_type: 'voucher', ref_id: v.id, reference_number: v.check_number||v.number, created_by: profile.id,
-        }).select('id').single();
+        });
         if(btErr) throw btErr;
         patch.bank_transaction_id = btx.id; patch.released_at = now;
       }
