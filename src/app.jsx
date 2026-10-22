@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 833 · AGM now has her own For-Approval page. She is the first approver for: department purchase requests (before Purchasing), HR/Admin Requests for Payment (AGM \u2192 Admin \u2192 Finance), and the liquidations of petty cash, cash advances and budget requests (AGM \u2192 Admin). Admin can still approve anything directly.";
+const BUILD = "Live build 834 · Geziel (HR Admin) now keeps full access to the whole HR module \u2014 she is still part of HR, with the Admin Office added on top. HR dashboard, employees, leave, loans, memos, reviews, recruitment, payroll and HR notifications all restored for her role.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14252,7 +14252,7 @@ function HrEscalationModal({ init, profile, profiles, employees, onClose, onSave
     const { data:escRow, error }=await sb.from('hr_escalations').insert(payload).select('id').single();
     if(error){ setBusy(false); setMsg(error.message); return; }
     try {
-      const hrIds=(profiles||[]).filter(p=>p.role==='hr').map(p=>p.id);
+      const hrIds=(profiles||[]).filter(p=>p.role==='hr'||p.role==='hr_admin').map(p=>p.id);
       const person = personId ? (employees||[]).find(e=>e.id===personId) : null;
       const txt = `⚠ Quality escalation from Production: ${subject.trim()}${rejectQty?` — ${rejectQty} rejects`:''}${person?` · re: ${fullName(person)}`:''}${reason?` — ${reason.trim()}`:''}. Please investigate.`;
       if(hrIds.length) await sb.from('notifications').insert(hrIds.map(id=>({ recipient_id:id, actor_id:profile.id, text:txt, link_view:'hr-relations', ref_type:'hr_escalation', ref_id:escRow?.id||null, type:'system' })));
@@ -17729,7 +17729,7 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
   const [fillRev,setFillRev]=useState(null);
   const [printRev,setPrintRev]=useState(null);
   const [starting,setStarting]=useState(false);
-  const canManage = ['admin','hr','manager','sales_representative'].includes(profile.role);
+  const canManage = ['admin','hr','hr_admin','manager','sales_representative'].includes(profile.role);
   const tplName=(id)=>(evalTemplates||[]).find(t=>t.id===id)?.name||'—';
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
   async function seedSalesAssociate(){
@@ -17911,7 +17911,7 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
     if(over && over.notify){ try{ await over.notify(savedId); }catch(_){} }
     onSaved();
   }
-  const canAssign = ['admin','hr','manager','sales_representative'].includes(profile.role);
+  const canAssign = ['admin','hr','hr_admin','manager','sales_representative'].includes(profile.role);
   const isLeaderView = !!review.assigned_to && review.assigned_to===profile.id;
   const assignedName = review.assigned_to ? (()=>{ const p=(profiles||[]).find(x=>x.id===review.assigned_to); return p?(p.name||p.email):'a team leader'; })() : '';
   const [assignTo,setAssignTo]=useState(review.assigned_to||'');
@@ -19013,7 +19013,7 @@ async function applyLeaveBalanceDelta(employeeId, bucket, deltaDays, actorId){
   }catch(e){ console.warn('leave balance delta failed', e); }
 }
 
-const canEditLeaves=(p)=>['admin','hr'].includes(p?.role);
+const canEditLeaves=(p)=>['admin','hr','hr_admin'].includes(p?.role);
 function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, leaveCashouts, rfps, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
@@ -20634,7 +20634,7 @@ async function regenGovLoanSchedule(loan){
   try{ await sb.from('gov_loan_installments').delete().eq('gov_loan_id', loan.id); }catch(_){}
   try{ await sb.from('gov_loan_installments').insert(rows); }catch(e){ console.warn('gov schedule insert failed', e); }
 }
-function canManageGovLoans(p){ return ['admin','hr','accounting','accounting_officer'].includes(p?.role); }
+function canManageGovLoans(p){ return ['admin','hr','hr_admin','accounting','accounting_officer'].includes(p?.role); }
 
 function GovLoansView({ profile, employees, govLoans, govLoanInstallments, reload }){
   const canEdit = canManageGovLoans(profile);
@@ -26680,7 +26680,7 @@ function tripTimeMetrics(stops, breaks, ticket, nowMs){
 function TripTicketsView({ profile }){
   const isAdmin=profile.role==='admin';
   const isLogisticsRole=profile.role==='logistics';
-  const canManageVehicles = isAdmin || profile.role==='hr' || isLogisticsRole;
+  const canManageVehicles = isAdmin || profile.role==='hr' || profile.role==='hr_admin' || isLogisticsRole;
   const [tab,setTab]=useState('ticket');
   const [date,setDate]=useState(tripYmd(new Date()));
   const [vehicles,setVehicles]=useState([]);
@@ -49200,8 +49200,9 @@ function App(){
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
-      allowed = new Set(['admin-home','inbox','my-tasks','profile','budgets',
-        'admin-directory','assets','admin-office','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
+      // Still part of HR (full HR module) PLUS the Admin Office module.
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
+        'admin-home','admin-directory','assets','admin-office','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -49903,9 +49904,11 @@ function App(){
     // HR Admin (Admin Office) — the new admin personnel. Lands on Admin Home;
     // owns the whole Admin Office module + her own Request for Payment to Finance.
     NAV = [
-      { items:[ ['admin-home','Admin Home','🗂'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       ADMIN_OFFICE_GROUP,
-      { group:'Finance', items:[ ['budgets','Budget Requests','💰'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProdSupervisor){
