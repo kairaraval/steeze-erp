@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 829 · Storage egress: signed URLs for private files (images, attachments) are now cached and reused per file for 6h instead of regenerated on every view — so the CDN/browser cache serves repeats instead of re-downloading from Storage.";
+const BUILD = "Live build 830 · Auto-update: when a newer build is deployed the app now safely refreshes onto it by itself (once per build, never while you’re typing), so the whole office lands on the latest within ~10 minutes instead of waiting for each person to click the update pill.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47626,6 +47626,18 @@ function App(){
         // newer than any build the user already dismissed. Clears itself once
         // running == deployed (i.e. after they refresh onto the latest).
         if(alive) setUpdateReady(dep>RUN_BUILD && dep>dismissedBuildRef.current);
+        // One-time SAFE auto-refresh onto the newer build, so the whole office
+        // lands on the latest without each person clicking. Guards against the
+        // old refresh-loop: we reload AT MOST ONCE per deployed build number
+        // (sessionStorage), and never while the person is typing. After the
+        // reload RUN_BUILD == dep, so this stops on its own.
+        if(dep>RUN_BUILD){
+          let reloadedFor=0; try{ reloadedFor=Number(sessionStorage.getItem('autoReloadBuild')||0); }catch(_){}
+          if(dep>reloadedFor && !recentlyTyped(20000)){
+            try{ sessionStorage.setItem('autoReloadBuild', String(dep)); }catch(_){}
+            setTimeout(()=>{ try{ window.location.reload(); }catch(_){} }, 2500);
+          }
+        }
       }catch(_){}
     }
     check();
