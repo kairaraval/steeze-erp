@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 824 · Subcon Sewing: delivered orders no longer sit in Active (a delivered order means its subcon sewing is done). Active now shows only not-yet-delivered projects that still have pieces out; delivered ones are under Done/All.";
+const BUILD = "Live build 825 · Subcon Sewing closes a batch only once PAID: Active while pieces are out, returned-but-not-on-payroll, or on-payroll-but-unpaid. Rows show returned → for payment → on payroll → ✓ paid. Old delivered orders never tracked here stay grandfathered as done.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10248,7 +10248,7 @@ const SUBCON_SEW_NEXT='quality check (qc)';
 function prodStatusIdx(k){ return PRODUCTION_STATUSES.findIndex(s=>s.key===k); }
 function canDoneSubconProject(p){ return ['admin','production_supervisor'].includes(p?.role); }
 
-function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs, subconSends, subconReturns, subconProjects, reload }){
+function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs, subconSends, subconReturns, subconProjects, subconPayrolls, subconPayrollItems, reload }){
   const canEdit = subconSewingCanEdit(profile);
   const canDone = canDoneSubconProject(profile);
   // Who can create payroll-feeding send-outs / log dated deliveries on this board.
@@ -10299,6 +10299,14 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const projLabel=(leadId, fbClient, fbItem)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?clientName(l.client_id):''; const parts=[]; if(c) parts.push(c); else if(fbClient) parts.push(fbClient); if(l&&l.title) parts.push(l.title); else if(fbItem) parts.push(fbItem); return parts.filter(Boolean).join(' · ') || (fbClient||fbItem||'Project'); };
   const num=(n)=>Number(n||0).toLocaleString();
 
+  // Send IDs whose weekly payroll has been PAID — used to tell when a staged
+  // payroll item is fully settled (a batch closes only once paid).
+  const paidSendIds = React.useMemo(()=>{
+    const paidPayrolls=new Set((subconPayrolls||[]).filter(pr=>!pr.deleted_at && pr.status==='paid').map(pr=>pr.id));
+    const s=new Set();
+    (subconPayrollItems||[]).forEach(it=>{ if(it.send_id && paidPayrolls.has(it.payroll_id)) s.add(it.send_id); });
+    return s;
+  }, [subconPayrolls, subconPayrollItems]);
   // Build one entry per PROJECT (from the Production Board job that's "out to sewing
   // subcon", plus any project that already has subcon assignments/batches), each
   // carrying its subcon sub-rows.
@@ -10325,15 +10333,18 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.itemList=Array.from(s.items).filter(Boolean).join(', ');
         s.manualOnly=s.batchCount===0;
         // Pieces already added to the payroll queue (staged or sent) for this subcon+project.
-        s.staged=(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===s.subcon_id && q.lead_id===p.lead_id).reduce((t,q)=>t+Number(q.qty||0),0);
+        const qRows=(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===s.subcon_id && q.lead_id===p.lead_id);
+        s.staged=qRows.reduce((t,q)=>t+Number(q.qty||0),0);
+        s.paid=qRows.filter(q=>q.status==='sent' && q.sent_send_id && paidSendIds.has(q.sent_send_id)).reduce((t,q)=>t+Number(q.qty||0),0);
         s.payable=Math.max(0, Number(s.returned||0) - s.staged); // good returns not yet added to payroll
+        s.unpaid=Math.max(0, s.staged - s.paid);                  // on payroll but not yet paid
         return s;
       }).sort((a,b)=>a.subcon.localeCompare(b.subcon));
       p.out=p.rows.reduce((x,s)=>x+s.out,0); p.returned=p.rows.reduce((x,s)=>x+s.returned,0); p.balance=p.rows.reduce((x,s)=>x+s.balance,0);
       p.overdue=p.rows.some(s=>s.overdue);
       return p;
     });
-  }, [assigns, batches, subcons, leads, clients, prodJobs, queue]);
+  }, [assigns, batches, subcons, leads, clients, prodJobs, queue, paidSendIds]);
 
   const q=search.trim().toLowerCase();
   const matchP=(p)=> !q || `${p.label} ${p.number} ${p.rows.map(s=>s.subcon+' '+s.itemList).join(' ')}`.toLowerCase().includes(q);
@@ -10342,11 +10353,17 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // production job's stage. (Before, a project vanished here once its job moved
   // past "Out to Sewing Subcon" — e.g. delivered — even if subcon work/payroll
   // was still pending, which hid most sorting releases.)
-  // Open = still has subcon work pending AND the order hasn't been delivered yet.
-  // A delivered order means all its sewing (subcon included) is finished, so it
-  // drops out of Active even if returns were never logged on this board.
+  // A batch closes only once it's PAID: Active while any subcon still has pieces
+  // out (not returned), returned-but-not-yet-on-payroll, or on-payroll-but-unpaid.
+  // Historical grandfather: an order delivered BEFORE this tracking existed (no
+  // returns logged + nothing added to payroll here) is treated as done so old
+  // delivered orders don't flood the board.
   const projDelivered=(p)=> !!(p.job && PRODUCTION_DONE.includes(p.job.status));
-  const projSubconOpen=(p)=> !projDelivered(p) && p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 );
+  const hasBoardActivity=(p)=> p.rows.some(s=> Number(s.returnsGood||0)>0 || Number(s.staged||0)>0);
+  const projSubconOpen=(p)=>{
+    if(projDelivered(p) && !hasBoardActivity(p)) return false; // old delivered order, never tracked here
+    return p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 || Number(s.unpaid||0)>0 );
+  };
   const tabP=(p)=> tab==='all' ? true : tab==='done' ? !projSubconOpen(p) : projSubconOpen(p);
   const projShown=projects.filter(p=>matchP(p)&&tabP(p)).sort((a,b)=>a.label.localeCompare(b.label));
 
@@ -10448,7 +10465,15 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const rowOk=(s)=> rowFilter==='all' ? true : rowFilter==='open' ? (s.balance>0) : (s.out>0 && s.balance<=0);
   const subRow=(p,s,i,showProject)=>(
     <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
-      <td className="px-3 py-2 font-medium"><button onClick={()=>setRowDetail({p,s})} className="text-left hover:text-indigo-600 hover:underline" title="Open — see all returns + payroll entries for this subcon">{showProject?p.label:s.subcon}</button>{s.out>0&&s.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">all returned</span>}{s.manualOnly && s.out===0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
+      <td className="px-3 py-2 font-medium"><button onClick={()=>setRowDetail({p,s})} className="text-left hover:text-indigo-600 hover:underline" title="Open — see all returns + payroll entries for this subcon">{showProject?p.label:s.subcon}</button>
+        {s.out>0 && s.staged>0 && s.unpaid<=0 && s.balance<=0 && s.payable<=0
+          ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ paid</span>
+          : s.unpaid>0
+            ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">on payroll</span>
+            : (s.out>0 && s.balance<=0 && s.payable>0)
+              ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">for payment</span>
+              : null}
+        {s.manualOnly && s.out===0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">assigned</span>}</td>
       <td className="px-3 py-2 text-xs text-slate-500">{s.itemList||'—'}</td>
       <td className="px-3 py-2 text-right">{s.qty?num(s.qty):'—'}</td>
       <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
@@ -49226,7 +49251,7 @@ function App(){
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
-        {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} reload={loadAll} />}
+        {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
