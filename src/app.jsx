@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 826 · Subcon For-payroll: sending now re-reads the latest rate/qty and blocks any ₱0 item, so a rate edit that wasn’t saved yet can’t push a ₱0 line into payroll (fixed Mona Fe Cuenca’s ₱0 → ₱17,500).";
+const BUILD = "Live build 827 · Journal Entries: added search + pagination (25 per page, newest first) so the list no longer loads everything at once.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41875,11 +41875,23 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
   const [viewing,setViewing]=useState(null);
   const [addingAcct,setAddingAcct]=useState(false);
   const [bulk,setBulk]=useState(false);
+  const [jeSearch,setJeSearch]=useState('');
+  const [jePage,setJePage]=useState(1);
+  const JE_PER_PAGE=25;
   const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   const entries = (journalEntries||[]).filter(j=>!j.deleted_at);
   const monthKey = new Date().toISOString().slice(0,7);
   const monthTotal = entries.filter(j=>(j.date||'').startsWith(monthKey)).reduce((s,j)=>s+Number(j.total_debit||0),0);
   const accounts = (chartAccounts||[]).slice().sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  // Search + newest-first + pagination for the journal entries list.
+  const jq=jeSearch.trim().toLowerCase();
+  const filteredEntries = entries
+    .filter(j=> !jq || `${j.number||''} ${j.memo||''} ${j.reference||''} ${bankName(j.bank_id)} ${j.status||''}`.toLowerCase().includes(jq))
+    .slice().sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||'')));
+  const jeTotalPages=Math.max(1, Math.ceil(filteredEntries.length/JE_PER_PAGE));
+  const jePageSafe=Math.min(jePage, jeTotalPages);
+  const pagedEntries=filteredEntries.slice((jePageSafe-1)*JE_PER_PAGE, jePageSafe*JE_PER_PAGE);
+  useEffect(()=>{ setJePage(1); }, [jeSearch]);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -41900,7 +41912,11 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
         </div>
       </div>
 
-      {tab==='journal' && (
+      {tab==='journal' && (<>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <input value={jeSearch} onChange={e=>setJeSearch(e.target.value)} placeholder="Search JV #, memo, reference, bank…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+          <div className="text-xs text-slate-500">{filteredEntries.length} entr{filteredEntries.length===1?'y':'ies'}{jq?' match':''}</div>
+        </div>
         <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
             <th className="text-left px-3 py-2">JV No.</th><th className="text-left px-3 py-2">Date</th>
@@ -41908,8 +41924,8 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
             <th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th>
           </tr></thead>
           <tbody>
-            {entries.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No journal entries yet. {canEdit && 'Click “+ New journal entry”.'}</td></tr>}
-            {entries.map(j=>(
+            {filteredEntries.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">{entries.length===0?`No journal entries yet. ${canEdit?'Click “+ New journal entry”.':''}`:'No journal entries match your search.'}</td></tr>}
+            {pagedEntries.map(j=>(
               <tr key={j.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(j)}>
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{j.number}</td>
                 <td className="px-3 py-2 text-xs">{fmtDate(j.date)}</td>
@@ -41922,7 +41938,18 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
             ))}
           </tbody>
         </table></div>
-      )}
+        {jeTotalPages>1 && (
+          <div className="flex items-center justify-between mt-3 text-sm">
+            <div className="text-slate-500">Page {jePageSafe} of {jeTotalPages} · showing {(jePageSafe-1)*JE_PER_PAGE+1}–{Math.min(jePageSafe*JE_PER_PAGE, filteredEntries.length)} of {filteredEntries.length}</div>
+            <div className="flex items-center gap-1">
+              <button onClick={()=>setJePage(1)} disabled={jePageSafe<=1} className="px-2.5 py-1.5 rounded-lg border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">« First</button>
+              <button onClick={()=>setJePage(p=>Math.max(1,p-1))} disabled={jePageSafe<=1} className="px-2.5 py-1.5 rounded-lg border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">‹ Prev</button>
+              <button onClick={()=>setJePage(p=>Math.min(jeTotalPages,p+1))} disabled={jePageSafe>=jeTotalPages} className="px-2.5 py-1.5 rounded-lg border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">Next ›</button>
+              <button onClick={()=>setJePage(jeTotalPages)} disabled={jePageSafe>=jeTotalPages} className="px-2.5 py-1.5 rounded-lg border bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50">Last »</button>
+            </div>
+          </div>
+        )}
+      </>)}
 
       {tab==='coa' && (
         <div className="space-y-4">
