@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 825 · Subcon Sewing closes a batch only once PAID: Active while pieces are out, returned-but-not-on-payroll, or on-payroll-but-unpaid. Rows show returned → for payment → on payroll → ✓ paid. Old delivered orders never tracked here stay grandfathered as done.";
+const BUILD = "Live build 826 · Subcon For-payroll: sending now re-reads the latest rate/qty and blocks any ₱0 item, so a rate edit that wasn’t saved yet can’t push a ₱0 line into payroll (fixed Mona Fe Cuenca’s ₱0 → ₱17,500).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10431,11 +10431,18 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // per item so the weekly payroll generation picks them up.
   async function sendQueueToPayroll(rows){
     if(!rows || !rows.length) return;
-    const bad=rows.filter(q=>!(Number(q.rate)>0));
-    if(bad.length){ if(!confirm(`${bad.length} item(s) have no rate (₱0). They'll go in at ₱0 — set the rate first, or continue?`)) return; }
-    if(!confirm(`Send ${rows.length} item(s) to Subcon Payroll?\n\nThey'll appear in the weekly payroll for approval & payment.`)) return;
+    // Re-read the rows fresh from the DB so a rate/qty edit that was still being
+    // typed (not yet saved) can't send a stale ₱0 rate into payroll.
+    const ids=rows.map(r=>r.id);
+    let fresh=[];
+    try{ const { data }=await sb.from('subcon_payroll_queue').select('*').in('id', ids); fresh=(data||[]).filter(q=>!q.deleted_at && q.status==='staged'); }
+    catch(_){ fresh=rows; }
+    if(!fresh.length){ alert('Nothing to send — these items were already sent.'); return; }
+    const bad=fresh.filter(q=>!(Number(q.rate)>0) || !(Number(q.qty)>0));
+    if(bad.length){ alert(`Set a rate (and qty) first for: ${bad.map(q=>subconNm(q.subcon_id)).join(', ')}. Items can't go to payroll at ₱0.`); return; }
+    if(!confirm(`Send ${fresh.length} item(s) to Subcon Payroll?\n\nThey'll appear in the weekly payroll for approval & payment.`)) return;
     try{
-      for(const q of rows){
+      for(const q of fresh){
         const monthKey=todayManila().slice(0,7);
         const { data:mr }=await sb.from('subcon_sends').select('number').like('number',`SCS-${monthKey}-%`);
         let mx=0;(mr||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>mx)mx=n;}});
