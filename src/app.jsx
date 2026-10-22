@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 830 · Auto-update: when a newer build is deployed the app now safely refreshes onto it by itself (once per build, never while you’re typing), so the whole office lands on the latest within ~10 minutes instead of waiting for each person to click the update pill.";
+const BUILD = "Live build 831 · New Admin Office module for the HR Admin (Geziel) — visible to Admin, AGM, HR and HR Admin. Directory of technicians/electricians/emergency numbers, office-supplies inventory with issue/restock logging, an admin request queue (DHL, onboarding kits, repairs), a Permits & Licenses tracker with expiry alerts, a maintenance/repair log, plus her own Request for Payment to Finance and the shared Asset Register.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24525,6 +24525,7 @@ function roleLabel(r){
          r==='sewing_lead'            ? 'Sewing Line Lead' :
          r==='knit_embro_lead'        ? 'Knit / Embro Team Lead' :
          r==='hr'                     ? 'HR Department' :
+         r==='hr_admin'               ? 'HR Admin (Admin Office)' :
          r==='logistics'              ? 'Logistics Team' :
          r==='video_editor'           ? 'Video Editor' :
          'Sales Manager';
@@ -24557,6 +24558,7 @@ function RoleBadge({ role }){
     role==='sewing_lead'            ? 'bg-rose-100 text-rose-700' :
     role==='knit_embro_lead'        ? 'bg-orange-100 text-orange-700' :
     role==='hr'                     ? 'bg-fuchsia-100 text-fuchsia-700' :
+    role==='hr_admin'               ? 'bg-fuchsia-200 text-fuchsia-800' :
     role==='logistics'              ? 'bg-cyan-100 text-cyan-700' :
     role==='video_editor'           ? 'bg-rose-100 text-rose-700' :
     'bg-slate-100 text-slate-600';
@@ -24849,12 +24851,13 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'sewing_lead',      label:'Sewing Lead',     count:profiles.filter(p=>p.role==='sewing_lead').length },
     { key:'knit_embro_lead',  label:'Knit/Embro Lead', count:profiles.filter(p=>p.role==='knit_embro_lead').length },
     { key:'hr',               label:'HR',              count:profiles.filter(p=>p.role==='hr').length },
+    { key:'hr_admin',         label:'HR Admin',        count:profiles.filter(p=>p.role==='hr_admin').length },
     { key:'logistics',        label:'Logistics',       count:profiles.filter(p=>p.role==='logistics').length },
     { key:'video_editor',     label:'Video Editor',    count:profiles.filter(p=>p.role==='video_editor').length },
   ];
   const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
   // Group rows by role for clarity
-  const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','logistics','video_editor'];
+  const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','hr_admin','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
     const ra=roleOrder.indexOf(a.role||''); const rb=roleOrder.indexOf(b.role||'');
     if(ra!==rb) return ra-rb;
@@ -24918,6 +24921,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
               <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
               <option value="hr">HR Department</option>
+              <option value="hr_admin">HR Admin (Admin Office)</option>
               <option value="logistics">Logistics Team</option>
               <option value="video_editor">Video Editor</option>
             </select>
@@ -25031,6 +25035,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
                   <option value="sewing_lead">Sewing Line Lead</option>
               <option value="knit_embro_lead">Knit / Embro Team Lead</option>
                   <option value="hr">HR Department</option>
+                  <option value="hr_admin">HR Admin (Admin Office)</option>
                   <option value="logistics">Logistics Team</option>
                   <option value="video_editor">Video Editor</option>
                 </select>
@@ -41068,7 +41073,7 @@ function AssetsView({ profile, assets, profiles, reload }){
   const [catFilter,setCatFilter]=useState('');
   const [editing,setEditing]=useState(null);   // asset row or {} for new
   const [tagAsset,setTagAsset]=useState(null);
-  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer' || profile.role==='hr_admin';
   const live = (assets||[]).filter(a=>!a.deleted_at);
   const rows = live
     .filter(a=> !catFilter || a.category===catFilter)
@@ -41246,6 +41251,640 @@ function AssetTagModal({ asset, onClose }){
       </div>
     </div>
   </Modal>);
+}
+
+/* ═══════════════════ ADMIN OFFICE MODULE ═══════════════════ */
+/* A home for the Admin personnel (HR Admin) — directory of service people &
+   emergency numbers, office-supplies inventory, admin request queue, permits &
+   licenses with expiry alerts, and a maintenance / repair log. Visible to
+   Admin, AGM, HR and the HR Admin role. */
+const ADMIN_CONTACT_CATEGORIES = ['Emergency','Technician','Electrician','Plumber','Aircon','Pest Control','IT / Internet','Utilities','Government','Medical','Courier','Supplier','Other'];
+const OFFICE_ITEM_CATEGORIES = ['Pantry','Cleaning','Stationery','IT Consumables','Printing','First Aid','Fixtures','Other'];
+const ADMIN_REQUEST_CATEGORIES = ['Courier / DHL','Onboarding Kit','Repair / Maintenance','Purchase','Travel / Booking','Office Supplies','Document / Permit','Other'];
+const ADMIN_REQUEST_STATUSES = [
+  { key:'open',        label:'Open',        color:'bg-amber-100 text-amber-700' },
+  { key:'in_progress', label:'In progress', color:'bg-sky-100 text-sky-700' },
+  { key:'done',        label:'Done',        color:'bg-emerald-100 text-emerald-700' },
+  { key:'cancelled',   label:'Cancelled',   color:'bg-slate-200 text-slate-600' },
+];
+const adminReqStatusMeta = (k)=> ADMIN_REQUEST_STATUSES.find(s=>s.key===k) || ADMIN_REQUEST_STATUSES[0];
+const PERMIT_TYPES = ['Business Permit','Fire Safety Certificate','BIR Registration','Sanitary Permit','Barangay Clearance','SEC / DTI','Contract / Lease','Insurance','Other'];
+const MAINT_CATEGORIES = ['Aircon','Pest Control','Electrical','Plumbing','Equipment','Vehicle','Building','IT','Other'];
+function adminOfficeCanEdit(p){ return ['admin','agm','hr','hr_admin'].includes(p?.role); }
+async function nextAdminReqNumber(){
+  const monthKey=todayManila().slice(0,7);
+  const { data }=await sb.from('admin_requests').select('number').like('number', `ADM-${monthKey}-%`);
+  let maxSeq=0; (data||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
+  return `ADM-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
+}
+function permitStatusMeta(p){
+  if(!p.expiry_date) return { key:'none', label:'No expiry', color:'bg-slate-100 text-slate-500', days:null };
+  const today=todayManila();
+  if(p.expiry_date < today) return { key:'expired', label:'Expired', color:'bg-rose-100 text-rose-700', days:0 };
+  const days=Math.round((new Date(p.expiry_date+'T00:00:00') - new Date(today+'T00:00:00'))/86400000);
+  if(days<=45) return { key:'expiring', label:`Due in ${days}d`, color:'bg-amber-100 text-amber-700', days };
+  return { key:'active', label:'Active', color:'bg-emerald-100 text-emerald-700', days };
+}
+function maintStatusMeta(m){
+  if(m.status==='scheduled'){
+    if(m.next_service_date && m.next_service_date < todayManila()) return { label:'Overdue', color:'bg-rose-100 text-rose-700' };
+    return { label:'Scheduled', color:'bg-sky-100 text-sky-700' };
+  }
+  if(m.next_service_date && m.next_service_date < todayManila()) return { label:'Due again', color:'bg-amber-100 text-amber-700' };
+  return { label:'Done', color:'bg-emerald-100 text-emerald-700' };
+}
+
+function AdminHomeView({ profile, adminContacts, officeItems, adminRequests, adminPermits, adminMaintenance, navTo }){
+  const go=(v)=> navTo && navTo(v);
+  const openReq = (adminRequests||[]).filter(r=>!r.deleted_at && (r.status==='open'||r.status==='in_progress'));
+  const lowStock = (officeItems||[]).filter(i=>!i.deleted_at && Number(i.qty_on_hand||0) <= Number(i.reorder_level||0));
+  const permitsAlert = (adminPermits||[]).filter(p=>!p.deleted_at && ['expired','expiring'].includes(permitStatusMeta(p).key))
+    .sort((a,b)=>String(a.expiry_date||'').localeCompare(String(b.expiry_date||'')));
+  const maintDue = (adminMaintenance||[]).filter(m=>!m.deleted_at && m.next_service_date && m.next_service_date <= todayManila());
+  const emergency = (adminContacts||[]).filter(c=>!c.deleted_at && c.is_emergency);
+  const Card=({icon,label,value,tone,onClick,sub})=>(
+    <button onClick={onClick} className={`text-left p-4 rounded-xl border bg-white hover:shadow-sm transition ${tone||''}`}>
+      <div className="text-2xl">{icon}</div>
+      <div className="text-2xl font-bold mt-1">{value}</div>
+      <div className="text-xs text-slate-500">{label}</div>
+      {sub && <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}
+    </button>
+  );
+  return (
+    <div className="p-6">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold">🗂 Admin Office</h1>
+        <p className="text-slate-500 text-sm">Everything the office runs on — contacts, supplies, requests, permits and upkeep.</p>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Card icon="📋" value={openReq.length} label="Open admin requests" tone={openReq.length?'border-amber-200':''} onClick={()=>go('admin-requests')} />
+        <Card icon="📦" value={lowStock.length} label="Office items to restock" tone={lowStock.length?'border-rose-200':''} onClick={()=>go('admin-office')} sub={lowStock.length?lowStock.slice(0,2).map(i=>i.name).join(', '):'All stocked'} />
+        <Card icon="📜" value={permitsAlert.length} label="Permits expiring / expired" tone={permitsAlert.length?'border-rose-200':''} onClick={()=>go('admin-permits')} />
+        <Card icon="🔧" value={maintDue.length} label="Maintenance due" tone={maintDue.length?'border-amber-200':''} onClick={()=>go('admin-maintenance')} />
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2"><h2 className="font-semibold text-sm">📜 Permit alerts</h2><button onClick={()=>go('admin-permits')} className="text-xs text-indigo-600 hover:underline">Open</button></div>
+          {permitsAlert.length===0 ? <p className="text-xs text-slate-400 py-3">No permits expiring in the next 45 days. 🎉</p> :
+            <table className="w-full text-sm"><tbody>{permitsAlert.slice(0,6).map(p=>{ const m=permitStatusMeta(p); return (
+              <tr key={p.id} className="border-t"><td className="py-1.5">{p.name}</td><td className="py-1.5 text-xs text-slate-400">{fmtDate(p.expiry_date)}</td><td className="py-1.5 text-right"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td></tr>
+            ); })}</tbody></table>}
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2"><h2 className="font-semibold text-sm">🚨 Emergency numbers</h2><button onClick={()=>go('admin-directory')} className="text-xs text-indigo-600 hover:underline">Directory</button></div>
+          {emergency.length===0 ? <p className="text-xs text-slate-400 py-3">No emergency contacts yet.</p> :
+            <table className="w-full text-sm"><tbody>{emergency.slice(0,6).map(c=>(
+              <tr key={c.id} className="border-t"><td className="py-1.5">{c.name}</td><td className="py-1.5 text-right font-mono text-xs">{c.phone||'—'}</td></tr>
+            ))}</tbody></table>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Directory ── */
+function AdminDirectoryView({ profile, adminContacts, reload }){
+  const canEdit=adminOfficeCanEdit(profile);
+  const [search,setSearch]=useState('');
+  const [cat,setCat]=useState('');
+  const [editing,setEditing]=useState(null);
+  const live=(adminContacts||[]).filter(c=>!c.deleted_at);
+  const rows=live
+    .filter(c=> !cat || c.category===cat)
+    .filter(c=> !search || `${c.name||''} ${c.company||''} ${c.role_title||''} ${c.phone||''} ${c.category||''}`.toLowerCase().includes(search.toLowerCase()));
+  const emergency=rows.filter(c=>c.is_emergency);
+  const others=rows.filter(c=>!c.is_emergency);
+  const Row=(c)=>(
+    <tr key={c.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(c)}>
+      <td className="px-3 py-2"><div className="font-medium">{c.name}</div>{c.role_title && <div className="text-[11px] text-slate-400">{c.role_title}</div>}</td>
+      <td className="px-3 py-2 text-xs">{c.company||'—'}</td>
+      <td className="px-3 py-2 font-mono text-xs">{c.phone||'—'}{c.alt_phone && <div className="text-slate-400">{c.alt_phone}</div>}</td>
+      <td className="px-3 py-2 text-xs">{c.category}</td>
+      <td className="px-3 py-2 text-xs text-slate-500"><div className="truncate max-w-[18rem]" title={c.notes}>{c.notes||''}</div></td>
+    </tr>
+  );
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📇 Directory</h1><p className="text-slate-500 text-sm">Technicians, electricians, suppliers & emergency numbers · {live.length} contacts</p></div>
+          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add contact</button>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={cat} onChange={e=>setCat(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200"><option value="">All categories</option>{ADMIN_CONTACT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name / company / phone…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      {emergency.length>0 && <div className="bg-white border border-rose-200 rounded-xl overflow-hidden mb-4">
+        <div className="px-3 py-2 bg-rose-50 text-rose-700 text-xs font-semibold uppercase tracking-wide">🚨 Emergency</div>
+        <table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Company</th><th className="text-left px-3 py-2">Phone</th><th className="text-left px-3 py-2">Category</th><th className="text-left px-3 py-2">Notes</th></tr></thead><tbody>{emergency.map(Row)}</tbody></table>
+      </div>}
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Company</th><th className="text-left px-3 py-2">Phone</th><th className="text-left px-3 py-2">Category</th><th className="text-left px-3 py-2">Notes</th></tr></thead>
+        <tbody>{others.length===0 && emergency.length===0 ? <tr><td colSpan="5" className="text-center text-slate-400 py-8">No contacts {search||cat?'match':'yet'}. {canEdit&&'Click “+ Add contact”.'}</td></tr> : others.map(Row)}</tbody>
+      </table></div></div>
+      {editing && <AdminContactModal contact={editing} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+function AdminContactModal({ contact, profile, onClose, onSaved }){
+  const isEdit=!!contact?.id;
+  const [f,setF]=useState({
+    name:contact.name||'', category:contact.category||ADMIN_CONTACT_CATEGORIES[1], role_title:contact.role_title||'',
+    company:contact.company||'', phone:contact.phone||'', alt_phone:contact.alt_phone||'', email:contact.email||'',
+    address:contact.address||'', notes:contact.notes||'', is_emergency:!!contact.is_emergency,
+  });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function save(){
+    if(!f.name.trim()){ setMsg('Name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ name:f.name.trim(), category:f.category, role_title:f.role_title.trim()||null, company:f.company.trim()||null,
+      phone:f.phone.trim()||null, alt_phone:f.alt_phone.trim()||null, email:f.email.trim()||null, address:f.address.trim()||null,
+      notes:f.notes.trim()||null, is_emergency:!!f.is_emergency, updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('admin_contacts').update(payload).eq('id',contact.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('admin_contacts').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm(`Delete contact "${contact.name}"?`)) return; const { error }=await sb.from('admin_contacts').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',contact.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?`Contact · ${contact.name}`:'+ Add contact'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. Mang Ramon" /></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{ADMIN_CONTACT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Role / trade"><input className="input" value={f.role_title} onChange={e=>up('role_title',e.target.value)} placeholder="e.g. Aircon technician" /></TpLbl>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Company"><input className="input" value={f.company} onChange={e=>up('company',e.target.value)} /></TpLbl>
+          <TpLbl t="Phone"><input className="input" value={f.phone} onChange={e=>up('phone',e.target.value)} /></TpLbl>
+          <TpLbl t="Alt. phone"><input className="input" value={f.alt_phone} onChange={e=>up('alt_phone',e.target.value)} /></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Email"><input className="input" value={f.email} onChange={e=>up('email',e.target.value)} /></TpLbl>
+          <TpLbl t="Address"><input className="input" value={f.address} onChange={e=>up('address',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Rates, availability, how to reach, etc." /></TpLbl>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.is_emergency} onChange={e=>up('is_emergency',e.target.checked)} /> Pin as an emergency contact (shows at top + on Admin Home)</label>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save contact':'Add contact'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Office inventory ── */
+function OfficeInventoryView({ profile, officeItems, officeItemLog, profiles, reload }){
+  const canEdit=adminOfficeCanEdit(profile);
+  const [search,setSearch]=useState('');
+  const [cat,setCat]=useState('');
+  const [editing,setEditing]=useState(null);
+  const [moving,setMoving]=useState(null);     // { item, direction }
+  const [showLog,setShowLog]=useState(false);
+  const live=(officeItems||[]).filter(i=>!i.deleted_at);
+  const rows=live
+    .filter(i=> !cat || i.category===cat)
+    .filter(i=> !search || `${i.name||''} ${i.category||''} ${i.location||''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=> (Number(a.qty_on_hand||0)<=Number(a.reorder_level||0)?0:1) - (Number(b.qty_on_hand||0)<=Number(b.reorder_level||0)?0:1) || String(a.name||'').localeCompare(String(b.name||'')));
+  const lowCount=live.filter(i=>Number(i.qty_on_hand||0)<=Number(i.reorder_level||0)).length;
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):null; };
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📦 Office Inventory</h1><p className="text-slate-500 text-sm">{live.length} items · {lowCount>0?<span className="text-rose-600 font-semibold">{lowCount} to restock</span>:'all stocked'}</p></div>
+          <div className="flex gap-2">
+            <button onClick={()=>setShowLog(true)} className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">🧾 Activity</button>
+            {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add item</button>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <select value={cat} onChange={e=>setCat(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200"><option value="">All categories</option>{OFFICE_ITEM_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search item / location…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Category</th>
+          <th className="text-right px-3 py-2">On hand</th><th className="text-right px-3 py-2">Reorder at</th>
+          <th className="text-left px-3 py-2">Location</th><th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No items {search||cat?'match':'yet'}. {canEdit&&'Click “+ Add item”.'}</td></tr>}
+          {rows.map(i=>{ const low=Number(i.qty_on_hand||0)<=Number(i.reorder_level||0); return (
+            <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
+              <td className={`px-3 py-2 font-medium ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(i)}>{i.name}{i.notes && <div className="text-[11px] text-slate-400 font-normal">{i.notes}</div>}</td>
+              <td className="px-3 py-2 text-xs">{i.category}</td>
+              <td className="px-3 py-2 text-right font-semibold">{Number(i.qty_on_hand||0)} <span className="text-[11px] text-slate-400 font-normal">{i.unit||''}</span></td>
+              <td className="px-3 py-2 text-right text-slate-500">{Number(i.reorder_level||0)}</td>
+              <td className="px-3 py-2 text-xs">{i.location||'—'}</td>
+              <td className="px-3 py-2 text-center">{low?<span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">Low — restock</span>:<span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">OK</span>}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">{canEdit && <>
+                <button onClick={()=>setMoving({ item:i, direction:'out' })} className="text-xs text-indigo-600 hover:underline mr-2">Issue</button>
+                <button onClick={()=>setMoving({ item:i, direction:'in' })} className="text-xs text-emerald-600 hover:underline">Restock</button>
+              </>}</td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <OfficeItemModal item={editing} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+      {moving && <OfficeMoveModal item={moving.item} direction={moving.direction} profile={profile} profiles={profiles} onClose={()=>setMoving(null)} onSaved={()=>{ setMoving(null); reload&&reload(); }} />}
+      {showLog && <Modal title="🧾 Office inventory activity" onClose={()=>setShowLog(false)} wide>
+        <div className="max-h-[60vh] overflow-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Item</th><th className="text-center px-3 py-2">Move</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Who / source</th><th className="text-left px-3 py-2">Notes</th></tr></thead>
+          <tbody>{(officeItemLog||[]).length===0 ? <tr><td colSpan="6" className="text-center text-slate-400 py-6">No activity yet.</td></tr> : (officeItemLog||[]).map(l=>{ const it=(officeItems||[]).find(x=>x.id===l.item_id); return (
+            <tr key={l.id} className="border-t"><td className="px-3 py-2 text-xs">{fmtDate(l.date||l.created_at)}</td><td className="px-3 py-2">{it?it.name:'(deleted item)'}</td>
+            <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${l.direction==='out'?'bg-amber-100 text-amber-700':'bg-emerald-100 text-emerald-700'}`}>{l.direction==='out'?'Issued':'Restock'}</span></td>
+            <td className="px-3 py-2 text-right font-semibold">{l.direction==='out'?'−':'+'}{Number(l.qty||0)}</td>
+            <td className="px-3 py-2 text-xs">{l.person_name|| (l.person_id? (nameOf(l.person_id)||'—') : '—')}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{l.notes||''}</td></tr>
+          ); })}</tbody></table></div>
+      </Modal>}
+    </div>
+  );
+}
+function OfficeItemModal({ item, profile, onClose, onSaved }){
+  const isEdit=!!item?.id;
+  const [f,setF]=useState({ name:item.name||'', category:item.category||OFFICE_ITEM_CATEGORIES[0], unit:item.unit||'pcs',
+    qty_on_hand:item.qty_on_hand??0, reorder_level:item.reorder_level??0, location:item.location||'', notes:item.notes||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function save(){
+    if(!f.name.trim()){ setMsg('Item name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ name:f.name.trim(), category:f.category, unit:f.unit.trim()||'pcs', qty_on_hand:Number(f.qty_on_hand)||0,
+      reorder_level:Number(f.reorder_level)||0, location:f.location.trim()||null, notes:f.notes.trim()||null, updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('office_items').update(payload).eq('id',item.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('office_items').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm(`Delete "${item.name}"?`)) return; const { error }=await sb.from('office_items').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',item.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?`Item · ${item.name}`:'+ Add office item'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Item name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. A4 bond paper" /></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{OFFICE_ITEM_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          <TpLbl t="On hand"><input type="number" className="input" value={f.qty_on_hand} onChange={e=>up('qty_on_hand',e.target.value)} /></TpLbl>
+          <TpLbl t="Unit"><input className="input" value={f.unit} onChange={e=>up('unit',e.target.value)} placeholder="pcs / ream / box" /></TpLbl>
+          <TpLbl t="Reorder at"><input type="number" className="input" value={f.reorder_level} onChange={e=>up('reorder_level',e.target.value)} /></TpLbl>
+          <TpLbl t="Location"><input className="input" value={f.location} onChange={e=>up('location',e.target.value)} placeholder="e.g. Supply cabinet" /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        <div className="text-[11px] text-slate-400">Use Issue / Restock on the list to log who takes what — the on-hand count updates automatically.</div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save item':'Add item'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function OfficeMoveModal({ item, direction, profile, profiles, onClose, onSaved }){
+  const out=direction==='out';
+  const [qty,setQty]=useState('');
+  const [personName,setPersonName]=useState('');
+  const [personId,setPersonId]=useState('');
+  const [date,setDate]=useState(todayManila());
+  const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    const q=Number(qty);
+    if(!(q>0)){ setMsg('Enter a quantity greater than 0.'); return; }
+    if(out && q>Number(item.qty_on_hand||0) && !confirm(`Issuing ${q} but only ${item.qty_on_hand} on hand. Continue and go negative?`)) return;
+    setBusy(true); setMsg('');
+    const who = personId ? ((profiles||[]).find(p=>p.id===personId)?.name||null) : (personName.trim()||null);
+    const { error:logErr }=await sb.from('office_item_log').insert({ item_id:item.id, direction, qty:q, person_name:who, person_id:personId||null, date:date||todayManila(), notes:notes.trim()||null, created_by:profile.id });
+    if(logErr){ setBusy(false); setMsg(logErr.message); return; }
+    const newQty=Number(item.qty_on_hand||0) + (out? -q : q);
+    const { error:upErr }=await sb.from('office_items').update({ qty_on_hand:newQty, updated_at:new Date().toISOString() }).eq('id',item.id);
+    setBusy(false); if(upErr){ setMsg(upErr.message); return; } onSaved();
+  }
+  return (
+    <Modal title={`${out?'Issue':'Restock'} · ${item.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-sm text-slate-500">On hand now: <strong>{Number(item.qty_on_hand||0)} {item.unit||''}</strong></div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t={`Quantity to ${out?'issue':'add'} *`}><input type="number" className="input" value={qty} onChange={e=>setQty(e.target.value)} autoFocus /></TpLbl>
+          <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+        </div>
+        {out ? <>
+          <TpLbl t="Issued to (staff)"><select className="input" value={personId} onChange={e=>setPersonId(e.target.value)}><option value="">— type a name below —</option>{(profiles||[]).filter(p=>!p.deleted_at).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></TpLbl>
+          {!personId && <TpLbl t="…or name"><input className="input" value={personName} onChange={e=>setPersonName(e.target.value)} placeholder="Who is taking it" /></TpLbl>}
+        </> : <TpLbl t="Source / supplier"><input className="input" value={personName} onChange={e=>setPersonName(e.target.value)} placeholder="Where it came from (optional)" /></TpLbl>}
+        <TpLbl t="Notes"><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className={`w-full py-2 rounded-lg text-white font-semibold disabled:opacity-50 ${out?'bg-amber-600 hover:bg-amber-700':'bg-emerald-600 hover:bg-emerald-700'}`}>{busy?'Saving…':out?'Issue & update stock':'Add to stock'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Admin requests ── */
+function AdminRequestsView({ profile, adminRequests, profiles, reload }){
+  const canEdit=adminOfficeCanEdit(profile);
+  const [tab,setTab]=useState('active');
+  const [search,setSearch]=useState('');
+  const [editing,setEditing]=useState(null);
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):null; };
+  const live=(adminRequests||[]).filter(r=>!r.deleted_at);
+  const byTab = live.filter(r=> tab==='all' ? true : tab==='active' ? (r.status==='open'||r.status==='in_progress') : r.status===tab);
+  const rows=byTab
+    .filter(r=> !search || `${r.number||''} ${r.title||''} ${r.category||''} ${r.requested_by_name||''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const counts={ active:live.filter(r=>r.status==='open'||r.status==='in_progress').length, done:live.filter(r=>r.status==='done').length };
+  async function setStatus(r,status){
+    const patch={ status, updated_at:new Date().toISOString() };
+    if(status==='done') patch.done_at=new Date().toISOString();
+    const { error }=await sb.from('admin_requests').update(patch).eq('id',r.id);
+    if(error){ alert(error.message); return; } reload&&reload();
+  }
+  const TAB=(k,l)=>(<button onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab===k?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{l}</button>);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📋 Admin Requests</h1><p className="text-slate-500 text-sm">Courier/DHL, onboarding kits, repairs, purchases — anything the office needs. {counts.active} active</p></div>
+          <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New request</button>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          {TAB('active',`Active (${counts.active})`)}{TAB('done',`Done (${counts.done})`)}{TAB('cancelled','Cancelled')}{TAB('all','All')}
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[160px]" />
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Request</th><th className="text-left px-3 py-2">Category</th>
+          <th className="text-left px-3 py-2">Requested by</th><th className="text-left px-3 py-2">Due</th><th className="text-center px-3 py-2">Docs</th>
+          <th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No requests here.</td></tr>}
+          {rows.map(r=>{ const m=adminReqStatusMeta(r.status); const nAtt=Array.isArray(r.attachments)?r.attachments.length:0; const overdue=r.due_date && r.due_date<todayManila() && (r.status==='open'||r.status==='in_progress'); return (
+            <tr key={r.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{r.number||'—'}</td>
+              <td className="px-3 py-2 cursor-pointer" onClick={()=>setEditing(r)}><div className="font-medium flex items-center gap-1">{r.priority==='high' && <span title="High priority">🔴</span>}{r.title}</div>{r.details && <div className="text-[11px] text-slate-400 truncate max-w-[22rem]" title={r.details}>{r.details}</div>}</td>
+              <td className="px-3 py-2 text-xs">{r.category}</td>
+              <td className="px-3 py-2 text-xs">{r.requested_by_name|| nameOf(r.requested_by) ||'—'}</td>
+              <td className={`px-3 py-2 text-xs ${overdue?'text-rose-600 font-semibold':''}`}>{r.due_date?fmtDate(r.due_date):'—'}{overdue?' ⚠':''}</td>
+              <td className="px-3 py-2 text-center text-xs">{nAtt>0?`📎 ${nAtt}`:<span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">{canEdit && (r.status==='open'||r.status==='in_progress') && <>
+                {r.status==='open' && <button onClick={()=>setStatus(r,'in_progress')} className="text-xs text-sky-600 hover:underline mr-2">Start</button>}
+                <button onClick={()=>setStatus(r,'done')} className="text-xs text-emerald-600 hover:underline">Done</button>
+              </>}</td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <AdminRequestModal req={editing} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+function AdminRequestModal({ req, profile, onClose, onSaved }){
+  const isEdit=!!req?.id;
+  const canEdit=adminOfficeCanEdit(profile);
+  const [f,setF]=useState({ title:req.title||'', category:req.category||ADMIN_REQUEST_CATEGORIES[0], details:req.details||'',
+    priority:req.priority||'normal', status:req.status||'open', due_date:req.due_date||'', attachments:Array.isArray(req.attachments)?req.attachments:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function save(){
+    if(!f.title.trim()){ setMsg('What do you need? Add a short title.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ title:f.title.trim(), category:f.category, details:f.details.trim()||null, priority:f.priority,
+      status:f.status, due_date:f.due_date||null, attachments:Array.isArray(f.attachments)?f.attachments:[], updated_at:new Date().toISOString() };
+    if(f.status==='done' && !req.done_at) payload.done_at=new Date().toISOString();
+    let error;
+    if(isEdit){ ({ error }=await sb.from('admin_requests').update(payload).eq('id',req.id)); }
+    else {
+      payload.number=await nextAdminReqNumber();
+      payload.created_by=profile.id; payload.requested_by=profile.id; payload.requested_by_name=profile.name||profile.email;
+      ({ error }=await sb.from('admin_requests').insert(payload));
+      // Notify the Admin Office (HR Admin) + admin that there's a new request.
+      if(!error){ try{ const { data:ppl }=await sb.from('profiles').select('id,role').in('role',['hr_admin','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, text:`📋 New admin request: ${payload.title}`, link_view:'admin-requests', type:'system' })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){} }
+    }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm('Delete this request?')) return; const { error }=await sb.from('admin_requests').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',req.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?`Request · ${req.number||req.title}`:'+ New admin request'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="col-span-2"><TpLbl t="What do you need? *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} placeholder="e.g. DHL pickup for client sample" /></TpLbl></div>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{ADMIN_REQUEST_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Details"><textarea className="input min-h-[60px]" value={f.details} onChange={e=>up('details',e.target.value)} placeholder="Addresses, quantities, deadlines, links…" /></TpLbl>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Priority"><select className="input" value={f.priority} onChange={e=>up('priority',e.target.value)}><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></TpLbl>
+          <TpLbl t="Needed by"><input type="date" className="input" value={f.due_date} onChange={e=>up('due_date',e.target.value)} /></TpLbl>
+          {isEdit && canEdit && <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{ADMIN_REQUEST_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></TpLbl>}
+        </div>
+        <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="admin" label="📎 Attach quotes, specs or photos" inline />
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save request':'Submit request'}</button>
+          {isEdit && canEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Permits & Licenses ── */
+function AdminPermitsView({ profile, adminPermits, reload }){
+  const canEdit=adminOfficeCanEdit(profile);
+  const [search,setSearch]=useState('');
+  const [editing,setEditing]=useState(null);
+  const live=(adminPermits||[]).filter(p=>!p.deleted_at);
+  const rows=live
+    .filter(p=> !search || `${p.name||''} ${p.permit_type||''} ${p.authority||''} ${p.permit_no||''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=> String(a.expiry_date||'9999').localeCompare(String(b.expiry_date||'9999')));
+  const alertCount=live.filter(p=>['expired','expiring'].includes(permitStatusMeta(p).key)).length;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📜 Permits & Licenses</h1><p className="text-slate-500 text-sm">{live.length} on file · {alertCount>0?<span className="text-amber-700 font-semibold">{alertCount} need attention</span>:'all current'}</p></div>
+          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add permit</button>}
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search permit / authority / number…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 w-full md:w-96 mt-3" />
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Permit / License</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Authority</th>
+          <th className="text-left px-3 py-2">No.</th><th className="text-left px-3 py-2">Issued</th><th className="text-left px-3 py-2">Expires</th>
+          <th className="text-right px-3 py-2">Fee</th><th className="text-center px-3 py-2">Docs</th><th className="text-center px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No permits {search?'match':'yet'}. {canEdit&&'Click “+ Add permit”.'}</td></tr>}
+          {rows.map(p=>{ const m=permitStatusMeta(p); const nAtt=Array.isArray(p.attachments)?p.attachments.length:0; return (
+            <tr key={p.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(p)}>
+              <td className="px-3 py-2 font-medium">{p.name}</td>
+              <td className="px-3 py-2 text-xs">{p.permit_type}</td>
+              <td className="px-3 py-2 text-xs">{p.authority||'—'}</td>
+              <td className="px-3 py-2 font-mono text-[11px]">{p.permit_no||'—'}</td>
+              <td className="px-3 py-2 text-xs">{p.issue_date?fmtDate(p.issue_date):'—'}</td>
+              <td className="px-3 py-2 text-xs">{p.expiry_date?fmtDate(p.expiry_date):'—'}</td>
+              <td className="px-3 py-2 text-right">{p.amount!=null?peso(p.amount):'—'}</td>
+              <td className="px-3 py-2 text-center text-xs">{nAtt>0?`📎 ${nAtt}`:<span className="text-slate-300">—</span>}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <AdminPermitModal permit={editing} profile={profile} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+function AdminPermitModal({ permit, profile, onClose, onSaved }){
+  const isEdit=!!permit?.id;
+  const [f,setF]=useState({ name:permit.name||'', permit_type:permit.permit_type||PERMIT_TYPES[0], authority:permit.authority||'',
+    permit_no:permit.permit_no||'', issue_date:permit.issue_date||'', expiry_date:permit.expiry_date||'', amount:permit.amount??'',
+    notes:permit.notes||'', attachments:Array.isArray(permit.attachments)?permit.attachments:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  async function save(){
+    if(!f.name.trim()){ setMsg('Name is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ name:f.name.trim(), permit_type:f.permit_type, authority:f.authority.trim()||null, permit_no:f.permit_no.trim()||null,
+      issue_date:f.issue_date||null, expiry_date:f.expiry_date||null, amount:f.amount===''?null:Number(f.amount),
+      notes:f.notes.trim()||null, attachments:Array.isArray(f.attachments)?f.attachments:[], updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('admin_permits').update(payload).eq('id',permit.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('admin_permits').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm(`Delete "${permit.name}"?`)) return; const { error }=await sb.from('admin_permits').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',permit.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?`Permit · ${permit.name}`:'+ Add permit / license'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="col-span-2"><TpLbl t="Name *"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. Mayor's Permit 2026" /></TpLbl></div>
+          <TpLbl t="Type"><select className="input" value={f.permit_type} onChange={e=>up('permit_type',e.target.value)}>{PERMIT_TYPES.map(t=><option key={t}>{t}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Issuing authority"><input className="input" value={f.authority} onChange={e=>up('authority',e.target.value)} placeholder="e.g. City Hall, BFP, BIR" /></TpLbl>
+          <TpLbl t="Permit / cert. no."><input className="input" value={f.permit_no} onChange={e=>up('permit_no',e.target.value)} /></TpLbl>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Issued"><input type="date" className="input" value={f.issue_date} onChange={e=>up('issue_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Expires"><input type="date" className="input" value={f.expiry_date} onChange={e=>up('expiry_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Fee / amount"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} /></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[40px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Renewal steps, requirements, contact person…" /></TpLbl>
+        <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="admin" label="📎 Scan of the permit / official receipt" inline />
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save permit':'Add permit'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Maintenance / repair log ── */
+function AdminMaintenanceView({ profile, adminMaintenance, assets, adminContacts, reload }){
+  const canEdit=adminOfficeCanEdit(profile);
+  const [search,setSearch]=useState('');
+  const [editing,setEditing]=useState(null);
+  const live=(adminMaintenance||[]).filter(m=>!m.deleted_at);
+  const rows=live
+    .filter(m=> !search || `${m.asset_label||''} ${m.category||''} ${m.vendor_name||''} ${m.details||''}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=> String(b.service_date||'').localeCompare(String(a.service_date||'')));
+  const dueCount=live.filter(m=>m.next_service_date && m.next_service_date<=todayManila()).length;
+  const totalCost=live.reduce((s,m)=>s+Number(m.cost||0),0);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🔧 Maintenance Log</h1><p className="text-slate-500 text-sm">Aircon, pest control, repairs · {live.length} records · {peso(totalCost)} spent · {dueCount>0?<span className="text-amber-700 font-semibold">{dueCount} due</span>:'none due'}</p></div>
+          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Log service</button>}
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search item / vendor / category…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 w-full md:w-96 mt-3" />
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Item / area</th><th className="text-left px-3 py-2">Category</th><th className="text-left px-3 py-2">Vendor</th>
+          <th className="text-left px-3 py-2">Serviced</th><th className="text-left px-3 py-2">Next due</th><th className="text-right px-3 py-2">Cost</th><th className="text-center px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No records {search?'match':'yet'}. {canEdit&&'Click “+ Log service”.'}</td></tr>}
+          {rows.map(m=>{ const s=maintStatusMeta(m); return (
+            <tr key={m.id} className={`border-t hover:bg-slate-50 ${canEdit?'cursor-pointer':''}`} onClick={()=>canEdit&&setEditing(m)}>
+              <td className="px-3 py-2 font-medium">{m.asset_label||'—'}{m.details && <div className="text-[11px] text-slate-400 font-normal truncate max-w-[20rem]" title={m.details}>{m.details}</div>}</td>
+              <td className="px-3 py-2 text-xs">{m.category}</td>
+              <td className="px-3 py-2 text-xs">{m.vendor_name||'—'}</td>
+              <td className="px-3 py-2 text-xs">{m.service_date?fmtDate(m.service_date):'—'}</td>
+              <td className={`px-3 py-2 text-xs ${m.next_service_date && m.next_service_date<=todayManila()?'text-amber-700 font-semibold':''}`}>{m.next_service_date?fmtDate(m.next_service_date):'—'}</td>
+              <td className="px-3 py-2 text-right">{m.cost!=null?peso(m.cost):'—'}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${s.color}`}>{s.label}</span></td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {editing && <AdminMaintenanceModal rec={editing} profile={profile} assets={assets} adminContacts={adminContacts} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+function AdminMaintenanceModal({ rec, profile, assets, adminContacts, onClose, onSaved }){
+  const isEdit=!!rec?.id;
+  const [f,setF]=useState({ asset_label:rec.asset_label||'', asset_id:rec.asset_id||'', category:rec.category||MAINT_CATEGORIES[0],
+    service_date:rec.service_date||todayManila(), next_service_date:rec.next_service_date||'', vendor_name:rec.vendor_name||'',
+    contact_id:rec.contact_id||'', cost:rec.cost??'', status:rec.status||'done', details:rec.details||'', attachments:Array.isArray(rec.attachments)?rec.attachments:[] });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const vendors=(adminContacts||[]).filter(c=>!c.deleted_at && ['Technician','Electrician','Plumber','Aircon','Pest Control','IT / Internet','Supplier','Other'].includes(c.category));
+  async function save(){
+    if(!f.asset_label.trim()){ setMsg('What was serviced? Add a label.'); return; }
+    setBusy(true); setMsg('');
+    const vc=f.contact_id ? (adminContacts||[]).find(c=>c.id===f.contact_id) : null;
+    const payload={ asset_label:f.asset_label.trim(), asset_id:f.asset_id||null, category:f.category,
+      service_date:f.service_date||null, next_service_date:f.next_service_date||null,
+      vendor_name: vc ? vc.name : (f.vendor_name.trim()||null), contact_id:f.contact_id||null,
+      cost:f.cost===''?null:Number(f.cost), status:f.status, details:f.details.trim()||null,
+      attachments:Array.isArray(f.attachments)?f.attachments:[], updated_at:new Date().toISOString() };
+    let error;
+    if(isEdit){ ({ error }=await sb.from('admin_maintenance_log').update(payload).eq('id',rec.id)); }
+    else { payload.created_by=profile.id; ({ error }=await sb.from('admin_maintenance_log').insert(payload)); }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function del(){ if(!confirm('Delete this record?')) return; const { error }=await sb.from('admin_maintenance_log').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',rec.id); if(error){ alert(error.message); return; } onSaved(); }
+  return (
+    <Modal title={isEdit?'Maintenance record':'+ Log a service / repair'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="col-span-2"><TpLbl t="What was serviced? *"><input className="input" value={f.asset_label} onChange={e=>up('asset_label',e.target.value)} placeholder="e.g. Office aircon (admin room)" /></TpLbl></div>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{MAINT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Link to asset (optional)"><select className="input" value={f.asset_id} onChange={e=>up('asset_id',e.target.value)}><option value="">— none —</option>{(assets||[]).filter(a=>!a.deleted_at).map(a=><option key={a.id} value={a.id}>{a.asset_code?`${a.asset_code} · `:''}{a.name}</option>)}</select></TpLbl>
+          <TpLbl t="Vendor from directory"><select className="input" value={f.contact_id} onChange={e=>up('contact_id',e.target.value)}><option value="">— type vendor below —</option>{vendors.map(c=><option key={c.id} value={c.id}>{c.name}{c.company?` · ${c.company}`:''}</option>)}</select></TpLbl>
+        </div>
+        {!f.contact_id && <TpLbl t="…or vendor name"><input className="input" value={f.vendor_name} onChange={e=>up('vendor_name',e.target.value)} /></TpLbl>}
+        <div className="grid grid-cols-4 gap-2">
+          <TpLbl t="Service date"><input type="date" className="input" value={f.service_date} onChange={e=>up('service_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Next due"><input type="date" className="input" value={f.next_service_date} onChange={e=>up('next_service_date',e.target.value)} /></TpLbl>
+          <TpLbl t="Cost"><input type="number" className="input" value={f.cost} onChange={e=>up('cost',e.target.value)} /></TpLbl>
+          <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}><option value="done">Done</option><option value="scheduled">Scheduled</option></select></TpLbl>
+        </div>
+        <TpLbl t="Details"><textarea className="input min-h-[40px]" value={f.details} onChange={e=>up('details',e.target.value)} placeholder="What was done, parts replaced, warranty…" /></TpLbl>
+        <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="admin" label="📎 Service report / receipt" inline />
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save record':'Log service'}</button>
+          {isEdit && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 /* ─────────── JOURNAL ENTRIES / JOURNAL VOUCHERS ─────────── */
@@ -47736,6 +48375,13 @@ function App(){
   const [subconProjects,setSubconProjects]=useState([]);
   const [checks,setChecks]=useState([]);
   const [checkBooklets,setCheckBooklets]=useState([]);
+  // Admin Office module — directory, office inventory, admin requests, permits, maintenance.
+  const [adminContacts,setAdminContacts]=useState([]);
+  const [officeItems,setOfficeItems]=useState([]);
+  const [officeItemLog,setOfficeItemLog]=useState([]);
+  const [adminRequests,setAdminRequests]=useState([]);
+  const [adminPermits,setAdminPermits]=useState([]);
+  const [adminMaintenance,setAdminMaintenance]=useState([]);
   // Sales commissions ledger (one row per earned half: booking | collection).
   // Used by the Commissions view + Voucher generation for monthly payouts.
   const [salesCommissions,setSalesCommissions]=useState([]);
@@ -48168,6 +48814,13 @@ function App(){
     // Check monitoring (graceful empty if SQL not yet run).
     try { const ck = await sb.from('checks').select('*').is('deleted_at',null).order('check_no',{ascending:false}); setChecks(ck && !ck.error ? (ck.data||[]) : []); } catch(_){ setChecks([]); }
     try { const cb = await sb.from('check_booklets').select('*').is('deleted_at',null).order('start_no'); setCheckBooklets(cb && !cb.error ? (cb.data||[]) : []); } catch(_){ setCheckBooklets([]); }
+    // Admin Office module (graceful empty if SQL not yet run).
+    try { const ac = await sb.from('admin_contacts').select('*').is('deleted_at',null).order('name'); setAdminContacts(ac && !ac.error ? (ac.data||[]) : []); } catch(_){ setAdminContacts([]); }
+    try { const oi = await sb.from('office_items').select('*').is('deleted_at',null).order('name'); setOfficeItems(oi && !oi.error ? (oi.data||[]) : []); } catch(_){ setOfficeItems([]); }
+    try { const ol = await sb.from('office_item_log').select('*').order('created_at',{ascending:false}).limit(500); setOfficeItemLog(ol && !ol.error ? (ol.data||[]) : []); } catch(_){ setOfficeItemLog([]); }
+    try { const ar = await sb.from('admin_requests').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setAdminRequests(ar && !ar.error ? (ar.data||[]) : []); } catch(_){ setAdminRequests([]); }
+    try { const ap2 = await sb.from('admin_permits').select('*').is('deleted_at',null).order('expiry_date',{ascending:true,nullsFirst:false}); setAdminPermits(ap2 && !ap2.error ? (ap2.data||[]) : []); } catch(_){ setAdminPermits([]); }
+    try { const am = await sb.from('admin_maintenance_log').select('*').is('deleted_at',null).order('service_date',{ascending:false,nullsFirst:false}); setAdminMaintenance(am && !am.error ? (am.data||[]) : []); } catch(_){ setAdminMaintenance([]); }
     setSalesCommissions(sccm && !sccm.error ? (sccm.data||[]) : []);
     setSizeCharts(sc.data||[]); setGarmentMockups(gm.data||[]);
     setStyles(st.data||[]);
@@ -48213,7 +48866,8 @@ function App(){
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
-        'logistics','trip-tickets','delivery-receipts','payroll']);
+        'logistics','trip-tickets','delivery-receipts','payroll',
+        'assets','hr-payments','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
       // Sales assistant now also has access to Sales Orders (filtered to their
@@ -48314,8 +48968,15 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets']);
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
+        'assets','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
+    } else if(profile.role==='hr_admin'){
+      // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
+      // module + her own Request for Payment to Finance. Lands on Admin Home.
+      allowed = new Set(['admin-home','inbox','my-tasks','profile','budgets',
+        'admin-directory','assets','admin-office','hr-payments','admin-requests','admin-permits','admin-maintenance']);
+      fallback = 'admin-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
       allowed = new Set(['logistics','trip-tickets']);
@@ -48830,6 +49491,7 @@ function App(){
   const isProdSupervisor=profile.role==='production_supervisor';
   const isProdAssistant=profile.role==='production_assistant';
   const isHR=profile.role==='hr';
+  const isHrAdmin=profile.role==='hr_admin';
   const isAGM=profile.role==='agm';
   const isLogistics=profile.role==='logistics';
   const isVideoEditor=profile.role==='video_editor';
@@ -48901,6 +49563,17 @@ function App(){
   const PERSONAL_GROUP = { group:'Personal', items:[
     ['profile','My Profile','⭐'],
   ] };
+  // Admin Office — the HR Admin's home. Shared across Admin, AGM, HR and HR Admin.
+  const ADMIN_OFFICE_GROUP = { group:'Admin Office', items:[
+    ['admin-home','Admin Home','🗂'],
+    ['admin-directory','Directory','📇'],
+    ['assets','Asset Register','🏷'],
+    ['admin-office','Office Inventory','📦'],
+    ['hr-payments','Request for Payment','🧾'],
+    ['admin-requests','Admin Requests','📋'],
+    ['admin-permits','Permits & Licenses','📜'],
+    ['admin-maintenance','Maintenance Log','🔧'],
+  ] };
   if(isAGM){
     // Assistant General Manager (Head of People & Operations) — company-wide
     // visibility across every department, landing on the Operations Command
@@ -48918,6 +49591,7 @@ function App(){
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      ADMIN_OFFICE_GROUP,
       PERSONAL_GROUP,
     ];
   } else if(isLogistics){
@@ -48988,6 +49662,16 @@ function App(){
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
+      ADMIN_OFFICE_GROUP,
+      PERSONAL_GROUP,
+    ];
+  } else if(isHrAdmin){
+    // HR Admin (Admin Office) — the new admin personnel. Lands on Admin Home;
+    // owns the whole Admin Office module + her own Request for Payment to Finance.
+    NAV = [
+      { items:[ ['admin-home','Admin Home','🗂'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      ADMIN_OFFICE_GROUP,
+      { group:'Finance', items:[ ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProdSupervisor){
@@ -49133,6 +49817,7 @@ function App(){
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      ADMIN_OFFICE_GROUP,
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
       PERSONAL_GROUP,
@@ -49405,6 +50090,12 @@ function App(){
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='assets' && <AssetsView profile={profile} assets={assets} profiles={profiles} reload={loadAll} />}
+        {view==='admin-home' && <AdminHomeView profile={profile} adminContacts={adminContacts} officeItems={officeItems} adminRequests={adminRequests} adminPermits={adminPermits} adminMaintenance={adminMaintenance} navTo={navTo} />}
+        {view==='admin-directory' && <AdminDirectoryView profile={profile} adminContacts={adminContacts} reload={loadAll} />}
+        {view==='admin-office' && <OfficeInventoryView profile={profile} officeItems={officeItems} officeItemLog={officeItemLog} profiles={profiles} reload={loadAll} />}
+        {view==='admin-requests' && <AdminRequestsView profile={profile} adminRequests={adminRequests} profiles={profiles} reload={loadAll} />}
+        {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
+        {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
