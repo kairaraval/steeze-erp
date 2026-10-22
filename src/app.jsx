@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 827 · Journal Entries: added search + pagination (25 per page, newest first) so the list no longer loads everything at once.";
+const BUILD = "Live build 828 · Journal Entries: cancelled JVs are hidden from the default (Active) list and moved to their own “Cancelled” tab.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41876,6 +41876,7 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
   const [addingAcct,setAddingAcct]=useState(false);
   const [bulk,setBulk]=useState(false);
   const [jeSearch,setJeSearch]=useState('');
+  const [jeStatus,setJeStatus]=useState('active'); // 'active' (hide cancelled) | 'cancelled'
   const [jePage,setJePage]=useState(1);
   const JE_PER_PAGE=25;
   const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
@@ -41885,13 +41886,15 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
   const accounts = (chartAccounts||[]).slice().sort((a,b)=>String(a.code).localeCompare(String(b.code)));
   // Search + newest-first + pagination for the journal entries list.
   const jq=jeSearch.trim().toLowerCase();
+  const cancelledCount = entries.filter(j=>j.status==='cancelled').length;
   const filteredEntries = entries
+    .filter(j=> jeStatus==='cancelled' ? j.status==='cancelled' : j.status!=='cancelled')
     .filter(j=> !jq || `${j.number||''} ${j.memo||''} ${j.reference||''} ${bankName(j.bank_id)} ${j.status||''}`.toLowerCase().includes(jq))
     .slice().sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')) || String(b.number||'').localeCompare(String(a.number||'')));
   const jeTotalPages=Math.max(1, Math.ceil(filteredEntries.length/JE_PER_PAGE));
   const jePageSafe=Math.min(jePage, jeTotalPages);
   const pagedEntries=filteredEntries.slice((jePageSafe-1)*JE_PER_PAGE, jePageSafe*JE_PER_PAGE);
-  useEffect(()=>{ setJePage(1); }, [jeSearch]);
+  useEffect(()=>{ setJePage(1); }, [jeSearch, jeStatus]);
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -41914,6 +41917,10 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
 
       {tab==='journal' && (<>
         <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+            <button onClick={()=>setJeStatus('active')} className={`px-3 py-1.5 rounded-md ${jeStatus==='active'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Active</button>
+            <button onClick={()=>setJeStatus('cancelled')} className={`px-3 py-1.5 rounded-md ${jeStatus==='cancelled'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Cancelled {cancelledCount>0?`(${cancelledCount})`:''}</button>
+          </div>
           <input value={jeSearch} onChange={e=>setJeSearch(e.target.value)} placeholder="Search JV #, memo, reference, bank…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
           <div className="text-xs text-slate-500">{filteredEntries.length} entr{filteredEntries.length===1?'y':'ies'}{jq?' match':''}</div>
         </div>
@@ -41924,7 +41931,7 @@ function JournalView({ profile, profiles, journalEntries, chartAccounts, bankAcc
             <th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th>
           </tr></thead>
           <tbody>
-            {filteredEntries.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">{entries.length===0?`No journal entries yet. ${canEdit?'Click “+ New journal entry”.':''}`:'No journal entries match your search.'}</td></tr>}
+            {filteredEntries.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">{entries.length===0?`No journal entries yet. ${canEdit?'Click “+ New journal entry”.':''}`:jeStatus==='cancelled'?'No cancelled journal entries.':'No journal entries match your search.'}</td></tr>}
             {pagedEntries.map(j=>(
               <tr key={j.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(j)}>
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{j.number}</td>
