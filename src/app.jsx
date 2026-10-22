@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 832 · The Admin Office Request for Payment is now its own stream, separate from HR\u2019s. Admin RFPs (utilities, courier, repairs, permits, office supplies) no longer mix with HR\u2019s payment requests, while both still land in Finance\u2019s queue for vouchering.";
+const BUILD = "Live build 833 · AGM now has her own For-Approval page. She is the first approver for: department purchase requests (before Purchasing), HR/Admin Requests for Payment (AGM \u2192 Admin \u2192 Finance), and the liquidations of petty cash, cash advances and budget requests (AGM \u2192 Admin). Admin can still approve anything directly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31291,6 +31291,11 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
   const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   const myLane = (profile.role==='purchasing_admin' || profile.role==='purchasing_personnel') ? 'queue' : (profile.role==='purchasing' ? 'review' : null);
   async function approveAndHandoff(pr){
+    // Department requests from other departments must be approved by the AGM
+    // first before Purchasing can process them. Admin can bypass.
+    if(pr.status==='department_request' && !pr.agm_approved_at && !isAdmin){
+      alert(`This is a Department Request — the AGM needs to approve it first before Purchasing processes it.\n\nIt will appear here for processing once she approves.`); return;
+    }
     const missing = prLinesMissingSupplier(pr, items);
     if(missing.length){ alert(`Assign a supplier to every material line before approving.\n\n${missing.length} line${missing.length===1?'':'s'} still ${missing.length===1?'has':'have'} no supplier. Open the PR and pick a supplier for each line so it lands cleanly in the Materials Queue.`); setEditing(pr); return; }
     const { error } = await sb.from('purchase_requests').update({ status:'approved' }).eq('id', pr.id);
@@ -35813,10 +35818,12 @@ function HRPaymentRequestModal({ profile, existing, onClose, onSaved, origin='hr
         if(error) throw error;
       } else {
         const number = await nextRfpNumber();
-        const { data, error } = await sb.from('rfps').insert({ ...payload, number, date:todayManila(), status:'pending_finance', requested_by:profile.id, requested_at:new Date().toISOString(), origin: origin==='admin_office'?'admin_office':null }).select('id,number').single();
+        // HR / Admin department RFPs route through the AGM first (she approves,
+        // then it goes to Admin, then Finance pays).
+        const { data, error } = await sb.from('rfps').insert({ ...payload, number, date:todayManila(), status:'pending_agm', requested_by:profile.id, requested_at:new Date().toISOString(), origin: origin==='admin_office'?'admin_office':null }).select('id,number').single();
         if(error) throw error; rfpId=data?.id;
-        // Notify Finance / Accounting.
-        try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 New Request for Payment from ${profile.name||profile.email} — ${f.supplier_name.trim()} · ${peso(Number(f.amount))} (${data?.number||''})`, link_view:'rfps', ref_type:'rfp', ref_id:rfpId })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+        // Notify the AGM (first approver) + Admin.
+        try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 New Request for Payment from ${profile.name||profile.email} — ${f.supplier_name.trim()} · ${peso(Number(f.amount))} (${data?.number||''}) — awaiting AGM approval`, link_view:'agm-approvals', ref_type:'rfp', ref_id:rfpId })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
       }
       setBusy(false); onSaved && onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -36146,6 +36153,7 @@ function CheckMonitoringView({ profile, bankAccounts, checks, checkBooklets, rel
 /* ─────────── RFP QUEUE + VOUCHERS ─────────── */
 const RFP_STATUSES = [
   { key:'pending_purchasing', label:'Needs Proof',    color:'bg-fuchsia-100 text-fuchsia-700' },
+  { key:'pending_agm',     label:'Pending AGM',      color:'bg-cyan-100 text-cyan-700' },
   { key:'pending_finance', label:'Pending Finance',  color:'bg-amber-100 text-amber-700' },
   { key:'pending_admin',   label:'Pending Admin',    color:'bg-orange-100 text-orange-700' },
   { key:'returned',        label:'Returned',         color:'bg-purple-100 text-purple-700' },
@@ -36366,6 +36374,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   }
   const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:(code||'—'); };
   const isAdmin = profile.role==='admin';
+  const isAgm = profile.role==='agm';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const isPurchasing = profile.role==='purchasing' || profile.role==='purchasing_admin' || profile.role==='purchasing_personnel';
   const po = orders.find(o=>o.id===rfp.po_id);
@@ -36395,6 +36404,15 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     setBusy(true);
     const { error } = await sb.from('rfps').update({ status:'pending_finance' }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    onSaved();
+  }
+  async function approveAgm(){
+    if(!isAgm && !isAdmin){ setMsg('Only the AGM (or Admin) can approve at this step.'); return; }
+    setBusy(true);
+    const { error } = await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:new Date().toISOString(), agm_note:notes||null }).eq('id', rfp.id);
+    setBusy(false); if(error){ setMsg(error.message); return; }
+    // Notify Admin it's their turn.
+    try{ const { data:admins }=await sb.from('profiles').select('id').eq('role','admin'); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 RFP ${rfp.number||''} approved by AGM — awaiting your approval · ${rfp.supplier_name||''} ${peso(rfp.amount)}`, link_view:'approvals', ref_type:'rfp', ref_id:rfp.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
     onSaved();
   }
   async function approveFinance(){
@@ -36681,7 +36699,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           {rfp.status==='partial' && <div className="text-xs text-amber-700"><span className="font-semibold">Partially paid:</span> {peso(rfp.amount_paid)} of {peso(rfp.amount)} · Balance {peso(rfpBalance(rfp))}</div>}
         </div>
 
-        {(rfp.status==='pending_finance' || rfp.status==='pending_admin') && (isAdmin||isAccounting) && (
+        {(rfp.status==='pending_agm' || rfp.status==='pending_finance' || rfp.status==='pending_admin') && (isAdmin||isAccounting||isAgm) && (
           <TpLbl t="Notes / Question (required if rejecting or returning)"><textarea className="input min-h-[60px]" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. Why is the amount ₱157,559? Please attach the breakdown." /></TpLbl>
         )}
 
@@ -36694,6 +36712,15 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           )}
           {status==='pending_purchasing' && !isPurchasing && !isAdmin && (
             <div className="flex-1 text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Waiting for Purchasing to attach the proof of transaction — it moves here automatically once they do.</div>
+          )}
+          {status==='pending_agm' && (isAgm||isAdmin) && (
+            <>
+              <button onClick={approveAgm} disabled={busy} className="flex-1 py-2 rounded-lg bg-cyan-600 text-white font-semibold disabled:opacity-50">✓ AGM approve & route to Admin</button>
+              <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
+            </>
+          )}
+          {status==='pending_agm' && !isAgm && !isAdmin && (
+            <div className="flex-1 text-xs text-slate-500 bg-slate-50 border rounded-lg px-3 py-2">Awaiting AGM approval. Once she approves, it goes to Admin, then Finance pays.</div>
           )}
           {status==='pending_finance' && (isAccounting||isAdmin) && (
             <>
@@ -38237,7 +38264,125 @@ function BankPaidPickModal({ rfp, bankAccounts, onClose, onConfirm }){
     </Modal>
   );
 }
-function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, reload }){
+/* ═══════════════ AGM FIRST-LEVEL APPROVALS ═══════════════ */
+// The Assistant General Manager is the first approver for: department purchase
+// requests (before Purchasing), HR/Admin Requests for Payment (before Admin →
+// Finance), and the liquidations of petty cash, cash advances and budget
+// requests (before Admin). Admin can always act on these too (bypass).
+function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, cashAdvances, pcReplenishments, reload }){
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const deptPRs = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request');
+  const agmRfps = (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm');
+  const budgetLiqs = (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm');
+  const caLiqs = (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm');
+  const pcLiqs = (pcReplenishments||[]).filter(r=>r.status==='pending_agm');
+  const total = deptPRs.length + agmRfps.length + budgetLiqs.length + caLiqs.length + pcLiqs.length;
+
+  async function notifyRoles(roles, text, link_view, ref_type, ref_id){
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',roles); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text, link_view, ref_type, ref_id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+  }
+  const stamp=()=>new Date().toISOString();
+  // Purchase requests
+  async function approvePR(pr){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['purchasing','purchasing_admin','purchasing_personnel'], `✅ Department request ${pr.number||''} approved by AGM — ready for Purchasing to review.`, 'requests','purchase_request',pr.id); reload&&reload(); }
+  async function returnPR(pr){ const note=prompt('Return this request to the department. What needs fixing?'); if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', agm_note:(note||'').trim()||null }).eq('id',pr.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  // RFPs
+  async function approveRFP(r){ const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
+  async function returnRFP(r){ const note=prompt('Reason for returning / rejecting this RFP?'); if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:(note||'').trim()||null, agm_note:(note||'').trim()||null }).eq('id',r.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  // Budget liquidation
+  async function approveBudget(b){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp() }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
+  async function returnBudget(b){ const note=prompt('Return the liquidation to the requester. Why?'); if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  // Cash advance liquidation
+  async function approveCA(c){ const { error }=await sb.from('cash_advances').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp() }).eq('id',c.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Cash advance liquidation approved by AGM — awaiting your approval · ${c.number||''} ${peso(c.amount_liquidated||0)}`, 'approvals','cash_advance',c.id); reload&&reload(); }
+  async function returnCA(c){ const note=prompt('Return the liquidation to the custodian. Why?'); if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  // Petty cash replenishment
+  async function approvePC(r){ const { error }=await sb.from('petty_cash_replenishments').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Petty cash replenishment approved by AGM — ${peso(r.amount)} awaiting your approval.`, 'petty-cash','petty_replenish',r.id); reload&&reload(); }
+
+  const Section=({title,icon,items,children})=> items.length===0 ? null : (
+    <div className="bg-white border rounded-xl overflow-hidden mb-4">
+      <div className="px-4 py-2.5 border-b bg-slate-50 flex items-center justify-between"><h2 className="font-semibold text-sm">{icon} {title}</h2><span className="text-xs text-slate-400">{items.length}</span></div>
+      <div className="divide-y">{children}</div>
+    </div>
+  );
+  const ActBtns=({onApprove,onReturn,approveLabel='✓ Approve'})=>(
+    <div className="flex gap-2 shrink-0">
+      <button onClick={onApprove} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-700">{approveLabel}</button>
+      {onReturn && <button onClick={onReturn} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button>}
+    </div>
+  );
+  return (
+    <div className="p-6">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold">📬 For Approval</h1>
+        <p className="text-slate-500 text-sm">Your first-level sign-off. {total===0?'Nothing waiting right now. 🎉':`${total} item${total===1?'':'s'} waiting for you.`}</p>
+      </div>
+      {total===0 && <div className="bg-white border rounded-xl p-10 text-center text-slate-400">You're all caught up — nothing needs your approval.</div>}
+
+      <Section title="Department Purchase Requests" icon="📝" items={deptPRs}>
+        {deptPRs.map(pr=>{ const nLines=Array.isArray(pr.lines)?pr.lines.length:0; return (
+          <div key={pr.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium">{pr.number||'PR'} · {pr.department||pr.title||'Department request'}</div>
+              <div className="text-xs text-slate-500">{nLines} item{nLines===1?'':'s'}{pr.urgency?` · ${pr.urgency}`:''} · by {nameOf(pr.created_by)}</div>
+              {pr.notes && <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-[32rem]">{pr.notes}</div>}
+            </div>
+            <ActBtns approveLabel="✓ Approve → Purchasing" onApprove={()=>approvePR(pr)} onReturn={()=>returnPR(pr)} />
+          </div>
+        ); })}
+      </Section>
+
+      <Section title="Requests for Payment (HR / Admin)" icon="🧾" items={agmRfps}>
+        {agmRfps.map(r=>(
+          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium">{r.number||'RFP'} · {r.supplier_name||'—'} · <span className="text-emerald-700">{peso(r.amount)}</span></div>
+              <div className="text-xs text-slate-500 truncate max-w-[32rem]">{r.particulars||''}</div>
+              <div className="text-[11px] text-slate-400">by {nameOf(r.requested_by)}{Array.isArray(r.attachments)&&r.attachments.length?` · 📎 ${r.attachments.length}`:''}</div>
+            </div>
+            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveRFP(r)} onReturn={()=>returnRFP(r)} />
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Budget Liquidations" icon="💰" items={budgetLiqs}>
+        {budgetLiqs.map(b=>(
+          <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium">{b.department||''} · {(b.purpose||'').slice(0,60)} · <span className="text-emerald-700">{peso(b.amount_liquidated||0)}</span></div>
+              <div className="text-xs text-slate-500">Approved budget {peso(b.amount||0)} · liquidation by {nameOf(b.requested_by)} · {Array.isArray(b.liquidation_lines)?b.liquidation_lines.length:0} expense line(s)</div>
+            </div>
+            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveBudget(b)} onReturn={()=>returnBudget(b)} />
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Cash Advance Liquidations" icon="🧾" items={caLiqs}>
+        {caLiqs.map(c=>(
+          <div key={c.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium">{c.number||'CA'} · {c.custodian_name||''} · <span className="text-emerald-700">{peso(c.amount_liquidated||0)}</span></div>
+              <div className="text-xs text-slate-500">Issued {peso(c.amount||0)} · {c.purpose||''} · {Array.isArray(c.receipts)?c.receipts.length:0} receipt(s)</div>
+            </div>
+            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveCA(c)} onReturn={()=>returnCA(c)} />
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Petty Cash Liquidations (replenishment)" icon="💵" items={pcLiqs}>
+        {pcLiqs.map(r=>(
+          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium"><span className="text-emerald-700">{peso(r.amount)}</span> · {r.note||'Petty cash replenishment'}</div>
+              <div className="text-xs text-slate-500">Requested by {nameOf(r.requested_by)} · {fmtDate(String(r.requested_at||r.created_at||'').slice(0,10))}</div>
+            </div>
+            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approvePC(r)} onReturn={null} />
+          </div>
+        ))}
+      </Section>
+    </div>
+  );
+}
+
+function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, cashAdvances, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [payingBank,setPayingBank]=useState(null); // RFP being marked paid — pick which of our banks
   const [openBudget,setOpenBudget]=useState(null);
@@ -38319,7 +38464,33 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   // (approved_at IS NULL). Cash / Check / Bank-Transfer all route here so
   // every disbursement goes through Admin sign-off.
   const pendingVouchers = (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at);
-  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length;
+  // Liquidations the AGM already approved — now awaiting Admin's final sign-off.
+  const isAdminRole = profile.role==='admin';
+  const liqBudgets = isAdminRole ? (budgetRequests||[]).filter(b => !b.deleted_at && b.liq_approval==='pending_admin') : [];
+  const liqCAs = isAdminRole ? (cashAdvances||[]).filter(c => !c.deleted_at && c.liq_approval==='pending_admin') : [];
+  const caName=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  async function finalApproveBudgetLiq(b){
+    if(!confirm(`Approve this budget liquidation?\n\n${(b.purpose||'').slice(0,60)} · ${peso(b.amount_liquidated||0)}\n\nThis posts it to the books (marks the budget Spent).`)) return;
+    const { error }=await sb.from('budget_requests').update({ status:'spent', liquidated_at:new Date().toISOString(), liquidated_by:profile.id, liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id', b.id);
+    if(error){ alert(error.message); return; }
+    try{ if(b.requested_by && b.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:b.requested_by, actor_id:profile.id, type:'system', text:`✅ Your budget liquidation "${(b.purpose||'').slice(0,40)}" was approved.`, link_view:'budgets', ref_type:'budget_request', ref_id:b.id }); }catch(_){}
+    reload && reload();
+  }
+  async function returnBudgetLiq(b){ const note=prompt('Return the liquidation. Why?'); if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id', b.id); if(error){ alert(error.message); return; } reload && reload(); }
+  async function finalApproveCALiq(c){
+    const total2=Number(c.amount_liquidated||0); const returned=Math.max(0, Number(c.amount||0)-total2);
+    if(!confirm(`Approve this cash advance liquidation?\n\n${c.number||'CA'} · ${c.custodian_name||''} · ${peso(total2)}\n\nThis posts it to the books (marks it Liquidated${returned>0.01&&c.bank_id?` and records the ₱${returned.toLocaleString()} return to the bank`:''}).`)) return;
+    try{
+      if(returned>0.01 && c.bank_id){
+        await insertBankTxnOnce({ bank_id:c.bank_id, date:todayManila(), direction:'in', amount:returned, description:`Return from ${c.number||'CA'} · ${c.custodian_name||''}`, ref_type:'cash_advance', ref_id:c.id, created_by:profile.id });
+      }
+      const { error }=await sb.from('cash_advances').update({ status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id', c.id);
+      if(error) throw error;
+    }catch(e){ alert(e.message||String(e)); return; }
+    reload && reload();
+  }
+  async function returnCALiq(c){ const note=prompt('Return the liquidation. Why?'); if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id', c.id); if(error){ alert(error.message); return; } reload && reload(); }
+  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length + liqBudgets.length + liqCAs.length;
   // One-click FULL admin approval + signature. This advances the money-approval
   // (approval_status → 'approved'), posts the bank transaction for officer drafts
   // that haven't posted yet, and stamps the admin signature — so an approved
@@ -38531,6 +38702,30 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
           })}</div>
         </>)}
       </div>
+      )}
+
+      {/* Liquidations the AGM approved — awaiting your final sign-off */}
+      {(liqBudgets.length>0 || liqCAs.length>0) && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-cyan-50 border-b border-cyan-200 flex items-center justify-between">
+            <div className="font-semibold text-cyan-900">💵 Liquidations — final approval <span className="text-cyan-600 font-normal text-xs ml-1">· {liqBudgets.length+liqCAs.length} waiting</span></div>
+            <div className="text-xs text-cyan-600">AGM approved · your sign-off posts them to the books</div>
+          </div>
+          <div className="divide-y">
+            {liqBudgets.map(b=>(
+              <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[200px]"><div className="font-medium">Budget · {(b.purpose||'').slice(0,60)} · <span className="text-emerald-700">{peso(b.amount_liquidated||0)}</span></div><div className="text-xs text-slate-500">{b.department||''} · by {caName(b.requested_by)} · {Array.isArray(b.liquidation_lines)?b.liquidation_lines.length:0} line(s)</div></div>
+                <div className="flex gap-2 shrink-0"><button onClick={()=>finalApproveBudgetLiq(b)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnBudgetLiq(b)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
+              </div>
+            ))}
+            {liqCAs.map(c=>(
+              <div key={c.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[200px]"><div className="font-medium">Cash advance · {c.number||''} {c.custodian_name||''} · <span className="text-emerald-700">{peso(c.amount_liquidated||0)}</span></div><div className="text-xs text-slate-500">Issued {peso(c.amount||0)} · {Array.isArray(c.receipts)?c.receipts.length:0} receipt(s)</div></div>
+                <div className="flex gap-2 shrink-0"><button onClick={()=>finalApproveCALiq(c)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnCALiq(c)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Budget Requests — Sprint 2 will surface these */}
@@ -39883,7 +40078,18 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     }
     setBusy(true); setMsg('');
     const payload={ liquidation_lines:clean, amount_liquidated:clean.reduce((s,l)=>s+l.amount,0), attachments:liqDocs };
-    if(finalize){ payload.status='spent'; payload.liquidated_at=new Date().toISOString(); payload.liquidated_by=profile.id; }
+    const liqApproved = existing?.liq_approval==='approved' || profile.role==='admin';
+    if(finalize && !liqApproved){
+      // Liquidation needs AGM then Admin sign-off before it commits. Save the
+      // drafted lines and route it to the AGM first.
+      payload.liq_approval='pending_agm';
+      const { error } = await sb.from('budget_requests').update(payload).eq('id', existing.id);
+      setBusy(false); if(error){ setMsg(error.message); return; }
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💰 Budget liquidation for approval — ${(existing.purpose||'').slice(0,40)} · ${peso(payload.amount_liquidated)}`, link_view:'agm-approvals', ref_type:'budget_request', ref_id:existing.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setMsg('Sent to the AGM for approval. It commits once she and Admin sign off.');
+      onSaved(); return;
+    }
+    if(finalize){ payload.status='spent'; payload.liquidated_at=new Date().toISOString(); payload.liquidated_by=profile.id; payload.liq_approval='approved'; }
     const { error } = await sb.from('budget_requests').update(payload).eq('id', existing.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
     onSaved();
@@ -40273,10 +40479,11 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
             <div className="mt-2 space-y-1.5">
               {myRepl.map(r=>{ const st=r.status; return (
                 <div key={r.id} className="flex items-center gap-2 flex-wrap bg-white border rounded px-2 py-1.5 text-xs">
-                  <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${st==='pending_admin'?'bg-amber-100 text-amber-700':st==='approved'?'bg-blue-100 text-blue-700':st==='released'?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{st==='pending_admin'?'Pending admin':st}</span>
+                  <span className={`uppercase font-bold px-1.5 py-0.5 rounded ${st==='pending_agm'?'bg-cyan-100 text-cyan-700':st==='pending_admin'?'bg-amber-100 text-amber-700':st==='approved'?'bg-blue-100 text-blue-700':st==='released'?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-600'}`}>{st==='pending_agm'?'Pending AGM':st==='pending_admin'?'Pending admin':st}</span>
                   <span className="font-semibold">{peso(r.amount)}</span>
                   <button onClick={()=>{ const p=periodForRepl(r); setPeriodFilter(p); }} className="text-indigo-600 hover:underline" title="Show the expenses in this liquidation period">📂 requested {fmtDate(String(r.requested_at||r.created_at).slice(0,10))} — view expenses</button>
                   <div className="flex-1"></div>
+                  {st==='pending_agm' && <span className="text-cyan-700">awaiting AGM</span>}
                   {st==='pending_admin' && isAdmin && <button onClick={()=>onApproveRepl && onApproveRepl(r)} className="px-2 py-0.5 rounded bg-blue-600 text-white font-semibold">✓ Approve</button>}
                   {st==='approved' && isAcct && <>
                     <select value={relBank} onChange={e=>setRelBank(e.target.value)} className="border rounded px-1 py-0.5 text-[11px]"><option value="">bank…</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
@@ -40539,12 +40746,13 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
       const { data:stamped }=await sb.from('expenses').update({ pc_liquidated_at: now }).in('id', cycleExp.map(e=>e.id)).is('pc_liquidated_at', null).select('id,amount');
       if(!stamped || stamped.length===0){ reload && reload(); return; }
       const realSpent = stamped.reduce((s,e)=>s+Number(e.amount||0),0);
-      await sb.from('petty_cash_replenishments').insert({ petty_cash_id:c.id, amount:realSpent, status:'pending_admin', requested_by:profile.id, note:`Replenish ${c.number||'petty cash'} to ${peso(c.amount)}` });
+      // Replenishment routes to the AGM first, then Admin.
+      await sb.from('petty_cash_replenishments').insert({ petty_cash_id:c.id, amount:realSpent, status:'pending_agm', requested_by:profile.id, note:`Replenish ${c.number||'petty cash'} to ${peso(c.amount)}` });
       await sb.from('cash_advances').update({ liquidated_at:now.slice(0,10) }).eq('id', c.id);
-      // Notify admins that a replenishment needs approval.
+      // Notify the AGM (first approver) + admins.
       try {
-        const admins=(profiles||[]).filter(p=>p.role==='admin').map(p=>p.id).filter(id=>id&&id!==profile.id);
-        if(admins.length) await sb.from('notifications').insert(admins.map(id=>({ recipient_id:id, actor_id:profile.id, text:`Petty cash ${c.number||''} liquidated — replenishment of ${peso(spent)} needs your approval.`, link_view:'petty-cash', ref_type:'petty_replenish', ref_id:c.id, type:'system' })));
+        const ppl=(profiles||[]).filter(p=>p.role==='agm'||p.role==='admin').map(p=>p.id).filter(id=>id&&id!==profile.id);
+        if(ppl.length) await sb.from('notifications').insert(ppl.map(id=>({ recipient_id:id, actor_id:profile.id, text:`Petty cash ${c.number||''} liquidated — replenishment of ${peso(spent)} needs AGM approval.`, link_view:'agm-approvals', ref_type:'petty_replenish', ref_id:c.id, type:'system' })));
       } catch(_){}
       reload && reload();
     } catch(e){ alert(e.message||String(e)); }
@@ -40951,6 +41159,18 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
   async function liquidate(){
     if(receipts.length===0){ setMsg('Add at least one receipt before liquidating.'); return; }
     if(incompleteLines.length>0){ setMsg(`⚠ ${incompleteLines.length} receipt line(s) are incomplete — every expense needs an uploaded receipt AND a category before you can liquidate/close.`); return; }
+    const liqApproved = ca.liq_approval==='approved' || profile.role==='admin';
+    if(!liqApproved){
+      // Liquidation needs AGM then Admin sign-off before it commits (no bank
+      // movement yet). Save the receipts/docs and route to the AGM first.
+      setBusy(true); setMsg('');
+      try{
+        await sb.from('cash_advances').update({ receipts, supporting_docs:docs, amount_liquidated:total, amount_returned:returned, liq_approval:'pending_agm' }).eq('id', ca.id);
+        const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💰 Cash advance liquidation for approval — ${ca.number||''} ${ca.custodian_name||''} · ${peso(total)}`, link_view:'agm-approvals', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows);
+      }catch(e){ setBusy(false); setMsg('Save failed: '+(e.message||e)); return; }
+      setBusy(false); setMsg('Sent to the AGM for approval. It commits once she and Admin sign off.');
+      onSaved && onSaved(); return;
+    }
     setBusy(true); setMsg('');
     try {
       if(returned > 0.01 && ca.bank_id){
@@ -40962,7 +41182,7 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
       }
       const { error } = await sb.from('cash_advances').update({
         receipts, supporting_docs:docs, amount_liquidated: total, amount_returned: returned,
-        status: 'liquidated', liquidated_at: todayManila(),
+        status: 'liquidated', liquidated_at: todayManila(), liq_approval:'approved',
       }).eq('id', ca.id);
       if(error) throw error;
       setBusy(false); onSaved();
@@ -48866,7 +49086,7 @@ function App(){
       // Assistant General Manager — company-wide visibility. Lands on the
       // Operations Command Center. Can open everything operational + HR + finance
       // visibility; money-write/banking/approval views are gated inside each view.
-      allowed = new Set(['ops-command','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
+      allowed = new Set(['ops-command','agm-approvals','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
@@ -49356,7 +49576,15 @@ function App(){
     + (vouchers||[]).filter(v => !v.approved_at && !v.deleted_at).length
     + (hrMemos||[]).filter(m => m.status==='pending').length
     + (hrLoans||[]).filter(l => l.status==='pending_admin').length
-    + (profile?.role==='admin' ? (hrMovements||[]).filter(m => m.status==='for_approval' && !m.deleted_at).length : 0);
+    + (profile?.role==='admin' ? (hrMovements||[]).filter(m => m.status==='for_approval' && !m.deleted_at).length : 0)
+    + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_admin').length
+    + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_admin').length;
+  // AGM first-level approval queue badge.
+  const agmApprovalsPending = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request').length
+    + (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length
+    + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm').length
+    + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm').length
+    + (pcReplenishments||[]).filter(r=>r.status==='pending_agm').length;
 
   function openDeptActivity(info){ setDeptActivity(info); }
   // From the Inbox: small "💬 Comments" button → opens the activity thread.
@@ -49587,7 +49815,7 @@ function App(){
     // Finance *visibility*; full use of the HR module she oversees. No banking /
     // fund release and no monetary approval authority (those stay with the CEO).
     NAV = [
-      { items:[ ['ops-command','Command Center','🧭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
@@ -49872,8 +50100,8 @@ function App(){
   function NavBtn([k,lbl,icon], keyPrefix){
     // Sidebar badges. The 'approvals' badge uses an amber color (urgent but
     // not error) so it stands out from inbox @mentions (which are rose).
-    const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : k==='approvals'?pendingApprovals : k==='replacements'?replacementPending : 0;
-    const badgeColor = k==='approvals' ? 'bg-amber-500' : 'bg-rose-500';
+    const badge = k==='inbox'?unreadInbox : k==='prod'?prodActive : k==='approvals'?pendingApprovals : k==='agm-approvals'?agmApprovalsPending : k==='replacements'?replacementPending : 0;
+    const badgeColor = (k==='approvals'||k==='agm-approvals') ? 'bg-amber-500' : 'bg-rose-500';
     const fav = favs.includes(k);
     return (
       <div key={(keyPrefix||'')+k} className="group/nav flex items-center">
@@ -50060,7 +50288,8 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} cashAdvances={cashAdvances} reload={loadAll} />}
+        {view==='agm-approvals' && <AGMApprovalsView profile={profile} profiles={profiles} requests={requests} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} pcReplenishments={pcReplenishments} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
