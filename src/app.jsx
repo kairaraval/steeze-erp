@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 831 · New Admin Office module for the HR Admin (Geziel) — visible to Admin, AGM, HR and HR Admin. Directory of technicians/electricians/emergency numbers, office-supplies inventory with issue/restock logging, an admin request queue (DHL, onboarding kits, repairs), a Permits & Licenses tracker with expiry alerts, a maintenance/repair log, plus her own Request for Payment to Finance and the shared Asset Register.";
+const BUILD = "Live build 832 · The Admin Office Request for Payment is now its own stream, separate from HR\u2019s. Admin RFPs (utilities, courier, repairs, permits, office supplies) no longer mix with HR\u2019s payment requests, while both still land in Finance\u2019s queue for vouchering.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35771,10 +35771,11 @@ async function nextRfpNumber(){
   let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
   return `RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
 }
-function HRPaymentRequestModal({ profile, existing, onClose, onSaved }){
+function HRPaymentRequestModal({ profile, existing, onClose, onSaved, origin='hr', categories }){
   const isEdit=!!existing?.id;
+  const CATS = (categories && categories.length) ? categories : HR_PAYMENT_CATEGORIES;
   const [f,setF]=useState({
-    category: existing?.category || HR_PAYMENT_CATEGORIES[0],
+    category: existing?.category || CATS[0],
     supplier_name: existing?.supplier_name || '',
     particulars: existing?.particulars || '',
     amount: existing?.amount!=null ? String(existing.amount) : '',
@@ -35812,7 +35813,7 @@ function HRPaymentRequestModal({ profile, existing, onClose, onSaved }){
         if(error) throw error;
       } else {
         const number = await nextRfpNumber();
-        const { data, error } = await sb.from('rfps').insert({ ...payload, number, date:todayManila(), status:'pending_finance', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
+        const { data, error } = await sb.from('rfps').insert({ ...payload, number, date:todayManila(), status:'pending_finance', requested_by:profile.id, requested_at:new Date().toISOString(), origin: origin==='admin_office'?'admin_office':null }).select('id,number').single();
         if(error) throw error; rfpId=data?.id;
         // Notify Finance / Accounting.
         try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 New Request for Payment from ${profile.name||profile.email} — ${f.supplier_name.trim()} · ${peso(Number(f.amount))} (${data?.number||''})`, link_view:'rfps', ref_type:'rfp', ref_id:rfpId })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
@@ -35825,7 +35826,7 @@ function HRPaymentRequestModal({ profile, existing, onClose, onSaved }){
       <div className="space-y-3">
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">This goes straight to Finance's payment queue. Attach the quotation/invoice and fill in the payee's bank details so Accounting can cut the voucher without following up.</div>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{HR_PAYMENT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)}>{CATS.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
           <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} onChange={e=>up('amount',e.target.value)} placeholder="0.00" /></TpLbl>
         </div>
         <TpLbl t="Pay to (payee / supplier) *"><input className="input" value={f.supplier_name} onChange={e=>up('supplier_name',e.target.value)} placeholder="e.g. Maxicare Healthcare Corp." /></TpLbl>
@@ -35853,15 +35854,19 @@ function HRPaymentRequestModal({ profile, existing, onClose, onSaved }){
     </Modal>
   );
 }
-function HRPaymentRequestsView({ profile, profiles, rfps, reload }){
+function HRPaymentRequestsView({ profile, profiles, rfps, reload, origin='hr', heading, blurb, categories }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [search,setSearch]=useState('');
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const isAdmin = profile.role==='admin';
-  // HR / dept payment requests = manual RFPs (not tied to a PO). Admin sees all
-  // such requests; everyone else sees the ones they raised.
-  const mine = (rfps||[]).filter(r=>!r.deleted_at && !r.po_id && (isAdmin || r.requested_by===profile.id));
+  const isAdminOrigin = origin==='admin_office';
+  // HR / dept payment requests = manual RFPs (not tied to a PO). The Admin Office
+  // RFP is a separate stream (origin='admin_office') so it never mixes with HR's.
+  // Admin sees all requests in the stream; everyone else sees the ones they raised.
+  const mine = (rfps||[]).filter(r=>!r.deleted_at && !r.po_id
+    && (isAdminOrigin ? r.origin==='admin_office' : r.origin!=='admin_office')
+    && (isAdmin || r.requested_by===profile.id));
   const rows = mine
     .filter(r=> !search || `${r.number||''} ${r.supplier_name||''} ${r.particulars||''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||'')));
@@ -35873,8 +35878,8 @@ function HRPaymentRequestsView({ profile, profiles, rfps, reload }){
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold">🧾 Request for Payment</h1>
-            <p className="text-slate-500 text-sm">Ask Accounting to pay HMO, events, venues and other bills. {openCount} open · {peso(paidTotal)} paid</p>
+            <h1 className="text-2xl font-bold">🧾 {heading||'Request for Payment'}</h1>
+            <p className="text-slate-500 text-sm">{blurb||'Ask Accounting to pay HMO, events, venues and other bills.'} {openCount} open · {peso(paidTotal)} paid</p>
           </div>
           <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New payment request</button>
         </div>
@@ -35904,8 +35909,8 @@ function HRPaymentRequestsView({ profile, profiles, rfps, reload }){
           ); })}
         </tbody>
       </table></div></div>
-      {creating && <HRPaymentRequestModal profile={profile} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload&&reload(); }} />}
-      {editing && <HRPaymentRequestModal profile={profile} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
+      {creating && <HRPaymentRequestModal profile={profile} origin={origin} categories={categories} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload&&reload(); }} />}
+      {editing && <HRPaymentRequestModal profile={profile} existing={editing} origin={origin} categories={categories} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload&&reload(); }} />}
     </div>
   );
 }
@@ -41270,6 +41275,7 @@ const ADMIN_REQUEST_STATUSES = [
 const adminReqStatusMeta = (k)=> ADMIN_REQUEST_STATUSES.find(s=>s.key===k) || ADMIN_REQUEST_STATUSES[0];
 const PERMIT_TYPES = ['Business Permit','Fire Safety Certificate','BIR Registration','Sanitary Permit','Barangay Clearance','SEC / DTI','Contract / Lease','Insurance','Other'];
 const MAINT_CATEGORIES = ['Aircon','Pest Control','Electrical','Plumbing','Equipment','Vehicle','Building','IT','Other'];
+const ADMIN_PAYMENT_CATEGORIES = ['Office / Admin','Utilities','Courier / Freight','Repairs & Maintenance','Permit / License / Government','Office Supplies','Subscription / Membership','Rent','Other'];
 function adminOfficeCanEdit(p){ return ['admin','agm','hr','hr_admin'].includes(p?.role); }
 async function nextAdminReqNumber(){
   const monthKey=todayManila().slice(0,7);
@@ -48867,7 +48873,7 @@ function App(){
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll',
-        'assets','hr-payments','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
+        'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
       // Sales assistant now also has access to Sales Orders (filtered to their
@@ -48969,13 +48975,13 @@ function App(){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
       allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
-        'assets','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
+        'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
       allowed = new Set(['admin-home','inbox','my-tasks','profile','budgets',
-        'admin-directory','assets','admin-office','hr-payments','admin-requests','admin-permits','admin-maintenance']);
+        'admin-directory','assets','admin-office','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -49569,7 +49575,7 @@ function App(){
     ['admin-directory','Directory','📇'],
     ['assets','Asset Register','🏷'],
     ['admin-office','Office Inventory','📦'],
-    ['hr-payments','Request for Payment','🧾'],
+    ['admin-rfp','Request for Payment','🧾'],
     ['admin-requests','Admin Requests','📋'],
     ['admin-permits','Permits & Licenses','📜'],
     ['admin-maintenance','Maintenance Log','🔧'],
@@ -50086,6 +50092,7 @@ function App(){
         {view==='commissions' && <CommissionsView profile={profile} profiles={profiles} salesOrders={salesOrders} leads={leads} salesCommissions={salesCommissions} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='rfps' && <RFPsView profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} apVouchers={apVouchers} costCenters={costCenters} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} reload={loadAll} navTo={navTo} openRfpId={inboxRfpId} onOpenConsumed={()=>setInboxRfpId(null)} />}
         {view==='hr-payments' && <HRPaymentRequestsView profile={profile} profiles={profiles} rfps={rfps} reload={loadAll} />}
+        {view==='admin-rfp' && <HRPaymentRequestsView profile={profile} profiles={profiles} rfps={rfps} reload={loadAll} origin="admin_office" heading="Request for Payment" blurb="Ask Accounting to pay admin bills — utilities, courier, repairs, permits and office supplies." categories={ADMIN_PAYMENT_CATEGORIES} />}
         {view==='checks' && <CheckMonitoringView profile={profile} bankAccounts={bankAccounts} checks={checks} checkBooklets={checkBooklets} reload={loadAll} />}
         {view==='vouchers' && <VouchersView profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} rfps={rfps} orders={orders} costCenters={costCenters} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='ap-vouchers' && <APVouchersView profile={profile} profiles={profiles} apVouchers={apVouchers} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} reload={loadAll} />}
