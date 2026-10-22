@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 828 · Journal Entries: cancelled JVs are hidden from the default (Active) list and moved to their own “Cancelled” tab.";
+const BUILD = "Live build 829 · Storage egress: signed URLs for private files (images, attachments) are now cached and reused per file for 6h instead of regenerated on every view — so the CDN/browser cache serves repeats instead of re-downloading from Storage.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -512,7 +512,26 @@ function printAs(filename){
   setTimeout(()=>{ try{ document.title=prev; }catch(_){} }, 60000);
   window.print();
 }
-async function signedUrl(path, transform){ const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, 3600, transform?{transform}:undefined); if(error) throw error; return data.signedUrl; }
+// Signed URLs are cached and reused per (path + transform) until they near
+// expiry. A fresh signed URL carries a unique token, so the CDN treats each one
+// as a new object and re-downloads from Storage — reusing the SAME URL lets the
+// CDN/browser cache serve it, which is the main lever on Storage egress. We sign
+// for 6h so the cached URL stays valid (and cacheable) across page views.
+const __SIGNED_TTL = 60*60*6;                  // 6 hours
+const __suCache = new Map();                   // key -> { url, exp(ms) }
+(function(){ try{ const raw=sessionStorage.getItem('su_cache'); if(raw){ const o=JSON.parse(raw); const now=Date.now(); Object.entries(o).forEach(([k,v])=>{ if(v&&v.exp>now) __suCache.set(k,v); }); } }catch(_){} })();
+let __suSaveT=null;
+function __suPersist(){ if(__suSaveT) return; __suSaveT=setTimeout(()=>{ __suSaveT=null; try{ const o={}; __suCache.forEach((v,k)=>{ if(v.exp>Date.now()) o[k]=v; }); sessionStorage.setItem('su_cache', JSON.stringify(o)); }catch(_){} }, 1000); }
+async function signedUrl(path, transform){
+  const key = path + (transform ? '|'+JSON.stringify(transform) : '');
+  const hit = __suCache.get(key);
+  if(hit && hit.exp > Date.now()+5*60*1000) return hit.url;   // still valid for >5 min → reuse
+  const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(path, __SIGNED_TTL, transform?{transform}:undefined);
+  if(error) throw error;
+  __suCache.set(key, { url:data.signedUrl, exp: Date.now()+__SIGNED_TTL*1000 });
+  __suPersist();
+  return data.signedUrl;
+}
 async function uploadFile(scope, file){
   const safe=file.name.replace(/[^\w.\-]/g,'_'); const path=`${scope}/${Date.now()}_${safe}`;
   const { error } = await sb.storage.from(BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
@@ -521,7 +540,13 @@ async function uploadFile(scope, file){
 // Client-portal uploads live in a SEPARATE private bucket, scoped so each client
 // can only touch files under their own <client_id>/ folder (see storage RLS).
 const CLIENT_BUCKET='client-uploads';
-async function clientSignedUrl(path){ const { data, error } = await sb.storage.from(CLIENT_BUCKET).createSignedUrl(path, 3600); if(error) throw error; return data.signedUrl; }
+async function clientSignedUrl(path){
+  const key='cb|'+path; const hit=__suCache.get(key);
+  if(hit && hit.exp > Date.now()+5*60*1000) return hit.url;
+  const { data, error } = await sb.storage.from(CLIENT_BUCKET).createSignedUrl(path, __SIGNED_TTL); if(error) throw error;
+  __suCache.set(key, { url:data.signedUrl, exp: Date.now()+__SIGNED_TTL*1000 }); __suPersist();
+  return data.signedUrl;
+}
 async function clientUploadFile(clientId, file){
   const safe=file.name.replace(/[^\w.\-]/g,'_'); const path=`${clientId}/${Date.now()}_${Math.random().toString(36).slice(2,7)}_${safe}`;
   const { error } = await sb.storage.from(CLIENT_BUCKET).upload(path, file, { upsert:false }); if(error) throw error;
