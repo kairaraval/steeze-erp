@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 823 · Subcon Sewing now shows every project with pieces still out to a subcon — regardless of the production job’s stage. Before, a project disappeared once its job moved past “Out to Sewing Subcon” (e.g. delivered), which hid most subli/trad-sorting releases. Returns can also be logged on those.";
+const BUILD = "Live build 824 · Subcon Sewing: delivered orders no longer sit in Active (a delivered order means its subcon sewing is done). Active now shows only not-yet-delivered projects that still have pieces out; delivered ones are under Done/All.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10342,7 +10342,11 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // production job's stage. (Before, a project vanished here once its job moved
   // past "Out to Sewing Subcon" — e.g. delivered — even if subcon work/payroll
   // was still pending, which hid most sorting releases.)
-  const projSubconOpen=(p)=> p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 );
+  // Open = still has subcon work pending AND the order hasn't been delivered yet.
+  // A delivered order means all its sewing (subcon included) is finished, so it
+  // drops out of Active even if returns were never logged on this board.
+  const projDelivered=(p)=> !!(p.job && PRODUCTION_DONE.includes(p.job.status));
+  const projSubconOpen=(p)=> !projDelivered(p) && p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 );
   const tabP=(p)=> tab==='all' ? true : tab==='done' ? !projSubconOpen(p) : projSubconOpen(p);
   const projShown=projects.filter(p=>matchP(p)&&tabP(p)).sort((a,b)=>a.label.localeCompare(b.label));
 
