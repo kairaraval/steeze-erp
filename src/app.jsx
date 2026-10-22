@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 822 · Fixed double-posted bank transactions: removed 9 duplicate rows (CV-2026-09-003 + 7 collections + 1 voucher), and added a guard so recording a payment/payout can’t create an identical bank transaction twice.";
+const BUILD = "Live build 823 · Subcon Sewing now shows every project with pieces still out to a subcon — regardless of the production job’s stage. Before, a project disappeared once its job moved past “Out to Sewing Subcon” (e.g. delivered), which hid most subli/trad-sorting releases. Returns can also be logged on those.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10337,17 +10337,24 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
 
   const q=search.trim().toLowerCase();
   const matchP=(p)=> !q || `${p.label} ${p.number} ${p.rows.map(s=>s.subcon+' '+s.itemList).join(' ')}`.toLowerCase().includes(q);
-  const tabP=(p)=> tab==='all' ? true : tab==='done' ? p.projectDone : !p.projectDone;
+  // A project is OPEN for subcon sewing while it still has pieces out (not fully
+  // returned) OR returned pieces not yet added to payroll — independent of the
+  // production job's stage. (Before, a project vanished here once its job moved
+  // past "Out to Sewing Subcon" — e.g. delivered — even if subcon work/payroll
+  // was still pending, which hid most sorting releases.)
+  const projSubconOpen=(p)=> p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 );
+  const tabP=(p)=> tab==='all' ? true : tab==='done' ? !projSubconOpen(p) : projSubconOpen(p);
   const projShown=projects.filter(p=>matchP(p)&&tabP(p)).sort((a,b)=>a.label.localeCompare(b.label));
 
   // flat rows for the By-Subcon view (only rows with a real subcon)
   const flat=[]; projShown.forEach(p=> p.rows.forEach(s=>{ if(s.subcon_id) flat.push({p,s}); }));
 
-  const activeSubcons=new Set(projects.filter(p=>!p.projectDone).flatMap(p=>p.rows.filter(s=>s.subcon_id).map(s=>s.subcon_id))).size;
-  const activeProjects=projects.filter(p=>!p.projectDone).length;
-  const totalOut=projects.filter(p=>!p.projectDone).reduce((s,p)=>s+p.out,0);
-  const totalPending=projects.filter(p=>!p.projectDone).reduce((s,p)=>s+p.balance,0);
-  const overdueCount=projects.filter(p=>!p.projectDone && p.overdue).length;
+  const openProjects=projects.filter(projSubconOpen);
+  const activeSubcons=new Set(openProjects.flatMap(p=>p.rows.filter(s=>s.subcon_id&&s.balance>0).map(s=>s.subcon_id))).size;
+  const activeProjects=openProjects.length;
+  const totalOut=openProjects.reduce((s,p)=>s+p.out,0);
+  const totalPending=openProjects.reduce((s,p)=>s+p.balance,0);
+  const overdueCount=openProjects.filter(p=>p.overdue).length;
 
   async function del(a){ if(!confirm('Remove this subcon assignment? (Batch-out history stays.)')) return; await sb.from('subcon_assignments').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',a.id); load(); reload&&reload(); }
   async function toggleDone(p,s){
@@ -10426,7 +10433,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
-      {s.subcon_id && !p.projectDone && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
+      {s.subcon_id && (Number(s.balance||0)>0 || !p.projectDone) && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
       {s.subcon_id && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
       {s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
