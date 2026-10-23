@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 836 · Sampling Board now has a \u201cRequest materials\u201d button on every sample. When a sample is re-done (moved back from Delivered to Endorsed), its first materials PR no longer blocks a new one \u2014 this sends a fresh request straight to Purchasing (Purchase Requests \u2192 To Review).";
+const BUILD = "Live build 837 · The sample re-materials request is now a compact \u201c\ud83d\uded2 RM\u201d icon placed after the Techpack button \u2014 it is only for the isolated case of re-doing a delivered sample.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14469,8 +14469,8 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orde
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
               <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
-              {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Send a fresh materials request to Purchasing for this (re-)sample">🛒 Request materials</button>}
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+              {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Re-sample only: send a fresh materials request to Purchasing">🛒 RM</button>}
               {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
             </td>
@@ -14526,8 +14526,8 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orde
                           <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
               <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
-                          {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Send a fresh materials request to Purchasing for this (re-)sample">🛒 Request materials</button>}
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
+                          {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Re-sample only: send a fresh materials request to Purchasing">🛒 RM</button>}
                           {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
                         </td>
                       </tr>
