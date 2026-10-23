@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 835 · AGM approvals now open a full review panel for each request (line items, amounts, payee, receipts) with her e-signature, and a printable sign-off sheet. Fixed HR Admin (Geziel) being blocked from writing HR records (leaves, memos, cases, loans, reviews) \u2014 she now has full HR access at the database level too.";
+const BUILD = "Live build 836 · Sampling Board now has a \u201cRequest materials\u201d button on every sample. When a sample is re-done (moved back from Delivered to Endorsed), its first materials PR no longer blocks a new one \u2014 this sends a fresh request straight to Purchasing (Purchase Requests \u2192 To Review).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -14325,6 +14325,23 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orde
   const canDelete=isAdmin || !isAssistant;
   // Who may edit a sample's due date directly on the board.
   const canEditDue=['admin','manager','sales_representative','assistant','production_supervisor'].includes(profile.role);
+  // Who may (re-)request materials for a sample. The auto-PR only fires once per
+  // sample; when a sample is re-done (moved back from Delivered → Endorsed) the
+  // first PR blocks a new one, so this button force-creates a fresh request.
+  const canReqMat=['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant'].includes(profile.role);
+  async function reRequestMaterials(j){
+    const lead=j.lead_id?(leads||[]).find(l=>l.id===j.lead_id):null;
+    if(!confirm(`Request materials again for ${j.number||'this sample'}?\n\n${j.item||''}${j.client_name?` · ${j.client_name}`:''}\n\nThis sends a FRESH materials request to Purchasing for this re-sample (the first one was already processed).`)) return;
+    const lines=(j.items||[]).map(it=>({ description:`${it.itemType||'Item'}${it.category?` (${it.category})`:''} — re-sample for "${j.item||''}"`, sku:'', item_id:null, qty:Number(it.quantity)||0, est_cost:0, link:'', notes:'' }));
+    const payload={ number:'PR-'+Date.now().toString().slice(-5), date:todayManila(), requested_by:profile.id, dept_id:null, urgency:'normal', status:'submitted',
+      justification:`Re-sample materials for "${j.item||''}"${j.client_name?` · ${j.client_name}`:''} (${j.number||''}).`, approver_note:'', source:'sampling', linked_sample_id:j.id,
+      lines: lines.length?lines:[{ description:`Re-sample materials for "${j.item||''}"`, sku:'', item_id:null, qty:1, est_cost:0, link:'', notes:'' }] };
+    const { data, error }=await sb.from('purchase_requests').insert(payload).select().single();
+    if(error){ alert(error.message); return; }
+    try{ const { data:pur }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel','admin']); const rows=(pur||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🛒 Materials re-requested for re-sample ${j.number||''} — ${j.item||''}${lead?.title?` · ${lead.title}`:''}`, link_view:'requests', ref_type:'purchase_request', ref_id:data.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    alert('Materials request sent to Purchasing — it will show in Purchase Requests (To Review).');
+    reload();
+  }
   async function saveDue(j, val){
     const { error } = await sb.from('sampling_jobs').update({ due_date: val||null }).eq('id', j.id);
     if(error){ alert(error.message); return; }
@@ -14452,6 +14469,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orde
               <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
               <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
+              {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Send a fresh materials request to Purchasing for this (re-)sample">🛒 Request materials</button>}
               {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
               {onCreateDR && canManageDR(profile) && <button onClick={()=>onCreateDR(buildDrCtxFromSample(j, lead))} className="text-xs text-indigo-700 hover:underline mr-2" title="Create Sample Release DR">🚚 DR</button>}
               {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
@@ -14508,6 +14526,7 @@ function SamplingBoard({ profile, profiles, jobs, leads, subcons, requests, orde
                           <button onClick={()=>openActivity({ job:j, jobType:'sampling', title:`${j.item} · ${j.client_name}` })} className="text-xs text-indigo-600 hover:underline mr-2">💬</button>
               {canPlan && <button onClick={()=>setPlanning(j)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Plan this sample across departments">📊 Plan</button>}
               <span className="mr-2 inline-block align-middle"><MatBadge job={j} /></span>
+                          {canReqMat && <button onClick={()=>reRequestMaterials(j)} className="text-xs text-amber-700 hover:underline font-semibold mr-2" title="Send a fresh materials request to Purchasing for this (re-)sample">🛒 Request materials</button>}
                           {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋</button>}
                           {canDelete && <button onClick={()=>del(j.id)} className="text-xs text-rose-500 hover:underline opacity-0 group-hover:opacity-100" title="Delete sample">Delete</button>}
                         </td>
