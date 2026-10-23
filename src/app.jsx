@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 840 · Subcon payroll RFP now carries a signed Subcon Payroll Sheet as its supporting document. Open it from the RFP or the AGM/Admin approval screens to review per-subcon totals and print/save as PDF. It holds three signatures: the supervisor who prepared it, the AGM, and the Admin \u2014 each signature appears as they approve.";
+const BUILD = "Live build 841 · Admin can now approve an RFP directly when the AGM is unavailable (e.g. on leave). On a Pending-AGM request, Admin gets a \u201cApprove directly (skip AGM)\u201d button \u2014 it approves on your signature alone and the payroll sheet marks the AGM box \u201cSkipped \u2014 AGM unavailable\u201d. Applies to all AGM-first RFPs incl. subcon payroll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10893,7 +10893,7 @@ function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, r
           <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {bySub.length} subcon(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
           <div className="grid grid-cols-3 gap-6 mt-10">
             <SigBox who={signer} when={batch.signed_at} role="Prepared & signed by" />
-            <SigBox who={agm} when={rfp?.agm_approved_at} role="Reviewed & approved — AGM" fallback="Pending AGM" />
+            <SigBox who={agm} when={rfp?.agm_approved_at} role="Reviewed & approved — AGM" fallback={adm&&!agm?'Skipped — AGM unavailable':'Pending AGM'} />
             <SigBox who={adm} when={rfp?.admin_approved_at} role="Approved — Admin" fallback="Pending Admin" />
           </div>
         </div>
@@ -36975,6 +36975,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           {status==='pending_agm' && (isAgm||isAdmin) && (
             <>
               <button onClick={approveAgm} disabled={busy} className="flex-1 py-2 rounded-lg bg-cyan-600 text-white font-semibold disabled:opacity-50">✓ AGM approve & route to Admin</button>
+              {isAdmin && <button onClick={()=>{ if(confirm('Approve this directly without the AGM (e.g. she is on leave)?\n\nIt skips the AGM step and is approved on your signature alone.')) approveAdmin(); }} disabled={busy} className="py-2 px-4 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50" title="Skip the AGM step and approve on your signature (use when the AGM is unavailable)">✓ Approve directly (skip AGM)</button>}
               <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
             </>
           )}
