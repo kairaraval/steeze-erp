@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 841 · Admin can now approve an RFP directly when the AGM is unavailable (e.g. on leave). On a Pending-AGM request, Admin gets a \u201cApprove directly (skip AGM)\u201d button \u2014 it approves on your signature alone and the payroll sheet marks the AGM box \u201cSkipped \u2014 AGM unavailable\u201d. Applies to all AGM-first RFPs incl. subcon payroll.";
+const BUILD = "Live build 842 · Pending-AGM RFPs (incl. subcon payroll) now also appear on the Admin For-Approval page under an \u201cAwaiting AGM\u201d section, with the badge counting them \u2014 so you can review and approve directly from there if the AGM is unavailable.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38792,6 +38792,9 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   }
   const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
+  // RFPs still awaiting the AGM. Shown to Admin so you can approve directly when
+  // the AGM is unavailable (e.g. on leave).
+  const agmRfpsForAdmin = profile.role==='admin' ? (rfps||[]).filter(r => !r.deleted_at && r.status==='pending_agm') : [];
   // For Bank Payment — RFPs YOU already approved that still need the real bank
   // payment processed. Owner-only tracking: clicking Done stamps that the bank
   // transaction was authorized. Independent of the finance voucher / GL.
@@ -38848,7 +38851,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
     reload && reload();
   }
   async function returnCALiq(c){ const note=prompt('Return the liquidation. Why?'); if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id', c.id); if(error){ alert(error.message); return; } reload && reload(); }
-  const total = pendingRfps.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length + liqBudgets.length + liqCAs.length;
+  const total = pendingRfps.length + agmRfpsForAdmin.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length + liqBudgets.length + liqCAs.length;
   // One-click FULL admin approval + signature. This advances the money-approval
   // (approval_status → 'approved'), posts the bank transaction for officer drafts
   // that haven't posted yet, and stamps the admin signature — so an approved
@@ -38959,6 +38962,27 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
                 <button onClick={()=>rejectLoanA(l)} className="text-xs px-2.5 py-1 rounded border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">✕ Reject</button>
               </div>
             ); })}
+          </div>
+        </div>
+      )}
+
+      {/* RFPs still at the AGM — Admin can approve directly if she's unavailable. */}
+      {agmRfpsForAdmin.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-cyan-50 border-b border-cyan-200 flex items-center justify-between">
+            <div className="font-semibold text-cyan-900">🧵 Awaiting AGM <span className="text-cyan-600 font-normal text-xs ml-1">· {agmRfpsForAdmin.length} pending</span></div>
+            <div className="text-xs text-cyan-600">First approver is the AGM. Open one to approve directly if she's on leave.</div>
+          </div>
+          <div className="divide-y">
+            {agmRfpsForAdmin.map(r=>(
+              <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-cyan-50/40 cursor-pointer" onClick={()=>setOpenRfp(r)}>
+                <div className="flex-1 min-w-[200px]">
+                  <div className="font-medium">{r.number||'RFP'} · {r.supplier_name||'—'} · <span className="text-rose-700">{peso(r.amount)}</span>{r.origin==='subcon_payroll' && <span className="ml-2 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">Subcon payroll</span>}</div>
+                  <div className="text-[11px] text-slate-500 truncate max-w-[34rem]">{r.particulars||''}</div>
+                </div>
+                <button onClick={(e)=>{e.stopPropagation(); setOpenRfp(r);}} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 shrink-0">Review →</button>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -49942,6 +49966,7 @@ function App(){
     + (hrMemos||[]).filter(m => m.status==='pending').length
     + (hrLoans||[]).filter(l => l.status==='pending_admin').length
     + (profile?.role==='admin' ? (hrMovements||[]).filter(m => m.status==='for_approval' && !m.deleted_at).length : 0)
+    + (profile?.role==='admin' ? (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length : 0)
     + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_admin').length
     + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_admin').length;
   // AGM first-level approval queue badge.
