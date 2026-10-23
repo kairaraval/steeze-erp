@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 839 · Subcon payroll consolidated into Subcon Sewing. New 💰 Payroll tab: For payroll (check qty/rate) → In payroll (per-subcon review) → supervisor reviews & e-SIGNS the run (printable signed payroll sheet) → one Request for Payment to AGM → Admin → Finance. The old Subcon Payroll weekly-generate is retired (read-only history) to prevent double payment.";
+const BUILD = "Live build 840 · Subcon payroll RFP now carries a signed Subcon Payroll Sheet as its supporting document. Open it from the RFP or the AGM/Admin approval screens to review per-subcon totals and print/save as PDF. It holds three signatures: the supervisor who prepared it, the AGM, and the Admin \u2014 each signature appears as they approve.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10779,7 +10779,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       {addPayroll && <SubconAddToPayrollModal p={addPayroll.p} s={addPayroll.s} subcons={subcons} onSave={(vals)=>addToPayrollQueue(addPayroll.p, addPayroll.s, vals)} onClose={()=>setAddPayroll(null)} />}
       {rowDetail && <SubconRowDetailModal p={rowDetail.p} s={rowDetail.s} queue={(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===rowDetail.s.subcon_id && q.lead_id===rowDetail.p.lead_id)} profiles={profiles} canLog={canEdit && !rowDetail.p.projectDone} onAddReturn={()=>{ setFloorReturn({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onAddPayroll={()=>{ setAddPayroll({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onClose={()=>setRowDetail(null)} />}
       {signingRun && <SubconPayrollRunSignModal rows={(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id)} subcons={subcons} leads={leads} clients={clients} profile={profile} onClose={()=>setSigningRun(false)} onSaved={()=>{ setSigningRun(false); load(); reload&&reload(); }} />}
-      {viewRun && <SubconPayrollRunDoc batch={viewRun} rows={(queue||[]).filter(q=>!q.deleted_at && q.batch_id===viewRun.id)} subcons={subcons} leads={leads} clients={clients} profiles={profiles} onClose={()=>setViewRun(null)} />}
+      {viewRun && <SubconPayrollRunDoc batch={viewRun} rows={(queue||[]).filter(q=>!q.deleted_at && q.batch_id===viewRun.id)} subcons={subcons} leads={leads} clients={clients} profiles={profiles} rfp={viewRun.rfp_id?(rfps||[]).find(r=>r.id===viewRun.rfp_id):null} onClose={()=>setViewRun(null)} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
@@ -10851,12 +10851,24 @@ function SubconPayrollRunSignModal({ rows, subcons, leads, clients, profile, onC
   );
 }
 
-// Printable, signed subcon payroll document for one run.
-function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, onClose }){
+// Printable, signed subcon payroll document for one run. Carries three
+// signatures: the supervisor who prepared/signed it, the AGM and the Admin who
+// approved the linked RFP. Doubles as the RFP's supporting document.
+function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, rfp, onClose }){
   const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
   const projNm=(leadId)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name||l.client_name):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
   const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
-  const signer=(profiles||[]).find(p=>p.id===batch.signed_by);
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const signer=pById(batch.signed_by);
+  const agm=rfp?.agm_approved_by?pById(rfp.agm_approved_by):null;
+  const adm=rfp?.admin_approved_by?pById(rfp.admin_approved_by):null;
+  const SigBox=({who,when,role,fallback})=>(
+    <div className="text-center">
+      <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{who?.signature_data && <img src={who.signature_data} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+      <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div>
+      <div className="text-[11px] text-slate-700">{who?(who.name||who.email):(fallback||'—')}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div>
+    </div>
+  );
   const bySub=(()=>{ const m=new Map(); (rows||[]).forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
   const totalPcs=(rows||[]).reduce((t,q)=>t+Number(q.qty||0),0);
   const totalAmt=(rows||[]).reduce((t,q)=>t+amtOf(q),0);
@@ -10879,22 +10891,38 @@ function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, o
             </div>
           ))}
           <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {bySub.length} subcon(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
-          <div className="grid grid-cols-2 gap-8 mt-10 max-w-xl">
-            <div className="text-center">
-              <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{signer?.signature_data && <img src={signer.signature_data} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
-              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Prepared & signed by</div>
-              <div className="text-[11px] text-slate-700">{signer?(signer.name||signer.email):'—'}{batch.signed_at?` · ${fmtDate(String(batch.signed_at).slice(0,10))}`:''}</div>
-            </div>
-            <div className="text-center">
-              <div className="relative border-b border-slate-500 h-16"></div>
-              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Approved by</div>
-              <div className="text-[11px] text-slate-400">AGM / Admin</div>
-            </div>
+          <div className="grid grid-cols-3 gap-6 mt-10">
+            <SigBox who={signer} when={batch.signed_at} role="Prepared & signed by" />
+            <SigBox who={agm} when={rfp?.agm_approved_at} role="Reviewed & approved — AGM" fallback="Pending AGM" />
+            <SigBox who={adm} when={rfp?.admin_approved_at} role="Approved — Admin" fallback="Pending Admin" />
           </div>
         </div>
       </div>
     </Modal>
   );
+}
+
+// The Subcon Payroll sheet opened from an RFP (AGM / Admin / Finance side).
+// Self-fetches the linked payroll run + its lines so it works anywhere an RFP
+// is shown, without that screen needing subcon data loaded.
+function SubconPayrollRfpDoc({ rfp, profiles, onClose }){
+  const [state,setState]=useState(null);
+  useEffect(()=>{ let on=true; (async()=>{
+    try{
+      const { data:batches }=await sb.from('subcon_payroll_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1);
+      const batch=batches&&batches[0];
+      if(!batch){ if(on) setState({ batch:null }); return; }
+      const { data:rows }=await sb.from('subcon_payroll_queue').select('*').eq('batch_id',batch.id).is('deleted_at',null);
+      const { data:subcons }=await sb.from('subcons').select('id,name');
+      const leadIds=[...new Set((rows||[]).map(r=>r.lead_id).filter(Boolean))];
+      let leads=[],clients=[];
+      if(leadIds.length){ const { data:L }=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); leads=L||[]; const cIds=[...new Set(leads.map(l=>l.client_id).filter(Boolean))]; if(cIds.length){ const { data:C }=await sb.from('clients').select('id,name').in('id',cIds); clients=C||[]; } }
+      if(on) setState({ batch, rows:rows||[], subcons:subcons||[], leads, clients });
+    }catch(e){ if(on) setState({ batch:null, err:e.message||String(e) }); }
+  })(); return ()=>{ on=false; }; },[rfp.id]);
+  if(!state) return <Modal title="Subcon Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">Loading payroll sheet…</div></Modal>;
+  if(!state.batch) return <Modal title="Subcon Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">No signed payroll sheet is linked to this request.{state.err?` (${state.err})`:''}</div></Modal>;
+  return <SubconPayrollRunDoc batch={state.batch} rows={state.rows} subcons={state.subcons} leads={state.leads} clients={state.clients} profiles={profiles} rfp={rfp} onClose={onClose} />;
 }
 
 // Log a dated return straight on the Subcon Sewing floor (good + variance),
@@ -36611,6 +36639,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   // "Pending Finance" (see saveAtts). We keep a local override so the modal's
   // status pill + action buttons update immediately, without closing.
   const [statusOverride,setStatusOverride]=useState(null);
+  const [showPayrollDoc,setShowPayrollDoc]=useState(false);
   const status = statusOverride || rfp.status;
   const meta = rfpMeta(status);
 
@@ -36773,6 +36802,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
         </div>
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
+
+        {/* Subcon Sewing payroll — the signed supporting document (supervisor + AGM + Admin). */}
+        {rfp.origin==='subcon_payroll' && (
+          <div className="border rounded-lg bg-violet-50 border-violet-200 p-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase text-violet-700">🧵 Subcon Payroll Sheet</div>
+              <div className="text-[12px] text-slate-600 truncate">The signed per-subcon payroll breakdown — the supporting document for this payment. Open it to review &amp; print before approving.</div>
+            </div>
+            <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
+          </div>
+        )}
 
         {/* Linked HR leave cash-out form — the signed supporting document. */}
         {linkedCashout && (
@@ -36964,6 +37004,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       </div>
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
+      {showPayrollDoc && <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
     </Modal>
   );
 }
@@ -38490,6 +38531,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
   const { kind, data } = review;
   const [note,setNote]=useState('');
   const [busy,setBusy]=useState(false);
+  const [showPayrollDoc,setShowPayrollDoc]=useState(false);
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const itemName=(l)=>{ if(l.item_id){ const it=(items||[]).find(x=>x.id===l.item_id); if(it) return `${it.name}${it.color?` - ${it.color}`:''}`; } return l.description||'(item)'; };
   const sign = profile?.signature_data;
@@ -38559,6 +38601,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
 
         {/* ── Controls (not printed) ── */}
         <div className="no-print space-y-3">
+          {kind==='rfp' && data.origin==='subcon_payroll' && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">🧵 View &amp; check the Subcon Payroll Sheet</button>}
           {nAtt>0 && <div className="text-xs text-slate-600">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request — open it in the source module to view the files.</div>}
           {!sign && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">You don't have an e-signature saved yet. Set one up in <strong>My Profile → signature</strong> so your approval is signed.</div>}
           <TpLbl t="Note (optional — shows on the sheet; required if returning)"><textarea className="input min-h-[52px]" value={note} onChange={e=>setNote(e.target.value)} placeholder="Any condition or question…" /></TpLbl>
@@ -38569,6 +38612,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
           </div>
         </div>
       </div>
+      {showPayrollDoc && <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
     </Modal>
   );
 }
