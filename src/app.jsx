@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 842 · Pending-AGM RFPs (incl. subcon payroll) now also appear on the Admin For-Approval page under an \u201cAwaiting AGM\u201d section, with the badge counting them \u2014 so you can review and approve directly from there if the AGM is unavailable.";
+const BUILD = "Live build 843 · Accounting can now open the Subcon Payroll Sheet from the voucher/pay screen too (not just the RFP detail), so they can check the signed per-subcon breakdown before issuing the voucher. Also made the sheet loader fault-tolerant so name lookups never hide it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10908,17 +10908,23 @@ function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, r
 function SubconPayrollRfpDoc({ rfp, profiles, onClose }){
   const [state,setState]=useState(null);
   useEffect(()=>{ let on=true; (async()=>{
+    // Find the linked payroll run + its lines first. Enrichment (subcon / lead /
+    // client names) is best-effort so a read restriction on those tables for a
+    // given role never hides the whole sheet.
+    let batch=null, rows=[];
     try{
-      const { data:batches }=await sb.from('subcon_payroll_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1);
-      const batch=batches&&batches[0];
-      if(!batch){ if(on) setState({ batch:null }); return; }
-      const { data:rows }=await sb.from('subcon_payroll_queue').select('*').eq('batch_id',batch.id).is('deleted_at',null);
-      const { data:subcons }=await sb.from('subcons').select('id,name');
+      const r1=await sb.from('subcon_payroll_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1);
+      batch=(r1.data&&r1.data[0])||null;
+      if(batch){ const r2=await sb.from('subcon_payroll_queue').select('*').eq('batch_id',batch.id).is('deleted_at',null); rows=r2.data||[]; }
+    }catch(e){ if(on) setState({ batch:null, err:e.message||String(e) }); return; }
+    if(!batch){ if(on) setState({ batch:null }); return; }
+    let subcons=[], leads=[], clients=[];
+    try{ const r=await sb.from('subcons').select('id,name'); subcons=r.data||[]; }catch(_){}
+    try{
       const leadIds=[...new Set((rows||[]).map(r=>r.lead_id).filter(Boolean))];
-      let leads=[],clients=[];
-      if(leadIds.length){ const { data:L }=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); leads=L||[]; const cIds=[...new Set(leads.map(l=>l.client_id).filter(Boolean))]; if(cIds.length){ const { data:C }=await sb.from('clients').select('id,name').in('id',cIds); clients=C||[]; } }
-      if(on) setState({ batch, rows:rows||[], subcons:subcons||[], leads, clients });
-    }catch(e){ if(on) setState({ batch:null, err:e.message||String(e) }); }
+      if(leadIds.length){ const r=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); leads=r.data||[]; const cIds=[...new Set(leads.map(l=>l.client_id).filter(Boolean))]; if(cIds.length){ const rc=await sb.from('clients').select('id,name').in('id',cIds); clients=rc.data||[]; } }
+    }catch(_){}
+    if(on) setState({ batch, rows, subcons, leads, clients });
   })(); return ()=>{ on=false; }; },[rfp.id]);
   if(!state) return <Modal title="Subcon Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">Loading payroll sheet…</div></Modal>;
   if(!state.batch) return <Modal title="Subcon Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">No signed payroll sheet is linked to this request.{state.err?` (${state.err})`:''}</div></Modal>;
@@ -36581,7 +36587,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
         </div>
       )}
       {editing && <RFPModal rfp={editing} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload(); }} onPay={(r)=>{ setEditing(null); setPaying(r); }} onEditPO={(po)=>{ setEditing(null); if(navTo) navTo('orders'); }} />}
-      {paying && <VoucherFormModal rfp={paying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
+      {paying && <VoucherFormModal rfp={paying} profile={profile} profiles={profiles} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} costCenters={costCenters} chartAccounts={chartAccounts} onClose={()=>setPaying(null)} onSaved={()=>{ setPaying(null); reload(); }} />}
       {batchPaying && <BatchVoucherModal rfps={batchPaying} profile={profile} vouchers={vouchers} bankAccounts={bankAccounts} suppliers={suppliers} orders={orders} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>setBatchPaying(null)} onSaved={()=>{ setBatchPaying(null); clearSel(); reload(); }} />}
       {viewingAp && <APVoucherModal ap={viewingAp} profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setViewingAp(null)} />}
     </div>
@@ -37010,8 +37016,9 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   );
 }
 
-function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, costCenters, chartAccounts, onClose, onSaved }){
+function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, suppliers, costCenters, chartAccounts, onClose, onSaved }){
   const supplier = suppliers.find(s=>s.id===rfp.supplier_id);
+  const [showPayrollDoc,setShowPayrollDoc]=useState(false);
   const today = todayManila();
   const monthKey = ymdToMonthKey(today);
   // Pre-select voucher type from RFP payment method:
@@ -37158,6 +37165,12 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
           {Number(rfp.amount_paid||0)>0 && <div className="mb-1">Already paid <strong>{peso(rfp.amount_paid)}</strong> of {peso(rfp.amount)} · Balance <strong>{peso(rfpBalance(rfp))}</strong>.</div>}
           Paying <strong>{peso(f.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. You can change the amount below to pay partially — the RFP stays “Partially Paid” with the balance shown until it's fully settled.
         </div>
+        {rfp.origin==='subcon_payroll' && (
+          <div className="border rounded-lg bg-violet-50 border-violet-200 p-2.5 flex items-center justify-between gap-3">
+            <div className="text-xs text-violet-800">🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</div>
+            <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-2">
           <TpLbl t="Voucher type">
             <select className="input" value={f.type} onChange={e=>up('type',e.target.value)}>
@@ -37244,6 +37257,7 @@ function VoucherFormModal({ rfp, profile, vouchers, bankAccounts, suppliers, cos
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
       </div>
+      {showPayrollDoc && <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
     </Modal>
   );
 }
