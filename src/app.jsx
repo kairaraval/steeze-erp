@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 837 · The sample re-materials request is now a compact \u201c\ud83d\uded2 RM\u201d icon placed after the Techpack button \u2014 it is only for the isolated case of re-doing a delivered sample.";
+const BUILD = "Live build 838 · Fixed: opening a techpack from a production/sampling job\u2019s Activity panel now closes the Activity window first, so the techpack opens on top instead of hidden behind it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50542,7 +50542,7 @@ function App(){
       {sendPrintLead && <SendLeadToPrintingModal profile={profile} lead={sendPrintLead} client={clients.find(c=>c.id===sendPrintLead.client_id)} onClose={()=>setSendPrintLead(null)} onSent={(n)=>{ setSendPrintLead(null); loadAll(); alert('Sent to Printing'+(n?` with ${n} attachment${n===1?'':'s'}`:'')+'.'); }} />}
       {activityLead && <Thread profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id:(leads.find(l=>l.id===activityLead.id)||activityLead).id }} scope={'activity/'+activityLead.id} titleText={(leads.find(l=>l.id===activityLead.id)||activityLead).title} openSourceLabel={detailLead?null:'Open lead'} onOpenSource={detailLead?null:()=>{ const l=leads.find(x=>x.id===activityLead.id)||activityLead; setActivityLead(null); setDetailLead(l); }} afterChange={loadAll} onBack={detailLead?()=>setActivityLead(null):null} onClose={()=>setActivityLead(null)} />}
       {deptActivity && <Thread profile={profile} profiles={profiles} table="dept_job_activity" match={{ job_id:deptActivity.job.id, job_type:deptActivity.jobType }} scope={'dept/'+deptActivity.job.id} titleText={deptActivity.title}
-          sidePanel={<DeptJobSummary job={deptActivity.job} jobType={deptActivity.jobType} lead={(leads||[]).find(l=>l.id===(deptActivity.job.lead_id||deptActivity.job.source_lead_id))} profiles={profiles} openTechpack={openTechpackView} />}
+          sidePanel={<DeptJobSummary job={deptActivity.job} jobType={deptActivity.jobType} lead={(leads||[]).find(l=>l.id===(deptActivity.job.lead_id||deptActivity.job.source_lead_id))} profiles={profiles} openTechpack={(l)=>{ setDeptActivity(null); openTechpackView(l); }} />}
           openSourceLabel={(deptActivity.jobType==='production'||deptActivity.jobType==='sampling')?'📋 Open project plan board':'Go to board'} onOpenSource={()=>{ const jt=deptActivity.jobType; const job=deptActivity.job;
             // Production & sampling: open THIS project's plan board directly so the
             // supervisor lands on the exact project they were tagged about — not the
