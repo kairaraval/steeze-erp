@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 834 · Geziel (HR Admin) now keeps full access to the whole HR module \u2014 she is still part of HR, with the Admin Office added on top. HR dashboard, employees, leave, loans, memos, reviews, recruitment, payroll and HR notifications all restored for her role.";
+const BUILD = "Live build 835 · AGM approvals now open a full review panel for each request (line items, amounts, payee, receipts) with her e-signature, and a printable sign-off sheet. Fixed HR Admin (Geziel) being blocked from writing HR records (leaves, memos, cases, loans, reviews) \u2014 she now has full HR access at the database level too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38265,11 +38265,101 @@ function BankPaidPickModal({ rfp, bankAccounts, onClose, onConfirm }){
   );
 }
 /* ═══════════════ AGM FIRST-LEVEL APPROVALS ═══════════════ */
+// Review + e-sign modal: the AGM opens a request, sees the full details, signs
+// with her e-signature and can print a sign-off sheet, then approves or returns.
+function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, onReturn }){
+  const { kind, data } = review;
+  const [note,setNote]=useState('');
+  const [busy,setBusy]=useState(false);
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const itemName=(l)=>{ if(l.item_id){ const it=(items||[]).find(x=>x.id===l.item_id); if(it) return `${it.name}${it.color?` - ${it.color}`:''}`; } return l.description||'(item)'; };
+  const sign = profile?.signature_data;
+  const titleMap={ pr:'Department Purchase Request', rfp:'Request for Payment', budget:'Budget Liquidation', ca:'Cash Advance Liquidation', petty:'Petty Cash Liquidation' };
+  const ref = data.number || (kind==='petty'?'Petty cash':'—');
+  const whoId = data.requested_by || data.created_by;
+  // Summary rows per kind (label/value pairs) + an optional line table.
+  let summary=[], lines=null, amount=null;
+  if(kind==='pr'){
+    summary=[['Department', data.department||'—'],['Urgency', data.urgency||'normal'],['Requested by', nameOf(whoId)]];
+    lines=(data.lines||[]).map(l=>({ name:itemName(l), qty:Number(l.qty||0), cost:Number(l.est_cost||0), supplier:l.supplier_name||'' }));
+  } else if(kind==='rfp'){
+    amount=Number(data.amount||0);
+    summary=[['Pay to', data.supplier_name||'—'],['Purpose', data.particulars||'—'],['Payment method', data.payment_method||'—'],['Payee bank', [data.bank_name,data.bank_account_name,data.bank_account_number].filter(Boolean).join(' · ')||'—'],['Requested by', nameOf(whoId)]];
+  } else if(kind==='budget'){
+    amount=Number(data.amount_liquidated||0);
+    summary=[['Purpose', data.purpose||'—'],['Department', data.department||'—'],['Approved budget', peso(data.amount||0)],['Requested by', nameOf(whoId)]];
+    lines=(data.liquidation_lines||[]).map(l=>({ name:l.description||'(expense)', qty:null, cost:Number(l.amount||0), supplier:l.category||'' }));
+  } else if(kind==='ca'){
+    amount=Number(data.amount_liquidated||0);
+    summary=[['Custodian', data.custodian_name||'—'],['Issued', peso(data.amount||0)],['Purpose', data.purpose||'—']];
+    lines=(data.receipts||[]).map(l=>({ name:l.description||'(receipt)', qty:null, cost:Number(l.amount||0), supplier:l.category||'' }));
+  } else if(kind==='petty'){
+    amount=Number(data.amount||0);
+    summary=[['Replenishment', data.note||'Petty cash replenishment'],['Requested by', nameOf(whoId)],['Requested', fmtDate(String(data.requested_at||data.created_at||'').slice(0,10))]];
+  }
+  const nAtt=Array.isArray(data.attachments)?data.attachments.length:0;
+  async function doApprove(){
+    if(!sign){ if(!confirm("You don't have an e-signature on file yet. Approve without signing? You can set one up in My Profile → signature.")) return; }
+    setBusy(true); await onApprove(kind, data, note); setBusy(false);
+  }
+  async function doReturn(){ setBusy(true); await onReturn(kind, data, note); setBusy(false); }
+  return (
+    <Modal title={`Review · ${titleMap[kind]} · ${ref}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .agm-signoff,.agm-signoff *{visibility:visible !important;} .agm-signoff{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-4">
+        {/* ── Printable sign-off sheet ── */}
+        <div className="agm-signoff border rounded-xl p-5 bg-white">
+          <div className="flex items-center justify-between border-b pb-2 mb-3">
+            <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Approval Sign-off Sheet</div></div>
+            <div className="text-right text-xs text-slate-500">{titleMap[kind]}<div className="font-mono text-slate-700">{ref}</div><div>{fmtDate(todayManila())}</div></div>
+          </div>
+          <table className="w-full text-sm mb-3"><tbody>
+            {summary.map((r,i)=>(<tr key={i} className="border-b last:border-0"><td className="py-1.5 pr-4 text-slate-500 align-top whitespace-nowrap w-40">{r[0]}</td><td className="py-1.5 font-medium">{r[1]}</td></tr>))}
+            {amount!=null && <tr className="border-t"><td className="py-1.5 pr-4 text-slate-500">Amount</td><td className="py-1.5 font-bold text-emerald-700 text-base">{peso(amount)}</td></tr>}
+          </tbody></table>
+          {lines && lines.length>0 && (
+            <table className="w-full text-xs border rounded mb-3"><thead className="bg-slate-50 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Item / Expense</th>{kind==='pr' && <th className="text-right px-2 py-1">Qty</th>}<th className="text-right px-2 py-1">{kind==='pr'?'Est. cost':'Amount'}</th><th className="text-left px-2 py-1">{kind==='pr'?'Supplier':'Category'}</th></tr></thead>
+              <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1">{l.name}</td>{kind==='pr' && <td className="px-2 py-1 text-right">{l.qty}</td>}<td className="px-2 py-1 text-right">{peso(l.cost)}</td><td className="px-2 py-1 text-slate-500">{l.supplier}</td></tr>))}</tbody>
+            </table>
+          )}
+          {note && <div className="text-xs text-slate-600 mb-3"><span className="font-semibold">AGM note:</span> {note}</div>}
+          <div className="grid grid-cols-2 gap-8 mt-6 max-w-lg">
+            <div className="text-center">
+              <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{data.requested_by||data.created_by ? null : null}</div>
+              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Requested by</div>
+              <div className="text-[11px] text-slate-700 mt-0.5">{nameOf(whoId)}</div>
+            </div>
+            <div className="text-center">
+              <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{sign && <img src={sign} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Reviewed & approved by</div>
+              <div className="text-[11px] text-slate-700 mt-0.5">{profile.name||profile.email} · AGM</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">{fmtDate(todayManila())}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Controls (not printed) ── */}
+        <div className="no-print space-y-3">
+          {nAtt>0 && <div className="text-xs text-slate-600">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request — open it in the source module to view the files.</div>}
+          {!sign && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">You don't have an e-signature saved yet. Set one up in <strong>My Profile → signature</strong> so your approval is signed.</div>}
+          <TpLbl t="Note (optional — shows on the sheet; required if returning)"><textarea className="input min-h-[52px]" value={note} onChange={e=>setNote(e.target.value)} placeholder="Any condition or question…" /></TpLbl>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={doApprove} disabled={busy} className="flex-1 py-2 rounded-lg bg-cyan-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✓ Approve & sign'}</button>
+            <button onClick={()=>printAs(`AGM sign-off - ${ref}`)} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">🖨 Print sign-off</button>
+            {kind!=='petty' && <button onClick={doReturn} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">↩ Return</button>}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // The Assistant General Manager is the first approver for: department purchase
 // requests (before Purchasing), HR/Admin Requests for Payment (before Admin →
 // Finance), and the liquidations of petty cash, cash advances and budget
 // requests (before Admin). Admin can always act on these too (bypass).
-function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, cashAdvances, pcReplenishments, reload }){
+function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, cashAdvances, pcReplenishments, items, reload }){
+  const [review,setReview]=useState(null);   // { kind, data }
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const deptPRs = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request');
   const agmRfps = (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm');
@@ -38282,20 +38372,26 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
     try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',roles); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text, link_view, ref_type, ref_id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
   }
   const stamp=()=>new Date().toISOString();
+  const nn=(s)=>(s&&String(s).trim())||null;
   // Purchase requests
-  async function approvePR(pr){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['purchasing','purchasing_admin','purchasing_personnel'], `✅ Department request ${pr.number||''} approved by AGM — ready for Purchasing to review.`, 'requests','purchase_request',pr.id); reload&&reload(); }
-  async function returnPR(pr){ const note=prompt('Return this request to the department. What needs fixing?'); if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', agm_note:(note||'').trim()||null }).eq('id',pr.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function approvePR(pr, note){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['purchasing','purchasing_admin','purchasing_personnel'], `✅ Department request ${pr.number||''} approved by AGM — ready for Purchasing to review.`, 'requests','purchase_request',pr.id); reload&&reload(); }
+  async function returnPR(pr, note){ note = note===undefined ? prompt('Return this request to the department. What needs fixing?') : note; if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // RFPs
-  async function approveRFP(r){ const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
-  async function returnRFP(r){ const note=prompt('Reason for returning / rejecting this RFP?'); if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:(note||'').trim()||null, agm_note:(note||'').trim()||null }).eq('id',r.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function approveRFP(r, note){ const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
+  async function returnRFP(r, note){ note = note===undefined ? prompt('Reason for returning / rejecting this RFP?') : note; if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:nn(note), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Budget liquidation
-  async function approveBudget(b){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp() }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
-  async function returnBudget(b){ const note=prompt('Return the liquidation to the requester. Why?'); if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function approveBudget(b, note){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
+  async function returnBudget(b, note){ note = note===undefined ? prompt('Return the liquidation to the requester. Why?') : note; if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Cash advance liquidation
-  async function approveCA(c){ const { error }=await sb.from('cash_advances').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp() }).eq('id',c.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Cash advance liquidation approved by AGM — awaiting your approval · ${c.number||''} ${peso(c.amount_liquidated||0)}`, 'approvals','cash_advance',c.id); reload&&reload(); }
-  async function returnCA(c){ const note=prompt('Return the liquidation to the custodian. Why?'); if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function approveCA(c, note){ const { error }=await sb.from('cash_advances').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',c.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Cash advance liquidation approved by AGM — awaiting your approval · ${c.number||''} ${peso(c.amount_liquidated||0)}`, 'approvals','cash_advance',c.id); reload&&reload(); }
+  async function returnCA(c, note){ note = note===undefined ? prompt('Return the liquidation to the custodian. Why?') : note; if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:nn(note) }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Petty cash replenishment
-  async function approvePC(r){ const { error }=await sb.from('petty_cash_replenishments').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Petty cash replenishment approved by AGM — ${peso(r.amount)} awaiting your approval.`, 'petty-cash','petty_replenish',r.id); reload&&reload(); }
+  async function approvePC(r, note){ const { error }=await sb.from('petty_cash_replenishments').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Petty cash replenishment approved by AGM — ${peso(r.amount)} awaiting your approval.`, 'petty-cash','petty_replenish',r.id); reload&&reload(); }
+  // Modal dispatch (view + e-sign)
+  const APPROVE={ pr:approvePR, rfp:approveRFP, budget:approveBudget, ca:approveCA, petty:approvePC };
+  const RETURN={ pr:returnPR, rfp:returnRFP, budget:returnBudget, ca:returnCA };
+  async function reviewApprove(kind,data,note){ const fn=APPROVE[kind]; if(fn) await fn(data, note); setReview(null); }
+  async function reviewReturn(kind,data,note){ if(!note||!note.trim()){ alert('Add a note explaining what needs fixing before returning.'); return; } const fn=RETURN[kind]; if(fn) await fn(data, note); setReview(null); }
 
   const Section=({title,icon,items,children})=> items.length===0 ? null : (
     <div className="bg-white border rounded-xl overflow-hidden mb-4">
@@ -38303,11 +38399,8 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
       <div className="divide-y">{children}</div>
     </div>
   );
-  const ActBtns=({onApprove,onReturn,approveLabel='✓ Approve'})=>(
-    <div className="flex gap-2 shrink-0">
-      <button onClick={onApprove} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-700">{approveLabel}</button>
-      {onReturn && <button onClick={onReturn} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button>}
-    </div>
+  const OpenBtn=({kind,data})=>(
+    <button onClick={()=>setReview({ kind, data })} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-700 shrink-0">📄 Review &amp; sign →</button>
   );
   return (
     <div className="p-6">
@@ -38319,65 +38412,66 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
 
       <Section title="Department Purchase Requests" icon="📝" items={deptPRs}>
         {deptPRs.map(pr=>{ const nLines=Array.isArray(pr.lines)?pr.lines.length:0; return (
-          <div key={pr.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div key={pr.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50 cursor-pointer" onClick={()=>setReview({ kind:'pr', data:pr })}>
             <div className="flex-1 min-w-[200px]">
               <div className="font-medium">{pr.number||'PR'} · {pr.department||pr.title||'Department request'}</div>
-              <div className="text-xs text-slate-500">{nLines} item{nLines===1?'':'s'}{pr.urgency?` · ${pr.urgency}`:''} · by {nameOf(pr.created_by)}</div>
+              <div className="text-xs text-slate-500">{nLines} item{nLines===1?'':'s'}{pr.urgency?` · ${pr.urgency}`:''} · by {nameOf(pr.requested_by||pr.created_by)}</div>
               {pr.notes && <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-[32rem]">{pr.notes}</div>}
             </div>
-            <ActBtns approveLabel="✓ Approve → Purchasing" onApprove={()=>approvePR(pr)} onReturn={()=>returnPR(pr)} />
+            <div onClick={e=>e.stopPropagation()}><OpenBtn kind="pr" data={pr} /></div>
           </div>
         ); })}
       </Section>
 
       <Section title="Requests for Payment (HR / Admin)" icon="🧾" items={agmRfps}>
         {agmRfps.map(r=>(
-          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50 cursor-pointer" onClick={()=>setReview({ kind:'rfp', data:r })}>
             <div className="flex-1 min-w-[200px]">
               <div className="font-medium">{r.number||'RFP'} · {r.supplier_name||'—'} · <span className="text-emerald-700">{peso(r.amount)}</span></div>
               <div className="text-xs text-slate-500 truncate max-w-[32rem]">{r.particulars||''}</div>
               <div className="text-[11px] text-slate-400">by {nameOf(r.requested_by)}{Array.isArray(r.attachments)&&r.attachments.length?` · 📎 ${r.attachments.length}`:''}</div>
             </div>
-            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveRFP(r)} onReturn={()=>returnRFP(r)} />
+            <div onClick={e=>e.stopPropagation()}><OpenBtn kind="rfp" data={r} /></div>
           </div>
         ))}
       </Section>
 
       <Section title="Budget Liquidations" icon="💰" items={budgetLiqs}>
         {budgetLiqs.map(b=>(
-          <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50 cursor-pointer" onClick={()=>setReview({ kind:'budget', data:b })}>
             <div className="flex-1 min-w-[200px]">
               <div className="font-medium">{b.department||''} · {(b.purpose||'').slice(0,60)} · <span className="text-emerald-700">{peso(b.amount_liquidated||0)}</span></div>
               <div className="text-xs text-slate-500">Approved budget {peso(b.amount||0)} · liquidation by {nameOf(b.requested_by)} · {Array.isArray(b.liquidation_lines)?b.liquidation_lines.length:0} expense line(s)</div>
             </div>
-            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveBudget(b)} onReturn={()=>returnBudget(b)} />
+            <div onClick={e=>e.stopPropagation()}><OpenBtn kind="budget" data={b} /></div>
           </div>
         ))}
       </Section>
 
       <Section title="Cash Advance Liquidations" icon="🧾" items={caLiqs}>
         {caLiqs.map(c=>(
-          <div key={c.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div key={c.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50 cursor-pointer" onClick={()=>setReview({ kind:'ca', data:c })}>
             <div className="flex-1 min-w-[200px]">
               <div className="font-medium">{c.number||'CA'} · {c.custodian_name||''} · <span className="text-emerald-700">{peso(c.amount_liquidated||0)}</span></div>
               <div className="text-xs text-slate-500">Issued {peso(c.amount||0)} · {c.purpose||''} · {Array.isArray(c.receipts)?c.receipts.length:0} receipt(s)</div>
             </div>
-            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approveCA(c)} onReturn={()=>returnCA(c)} />
+            <div onClick={e=>e.stopPropagation()}><OpenBtn kind="ca" data={c} /></div>
           </div>
         ))}
       </Section>
 
       <Section title="Petty Cash Liquidations (replenishment)" icon="💵" items={pcLiqs}>
         {pcLiqs.map(r=>(
-          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div key={r.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50 cursor-pointer" onClick={()=>setReview({ kind:'petty', data:r })}>
             <div className="flex-1 min-w-[200px]">
               <div className="font-medium"><span className="text-emerald-700">{peso(r.amount)}</span> · {r.note||'Petty cash replenishment'}</div>
               <div className="text-xs text-slate-500">Requested by {nameOf(r.requested_by)} · {fmtDate(String(r.requested_at||r.created_at||'').slice(0,10))}</div>
             </div>
-            <ActBtns approveLabel="✓ Approve → Admin" onApprove={()=>approvePC(r)} onReturn={null} />
+            <div onClick={e=>e.stopPropagation()}><OpenBtn kind="petty" data={r} /></div>
           </div>
         ))}
       </Section>
+      {review && <AGMReviewModal review={review} profile={profile} profiles={profiles} items={items} onClose={()=>setReview(null)} onApprove={reviewApprove} onReturn={reviewReturn} />}
     </div>
   );
 }
@@ -50292,7 +50386,7 @@ function App(){
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
         {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} cashAdvances={cashAdvances} reload={loadAll} />}
-        {view==='agm-approvals' && <AGMApprovalsView profile={profile} profiles={profiles} requests={requests} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} pcReplenishments={pcReplenishments} reload={loadAll} />}
+        {view==='agm-approvals' && <AGMApprovalsView profile={profile} profiles={profiles} requests={requests} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} pcReplenishments={pcReplenishments} items={items} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
