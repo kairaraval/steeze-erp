@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 838 · Fixed: opening a techpack from a production/sampling job\u2019s Activity panel now closes the Activity window first, so the techpack opens on top instead of hidden behind it.";
+const BUILD = "Live build 839 · Subcon payroll consolidated into Subcon Sewing. New 💰 Payroll tab: For payroll (check qty/rate) → In payroll (per-subcon review) → supervisor reviews & e-SIGNS the run (printable signed payroll sheet) → one Request for Payment to AGM → Admin → Finance. The old Subcon Payroll weekly-generate is retired (read-only history) to prevent double payment.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10273,7 +10273,7 @@ const SUBCON_SEW_NEXT='quality check (qc)';
 function prodStatusIdx(k){ return PRODUCTION_STATUSES.findIndex(s=>s.key===k); }
 function canDoneSubconProject(p){ return ['admin','production_supervisor'].includes(p?.role); }
 
-function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs, subconSends, subconReturns, subconProjects, subconPayrolls, subconPayrollItems, reload }){
+function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs, subconSends, subconReturns, subconProjects, subconPayrolls, subconPayrollItems, rfps, reload }){
   const canEdit = subconSewingCanEdit(profile);
   const canDone = canDoneSubconProject(profile);
   // Who can create payroll-feeding send-outs / log dated deliveries on this board.
@@ -10305,8 +10305,11 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const [floorReturn,setFloorReturn]=useState(null); // { p, s } — log a return on the floor
   const [rowFilter,setRowFilter]=useState('all');     // 'all' | 'open' | 'returned'
   const [queue,setQueue]=useState([]);                // subcon_payroll_queue (staged for payroll)
+  const [payrollBatches,setPayrollBatches]=useState([]); // signed subcon payroll runs
+  const [signingRun,setSigningRun]=useState(false);   // prepare & sign modal open
+  const [viewRun,setViewRun]=useState(null);          // batch being viewed/printed
   const [addPayroll,setAddPayroll]=useState(null);    // { p, s } — add returned pcs to the payroll queue
-  const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'sent'
+  const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'ready' | 'runs'
   const [rowDetail,setRowDetail]=useState(null);       // { p, s } — open a subcon's full log
   const todayISO=todayManila();
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
@@ -10315,6 +10318,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
     try{ const { data }=await sb.from('sorting_batches').select('*').eq('destination_type','subcon').is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
     try{ const { data }=await sb.from('subcon_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
     try{ const { data }=await sb.from('subcon_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
+    try{ const { data }=await sb.from('subcon_payroll_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPayrollBatches(data||[]); }catch(_){ setPayrollBatches([]); }
     setBusy(false);
   }
   useEffect(()=>{ load(); },[]);
@@ -10480,8 +10484,37 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         await sb.from('subcon_sends').update({ status:'fully_returned' }).eq('id', send.id);
         await sb.from('subcon_payroll_queue').update({ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id, sent_send_id:send.id }).eq('id', q.id);
       }
-      load(); reload&&reload(); alert('Sent to Subcon Payroll. Review it in the Subcon Payroll module → Weekly payroll.');
+      load(); reload&&reload(); alert('Added to the payroll run. Review & sign it in the 💰 Payroll tab → In payroll.');
     }catch(e){ alert('Send failed: '+(e.message||e)); }
+  }
+  // Raise ONE Request for Payment for a whole signed payroll run → goes to the
+  // AGM (first approver) → Admin → Finance pays. Keeps everything documented.
+  async function requestPaymentForRun(batch){
+    const rows=(queue||[]).filter(q=>!q.deleted_at && q.batch_id===batch.id);
+    if(!rows.length){ alert('This run has no items.'); return; }
+    const amount=rows.reduce((t,q)=>t+Number(q.qty||0)*Number(q.rate||0),0);
+    const pcs=rows.reduce((t,q)=>t+Number(q.qty||0),0);
+    const subconCount=new Set(rows.map(q=>q.subcon_id)).size;
+    if(!confirm(`Request payment for payroll run ${batch.number}?\n\n${subconCount} subcon(s) · ${num(pcs)} pcs · ${peso(amount)}\n\nThis sends ONE Request for Payment to the AGM, then Admin, then Finance pays.`)) return;
+    try{
+      const number=await nextRfpNumber();
+      const particulars=`[Subcon Sewing Payroll] ${batch.number} — ${subconCount} subcon${subconCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${profile.name||profile.email}.`;
+      const { data:rfp, error }=await sb.from('rfps').insert({ number, date:todayManila(), status:'pending_agm', origin:'subcon_payroll', supplier_name:'Subcon Sewing Payroll', amount, particulars, payment_method:'cash', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
+      if(error) throw error;
+      await sb.from('subcon_payroll_batches').update({ status:'requested', rfp_id:rfp.id }).eq('id', batch.id);
+      await sb.from('subcon_payroll_queue').update({ status:'requested' }).eq('batch_id', batch.id).is('deleted_at',null);
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧵 Subcon payroll ${batch.number} signed by ${profile.name||profile.email} — ${peso(amount)} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'rfp', ref_id:rfp.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+      load(); reload&&reload(); alert(`Request for Payment ${rfp.number} sent. Track it in the approval queue.`);
+    }catch(e){ alert('Request failed: '+(e.message||e)); }
+  }
+  async function cancelRun(batch){
+    if(batch.status!=='signed'){ alert('Only a signed run that has not been requested yet can be unlocked.'); return; }
+    if(!confirm(`Unlock run ${batch.number}? Its items go back to “In payroll” so you can re-check them.`)) return;
+    try{
+      await sb.from('subcon_payroll_queue').update({ status:'sent', batch_id:null }).eq('batch_id', batch.id).is('deleted_at',null);
+      await sb.from('subcon_payroll_batches').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', batch.id);
+      load(); reload&&reload();
+    }catch(e){ alert('Failed: '+(e.message||e)); }
   }
   // sub-row action cell (shared by both views)
   const ActionCell=({p,s})=> !canEdit ? null : (
@@ -10543,29 +10576,37 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         </div>
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
           <button onClick={()=>setSbTab('floor')} className={`px-3 py-1.5 rounded-md ${sbTab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor tracking</button>
-          <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 For payroll{(queue||[]).filter(q=>!q.deleted_at&&q.status==='staged').length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&q.status==='staged').length})`:''}</button>
+          <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length})`:''}</button>
         </div>
       </div>
 
       {sbTab==='payroll' && (()=>{
         const staged=(queue||[]).filter(q=>!q.deleted_at && q.status==='staged');
-        const sent=(queue||[]).filter(q=>!q.deleted_at && q.status==='sent');
-        const shown=payrollSub==='sent'?sent:staged;
+        const sent=(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id);
+        const runs=(payrollBatches||[]).filter(b=>!b.deleted_at);
         const projNm=(leadId)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name||l.client_name):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
-        const totalPcs=staged.reduce((t,q)=>t+Number(q.qty||0),0);
-        const totalAmt=staged.reduce((t,q)=>t+Number(q.qty||0)*Number(q.rate||0),0);
+        const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+        const stAmt=staged.reduce((t,q)=>t+amtOf(q),0);
+        const sentAmt=sent.reduce((t,q)=>t+amtOf(q),0), sentPcs=sent.reduce((t,q)=>t+Number(q.qty||0),0);
+        // "In payroll" grouped per subcon (ready to review + sign).
+        const bySub=(()=>{ const m=new Map(); sent.forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
+        const rfpFor=(b)=> b.rfp_id ? (rfps||[]).find(r=>r.id===b.rfp_id) : null;
+        const runStatusChip=(b)=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const st=paid?'paid':b.status; const map={ signed:['Signed · ready to request','bg-amber-100 text-amber-700'], requested:['Requested — '+(r?rfpMeta(r.status).label:'pending'),'bg-sky-100 text-sky-700'], paid:['Paid','bg-emerald-100 text-emerald-700'], cancelled:['Cancelled','bg-slate-200 text-slate-600'] }; const [l,c]=map[st]||map.signed; return <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${c}`}>{l}</span>; };
+        const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
         return (
         <div className="space-y-3">
-          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800">Everything the supervisor adds from the floor lands here. Double-check the subcon, quantity and rate, then <strong>send to Subcon Payroll</strong>. Partial deliveries are fine — only what you add here gets paid; the rest stays on the floor until returned.</div>
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800">Subcon payroll runs entirely here now. <b>For payroll</b>: double-check each subcon's qty &amp; rate, then <b>Confirm</b> → it moves to <b>In payroll</b>. There the supervisor <b>reviews &amp; signs</b> the whole run, which raises <b>one Request for Payment</b> to the AGM → Admin → Finance.</div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
-              <button onClick={()=>setPayrollSub('staged')} className={`px-3 py-1 rounded-md ${payrollSub==='staged'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>For payroll ({staged.length})</button>
-              <button onClick={()=>setPayrollSub('sent')} className={`px-3 py-1 rounded-md ${payrollSub==='sent'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Sent ({sent.length})</button>
+              {SUB('staged',`For payroll (${staged.length})`)}{SUB('ready',`In payroll (${sent.length})`)}{SUB('runs',`Payroll runs (${runs.length})`)}
             </div>
             <div className="flex-1"></div>
-            {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(totalPcs)} pcs · <b className="text-slate-700">{peso(totalAmt)}</b></div>}
-            {payrollSub==='staged' && canLogPayroll && staged.length>0 && <button onClick={()=>sendQueueToPayroll(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">📤 Send all to Subcon Payroll ({staged.length})</button>}
+            {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(staged.reduce((t,q)=>t+Number(q.qty||0),0))} pcs · <b className="text-slate-700">{peso(stAmt)}</b></div>}
+            {payrollSub==='staged' && canLogPayroll && staged.length>0 && <button onClick={()=>sendQueueToPayroll(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✓ Confirm all for payroll ({staged.length})</button>}
+            {payrollSub==='ready' && canLogPayroll && sent.length>0 && <button onClick={()=>setSigningRun(true)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✍ Prepare &amp; sign payroll run</button>}
           </div>
+
+          {payrollSub==='staged' && (
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
               <th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Item</th>
@@ -10573,26 +10614,75 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
               <th className="text-left px-3 py-2">Return date</th><th></th>
             </tr></thead>
             <tbody>
-              {shown.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">{payrollSub==='sent'?'Nothing sent to payroll yet.':'Nothing staged. On the Floor tracking tab, log returns then click “💰 Add to payroll”.'}</td></tr>}
-              {shown.map(q=>(
+              {staged.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">Nothing staged. On the Floor tracking tab, log returns then click “💰 Add to payroll”.</td></tr>}
+              {staged.map(q=>(
                 <tr key={q.id} className="border-t hover:bg-slate-50">
                   <td className="px-3 py-2 font-medium">{subconNm(q.subcon_id)}</td>
                   <td className="px-3 py-2 text-xs text-slate-500">{projNm(q.lead_id)}</td>
                   <td className="px-3 py-2 text-xs">{q.item_label||q.garment||'—'}</td>
-                  <td className="px-3 py-2 text-right">{payrollSub==='staged'&&canLogPayroll ? <input type="number" min="0" defaultValue={q.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(q.qty)) updateQueueRow(q.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : num(q.qty)}</td>
-                  <td className="px-3 py-2 text-right">{payrollSub==='staged'&&canLogPayroll ? <input type="number" min="0" step="0.01" defaultValue={q.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==q.rate) updateQueueRow(q.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : peso(q.rate)}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{peso(Number(q.qty||0)*Number(q.rate||0))}</td>
+                  <td className="px-3 py-2 text-right">{canLogPayroll ? <input type="number" min="0" defaultValue={q.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(q.qty)) updateQueueRow(q.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : num(q.qty)}</td>
+                  <td className="px-3 py-2 text-right">{canLogPayroll ? <input type="number" min="0" step="0.01" defaultValue={q.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==q.rate) updateQueueRow(q.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" /> : peso(q.rate)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(q))}</td>
                   <td className="px-3 py-2 text-xs">{q.return_date?fmtDate(q.return_date):'—'}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {payrollSub==='staged' && canEdit && <button onClick={()=>removeQueueRow(q)} className="text-xs text-rose-500 hover:underline mr-2">Remove</button>}
-                    {payrollSub==='staged' && canLogPayroll && <button onClick={()=>sendQueueToPayroll([q])} className="text-xs text-violet-700 hover:underline font-semibold">📤 Send</button>}
-                    {payrollSub==='sent' && <span className="text-[10px] text-emerald-600 font-semibold">✓ in payroll</span>}
+                    {canEdit && <button onClick={()=>removeQueueRow(q)} className="text-xs text-rose-500 hover:underline mr-2">Remove</button>}
+                    {canLogPayroll && <button onClick={()=>sendQueueToPayroll([q])} className="text-xs text-violet-700 hover:underline font-semibold">✓ Confirm</button>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table></div></div>
-          {payrollSub==='staged' && canLogPayroll && <div className="text-[11px] text-slate-400">Sending creates the payroll record for that subcon. Finalize & pay it in the <strong>Subcon Payroll</strong> module → Weekly payroll.</div>}
+          )}
+
+          {payrollSub==='ready' && (
+            sent.length===0 ? <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">Nothing in payroll. Confirm items from the <b>For payroll</b> tab first.</div> :
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1"><span>{bySub.length} subcon(s) · {num(sentPcs)} pcs</span><span>Run total: <b className="text-slate-800 text-sm">{peso(sentAmt)}</b></span></div>
+              {bySub.map((g,gi)=>(
+                <div key={gi} className="bg-white border rounded-xl overflow-hidden">
+                  <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">{g.subcon}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b className="text-slate-700">{peso(g.amt)}</b></span></div>
+                  <table className="w-full text-sm"><tbody>
+                    {g.rows.map(q=>(
+                      <tr key={q.id} className="border-t">
+                        <td className="px-3 py-1.5 text-xs text-slate-500">{projNm(q.lead_id)}</td>
+                        <td className="px-3 py-1.5 text-xs">{q.item_label||q.garment||'—'}</td>
+                        <td className="px-3 py-1.5 text-right text-xs">{num(q.qty)} × {peso(q.rate)}</td>
+                        <td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(q))}</td>
+                        <td className="px-3 py-1.5 text-right">{canLogPayroll && <button onClick={()=>{ if(confirm('Send this item back to “For payroll” to re-check?')) updateQueueRow(q.id,{status:'staged'}); }} className="text-[11px] text-slate-400 hover:text-rose-600" title="Send back to For payroll">↩</button>}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {payrollSub==='runs' && (
+            <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+                <th className="text-left px-3 py-2">Run #</th><th className="text-left px-3 py-2">Signed by</th><th className="text-left px-3 py-2">Date</th>
+                <th className="text-right px-3 py-2">Subcons</th><th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th><th></th>
+              </tr></thead>
+              <tbody>
+                {runs.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">No payroll runs yet. Sign one from the In payroll tab.</td></tr>}
+                {runs.map(b=>{ const signer=(profiles||[]).find(p=>p.id===b.signed_by); return (
+                  <tr key={b.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-mono text-xs">{b.number}</td>
+                    <td className="px-3 py-2 text-xs">{signer?(signer.name||signer.email):'—'}</td>
+                    <td className="px-3 py-2 text-xs">{b.signed_at?fmtDate(String(b.signed_at).slice(0,10)):'—'}</td>
+                    <td className="px-3 py-2 text-right text-xs">{b.subcon_count}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td>
+                    <td className="px-3 py-2 text-center">{runStatusChip(b)}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={()=>setViewRun(b)} className="text-xs text-indigo-600 hover:underline mr-2">🖨 View</button>
+                      {b.status==='signed' && canLogPayroll && <button onClick={()=>requestPaymentForRun(b)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">💸 Request payment</button>}
+                      {b.status==='signed' && canLogPayroll && <button onClick={()=>cancelRun(b)} className="text-xs text-slate-400 hover:text-rose-600">Unlock</button>}
+                    </td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table></div></div>
+          )}
         </div>
         );
       })()}
@@ -10688,12 +10778,122 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       {floorReturn && <SubconFloorReturnModal p={floorReturn.p} s={floorReturn.s} onSave={(vals)=>saveFloorReturn(floorReturn.p, floorReturn.s, vals)} onClose={()=>setFloorReturn(null)} />}
       {addPayroll && <SubconAddToPayrollModal p={addPayroll.p} s={addPayroll.s} subcons={subcons} onSave={(vals)=>addToPayrollQueue(addPayroll.p, addPayroll.s, vals)} onClose={()=>setAddPayroll(null)} />}
       {rowDetail && <SubconRowDetailModal p={rowDetail.p} s={rowDetail.s} queue={(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===rowDetail.s.subcon_id && q.lead_id===rowDetail.p.lead_id)} profiles={profiles} canLog={canEdit && !rowDetail.p.projectDone} onAddReturn={()=>{ setFloorReturn({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onAddPayroll={()=>{ setAddPayroll({p:rowDetail.p,s:rowDetail.s}); setRowDetail(null); }} onClose={()=>setRowDetail(null)} />}
+      {signingRun && <SubconPayrollRunSignModal rows={(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id)} subcons={subcons} leads={leads} clients={clients} profile={profile} onClose={()=>setSigningRun(false)} onSaved={()=>{ setSigningRun(false); load(); reload&&reload(); }} />}
+      {viewRun && <SubconPayrollRunDoc batch={viewRun} rows={(queue||[]).filter(q=>!q.deleted_at && q.batch_id===viewRun.id)} subcons={subcons} leads={leads} clients={clients} profiles={profiles} onClose={()=>setViewRun(null)} />}
       {creatingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} prefillProjectId={null} onClose={()=>setCreatingSend(false)} onSaved={()=>{ setCreatingSend(false); reload&&reload(); }} />}
       {editingSend && <SubconSendModal profile={profile} subcons={subcons} leads={leads} prodJobs={prodJobs} clients={clients} projects={subconProjects} existing={editingSend} onClose={()=>setEditingSend(null)} onSaved={()=>{ setEditingSend(null); reload&&reload(); }} />}
       {logReturnFor && <SubconReturnModal profile={profile} send={logReturnFor} subcons={subcons} allReturns={subconReturns} onClose={()=>setLogReturnFor(null)} onSaved={()=>{ setLogReturnFor(null); reload&&reload(); }} />}
       {editingReturn && <SubconReturnModal profile={profile} send={(subconSends||[]).find(s=>s.id===editingReturn.send_id)} subcons={subcons} allReturns={subconReturns} existing={editingReturn} onClose={()=>setEditingReturn(null)} onSaved={()=>{ setEditingReturn(null); reload&&reload(); }} />}
       {viewingSend && <SubconSendDetailModal send={viewingSend} subcons={subcons} allReturns={subconReturns} profiles={profiles} profile={profile} onClose={()=>setViewingSend(null)} onAddReturn={()=>{ setLogReturnFor(viewingSend); setViewingSend(null); }} onEditReturn={(r)=>{ setEditingReturn(r); setViewingSend(null); }} onDeleteReturn={async(r)=>{ if(!confirm('Delete this return log?')) return; const { error }=await sb.from('subcon_returns').delete().eq('id',r.id); if(error){ alert(error.message); return; } setViewingSend(null); reload&&reload(); }} onEdit={canLogPayroll?()=>{ setEditingSend(viewingSend); setViewingSend(null); }:null} onDelete={async()=>{ if(!confirm(`Delete send batch ${viewingSend.number}?`)) return; const { error }=await sb.from('subcon_sends').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id, status:'cancelled' }).eq('id',viewingSend.id); if(error){ alert(error.message); return; } setViewingSend(null); reload&&reload(); }} />}
     </div>
+  );
+}
+
+// Supervisor reviews the whole in-payroll run per subcon, confirms she checked
+// it, and e-signs — creating a signed payroll run (batch) that can then raise
+// one Request for Payment.
+function SubconPayrollRunSignModal({ rows, subcons, leads, clients, profile, onClose, onSaved }){
+  const [checked,setChecked]=useState(false);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
+  const projNm=(leadId)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name||l.client_name):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
+  const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+  const bySub=(()=>{ const m=new Map(); (rows||[]).forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
+  const totalPcs=(rows||[]).reduce((t,q)=>t+Number(q.qty||0),0);
+  const totalAmt=(rows||[]).reduce((t,q)=>t+amtOf(q),0);
+  const sign=profile?.signature_data;
+  async function doSign(){
+    if(!checked){ setMsg('Please tick the review confirmation first.'); return; }
+    if(!sign){ if(!confirm("You don't have an e-signature saved yet. Sign without one? Set one up in My Profile → signature.")) return; }
+    setBusy(true); setMsg('');
+    try{
+      const monthKey=todayManila().slice(0,7);
+      const { data:mr }=await sb.from('subcon_payroll_batches').select('number').like('number',`SPR-${monthKey}-%`);
+      let mx=0;(mr||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>mx)mx=n;}});
+      const number=`SPR-${monthKey}-${String(mx+1).padStart(3,'0')}`;
+      const now=new Date().toISOString();
+      const dates=(rows||[]).map(q=>q.return_date).filter(Boolean).sort();
+      const { data:batch, error }=await sb.from('subcon_payroll_batches').insert({ number, period_from:dates[0]||null, period_to:dates[dates.length-1]||null, prepared_by:profile.id, prepared_at:now, signed_by:profile.id, signed_at:now, total_qty:totalPcs, total_amount:totalAmt, subcon_count:bySub.length, status:'signed', created_by:profile.id }).select('id').single();
+      if(error) throw error;
+      const { error:uErr }=await sb.from('subcon_payroll_queue').update({ status:'batched', batch_id:batch.id }).in('id',(rows||[]).map(q=>q.id));
+      if(uErr) throw uErr;
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="✍ Prepare & sign payroll run" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Review every subcon below. When you sign, this becomes a locked, signed payroll run — then raise one Request for Payment to the AGM.</div>
+        <div className="max-h-[48vh] overflow-auto space-y-2">
+          {bySub.map((g,gi)=>(
+            <div key={gi} className="border rounded-lg overflow-hidden">
+              <div className="px-3 py-1.5 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">{g.subcon}</span><span className="text-xs text-slate-500">{Number(g.pcs).toLocaleString()} pcs · <b className="text-slate-700">{peso(g.amt)}</b></span></div>
+              <table className="w-full text-xs"><tbody>
+                {g.rows.map(q=>(<tr key={q.id} className="border-t"><td className="px-3 py-1 text-slate-500">{projNm(q.lead_id)}</td><td className="px-3 py-1">{q.item_label||q.garment||'—'}</td><td className="px-3 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-3 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
+              </tbody></table>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-sm"><span className="font-semibold">{bySub.length} subcon(s) · {Number(totalPcs).toLocaleString()} pcs</span><span className="font-bold text-violet-800">{peso(totalAmt)}</span></div>
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)} className="mt-0.5" /> I have double-checked every subcon, quantity and rate above, and this payroll is correct.</label>
+        <div className="flex items-end gap-3">
+          <div className="text-center flex-1 max-w-[220px]">
+            <div className="relative border-b border-slate-500 h-14 flex items-end justify-center overflow-hidden">{sign && <img src={sign} alt="signature" className="max-h-[52px] max-w-full object-contain mb-0.5" />}</div>
+            <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Prepared & signed by</div>
+            <div className="text-[11px] text-slate-700">{profile.name||profile.email}</div>
+          </div>
+          <div className="flex-1"></div>
+          <button onClick={doSign} disabled={busy||!checked} className="py-2 px-5 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Signing…':'✍ Sign payroll run'}</button>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// Printable, signed subcon payroll document for one run.
+function SubconPayrollRunDoc({ batch, rows, subcons, leads, clients, profiles, onClose }){
+  const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
+  const projNm=(leadId)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name||l.client_name):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
+  const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+  const signer=(profiles||[]).find(p=>p.id===batch.signed_by);
+  const bySub=(()=>{ const m=new Map(); (rows||[]).forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
+  const totalPcs=(rows||[]).reduce((t,q)=>t+Number(q.qty||0),0);
+  const totalAmt=(rows||[]).reduce((t,q)=>t+amtOf(q),0);
+  return (
+    <Modal title={`Subcon Payroll · ${batch.number}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .scp-sheet,.scp-sheet *{visibility:visible !important;} .scp-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Subcon Payroll - ${batch.number}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="scp-sheet">
+          <div className="flex items-center justify-between border-b pb-2 mb-3">
+            <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Subcon Sewing Payroll</div></div>
+            <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{batch.number}</div><div>{batch.period_from?`${fmtDate(batch.period_from)} – ${fmtDate(batch.period_to||batch.period_from)}`:fmtDate(String(batch.signed_at||'').slice(0,10))}</div></div>
+          </div>
+          {bySub.map((g,gi)=>(
+            <div key={gi} className="mb-3">
+              <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">{g.subcon}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
+              <table className="w-full text-xs"><tbody>
+                {g.rows.map(q=>(<tr key={q.id} className="border-b"><td className="px-2 py-1 text-slate-500">{projNm(q.lead_id)}</td><td className="px-2 py-1">{q.item_label||q.garment||'—'}</td><td className="px-2 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
+              </tbody></table>
+            </div>
+          ))}
+          <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {bySub.length} subcon(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
+          <div className="grid grid-cols-2 gap-8 mt-10 max-w-xl">
+            <div className="text-center">
+              <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{signer?.signature_data && <img src={signer.signature_data} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Prepared & signed by</div>
+              <div className="text-[11px] text-slate-700">{signer?(signer.name||signer.email):'—'}{batch.signed_at?` · ${fmtDate(String(batch.signed_at).slice(0,10))}`:''}</div>
+            </div>
+            <div className="text-center">
+              <div className="relative border-b border-slate-500 h-16"></div>
+              <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Approved by</div>
+              <div className="text-[11px] text-slate-400">AGM / Admin</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -47668,7 +47868,7 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
             {canManageSubcon(profile) && tab==='projects' && <button onClick={()=>setCreatingProject(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New project</button>}
             {canManageSubcon(profile) && tab==='active' && <button onClick={()=>{ setSendPrefillProjectId(null); setCreatingSend(true); }} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New send batch</button>}
             {canManageSubcon(profile) && tab==='subcons' && <button onClick={()=>setCreatingSubcon(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ New subcon</button>}
-            {(canRunSubconPayroll(profile) || profile.role==='production_supervisor') && tab==='payroll' && <button onClick={()=>setGeneratingPayroll(true)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">+ Generate weekly payroll</button>}
+            {/* Weekly payroll generation retired — subcon payroll now runs from Subcon Sewing → 💰 Payroll (supervisor-signed → RFP). This view is read-only history. */}
           </div>
         </div>
         <div className="flex gap-2 mt-3 flex-wrap">
@@ -47685,6 +47885,12 @@ function SubconMonitoringView({ profile, profiles, clients, leads, prodJobs, sub
           )}
         </div>
       </div>
+
+      {tab==='payroll' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 mb-3">
+          📣 <b>Subcon payroll has moved.</b> Payroll is now prepared, supervisor-signed and sent to Finance from <b>Production → Subcon Sewing → 💰 Payroll tab</b>. This Weekly payroll view stays as read-only history for past runs. Please run new payroll from Subcon Sewing.
+        </div>
+      )}
 
       {tab==='projects' && (()=>{
         const liveProjects=(subconProjects||[]).filter(p=>!p.deleted_at);
@@ -50364,7 +50570,7 @@ function App(){
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head'].includes(profile.role)} />}
-        {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} reload={loadAll} />}
+        {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
