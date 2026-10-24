@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 845 · Purchasing DV-day liquidation now splits by payment: only CASH draws down the DV float and gets liquidated; Check / Bank Transfer / Promissory Note lines are listed for the complete record only and are NOT paid or posted again (no duplication with the usual voucher/check process). Form shows a full payment breakdown + DV cash reconciliation.";
+const BUILD = "Live build 846 · New Finance → 👑 Owner Advances: owners request funds (e.g. to pay the company credit card for machines, laptops, imported fabric), Finance releases, the owner liquidates with a full breakdown (Credit Card / TT / Cash / Check) and signs, then Finance posts. No AGM. Machine/laptop lines can be ticked to auto-add to the Asset Register. Printable signed form.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41209,7 +41209,8 @@ function PCAReleaseModal({ ca, profile, bankAccounts, onClose, onSaved }){
     if(!bankId){ setMsg('Pick the bank to release the cash from.'); return; }
     setBusy(true); setMsg('');
     try{
-      const { data:btx, error:be }=await insertBankTxnOnce({ bank_id:bankId, date:todayManila(), direction:'out', amount:Number(ca.amount||0), description:`DV-day cash advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id });
+      const label = ca.source==='owner' ? 'Owner advance' : 'DV-day cash advance';
+      const { data:btx, error:be }=await insertBankTxnOnce({ bank_id:bankId, date:todayManila(), direction:'out', amount:Number(ca.amount||0), description:`${label} ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id });
       if(be) throw be;
       const { error }=await sb.from('cash_advances').update({ status:'released', bank_id:bankId, bank_transaction_id:btx?.id||null }).eq('id',ca.id);
       if(error) throw error;
@@ -41377,6 +41378,231 @@ function PurchasingLiquidationDoc({ ca, profiles, onClose }){
   );
 }
 
+/* ═══════════════ OWNER / ADMIN ADVANCE (Finance) ═══════════════ */
+// Owners request money (e.g. to pay the company credit card used for machines,
+// laptops, imported fabrics). Finance releases → owner liquidates with the
+// breakdown + signs → Finance posts. No AGM. Capital items can be pushed to the
+// Asset Register. Stored in cash_advances (source='owner').
+const OWNER_PAY_METHODS = ['Credit Card','Bank Transfer / TT','Cash','Check'];
+function ownerMeta(ca){
+  if(ca.status==='cancelled') return { key:'cancelled', label:'Cancelled', color:'bg-slate-200 text-slate-600' };
+  if(ca.status==='requested') return { key:'requested', label:'Requested — awaiting Finance', color:'bg-amber-100 text-amber-700' };
+  if(ca.status==='liquidated') return { key:'done', label:'Liquidated', color:'bg-emerald-100 text-emerald-700' };
+  if(ca.liq_approval==='pending_finance') return { key:'pending_finance', label:'Liquidation — awaiting Finance', color:'bg-sky-100 text-sky-700' };
+  return { key:'released', label:'Released — to liquidate', color:'bg-indigo-100 text-indigo-700' };
+}
+function OwnerAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload }){
+  const [requesting,setRequesting]=useState(false);
+  const [releasing,setReleasing]=useState(null);
+  const [liquidating,setLiquidating]=useState(null);
+  const [viewing,setViewing]=useState(null);
+  const [filter,setFilter]=useState('open');
+  const isOwner = profile.role==='admin';
+  const canFinance = pcaIsFinance(profile) || profile.role==='admin';
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const rows=(cashAdvances||[]).filter(c=>!c.deleted_at && c.source==='owner')
+    .filter(c=>{ const m=ownerMeta(c); if(filter==='all') return true; if(filter==='open') return m.key!=='done'&&m.key!=='cancelled'; if(filter==='done') return m.key==='done'; return m.key===filter; })
+    .sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  async function cancelCA(c){ if(!confirm(`Cancel ${c.number||'this request'}?`)) return; const { error }=await sb.from('cash_advances').update({ status:'cancelled' }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  const TAB=(k,l)=>(<button onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${filter===k?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{l}</button>);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">👑 Owner Advances</h1><p className="text-slate-500 text-sm">Owners request funds (e.g. to pay the company credit card), then liquidate with the full breakdown. No AGM — straight to Finance.</p></div>
+          {isOwner && <button onClick={()=>setRequesting(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">＋ Request funds</button>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">{TAB('open','Open')}{TAB('requested','To release')}{TAB('pending_finance','To post')}{TAB('done','Liquidated')}{TAB('all','All')}</div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Purpose</th><th className="text-left px-3 py-2">Requested by</th>
+          <th className="text-right px-3 py-2">Advance</th><th className="text-right px-3 py-2">Spent</th><th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">Nothing here. {isOwner && 'Click “＋ Request funds”.'}</td></tr>}
+          {rows.map(c=>{ const m=ownerMeta(c); const spent=pcaLineTotal(c.receipts); return (
+            <tr key={c.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-mono text-xs">{c.number||'—'}<div className="text-[10px] text-slate-400">{fmtDate(c.date)}</div></td>
+              <td className="px-3 py-2"><div className="font-medium truncate max-w-[20rem]">{c.purpose||'—'}</div></td>
+              <td className="px-3 py-2 text-xs">{c.custodian_name||nameOf(c.custodian_id)}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
+              <td className="px-3 py-2 text-right">{c.status==='requested'?'—':peso(spent)}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                {m.key==='requested' && canFinance && <button onClick={()=>setReleasing(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">💵 Release</button>}
+                {m.key==='requested' && isOwner && <button onClick={()=>cancelCA(c)} className="text-xs text-slate-400 hover:text-rose-600 mr-2">Cancel</button>}
+                {m.key==='released' && isOwner && <button onClick={()=>setLiquidating(c)} className="text-xs text-violet-700 hover:underline font-semibold mr-2">🧾 Liquidate</button>}
+                {m.key==='pending_finance' && isOwner && <button onClick={()=>setLiquidating(c)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>}
+                {m.key==='pending_finance' && canFinance && <button onClick={()=>setLiquidating(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">✅ Post</button>}
+                <button onClick={()=>setViewing(c)} className="text-xs text-slate-500 hover:underline">🖨 Form</button>
+              </td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {requesting && <OwnerAdvanceRequestModal profile={profile} onClose={()=>setRequesting(false)} onSaved={()=>{ setRequesting(false); reload&&reload(); }} />}
+      {releasing && <PCAReleaseModal ca={releasing} profile={profile} bankAccounts={bankAccounts} onClose={()=>setReleasing(null)} onSaved={()=>{ setReleasing(null); reload&&reload(); }} />}
+      {liquidating && <OwnerLiquidationModal ca={liquidating} profile={profile} profiles={profiles} chartAccounts={chartAccounts} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload&&reload(); }} />}
+      {viewing && <OwnerLiquidationDoc ca={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
+    </div>
+  );
+}
+function OwnerAdvanceRequestModal({ profile, onClose, onSaved }){
+  const [f,setF]=useState({ amount:'', purpose:'', date:todayManila() });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    if(!(Number(f.amount)>0)){ setMsg('Enter the amount needed.'); return; }
+    if(!f.purpose.trim()){ setMsg('What is this for? (e.g. pay BDO credit card — new overlock machine + laptops)'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const monthKey=todayManila().slice(0,7);
+      const { data:mr }=await sb.from('cash_advances').select('number').like('number',`OWA-${monthKey}-%`);
+      let mx=0;(mr||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>mx)mx=n;}});
+      const number=`OWA-${monthKey}-${String(mx+1).padStart(3,'0')}`;
+      const { data:ca, error }=await sb.from('cash_advances').insert({ number, date:f.date||todayManila(), kind:'cash_advance', source:'owner', status:'requested', custodian_id:profile.id, custodian_name:profile.name||profile.email, purpose:f.purpose.trim(), amount:Number(f.amount), receipts:[], created_by:profile.id }).select('id,number').single();
+      if(error) throw error;
+      try{ const { data:fin }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer']); const rows=(fin||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`👑 Owner requested funds — ${peso(Number(f.amount))} (${ca.number}) · ${f.purpose.trim().slice(0,40)}`, link_view:'owner-advance', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="＋ Request owner funds" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">This goes to Finance to release. Afterwards, liquidate with the breakdown of what the money (or credit card) was spent on.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount needed *"><input type="number" className="input" value={f.amount} onChange={e=>setF(p=>({...p,amount:e.target.value}))} placeholder="0.00" autoFocus /></TpLbl>
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>setF(p=>({...p,date:e.target.value}))} /></TpLbl>
+        </div>
+        <TpLbl t="Purpose *"><textarea className="input min-h-[52px]" value={f.purpose} onChange={e=>setF(p=>({...p,purpose:e.target.value}))} placeholder="e.g. Pay BDO credit card — overlock machine, 2 laptops, imported fabric (China)" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Sending…':'💵 Send request to Finance'}</button>
+      </div>
+    </Modal>
+  );
+}
+function OwnerLiquidationModal({ ca, profile, profiles, chartAccounts, onClose, onSaved }){
+  const [lines,setLines]=useState(Array.isArray(ca.receipts)&&ca.receipts.length?ca.receipts:[{ supplier:'', description:'', amount:'', payment_method:'Credit Card', reference:'', receipt_url:'', gl_account_code:'', is_asset:false, asset_category:'' }]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [upIdx,setUpIdx]=useState(null);
+  const isOwner = profile.role==='admin';
+  const canFinance = pcaIsFinance(profile) || profile.role==='admin';
+  const canEdit = (isOwner && (!ca.liq_approval || ca.liq_approval==='pending_finance'));
+  const advanced=Number(ca.amount||0); const spent=pcaLineTotal(lines); const balance=advanced-spent;
+  const ownerBd=(()=>{ const b={cc:0,tt:0,cash:0,check:0,assets:0}; (lines||[]).forEach(l=>{ const a=Number(l.amount||0); const m=l.payment_method; if(m==='Credit Card') b.cc+=a; else if(m==='Bank Transfer / TT') b.tt+=a; else if(m==='Cash') b.cash+=a; else if(m==='Check') b.check+=a; if(l.is_asset) b.assets++; }); return b; })();
+  const prepBy=(profiles||[]).find(p=>p.id===ca.liq_prepared_by);
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:''; };
+  function setLine(i,patch){ setLines(ls=>ls.map((l,j)=>j===i?{...l,...patch}:l)); }
+  function addLine(){ setLines(ls=>[...ls,{ supplier:'', description:'', amount:'', payment_method:'Credit Card', reference:'', receipt_url:'', gl_account_code:'', is_asset:false, asset_category:'' }]); }
+  function rmLine(i){ setLines(ls=>ls.filter((_,j)=>j!==i)); }
+  async function uploadReceipt(i,file){ if(!file) return; setUpIdx(i); try{ const ext=(file.name.split('.').pop()||'jpg'); const key=`expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`; const { error }=await sb.storage.from(BUCKET).upload(key,file,{upsert:false,contentType:file.type||undefined}); if(error) throw error; setLine(i,{ receipt_url:key }); }catch(e){ setMsg('Upload failed: '+(e.message||e)); } setUpIdx(null); }
+  const cleanLines=()=>lines.filter(l=>Number(l.amount||0)>0).map(l=>({ supplier:(l.supplier||'').trim(), description:(l.description||'').trim(), amount:Number(l.amount||0), payment_method:l.payment_method||'Credit Card', reference:(l.reference||'').trim(), receipt_url:l.receipt_url||'', gl_account_code:l.gl_account_code||'', is_asset:!!l.is_asset, asset_category:l.asset_category||'' }));
+  async function saveDraft(){ setBusy(true); setMsg(''); const cl=cleanLines(); const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)) }).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
+  async function signSubmit(){
+    const cl=cleanLines(); if(!cl.length){ setMsg('Add at least one line before submitting.'); return; }
+    if(!profile.signature_data){ if(!confirm("You don't have an e-signature saved. Sign without one? Set one up in My Profile → signature.")) return; }
+    setBusy(true); setMsg('');
+    const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)), liq_prepared_by:profile.id, liq_prepared_at:new Date().toISOString(), liq_approval:'pending_finance' }).eq('id',ca.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try{ const { data:fin }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer']); const rows=(fin||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`👑 Owner liquidation ${ca.number||''} signed — ${peso(pcaLineTotal(cl))} · ready for Finance to post`, link_view:'owner-advance', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    setBusy(false); onSaved();
+  }
+  async function postByFinance(){
+    const cl=cleanLines(); const total=pcaLineTotal(cl); const returned=Math.max(0,advanced-total);
+    const assetLines=cl.filter(l=>l.is_asset);
+    if(!confirm(`Post this owner liquidation?\n\nSpent ${peso(total)} of ${peso(advanced)}${returned>0.01?` · ${peso(returned)} to return`:''}.${assetLines.length?`\n\n${assetLines.length} item(s) will be added to the Asset Register.`:''}`)) return;
+    setBusy(true); setMsg('');
+    try{
+      if(returned>0.01 && ca.bank_id){ await insertBankTxnOnce({ bank_id:ca.bank_id, date:todayManila(), direction:'in', amount:returned, description:`Return from owner advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id }); }
+      // Push flagged capital items to the Asset Register.
+      if(assetLines.length){ const assets=assetLines.map(l=>({ name:(l.description||l.supplier||'Asset'), category:l.asset_category||'Equipment', cost:Number(l.amount||0), purchase_date:ca.date||todayManila(), status:'in_use', notes:`From owner advance ${ca.number||''}${l.supplier?` · ${l.supplier}`:''}`, created_by:profile.id })); try{ await sb.from('assets').insert(assets); }catch(ae){ console.warn('asset insert failed', ae); } }
+      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:total, amount_returned:returned, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
+      if(error) throw error;
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const readOnly=!canEdit;
+  return (
+    <Modal title={`Owner Liquidation · ${ca.number||''} — ${ca.custodian_name||''}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">{ca.purpose||''}</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-amber-700">Advanced</div><div className="font-bold">{peso(advanced)}</div></div>
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-violet-700">Spent</div><div className="font-bold">{peso(spent)}</div></div>
+          <div className={`rounded-lg p-2 text-center border ${balance>=0?'bg-emerald-50 border-emerald-200':'bg-rose-50 border-rose-200'}`}><div className="text-[10px] uppercase text-slate-500">{balance>=0?'Balance to return':'Over (reimburse)'}</div><div className={`font-bold ${balance>=0?'text-emerald-700':'text-rose-700'}`}>{peso(Math.abs(balance))}</div></div>
+          <div className="bg-slate-50 border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Credit card {peso(ownerBd.cc)} · TT {peso(ownerBd.tt)}</div><div className="font-bold text-slate-600">{ownerBd.assets} asset(s) to register</div></div>
+        </div>
+        <div className="border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+            <th className="text-left px-2 py-2">Supplier</th><th className="text-left px-2 py-2">Item / particulars</th><th className="text-right px-2 py-2">Amount</th>
+            <th className="text-left px-2 py-2">Payment</th><th className="text-left px-2 py-2">Ref</th><th className="text-left px-2 py-2">Category</th><th className="text-center px-2 py-2">Asset</th><th className="text-center px-2 py-2">Receipt</th>{!readOnly && <th></th>}
+          </tr></thead>
+          <tbody>
+            {lines.map((l,i)=>(
+              <tr key={i} className="border-t align-top">
+                <td className="px-2 py-1.5">{readOnly?(l.supplier||'—'):<input className="input text-xs" value={l.supplier} onChange={e=>setLine(i,{supplier:e.target.value})} placeholder="Supplier" />}</td>
+                <td className="px-2 py-1.5">{readOnly?(l.description||'—'):<input className="input text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} placeholder="What was bought" />}</td>
+                <td className="px-2 py-1.5 text-right">{readOnly?peso(l.amount):<input type="number" className="input text-xs text-right w-24" value={l.amount} onChange={e=>setLine(i,{amount:e.target.value})} />}</td>
+                <td className="px-2 py-1.5">{readOnly?l.payment_method:<select className="input text-xs" value={l.payment_method} onChange={e=>setLine(i,{payment_method:e.target.value})}>{OWNER_PAY_METHODS.map(m=><option key={m}>{m}</option>)}</select>}</td>
+                <td className="px-2 py-1.5">{readOnly?(l.reference||'—'):<input className="input text-xs w-24" value={l.reference} onChange={e=>setLine(i,{reference:e.target.value})} placeholder="card/ref" />}</td>
+                <td className="px-2 py-1.5">{readOnly?(acctName(l.gl_account_code)||'—'):<select className="input text-xs" value={l.gl_account_code} onChange={e=>setLine(i,{gl_account_code:e.target.value})}><option value="">category…</option>{coaExpenseOptions(chartAccounts)}</select>}</td>
+                <td className="px-2 py-1.5 text-center">{readOnly?(l.is_asset?'✓':''):<div className="flex flex-col items-center gap-0.5"><input type="checkbox" checked={!!l.is_asset} onChange={e=>setLine(i,{is_asset:e.target.checked})} title="Add to Asset Register" />{l.is_asset && <select className="input text-[10px] px-1 py-0.5" value={l.asset_category} onChange={e=>setLine(i,{asset_category:e.target.value})}><option value="">type…</option>{ASSET_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>}</div>}</td>
+                <td className="px-2 py-1.5 text-center">{l.receipt_url?<button onClick={()=>openSignedAttachment(storageKeyFromUrl(l.receipt_url)||l.receipt_url)} className="text-[11px] text-indigo-600 hover:underline">view</button>:(readOnly?<span className="text-slate-300">—</span>:<label className="text-[11px] text-slate-500 cursor-pointer hover:underline">{upIdx===i?'…':'＋ photo'}<input type="file" accept="image/*" className="hidden" onChange={e=>uploadReceipt(i,e.target.files?.[0])} /></label>)}</td>
+                {!readOnly && <td className="px-2 py-1.5 text-right"><button onClick={()=>rmLine(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table></div></div>
+        {!readOnly && <button onClick={addLine} className="text-xs text-indigo-600 hover:underline font-semibold">＋ Add line</button>}
+        <div className="text-[11px] text-slate-500">Tick <b>Asset</b> on machines, laptops and equipment to add them to the Asset Register when Finance posts (depreciation tracking starts automatically).</div>
+
+        <div className="bg-slate-50 border rounded-lg p-3 flex items-end gap-6">
+          <div className="text-center flex-1 max-w-[220px]">
+            <div className="relative border-b border-slate-400 h-12 flex items-end justify-center overflow-hidden">{prepBy?.signature_data && <img src={prepBy.signature_data} className="max-h-11 object-contain" />}</div>
+            <div className="text-[10px] uppercase font-bold mt-1">Requested & signed by</div>
+            <div className="text-[11px] text-slate-600">{prepBy?(prepBy.name||prepBy.email):(ca.custodian_name||'—')}</div>
+          </div>
+          <div className="flex-1"></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 flex-wrap">
+          {canEdit && <button onClick={saveDraft} disabled={busy} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">Save draft</button>}
+          {canEdit && isOwner && (!ca.liq_approval) && <button onClick={signSubmit} disabled={busy} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">✍ Sign & send to Finance</button>}
+          {ca.liq_approval==='pending_finance' && canFinance && <button onClick={postByFinance} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✅ Post liquidation to the books</button>}
+          {ca.liq_approval==='pending_finance' && !canFinance && <div className="flex-1 text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">Signed — awaiting Finance to post.</div>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function OwnerLiquidationDoc({ ca, profiles, onClose }){
+  const lines=Array.isArray(ca.receipts)?ca.receipts:[];
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const prep=pById(ca.liq_prepared_by), fin=pById(ca.liq_admin_by);
+  const advanced=Number(ca.amount||0); const spent=pcaLineTotal(lines); const balance=advanced-spent;
+  const Sig=({who,when,role,fallback})=>(<div className="text-center"><div className="relative border-b border-slate-500 h-14 flex items-end justify-center overflow-hidden">{who?.signature_data && <img src={who.signature_data} className="max-h-[52px] object-contain" />}</div><div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div><div className="text-[11px] text-slate-700">{who?(who.name||who.email):(fallback||'—')}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div></div>);
+  return (
+    <Modal title={`Owner Liquidation · ${ca.number||''}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .owl-sheet,.owl-sheet *{visibility:visible !important;} .owl-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Owner Liquidation - ${ca.number||''}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="owl-sheet">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Owner Cash Advance Liquidation</div></div><div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{ca.number||''}</div><div>{fmtDate(ca.date)}</div></div></div>
+          <div className="text-sm mb-2"><b>Requested by:</b> {ca.custodian_name||''} · <b>Purpose:</b> {ca.purpose||''}</div>
+          <table className="w-full text-xs border"><thead className="bg-slate-50 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Supplier</th><th className="text-left px-2 py-1">Item</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Payment</th><th className="text-left px-2 py-1">Ref</th><th className="text-center px-2 py-1">Asset</th></tr></thead>
+            <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1">{l.supplier||'—'}</td><td className="px-2 py-1">{l.description||'—'}</td><td className="px-2 py-1 text-right">{peso(l.amount)}</td><td className="px-2 py-1">{l.payment_method||''}</td><td className="px-2 py-1">{l.reference||'—'}</td><td className="px-2 py-1 text-center">{l.is_asset?'✓':''}</td></tr>))}</tbody>
+          </table>
+          <div className="flex justify-end gap-6 text-sm mt-2 border-t pt-2"><span>Advanced: <b>{peso(advanced)}</b></span><span>Spent: <b>{peso(spent)}</b></span><span>{balance>=0?<>To return: <b>{peso(balance)}</b></>:<>Over: <b>{peso(-balance)}</b></>}</span></div>
+          <div className="grid grid-cols-2 gap-8 mt-10 max-w-xl">
+            <Sig who={prep} when={ca.liq_prepared_at} role="Requested & signed by" fallback={ca.custodian_name} />
+            <Sig who={fin} when={ca.liq_admin_at} role="Posted — Finance" fallback="Pending Finance" />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, chartAccounts, costCenters, replenishments, reload, kind }){
   // `kind` props split the single cash_advances table into two distinct views:
   //   'petty_cash'   — petty cash float for daily operational small expenses
@@ -41511,7 +41737,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   // 'cash_advance' so existing data lands on the Cash Advances page.
   // Purchasing DV-day advances (source='purchasing') live in their own
   // Purchasing → Cash Advance module, so keep them out of this list.
-  const ofKind = (cashAdvances||[]).filter(c => (c.kind || 'cash_advance') === kind && c.source!=='purchasing');
+  const ofKind = (cashAdvances||[]).filter(c => (c.kind || 'cash_advance') === kind && c.source!=='purchasing' && c.source!=='owner');
   const rows = ofKind.filter(c=>!filter||c.status===filter);
 
   // Per-custodian open balance
@@ -49880,7 +50106,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -50469,6 +50695,7 @@ function App(){
     ['petty-cash','Petty Cash','💵'],
     ['cash-advances','Cash Advances','🧾'],
     ['pur-cash-advance','Purchasing DV Advances','🛍'],
+    ['owner-advance','Owner Advances','👑'],
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
     ['checks','Check Monitoring','🏦'],
@@ -51015,6 +51242,7 @@ function App(){
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
         {view==='pur-cash-advance' && <PurchasingCashAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
+        {view==='owner-advance' && <OwnerAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
