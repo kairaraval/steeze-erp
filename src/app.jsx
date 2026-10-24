@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 846 · New Finance → 👑 Owner Advances: owners request funds (e.g. to pay the company credit card for machines, laptops, imported fabric), Finance releases, the owner liquidates with a full breakdown (Credit Card / TT / Cash / Check) and signs, then Finance posts. No AGM. Machine/laptop lines can be ticked to auto-add to the Asset Register. Printable signed form.";
+const BUILD = "Live build 847 · Toolbox now has two tabs: Meetings (as before) and a new Initiatives tracker. The CEO assigns improvement projects to the AGM, each with category, priority, a tickable deliverables checklist, status pipeline (Not Started \u2192 For Assessment \u2192 In Progress \u2192 For CEO Approval \u2192 Completed), progress updates, attachments and CEO accept. Pre-loaded all 15 projects from the AGM Operations Improvement Toolbox. Printable weekly progress report.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6969,6 +6969,254 @@ const CHECKIN_STATUS = { green:{ label:'On track', dot:'bg-emerald-500', pill:'b
 
 // ─── Toolbox Meetings (Executive) ───────────────────────────────────────────
 const TBM_STATUS = { routine:['Routine','bg-slate-100 text-slate-600'], issues:['Has issues','bg-amber-100 text-amber-700'], attention:['Needs CEO attention','bg-rose-100 text-rose-700'] };
+/* ═══════════════ TOOLBOX (Meetings + Initiatives) ═══════════════ */
+const INIT_PRIORITY = { urgent:['Urgent','bg-rose-100 text-rose-700'], high:['High','bg-amber-100 text-amber-700'], medium:['Medium','bg-sky-100 text-sky-700'], low:['Low','bg-slate-100 text-slate-500'] };
+const INIT_STATUSES = [ ['not_started','Not Started','bg-slate-200 text-slate-600'], ['for_assessment','For Assessment','bg-indigo-100 text-indigo-700'], ['in_progress','In Progress','bg-blue-100 text-blue-700'], ['for_ceo_approval','For CEO Approval','bg-amber-100 text-amber-700'], ['completed','Completed','bg-emerald-100 text-emerald-700'] ];
+const INIT_CATEGORIES = ['Administration & Facilities','Machine Maintenance & Assets','Office Organization & Security','Payroll & Workforce','General'];
+function initStatusMeta(k){ return INIT_STATUSES.find(s=>s[0]===k)||INIT_STATUSES[0]; }
+function initDeliv(i){ const d=Array.isArray(i.deliverables)?i.deliverables:[]; const done=d.filter(x=>x.done).length; return { done, total:d.length, pct: d.length? Math.round(done/d.length*100):0 }; }
+
+function ToolboxView({ profile, profiles, employees }){
+  const [tab,setTab]=useState('initiatives');
+  return (
+    <div className="p-6">
+      <div className="inline-flex rounded-lg border bg-white p-0.5 text-sm mb-1">
+        <button onClick={()=>setTab('initiatives')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='initiatives'?'bg-indigo-600 text-white':'text-slate-600'}`}>🎯 Initiatives</button>
+        <button onClick={()=>setTab('meetings')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='meetings'?'bg-indigo-600 text-white':'text-slate-600'}`}>🧰 Meetings</button>
+      </div>
+      {tab==='initiatives' ? <ToolboxInitiativesView profile={profile} profiles={profiles} /> : <div className="-mx-6 -mb-6"><ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} /></div>}
+    </div>
+  );
+}
+
+function ToolboxInitiativesView({ profile, profiles }){
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [open,setOpen]=useState(null); // initiative or 'new'
+  const [report,setReport]=useState(false);
+  const [fStatus,setFStatus]=useState('');
+  const [fPrio,setFPrio]=useState('');
+  const [fCat,setFCat]=useState('');
+  const [q,setQ]=useState('');
+  const canManage = profile.role==='admin';
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  async function load(){ setLoading(true); const { data }=await sb.from('toolbox_initiatives').select('*').is('deleted_at',null).order('sort_order',{ascending:true,nullsFirst:false}).order('created_at',{ascending:true}); setRows(data||[]); setLoading(false); }
+  useEffect(()=>{ load(); },[]);
+  const today=todayManila();
+  const qq=q.trim().toLowerCase();
+  const live=rows.filter(i=>!i.deleted_at);
+  const filtered=live
+    .filter(i=> !fStatus || i.status===fStatus)
+    .filter(i=> !fPrio || i.priority===fPrio)
+    .filter(i=> !fCat || i.category===fCat)
+    .filter(i=> !qq || `${i.code||''} ${i.title||''} ${i.objective||''} ${i.category||''} ${nameOf(i.assigned_to)}`.toLowerCase().includes(qq));
+  const kInProg=live.filter(i=>i.status==='in_progress').length;
+  const kApproval=live.filter(i=>i.status==='for_ceo_approval').length;
+  const kDone=live.filter(i=>i.status==='completed').length;
+  const kOverdue=live.filter(i=>i.status!=='completed' && i.target_date && i.target_date<today).length;
+  // Group filtered by category (keep category order).
+  const byCat=INIT_CATEGORIES.map(c=>({ cat:c, items:filtered.filter(i=>i.category===c) })).filter(g=>g.items.length);
+  const Kpi=({ic,label,value,color,alert})=>(<div className={`bg-white border rounded-xl p-3 flex items-center gap-3 ${alert&&value>0?'ring-1 ring-rose-200':''}`}><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className={`text-2xl font-extrabold leading-tight ${alert&&value>0?'text-rose-600':'text-slate-900'}`}>{value}</div></div></div>);
+  const Row=(i)=>{ const d=initDeliv(i); const pm=INIT_PRIORITY[i.priority]||INIT_PRIORITY.medium; const sm=initStatusMeta(i.status); const overdue=i.status!=='completed'&&i.target_date&&i.target_date<today; return (
+    <tr key={i.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpen(i)}>
+      <td className="px-3 py-2 font-mono text-xs text-slate-500">{i.code||'—'}</td>
+      <td className="px-3 py-2"><div className="font-medium">{i.title}</div>{i.ceo_approved_at && <span className="text-[10px] text-emerald-600">✓ CEO accepted</span>}</td>
+      <td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${pm[1]}`}>{pm[0]}</span></td>
+      <td className="px-3 py-2 text-xs">{nameOf(i.assigned_to)}</td>
+      <td className={`px-3 py-2 text-xs ${overdue?'text-rose-600 font-semibold':''}`}>{i.target_date?fmtDate(i.target_date):'—'}{overdue?' ⚠':''}</td>
+      <td className="px-3 py-2"><div className="flex items-center gap-1.5"><div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${d.pct}%`}}></div></div><span className="text-[10px] text-slate-500">{d.done}/{d.total}</span></div></td>
+      <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${sm[2]}`}>{sm[1]}</span></td>
+    </tr>
+  ); };
+  return (
+    <div className="pt-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div><h1 className="text-2xl font-bold">🎯 Improvement Initiatives</h1><p className="text-slate-500 text-sm">Projects the CEO assigns to the AGM — tracked with priority, deliverables checklist and status through to CEO acceptance.</p></div>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={()=>setReport(true)} className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">📄 Weekly report</button>
+          {canManage && <button onClick={()=>setOpen('new')} className="px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New initiative</button>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <Kpi ic="🔵" label="In progress" value={kInProg} color="bg-blue-100" />
+        <Kpi ic="📬" label="For CEO approval" value={kApproval} color="bg-amber-100" alert />
+        <Kpi ic="⏰" label="Overdue" value={kOverdue} color="bg-rose-100" alert />
+        <Kpi ic="✅" label="Completed" value={kDone} color="bg-emerald-100" />
+      </div>
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <select value={fCat} onChange={e=>setFCat(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All categories</option>{INIT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>
+        <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All statuses</option>{INIT_STATUSES.map(s=><option key={s[0]} value={s[0]}>{s[1]}</option>)}</select>
+        <select value={fPrio} onChange={e=>setFPrio(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All priorities</option>{Object.entries(INIT_PRIORITY).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</select>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" className="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" />
+      </div>
+      {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : filtered.length===0 ? (
+        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No initiatives {live.length?'match':'yet'}.</div>
+      ) : (
+        <div className="space-y-4">{byCat.map(g=>(
+          <div key={g.cat} className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2 bg-slate-50 border-b font-semibold text-sm">{g.cat} <span className="text-slate-400 font-normal text-xs">· {g.items.length}</span></div>
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">#</th><th className="text-left px-3 py-2">Initiative</th><th className="text-left px-3 py-2">Priority</th><th className="text-left px-3 py-2">Assigned</th><th className="text-left px-3 py-2">Target</th><th className="text-left px-3 py-2">Deliverables</th><th className="text-center px-3 py-2">Status</th></tr></thead>
+              <tbody>{g.items.map(Row)}</tbody>
+            </table></div>
+          </div>
+        ))}</div>
+      )}
+      {open && <InitiativeModal initiative={open==='new'?null:open} profile={profile} profiles={profiles} onClose={()=>setOpen(null)} onSaved={()=>{ load(); }} />}
+      {report && <InitiativeWeeklyReport rows={live} profiles={profiles} onClose={()=>setReport(false)} />}
+    </div>
+  );
+}
+function InitiativeModal({ initiative, profile, profiles, onClose, onSaved }){
+  const isEdit=!!initiative?.id;
+  const canManage = profile.role==='admin';
+  const canUpdate = canManage || profile.role==='agm' || profile.id===initiative?.assigned_to;
+  const [f,setF]=useState({
+    code:initiative?.code||'', title:initiative?.title||'', category:initiative?.category||INIT_CATEGORIES[0],
+    priority:initiative?.priority||'medium', objective:initiative?.objective||'', status:initiative?.status||'not_started',
+    assigned_to:initiative?.assigned_to||'', target_date:initiative?.target_date||'',
+    deliverables:Array.isArray(initiative?.deliverables)?initiative.deliverables:[],
+    attachments:Array.isArray(initiative?.attachments)?initiative.attachments:[],
+  });
+  const [updates,setUpdates]=useState(Array.isArray(initiative?.updates)?initiative.updates:[]);
+  const [newUpdate,setNewUpdate]=useState('');
+  const [newDeliv,setNewDeliv]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const d=initDeliv({deliverables:f.deliverables});
+  function toggleDeliv(i){ if(!canUpdate) return; setF(p=>({...p,deliverables:p.deliverables.map((x,j)=>j===i?{...x,done:!x.done}:x)})); }
+  function addDeliv(){ if(!newDeliv.trim()) return; setF(p=>({...p,deliverables:[...p.deliverables,{text:newDeliv.trim(),done:false}]})); setNewDeliv(''); }
+  function rmDeliv(i){ setF(p=>({...p,deliverables:p.deliverables.filter((_,j)=>j!==i)})); }
+  async function save(extraPatch){
+    if(!f.title.trim()){ setMsg('Title is required.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ code:f.code.trim()||null, title:f.title.trim(), category:f.category, priority:f.priority, objective:f.objective.trim()||null,
+      status:f.status, assigned_to:f.assigned_to||null, target_date:f.target_date||null, deliverables:f.deliverables, attachments:f.attachments, updates, updated_at:new Date().toISOString(), ...(extraPatch||{}) };
+    let error, savedId=initiative?.id;
+    if(isEdit){ ({ error }=await sb.from('toolbox_initiatives').update(payload).eq('id',initiative.id)); }
+    else { payload.created_by=profile.id; const r=await sb.from('toolbox_initiatives').insert(payload).select('id').single(); error=r.error; savedId=r.data?.id;
+      if(!error && payload.assigned_to && payload.assigned_to!==profile.id){ try{ await sb.from('notifications').insert({ recipient_id:payload.assigned_to, actor_id:profile.id, type:'system', text:`🎯 New initiative assigned to you: ${payload.title}`, link_view:'toolbox', ref_type:'toolbox_initiative', ref_id:savedId }); }catch(_){} }
+    }
+    setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); onClose();
+  }
+  async function postUpdate(){
+    if(!newUpdate.trim()) return;
+    const entry={ at:new Date().toISOString(), by:profile.id, by_name:profile.name||profile.email, text:newUpdate.trim() };
+    const nx=[...updates, entry]; setUpdates(nx); setNewUpdate('');
+    if(isEdit){ try{ await sb.from('toolbox_initiatives').update({ updates:nx, updated_at:new Date().toISOString() }).eq('id',initiative.id); onSaved&&onSaved(); }catch(e){ setMsg(e.message||String(e)); } }
+  }
+  async function setStatus(s){
+    if(s==='completed' && !canManage){ setMsg('Only the CEO can mark an initiative Completed (via Accept).'); return; }
+    up('status',s);
+    if(isEdit){ setBusy(true); const patch={ status:s, updated_at:new Date().toISOString() }; const { error }=await sb.from('toolbox_initiatives').update(patch).eq('id',initiative.id); setBusy(false); if(error){ setMsg(error.message); return; }
+      if(s==='for_ceo_approval'){ try{ const { data:admins }=await sb.from('profiles').select('id').eq('role','admin'); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`📬 Initiative ready for your approval: ${initiative.title}`, link_view:'toolbox', ref_type:'toolbox_initiative', ref_id:initiative.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){} }
+      onSaved&&onSaved(); }
+  }
+  async function ceoAccept(){
+    if(!canManage) return;
+    if(!confirm('Accept & mark this initiative Completed? (Deliverables should be submitted and reviewed.)')) return;
+    await save({ status:'completed', ceo_approved_by:profile.id, ceo_approved_at:new Date().toISOString() });
+  }
+  async function del(){ if(!confirm('Delete this initiative?')) return; await sb.from('toolbox_initiatives').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',initiative.id); onSaved&&onSaved(); onClose(); }
+  const readOnlyHdr=!canManage; // non-admins can't change title/priority/assignment
+  return (
+    <Modal title={isEdit?`${initiative.code?initiative.code+' · ':''}${initiative.title}`:'+ New initiative'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Code"><input className="input" value={f.code} onChange={e=>up('code',e.target.value)} disabled={readOnlyHdr} placeholder="e.g. B2" /></TpLbl>
+          <div className="col-span-2"><TpLbl t="Title *"><input className="input" value={f.title} onChange={e=>up('title',e.target.value)} disabled={readOnlyHdr} /></TpLbl></div>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          <TpLbl t="Category"><select className="input" value={f.category} onChange={e=>up('category',e.target.value)} disabled={readOnlyHdr}>{INIT_CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></TpLbl>
+          <TpLbl t="Priority"><select className="input" value={f.priority} onChange={e=>up('priority',e.target.value)} disabled={readOnlyHdr}>{Object.entries(INIT_PRIORITY).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</select></TpLbl>
+          <TpLbl t="Assigned to"><select className="input" value={f.assigned_to} onChange={e=>up('assigned_to',e.target.value)} disabled={readOnlyHdr}><option value="">—</option>{(profiles||[]).filter(p=>!p.deleted_at).map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select></TpLbl>
+          <TpLbl t="Target date"><input type="date" className="input" value={f.target_date} onChange={e=>up('target_date',e.target.value)} disabled={readOnlyHdr} /></TpLbl>
+        </div>
+        <TpLbl t="Objective / description"><textarea className="input min-h-[52px]" value={f.objective} onChange={e=>up('objective',e.target.value)} disabled={readOnlyHdr} /></TpLbl>
+
+        {/* Status pipeline */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold mb-1">Status</div>
+          <div className="flex items-center gap-1 flex-wrap">
+            {INIT_STATUSES.map(s=>{ const active=f.status===s[0]; const isDone=s[0]==='completed'; return (
+              <button key={s[0]} onClick={()=>canUpdate&&setStatus(s[0])} disabled={!canUpdate||(isDone&&!canManage)} title={isDone&&!canManage?'Only CEO marks Completed':''} className={`text-xs px-2.5 py-1 rounded-full font-semibold ${active?s[2]+' ring-2 ring-offset-1 ring-slate-300':'bg-slate-100 text-slate-500'} ${(!canUpdate||(isDone&&!canManage))?'opacity-60 cursor-not-allowed':'hover:opacity-80'}`}>{s[1]}</button>
+            ); })}
+          </div>
+        </div>
+
+        {/* Deliverables checklist */}
+        <div className="bg-slate-50 border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1"><div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Deliverables ({d.done}/{d.total})</div><div className="w-24 h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${d.pct}%`}}></div></div></div>
+          <div className="space-y-1">
+            {f.deliverables.map((x,i)=>(
+              <div key={i} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={!!x.done} onChange={()=>toggleDeliv(i)} disabled={!canUpdate} />
+                <span className={x.done?'line-through text-slate-400':''}>{x.text}</span>
+                {canManage && <button onClick={()=>rmDeliv(i)} className="ml-auto text-rose-300 hover:text-rose-600 text-xs">✕</button>}
+              </div>
+            ))}
+            {f.deliverables.length===0 && <div className="text-xs text-slate-400">No deliverables yet.</div>}
+          </div>
+          {canManage && <div className="flex gap-2 mt-2"><input value={newDeliv} onChange={e=>setNewDeliv(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addDeliv();}}} placeholder="Add a deliverable…" className="border rounded px-2 py-1 text-xs flex-1" /><button onClick={addDeliv} className="text-xs px-2 py-1 rounded bg-slate-700 text-white font-semibold">Add</button></div>}
+        </div>
+
+        {/* Progress updates */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold mb-1">Progress updates</div>
+          <div className="space-y-1.5 max-h-40 overflow-auto">
+            {updates.length===0 && <div className="text-xs text-slate-400">No updates yet.</div>}
+            {updates.slice().reverse().map((u,i)=>(<div key={i} className="text-xs bg-white border rounded px-2 py-1"><span className="text-slate-400">{fmtDate(String(u.at).slice(0,10))} · {u.by_name||nameOf(u.by)}:</span> {u.text}</div>))}
+          </div>
+          {canUpdate && <div className="flex gap-2 mt-1.5"><input value={newUpdate} onChange={e=>setNewUpdate(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();postUpdate();}}} placeholder="Add a progress note…" className="border rounded px-2 py-1 text-xs flex-1" /><button onClick={postUpdate} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Post</button></div>}
+        </div>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2">
+          <AttachmentsEditor value={f.attachments} onChange={v=>up('attachments',v)} scope="toolbox" label="📎 Quotations, reports, photos" inline />
+        </div>
+
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={()=>save()} disabled={busy} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save':'Create initiative'}</button>
+          {isEdit && canManage && f.status!=='completed' && <button onClick={ceoAccept} disabled={busy} className="py-2 px-4 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Accept (mark Completed)</button>}
+          {isEdit && canManage && <button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function InitiativeWeeklyReport({ rows, profiles, onClose }){
+  const today=todayManila();
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const completed=rows.filter(i=>i.status==='completed');
+  const ongoing=rows.filter(i=>i.status==='in_progress'||i.status==='for_assessment');
+  const delayed=rows.filter(i=>i.status!=='completed' && i.target_date && i.target_date<today);
+  const forApproval=rows.filter(i=>i.status==='for_ceo_approval');
+  const notStarted=rows.filter(i=>i.status==='not_started');
+  const Sec=({title,items,showTarget})=> (
+    <div className="mb-3">
+      <div className="font-bold text-sm border-b pb-1 mb-1">{title} ({items.length})</div>
+      {items.length===0 ? <div className="text-xs text-slate-400">None.</div> : <ul className="text-xs space-y-0.5">{items.map(i=>{ const d=initDeliv(i); const pm=INIT_PRIORITY[i.priority]||INIT_PRIORITY.medium; return (<li key={i.id} className="flex items-start gap-1"><span className="text-slate-400 font-mono">{i.code||'•'}</span><span className="flex-1">{i.title} <span className="text-slate-400">· {pm[0]} · {nameOf(i.assigned_to)} · {d.done}/{d.total} deliverables{showTarget&&i.target_date?` · due ${fmtDate(i.target_date)}`:''}</span></span></li>); })}</ul>}
+    </div>
+  );
+  return (
+    <Modal title="📄 Weekly Initiatives Report" onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .iwr-sheet,.iwr-sheet *{visibility:visible !important;} .iwr-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Initiatives Weekly Report - ${today}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="iwr-sheet">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">AGM Initiatives — Weekly Progress Report</div></div><div className="text-right text-xs text-slate-500">{fmtDate(today)}</div></div>
+          <Sec title="✅ Completed" items={completed} />
+          <Sec title="📬 For CEO Approval" items={forApproval} />
+          <Sec title="🔵 Ongoing" items={ongoing} showTarget />
+          <Sec title="⏰ Delayed / Overdue" items={delayed} showTarget />
+          <Sec title="⚪ Not Started" items={notStarted} showTarget />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ToolboxMeetingsView({ profile, profiles, employees }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -51228,7 +51476,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
-        {view==='toolbox' && <ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} />}
+        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
