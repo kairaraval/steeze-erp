@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 847 · Toolbox now has two tabs: Meetings (as before) and a new Initiatives tracker. The CEO assigns improvement projects to the AGM, each with category, priority, a tickable deliverables checklist, status pipeline (Not Started \u2192 For Assessment \u2192 In Progress \u2192 For CEO Approval \u2192 Completed), progress updates, attachments and CEO accept. Pre-loaded all 15 projects from the AGM Operations Improvement Toolbox. Printable weekly progress report.";
+const BUILD = "Live build 848 · Settings → Team now has a search box to find people by name, email or role (works alongside the role filter chips).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25266,6 +25266,7 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
   const [editingNameId,setEditingNameId]=useState(null);
   const [draftName,setDraftName]=useState('');
   const [filterRole,setFilterRole]=useState('all');
+  const [memberSearch,setMemberSearch]=useState('');
   const [pwReset,setPwReset]=useState(null); // member whose password an admin is resetting
   const appUrl = typeof window!=='undefined' ? window.location.origin : '';
 
@@ -25356,7 +25357,9 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
     { key:'logistics',        label:'Logistics',       count:profiles.filter(p=>p.role==='logistics').length },
     { key:'video_editor',     label:'Video Editor',    count:profiles.filter(p=>p.role==='video_editor').length },
   ];
-  const filtered = filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole);
+  const mq = memberSearch.trim().toLowerCase();
+  const filtered = (filterRole==='all' ? profiles : profiles.filter(p=>p.role===filterRole))
+    .filter(p=> !mq || `${p.name||''} ${p.email||''} ${roleLabel(p.role)}`.toLowerCase().includes(mq));
   // Group rows by role for clarity
   const roleOrder = ['admin','agm','manager','sales_representative','assistant','production','production_supervisor','production_assistant','pattern_maker','cutting_dept','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','packing_head','qc','qc_leader','qc_personnel','inventory_personnel','graphic','printing','purchasing','purchasing_admin','purchasing_personnel','accounting','accounting_officer','sewing_lead','knit_embro_lead','hr','hr_admin','logistics','video_editor'];
   const sortedRows = filtered.slice().sort((a,b)=>{
@@ -25468,7 +25471,13 @@ function SettingsView({ profile, profiles, pendingInvites, reload }){
       {/* Team roster */}
       <div className="bg-white rounded-xl border overflow-hidden">
         <div className="px-4 py-3 border-b flex items-center justify-between gap-3 flex-wrap">
-          <div className="font-semibold text-slate-900">All team members · {profiles.length}</div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="font-semibold text-slate-900">All team members · {profiles.length}</div>
+            <div className="relative">
+              <input value={memberSearch} onChange={e=>setMemberSearch(e.target.value)} placeholder="🔍 Search name, email or role…" className="border rounded-lg pl-3 pr-7 py-1.5 text-sm w-64" />
+              {memberSearch && <button onClick={()=>setMemberSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs">✕</button>}
+            </div>
+          </div>
           <div className="flex flex-wrap gap-1">
             {roleOptions.map(o=>(
               <button key={o.key} onClick={()=>setFilterRole(o.key)} className={`text-xs px-2.5 py-1 rounded-full border ${filterRole===o.key?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
