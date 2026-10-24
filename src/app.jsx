@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 843 · Accounting can now open the Subcon Payroll Sheet from the voucher/pay screen too (not just the RFP detail), so they can check the signed per-subcon breakdown before issuing the voucher. Also made the sheet loader fault-tolerant so name lookups never hide it.";
+const BUILD = "Live build 844 · New Purchasing → Cash Advance (DV Day): purchasing requests buying-day funds, Finance releases, then they fill a liquidation form (per supplier + item + payment method: Cash/Check/Promissory Note), Minda + Chelle both e-sign, submit to AGM, then Finance posts it. Printable signed liquidation form with all four signatures.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38661,7 +38661,7 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   async function approveBudget(b, note){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
   async function returnBudget(b, note){ note = note===undefined ? prompt('Return the liquidation to the requester. Why?') : note; if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Cash advance liquidation
-  async function approveCA(c, note){ const { error }=await sb.from('cash_advances').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',c.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Cash advance liquidation approved by AGM — awaiting your approval · ${c.number||''} ${peso(c.amount_liquidated||0)}`, 'approvals','cash_advance',c.id); reload&&reload(); }
+  async function approveCA(c, note){ const toFinance = c.source==='purchasing'; const { error }=await sb.from('cash_advances').update({ liq_approval: toFinance?'pending_finance':'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',c.id); if(error){ alert(error.message); return; } await notifyRoles(toFinance?['accounting','accounting_officer']:['admin'], `💰 ${toFinance?'Purchasing cash advance':'Cash advance'} liquidation approved by AGM — ${toFinance?'awaiting Finance to post':'awaiting your approval'} · ${c.number||''} ${peso(c.amount_liquidated||0)}`, toFinance?'pur-cash-advance':'approvals','cash_advance',c.id); reload&&reload(); }
   async function returnCA(c, note){ note = note===undefined ? prompt('Return the liquidation to the custodian. Why?') : note; if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:nn(note) }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Petty cash replenishment
   async function approvePC(r, note){ const { error }=await sb.from('petty_cash_replenishments').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp() }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Petty cash replenishment approved by AGM — ${peso(r.amount)} awaiting your approval.`, 'petty-cash','petty_replenish',r.id); reload&&reload(); }
@@ -41079,6 +41079,279 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   );
 }
 
+/* ═══════════════ PURCHASING CASH ADVANCE (DV DAY) ═══════════════ */
+// Purchasing (Minda / Chelle) request buying-day funds → Finance releases →
+// they liquidate with a per-item form (supplier + payment method) → both sign →
+// AGM approves → Finance posts it to the books. Stored in cash_advances
+// (source='purchasing') so it lives with Finance's cash advances.
+const PCA_PAY_METHODS = ['Cash','Check','Promissory Note','Bank Transfer'];
+function pcaIsPurchasing(p){ return ['purchasing','purchasing_admin','purchasing_personnel'].includes(p?.role); }
+function pcaIsFinance(p){ return ['accounting','accounting_officer'].includes(p?.role); }
+function pcaLineTotal(ls){ return (ls||[]).reduce((t,l)=>t+Number(l.amount||0),0); }
+function pcaMeta(ca){
+  if(ca.status==='cancelled') return { key:'cancelled', label:'Cancelled', color:'bg-slate-200 text-slate-600' };
+  if(ca.status==='requested') return { key:'requested', label:'Requested — awaiting Finance', color:'bg-amber-100 text-amber-700' };
+  if(ca.status==='liquidated') return { key:'done', label:'Liquidated', color:'bg-emerald-100 text-emerald-700' };
+  // released:
+  if(ca.liq_approval==='pending_agm') return { key:'pending_agm', label:'Liquidation — awaiting AGM', color:'bg-cyan-100 text-cyan-700' };
+  if(ca.liq_approval==='pending_finance') return { key:'pending_finance', label:'Liquidation — awaiting Finance', color:'bg-sky-100 text-sky-700' };
+  return { key:'released', label:'Released — to liquidate', color:'bg-indigo-100 text-indigo-700' };
+}
+function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload }){
+  const [requesting,setRequesting]=useState(false);
+  const [releasing,setReleasing]=useState(null);
+  const [liquidating,setLiquidating]=useState(null);
+  const [viewing,setViewing]=useState(null);
+  const [filter,setFilter]=useState('open');
+  const canRequest = pcaIsPurchasing(profile) || profile.role==='admin';
+  const canFinance = pcaIsFinance(profile) || profile.role==='admin';
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const rows=(cashAdvances||[]).filter(c=>!c.deleted_at && c.source==='purchasing')
+    .filter(c=>{ const m=pcaMeta(c); if(filter==='all') return true; if(filter==='open') return m.key!=='done'&&m.key!=='cancelled'; if(filter==='done') return m.key==='done'; return m.key===filter; })
+    .sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const open=(cashAdvances||[]).filter(c=>!c.deleted_at && c.source==='purchasing' && !['liquidated','cancelled'].includes(c.status));
+  const toRelease=open.filter(c=>c.status==='requested').length;
+  const toPost=open.filter(c=>c.status==='released' && c.liq_approval==='pending_finance').length;
+  async function cancelCA(c){ if(!confirm(`Cancel ${c.number||'this request'}?`)) return; const { error }=await sb.from('cash_advances').update({ status:'cancelled' }).eq('id',c.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  const TAB=(k,l)=>(<button onClick={()=>setFilter(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${filter===k?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{l}</button>);
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">💵 Cash Advance (DV Day)</h1><p className="text-slate-500 text-sm">Request buying-day funds, then liquidate with the supplier &amp; payment breakdown. {canFinance && <>{toRelease} to release · {toPost} to post.</>}</p></div>
+          {canRequest && <button onClick={()=>setRequesting(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">＋ Request DV-day funds</button>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">{TAB('open','Open')}{TAB('requested','To release')}{TAB('pending_finance','To post')}{TAB('done','Liquidated')}{TAB('all','All')}</div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Purpose</th><th className="text-left px-3 py-2">Custodian</th>
+          <th className="text-right px-3 py-2">Advance</th><th className="text-right px-3 py-2">Spent</th><th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
+        </tr></thead>
+        <tbody>
+          {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">Nothing here. {canRequest && 'Click “＋ Request DV-day funds”.'}</td></tr>}
+          {rows.map(c=>{ const m=pcaMeta(c); const spent=pcaLineTotal(c.receipts); return (
+            <tr key={c.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-mono text-xs">{c.number||'—'}<div className="text-[10px] text-slate-400">{fmtDate(c.date)}</div></td>
+              <td className="px-3 py-2"><div className="font-medium truncate max-w-[18rem]">{c.purpose||'—'}</div></td>
+              <td className="px-3 py-2 text-xs">{c.custodian_name||nameOf(c.custodian_id)}</td>
+              <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
+              <td className="px-3 py-2 text-right">{c.status==='requested'?'—':peso(spent)}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                {m.key==='requested' && canFinance && <button onClick={()=>setReleasing(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">💵 Release</button>}
+                {m.key==='requested' && canRequest && <button onClick={()=>cancelCA(c)} className="text-xs text-slate-400 hover:text-rose-600 mr-2">Cancel</button>}
+                {m.key==='released' && canRequest && <button onClick={()=>setLiquidating(c)} className="text-xs text-violet-700 hover:underline font-semibold mr-2">🧾 Liquidate</button>}
+                {(m.key==='pending_agm'||m.key==='pending_finance') && canRequest && <button onClick={()=>setLiquidating(c)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>}
+                {m.key==='pending_finance' && canFinance && <button onClick={()=>setLiquidating(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">✅ Post</button>}
+                <button onClick={()=>setViewing(c)} className="text-xs text-slate-500 hover:underline">🖨 Form</button>
+              </td>
+            </tr>
+          ); })}
+        </tbody>
+      </table></div></div>
+      {requesting && <PCARequestModal profile={profile} onClose={()=>setRequesting(false)} onSaved={()=>{ setRequesting(false); reload&&reload(); }} />}
+      {releasing && <PCAReleaseModal ca={releasing} profile={profile} bankAccounts={bankAccounts} onClose={()=>setReleasing(null)} onSaved={()=>{ setReleasing(null); reload&&reload(); }} />}
+      {liquidating && <PCALiquidationModal ca={liquidating} profile={profile} profiles={profiles} chartAccounts={chartAccounts} bankAccounts={bankAccounts} onClose={()=>setLiquidating(null)} onSaved={()=>{ setLiquidating(null); reload&&reload(); }} />}
+      {viewing && <PurchasingLiquidationDoc ca={viewing} profiles={profiles} onClose={()=>setViewing(null)} />}
+    </div>
+  );
+}
+async function nextPcaNumber(){
+  const monthKey=todayManila().slice(0,7);
+  const { data }=await sb.from('cash_advances').select('number').like('number',`PCA-${monthKey}-%`);
+  let mx=0;(data||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>mx)mx=n;}});
+  return `PCA-${monthKey}-${String(mx+1).padStart(3,'0')}`;
+}
+function PCARequestModal({ profile, onClose, onSaved }){
+  const [f,setF]=useState({ amount:'', purpose:'', date:todayManila() });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function save(){
+    if(!(Number(f.amount)>0)){ setMsg('Enter the amount needed.'); return; }
+    if(!f.purpose.trim()){ setMsg('What is this for? (e.g. DV-day buying 24 Oct)'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const number=await nextPcaNumber();
+      const { data:ca, error }=await sb.from('cash_advances').insert({ number, date:f.date||todayManila(), kind:'cash_advance', source:'purchasing', status:'requested', custodian_id:profile.id, custodian_name:profile.name||profile.email, purpose:f.purpose.trim(), amount:Number(f.amount), receipts:[], created_by:profile.id }).select('id,number').single();
+      if(error) throw error;
+      try{ const { data:fin }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(fin||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💵 Purchasing requested DV-day funds — ${peso(Number(f.amount))} (${ca.number}) · ${f.purpose.trim().slice(0,40)}`, link_view:'pur-cash-advance', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title="＋ Request DV-day funds" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">This goes to Finance to release the cash. Once you've bought everything, come back and liquidate with the supplier &amp; payment breakdown.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount needed *"><input type="number" className="input" value={f.amount} onChange={e=>setF(p=>({...p,amount:e.target.value}))} placeholder="0.00" autoFocus /></TpLbl>
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>setF(p=>({...p,date:e.target.value}))} /></TpLbl>
+        </div>
+        <TpLbl t="Purpose *"><textarea className="input min-h-[52px]" value={f.purpose} onChange={e=>setF(p=>({...p,purpose:e.target.value}))} placeholder="e.g. DV-day buying 24 Oct — fabrics, trims, threads from Divisoria" /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Sending…':'💵 Send request to Finance'}</button>
+      </div>
+    </Modal>
+  );
+}
+function PCAReleaseModal({ ca, profile, bankAccounts, onClose, onSaved }){
+  const [bankId,setBankId]=useState(bankAccounts?.[0]?.id||'');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  async function release(){
+    if(!bankId){ setMsg('Pick the bank to release the cash from.'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const { data:btx, error:be }=await insertBankTxnOnce({ bank_id:bankId, date:todayManila(), direction:'out', amount:Number(ca.amount||0), description:`DV-day cash advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id });
+      if(be) throw be;
+      const { error }=await sb.from('cash_advances').update({ status:'released', bank_id:bankId, bank_transaction_id:btx?.id||null }).eq('id',ca.id);
+      if(error) throw error;
+      try{ if(ca.custodian_id && ca.custodian_id!==profile.id) await sb.from('notifications').insert({ recipient_id:ca.custodian_id, actor_id:profile.id, type:'system', text:`💵 Your DV-day funds ${ca.number||''} were released — ${peso(ca.amount)}. Buy, then liquidate.`, link_view:'pur-cash-advance', ref_type:'cash_advance', ref_id:ca.id }); }catch(_){}
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`Release funds · ${ca.number||''}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs"><b>{ca.custodian_name||''}</b> requested <b>{peso(ca.amount)}</b> · {ca.purpose||''}</div>
+        <TpLbl t="Release from bank *"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— pick bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+        <div className="text-[11px] text-slate-400">Records a cash-out of {peso(ca.amount)} from the chosen bank. The custodian then liquidates it.</div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={release} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Releasing…':`💵 Release ${peso(ca.amount)}`}</button>
+      </div>
+    </Modal>
+  );
+}
+function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccounts, onClose, onSaved }){
+  const [lines,setLines]=useState(Array.isArray(ca.receipts)&&ca.receipts.length?ca.receipts:[{ supplier:'', description:'', amount:'', payment_method:'Cash', reference:'', receipt_url:'', gl_account_code:'' }]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [upIdx,setUpIdx]=useState(null);
+  const canFinance = pcaIsFinance(profile) || profile.role==='admin';
+  const canEdit = ((pcaIsPurchasing(profile)||profile.role==='admin') && (!ca.liq_approval || ca.liq_approval==='pending_agm'));
+  const spent=pcaLineTotal(lines); const advanced=Number(ca.amount||0); const balance=advanced-spent;
+  const prepBy=(profiles||[]).find(p=>p.id===ca.liq_prepared_by); const chkBy=(profiles||[]).find(p=>p.id===ca.liq_checked_by);
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:''; };
+  function setLine(i,patch){ setLines(ls=>ls.map((l,j)=>j===i?{...l,...patch}:l)); }
+  function addLine(){ setLines(ls=>[...ls,{ supplier:'', description:'', amount:'', payment_method:'Cash', reference:'', receipt_url:'', gl_account_code:'' }]); }
+  function rmLine(i){ setLines(ls=>ls.filter((_,j)=>j!==i)); }
+  async function uploadReceipt(i,file){ if(!file) return; setUpIdx(i); try{ const ext=(file.name.split('.').pop()||'jpg'); const key=`expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`; const { error }=await sb.storage.from(BUCKET).upload(key,file,{upsert:false,contentType:file.type||undefined}); if(error) throw error; setLine(i,{ receipt_url:key }); }catch(e){ setMsg('Upload failed: '+(e.message||e)); } setUpIdx(null); }
+  const cleanLines=()=>lines.filter(l=>Number(l.amount||0)>0).map(l=>({ supplier:(l.supplier||'').trim(), description:(l.description||'').trim(), amount:Number(l.amount||0), payment_method:l.payment_method||'Cash', reference:(l.reference||'').trim(), receipt_url:l.receipt_url||'', gl_account_code:l.gl_account_code||'' }));
+  async function saveDraft(){ setBusy(true); setMsg(''); const { error }=await sb.from('cash_advances').update({ receipts:cleanLines(), amount_liquidated:spent, amount_returned:Math.max(0,balance) }).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
+  async function sign(which){
+    const cl=cleanLines(); if(!cl.length){ setMsg('Add at least one purchase line before signing.'); return; }
+    if(!profile.signature_data){ if(!confirm("You don't have an e-signature saved. Sign without one? Set one up in My Profile → signature.")) return; }
+    const patch={ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)) };
+    if(which==='prepared'){ patch.liq_prepared_by=profile.id; patch.liq_prepared_at=new Date().toISOString(); }
+    else { patch.liq_checked_by=profile.id; patch.liq_checked_at=new Date().toISOString(); }
+    setBusy(true); setMsg(''); const { error }=await sb.from('cash_advances').update(patch).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
+  }
+  async function submitToAgm(){
+    const cl=cleanLines(); if(!cl.length){ setMsg('Add at least one purchase line.'); return; }
+    if(!ca.liq_prepared_by && !(profile.id===ca.liq_prepared_by)){ /* prepared must be signed */ }
+    if(!ca.liq_prepared_by || !ca.liq_checked_by){ setMsg('Both signatures are needed (prepared by + checked by) before submitting.'); return; }
+    setBusy(true); setMsg('');
+    const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)), liq_approval:'pending_agm' }).eq('id',ca.id);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 Purchasing cash advance liquidation ${ca.number||''} — ${peso(pcaLineTotal(cl))} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    setBusy(false); onSaved();
+  }
+  async function postByFinance(){
+    if(ca.liq_approval!=='pending_finance' && profile.role!=='admin'){ setMsg('This can be posted after the AGM approves.'); return; }
+    const cl=cleanLines(); const total=pcaLineTotal(cl); const returned=Math.max(0,advanced-total);
+    if(!confirm(`Post this liquidation to the books?\n\nSpent ${peso(total)} of ${peso(advanced)}${returned>0.01?` · ${peso(returned)} to return`:''}.`)) return;
+    setBusy(true); setMsg('');
+    try{
+      if(returned>0.01 && ca.bank_id){ await insertBankTxnOnce({ bank_id:ca.bank_id, date:todayManila(), direction:'in', amount:returned, description:`Return from DV-day advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id }); }
+      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:total, amount_returned:returned, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
+      if(error) throw error;
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const readOnly=!canEdit;
+  return (
+    <Modal title={`Liquidation · ${ca.number||''} — ${ca.custodian_name||''}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs flex items-center justify-between flex-wrap gap-2">
+          <span>Advanced <b>{peso(advanced)}</b> · {ca.purpose||''}</span>
+          <span>Spent <b>{peso(spent)}</b> · {balance>=0?<>Balance to return <b className="text-emerald-700">{peso(balance)}</b></>:<>Over-spent <b className="text-rose-700">{peso(-balance)}</b></>}</span>
+        </div>
+        <div className="border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+            <th className="text-left px-2 py-2">Supplier</th><th className="text-left px-2 py-2">Item / particulars</th><th className="text-right px-2 py-2">Amount</th>
+            <th className="text-left px-2 py-2">Payment</th><th className="text-left px-2 py-2">Check/PN #</th><th className="text-left px-2 py-2">Category</th><th className="text-center px-2 py-2">Receipt</th>{!readOnly && <th></th>}
+          </tr></thead>
+          <tbody>
+            {lines.map((l,i)=>(
+              <tr key={i} className="border-t align-top">
+                <td className="px-2 py-1.5">{readOnly?(l.supplier||'—'):<input className="input text-xs" value={l.supplier} onChange={e=>setLine(i,{supplier:e.target.value})} placeholder="Supplier" />}</td>
+                <td className="px-2 py-1.5">{readOnly?(l.description||'—'):<input className="input text-xs" value={l.description} onChange={e=>setLine(i,{description:e.target.value})} placeholder="What was bought" />}</td>
+                <td className="px-2 py-1.5 text-right">{readOnly?peso(l.amount):<input type="number" className="input text-xs text-right w-24" value={l.amount} onChange={e=>setLine(i,{amount:e.target.value})} />}</td>
+                <td className="px-2 py-1.5">{readOnly?l.payment_method:<select className="input text-xs" value={l.payment_method} onChange={e=>setLine(i,{payment_method:e.target.value})}>{PCA_PAY_METHODS.map(m=><option key={m}>{m}</option>)}</select>}</td>
+                <td className="px-2 py-1.5">{readOnly?(l.reference||(l.payment_method==='Cash'?'—':'')):((l.payment_method==='Check'||l.payment_method==='Promissory Note'||l.payment_method==='Bank Transfer')?<input className="input text-xs w-28" value={l.reference} onChange={e=>setLine(i,{reference:e.target.value})} placeholder="ref #" />:<span className="text-slate-300 text-xs">—</span>)}</td>
+                <td className="px-2 py-1.5">{readOnly?(acctName(l.gl_account_code)||'—'):<select className="input text-xs" value={l.gl_account_code} onChange={e=>setLine(i,{gl_account_code:e.target.value})}><option value="">category…</option>{coaExpenseOptions(chartAccounts)}</select>}</td>
+                <td className="px-2 py-1.5 text-center">{l.receipt_url?<button onClick={()=>openSignedAttachment(storageKeyFromUrl(l.receipt_url)||l.receipt_url)} className="text-[11px] text-indigo-600 hover:underline">view</button>:(readOnly?<span className="text-slate-300">—</span>:<label className="text-[11px] text-slate-500 cursor-pointer hover:underline">{upIdx===i?'…':'＋ photo'}<input type="file" accept="image/*" className="hidden" onChange={e=>uploadReceipt(i,e.target.files?.[0])} /></label>)}</td>
+                {!readOnly && <td className="px-2 py-1.5 text-right"><button onClick={()=>rmLine(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table></div></div>
+        {!readOnly && <button onClick={addLine} className="text-xs text-indigo-600 hover:underline font-semibold">＋ Add purchase line</button>}
+
+        {/* Signatures */}
+        <div className="grid grid-cols-2 gap-4 bg-slate-50 border rounded-lg p-3">
+          <div className="text-center">
+            <div className="relative border-b border-slate-400 h-12 flex items-end justify-center overflow-hidden">{prepBy?.signature_data && <img src={prepBy.signature_data} className="max-h-11 object-contain" />}</div>
+            <div className="text-[10px] uppercase font-bold mt-1">Prepared by</div>
+            <div className="text-[11px] text-slate-600">{prepBy?(prepBy.name||prepBy.email):'—'}</div>
+            {!ca.liq_prepared_by && (pcaIsPurchasing(profile)||profile.role==='admin') && !readOnly && <button onClick={()=>sign('prepared')} disabled={busy} className="mt-1 text-[11px] px-2 py-0.5 rounded bg-violet-600 text-white font-semibold">✍ Sign as preparer</button>}
+          </div>
+          <div className="text-center">
+            <div className="relative border-b border-slate-400 h-12 flex items-end justify-center overflow-hidden">{chkBy?.signature_data && <img src={chkBy.signature_data} className="max-h-11 object-contain" />}</div>
+            <div className="text-[10px] uppercase font-bold mt-1">Checked by</div>
+            <div className="text-[11px] text-slate-600">{chkBy?(chkBy.name||chkBy.email):'—'}</div>
+            {!ca.liq_checked_by && (pcaIsPurchasing(profile)||profile.role==='admin') && !readOnly && <button onClick={()=>sign('checked')} disabled={busy} className="mt-1 text-[11px] px-2 py-0.5 rounded bg-violet-600 text-white font-semibold" title="A second purchasing person checks & signs">✍ Sign as checker</button>}
+          </div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 flex-wrap">
+          {canEdit && <button onClick={saveDraft} disabled={busy} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">Save draft</button>}
+          {canEdit && (!ca.liq_approval) && <button onClick={submitToAgm} disabled={busy||!ca.liq_prepared_by||!ca.liq_checked_by} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50" title={(!ca.liq_prepared_by||!ca.liq_checked_by)?'Both signatures needed first':'Submit for AGM approval'}>📤 Submit to AGM</button>}
+          {ca.liq_approval==='pending_agm' && <div className="flex-1 text-xs text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg px-3 py-2">Submitted — awaiting AGM approval. She signs on her For-Approval page, then Finance posts it.</div>}
+          {ca.liq_approval==='pending_finance' && canFinance && <button onClick={postByFinance} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✅ Post liquidation to the books</button>}
+          {ca.liq_approval==='pending_finance' && !canFinance && <div className="flex-1 text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">AGM approved — awaiting Finance to post.</div>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function PurchasingLiquidationDoc({ ca, profiles, onClose }){
+  const lines=Array.isArray(ca.receipts)?ca.receipts:[];
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const prep=pById(ca.liq_prepared_by), chk=pById(ca.liq_checked_by), agm=pById(ca.liq_agm_by), fin=pById(ca.liq_admin_by);
+  const spent=pcaLineTotal(lines); const advanced=Number(ca.amount||0); const balance=advanced-spent;
+  const Sig=({who,when,role})=>(<div className="text-center"><div className="relative border-b border-slate-500 h-14 flex items-end justify-center overflow-hidden">{who?.signature_data && <img src={who.signature_data} className="max-h-[52px] object-contain" />}</div><div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div><div className="text-[11px] text-slate-700">{who?(who.name||who.email):'—'}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div></div>);
+  return (
+    <Modal title={`Cash Advance Liquidation · ${ca.number||''}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .pca-sheet,.pca-sheet *{visibility:visible !important;} .pca-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Cash Advance Liquidation - ${ca.number||''}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="pca-sheet">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Cash Advance Liquidation — Purchasing / DV Day</div></div><div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{ca.number||''}</div><div>{fmtDate(ca.date)}</div></div></div>
+          <div className="text-sm mb-2"><b>Custodian:</b> {ca.custodian_name||''} · <b>Purpose:</b> {ca.purpose||''}</div>
+          <table className="w-full text-xs border"><thead className="bg-slate-50 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Supplier</th><th className="text-left px-2 py-1">Item</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Payment</th><th className="text-left px-2 py-1">Ref</th></tr></thead>
+            <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1">{l.supplier||'—'}</td><td className="px-2 py-1">{l.description||'—'}</td><td className="px-2 py-1 text-right">{peso(l.amount)}</td><td className="px-2 py-1">{l.payment_method||'Cash'}</td><td className="px-2 py-1">{l.reference||'—'}</td></tr>))}</tbody>
+          </table>
+          <div className="flex justify-end gap-6 text-sm mt-2 border-t pt-2"><span>Advanced: <b>{peso(advanced)}</b></span><span>Spent: <b>{peso(spent)}</b></span><span>{balance>=0?<>To return: <b>{peso(balance)}</b></>:<>Over-spent: <b>{peso(-balance)}</b></>}</span></div>
+          <div className="grid grid-cols-4 gap-4 mt-10">
+            <Sig who={prep} when={ca.liq_prepared_at} role="Prepared by" />
+            <Sig who={chk} when={ca.liq_checked_at} role="Checked by" />
+            <Sig who={agm} when={ca.liq_agm_at} role="Approved — AGM" />
+            <Sig who={fin} when={ca.liq_admin_at} role="Posted — Finance" />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, chartAccounts, costCenters, replenishments, reload, kind }){
   // `kind` props split the single cash_advances table into two distinct views:
   //   'petty_cash'   — petty cash float for daily operational small expenses
@@ -41211,7 +41484,9 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   function caMeta(k){ return STATUSES.find(s=>s.key===k)||STATUSES[0]; }
   // Filter to this view's kind. Legacy rows with NULL kind default to
   // 'cash_advance' so existing data lands on the Cash Advances page.
-  const ofKind = (cashAdvances||[]).filter(c => (c.kind || 'cash_advance') === kind);
+  // Purchasing DV-day advances (source='purchasing') live in their own
+  // Purchasing → Cash Advance module, so keep them out of this list.
+  const ofKind = (cashAdvances||[]).filter(c => (c.kind || 'cash_advance') === kind && c.source!=='purchasing');
   const rows = ofKind.filter(c=>!filter||c.status===filter);
 
   // Per-custodian open balance
@@ -49495,7 +49770,7 @@ function App(){
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll',
-        'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
+        'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
       // Sales assistant now also has access to Sales Orders (filtered to their
@@ -49567,20 +49842,20 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_personnel'){
       // Purchasing Personnel — same access as Purchasing Admin but WITHOUT Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -50168,6 +50443,7 @@ function App(){
     ['expense-log','Expense Log','📚'],
     ['petty-cash','Petty Cash','💵'],
     ['cash-advances','Cash Advances','🧾'],
+    ['pur-cash-advance','Purchasing DV Advances','🛍'],
     ['budgets','Budget Requests','💰'],
     ['banks','Bank Accounts','🏦'],
     ['checks','Check Monitoring','🏦'],
@@ -50224,7 +50500,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
@@ -50349,7 +50625,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -50360,7 +50636,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -50372,7 +50648,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -50452,7 +50728,7 @@ function App(){
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -50713,6 +50989,7 @@ function App(){
         {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
+        {view==='pur-cash-advance' && <PurchasingCashAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
