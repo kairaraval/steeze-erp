@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 844 · New Purchasing → Cash Advance (DV Day): purchasing requests buying-day funds, Finance releases, then they fill a liquidation form (per supplier + item + payment method: Cash/Check/Promissory Note), Minda + Chelle both e-sign, submit to AGM, then Finance posts it. Printable signed liquidation form with all four signatures.";
+const BUILD = "Live build 845 · Purchasing DV-day liquidation now splits by payment: only CASH draws down the DV float and gets liquidated; Check / Bank Transfer / Promissory Note lines are listed for the complete record only and are NOT paid or posted again (no duplication with the usual voucher/check process). Form shows a full payment breakdown + DV cash reconciliation.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41088,6 +41088,15 @@ const PCA_PAY_METHODS = ['Cash','Check','Promissory Note','Bank Transfer'];
 function pcaIsPurchasing(p){ return ['purchasing','purchasing_admin','purchasing_personnel'].includes(p?.role); }
 function pcaIsFinance(p){ return ['accounting','accounting_officer'].includes(p?.role); }
 function pcaLineTotal(ls){ return (ls||[]).reduce((t,l)=>t+Number(l.amount||0),0); }
+// Split a liquidation's lines by how they were paid. Only CASH draws down the
+// DV float; Check / Bank Transfer / Promissory Note are recorded separately
+// (their own vouchers/checks) and are listed here for the record only.
+function pcaBreakdown(ls){
+  const b={ cash:0, check:0, bank:0, pn:0, total:0 };
+  (ls||[]).forEach(l=>{ const a=Number(l.amount||0); b.total+=a; const m=l.payment_method||'Cash';
+    if(m==='Cash') b.cash+=a; else if(m==='Check') b.check+=a; else if(m==='Bank Transfer') b.bank+=a; else if(m==='Promissory Note') b.pn+=a; else b.cash+=a; });
+  b.nonCash=b.check+b.bank+b.pn; return b;
+}
 function pcaMeta(ca){
   if(ca.status==='cancelled') return { key:'cancelled', label:'Cancelled', color:'bg-slate-200 text-slate-600' };
   if(ca.status==='requested') return { key:'requested', label:'Requested — awaiting Finance', color:'bg-amber-100 text-amber-700' };
@@ -41130,13 +41139,13 @@ function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccoun
         </tr></thead>
         <tbody>
           {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">Nothing here. {canRequest && 'Click “＋ Request DV-day funds”.'}</td></tr>}
-          {rows.map(c=>{ const m=pcaMeta(c); const spent=pcaLineTotal(c.receipts); return (
+          {rows.map(c=>{ const m=pcaMeta(c); const bd=pcaBreakdown(c.receipts); return (
             <tr key={c.id} className="border-t hover:bg-slate-50">
               <td className="px-3 py-2 font-mono text-xs">{c.number||'—'}<div className="text-[10px] text-slate-400">{fmtDate(c.date)}</div></td>
               <td className="px-3 py-2"><div className="font-medium truncate max-w-[18rem]">{c.purpose||'—'}</div></td>
               <td className="px-3 py-2 text-xs">{c.custodian_name||nameOf(c.custodian_id)}</td>
               <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
-              <td className="px-3 py-2 text-right">{c.status==='requested'?'—':peso(spent)}</td>
+              <td className="px-3 py-2 text-right">{c.status==='requested'?'—':<>{peso(bd.cash)}<span className="text-[10px] text-slate-400 block">cash{bd.nonCash>0?` · +${peso(bd.nonCash)} check/BT`:''}</span></>}</td>
               <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 {m.key==='requested' && canFinance && <button onClick={()=>setReleasing(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">💵 Release</button>}
@@ -41226,7 +41235,8 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
   const [upIdx,setUpIdx]=useState(null);
   const canFinance = pcaIsFinance(profile) || profile.role==='admin';
   const canEdit = ((pcaIsPurchasing(profile)||profile.role==='admin') && (!ca.liq_approval || ca.liq_approval==='pending_agm'));
-  const spent=pcaLineTotal(lines); const advanced=Number(ca.amount||0); const balance=advanced-spent;
+  const bd=pcaBreakdown(lines); const advanced=Number(ca.amount||0);
+  const cashSpent=bd.cash; const balance=advanced-cashSpent; // DV float reconciliation (cash only)
   const prepBy=(profiles||[]).find(p=>p.id===ca.liq_prepared_by); const chkBy=(profiles||[]).find(p=>p.id===ca.liq_checked_by);
   const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:''; };
   function setLine(i,patch){ setLines(ls=>ls.map((l,j)=>j===i?{...l,...patch}:l)); }
@@ -41234,11 +41244,11 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
   function rmLine(i){ setLines(ls=>ls.filter((_,j)=>j!==i)); }
   async function uploadReceipt(i,file){ if(!file) return; setUpIdx(i); try{ const ext=(file.name.split('.').pop()||'jpg'); const key=`expenses/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`; const { error }=await sb.storage.from(BUCKET).upload(key,file,{upsert:false,contentType:file.type||undefined}); if(error) throw error; setLine(i,{ receipt_url:key }); }catch(e){ setMsg('Upload failed: '+(e.message||e)); } setUpIdx(null); }
   const cleanLines=()=>lines.filter(l=>Number(l.amount||0)>0).map(l=>({ supplier:(l.supplier||'').trim(), description:(l.description||'').trim(), amount:Number(l.amount||0), payment_method:l.payment_method||'Cash', reference:(l.reference||'').trim(), receipt_url:l.receipt_url||'', gl_account_code:l.gl_account_code||'' }));
-  async function saveDraft(){ setBusy(true); setMsg(''); const { error }=await sb.from('cash_advances').update({ receipts:cleanLines(), amount_liquidated:spent, amount_returned:Math.max(0,balance) }).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
+  async function saveDraft(){ setBusy(true); setMsg(''); const cl=cleanLines(); const cash=pcaBreakdown(cl).cash; const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:cash, amount_returned:Math.max(0,advanced-cash) }).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved(); }
   async function sign(which){
     const cl=cleanLines(); if(!cl.length){ setMsg('Add at least one purchase line before signing.'); return; }
     if(!profile.signature_data){ if(!confirm("You don't have an e-signature saved. Sign without one? Set one up in My Profile → signature.")) return; }
-    const patch={ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)) };
+    const cash=pcaBreakdown(cl).cash; const patch={ receipts:cl, amount_liquidated:cash, amount_returned:Math.max(0,advanced-cash) };
     if(which==='prepared'){ patch.liq_prepared_by=profile.id; patch.liq_prepared_at=new Date().toISOString(); }
     else { patch.liq_checked_by=profile.id; patch.liq_checked_at=new Date().toISOString(); }
     setBusy(true); setMsg(''); const { error }=await sb.from('cash_advances').update(patch).eq('id',ca.id); setBusy(false); if(error){ setMsg(error.message); return; } onSaved();
@@ -41248,19 +41258,20 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
     if(!ca.liq_prepared_by && !(profile.id===ca.liq_prepared_by)){ /* prepared must be signed */ }
     if(!ca.liq_prepared_by || !ca.liq_checked_by){ setMsg('Both signatures are needed (prepared by + checked by) before submitting.'); return; }
     setBusy(true); setMsg('');
-    const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:pcaLineTotal(cl), amount_returned:Math.max(0,advanced-pcaLineTotal(cl)), liq_approval:'pending_agm' }).eq('id',ca.id);
+    const cash=pcaBreakdown(cl).cash;
+    const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:cash, amount_returned:Math.max(0,advanced-cash), liq_approval:'pending_agm' }).eq('id',ca.id);
     if(error){ setBusy(false); setMsg(error.message); return; }
-    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 Purchasing cash advance liquidation ${ca.number||''} — ${peso(pcaLineTotal(cl))} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 Purchasing cash advance liquidation ${ca.number||''} — DV cash ${peso(cash)} (total buys ${peso(pcaLineTotal(cl))}) · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
     setBusy(false); onSaved();
   }
   async function postByFinance(){
     if(ca.liq_approval!=='pending_finance' && profile.role!=='admin'){ setMsg('This can be posted after the AGM approves.'); return; }
-    const cl=cleanLines(); const total=pcaLineTotal(cl); const returned=Math.max(0,advanced-total);
-    if(!confirm(`Post this liquidation to the books?\n\nSpent ${peso(total)} of ${peso(advanced)}${returned>0.01?` · ${peso(returned)} to return`:''}.`)) return;
+    const cl=cleanLines(); const cash=pcaBreakdown(cl).cash; const returned=Math.max(0,advanced-cash);
+    if(!confirm(`Post this DV-day liquidation?\n\nFrom DV cash: ${peso(cash)} of ${peso(advanced)}${returned>0.01?` · ${peso(returned)} to return`:''}.\n\nCheck / bank-transfer purchases are kept for record only — they are NOT paid or posted again here.`)) return;
     setBusy(true); setMsg('');
     try{
       if(returned>0.01 && ca.bank_id){ await insertBankTxnOnce({ bank_id:ca.bank_id, date:todayManila(), direction:'in', amount:returned, description:`Return from DV-day advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id }); }
-      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:total, amount_returned:returned, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
+      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:cash, amount_returned:returned, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
       if(error) throw error;
       setBusy(false); onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -41269,10 +41280,15 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
   return (
     <Modal title={`Liquidation · ${ca.number||''} — ${ca.custodian_name||''}`} onClose={onClose} xwide>
       <div className="space-y-3">
-        <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs flex items-center justify-between flex-wrap gap-2">
-          <span>Advanced <b>{peso(advanced)}</b> · {ca.purpose||''}</span>
-          <span>Spent <b>{peso(spent)}</b> · {balance>=0?<>Balance to return <b className="text-emerald-700">{peso(balance)}</b></>:<>Over-spent <b className="text-rose-700">{peso(-balance)}</b></>}</span>
+        <div className="text-xs text-slate-500">{ca.purpose||''}</div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-amber-700">DV float advanced</div><div className="font-bold">{peso(advanced)}</div></div>
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-violet-700">Paid from DV cash</div><div className="font-bold">{peso(cashSpent)}</div></div>
+          <div className={`rounded-lg p-2 text-center border ${balance>=0?'bg-emerald-50 border-emerald-200':'bg-rose-50 border-rose-200'}`}><div className="text-[10px] uppercase text-slate-500">{balance>=0?'Balance to return':'Over cash (reimburse)'}</div><div className={`font-bold ${balance>=0?'text-emerald-700':'text-rose-700'}`}>{peso(Math.abs(balance))}</div></div>
+          <div className="bg-slate-50 border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Check / BT / PN</div><div className="font-bold text-slate-600">{peso(bd.nonCash)}</div></div>
+          <div className="bg-slate-50 border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Total DV-day buys</div><div className="font-bold">{peso(bd.total)}</div></div>
         </div>
+        <div className="text-[11px] text-slate-500 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">ℹ Only <b>Cash</b> lines are drawn from the DV float and liquidated here. <b>Check</b> and <b>Bank Transfer</b> purchases are already recorded through the usual payment process — they're listed below for your complete DV-day record only and are <b>not</b> paid or posted again. A <b>Promissory Note</b> means not yet paid.</div>
         <div className="border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
             <th className="text-left px-2 py-2">Supplier</th><th className="text-left px-2 py-2">Item / particulars</th><th className="text-right px-2 py-2">Amount</th>
@@ -41326,7 +41342,7 @@ function PurchasingLiquidationDoc({ ca, profiles, onClose }){
   const lines=Array.isArray(ca.receipts)?ca.receipts:[];
   const pById=(id)=>(profiles||[]).find(p=>p.id===id);
   const prep=pById(ca.liq_prepared_by), chk=pById(ca.liq_checked_by), agm=pById(ca.liq_agm_by), fin=pById(ca.liq_admin_by);
-  const spent=pcaLineTotal(lines); const advanced=Number(ca.amount||0); const balance=advanced-spent;
+  const bd=pcaBreakdown(lines); const advanced=Number(ca.amount||0); const balance=advanced-bd.cash;
   const Sig=({who,when,role})=>(<div className="text-center"><div className="relative border-b border-slate-500 h-14 flex items-end justify-center overflow-hidden">{who?.signature_data && <img src={who.signature_data} className="max-h-[52px] object-contain" />}</div><div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div><div className="text-[11px] text-slate-700">{who?(who.name||who.email):'—'}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div></div>);
   return (
     <Modal title={`Cash Advance Liquidation · ${ca.number||''}`} onClose={onClose} wide>
@@ -41339,7 +41355,16 @@ function PurchasingLiquidationDoc({ ca, profiles, onClose }){
           <table className="w-full text-xs border"><thead className="bg-slate-50 text-slate-500 uppercase"><tr><th className="text-left px-2 py-1">Supplier</th><th className="text-left px-2 py-1">Item</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Payment</th><th className="text-left px-2 py-1">Ref</th></tr></thead>
             <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1">{l.supplier||'—'}</td><td className="px-2 py-1">{l.description||'—'}</td><td className="px-2 py-1 text-right">{peso(l.amount)}</td><td className="px-2 py-1">{l.payment_method||'Cash'}</td><td className="px-2 py-1">{l.reference||'—'}</td></tr>))}</tbody>
           </table>
-          <div className="flex justify-end gap-6 text-sm mt-2 border-t pt-2"><span>Advanced: <b>{peso(advanced)}</b></span><span>Spent: <b>{peso(spent)}</b></span><span>{balance>=0?<>To return: <b>{peso(balance)}</b></>:<>Over-spent: <b>{peso(-balance)}</b></>}</span></div>
+          <div className="border-t mt-2 pt-2 grid grid-cols-2 gap-x-8 gap-y-0.5 text-sm max-w-md ml-auto">
+            <span className="text-slate-500">DV float advanced</span><span className="text-right font-semibold">{peso(advanced)}</span>
+            <span className="text-slate-500">Paid from DV cash</span><span className="text-right font-semibold">{peso(bd.cash)}</span>
+            <span className="text-slate-500">{balance>=0?'Balance to return':'Over cash (reimburse)'}</span><span className="text-right font-semibold">{peso(Math.abs(balance))}</span>
+            <span className="text-slate-400 text-xs pt-1">Paid by check</span><span className="text-right text-xs text-slate-500 pt-1">{peso(bd.check)}</span>
+            <span className="text-slate-400 text-xs">Paid by bank transfer</span><span className="text-right text-xs text-slate-500">{peso(bd.bank)}</span>
+            {bd.pn>0 && <><span className="text-slate-400 text-xs">Promissory note (unpaid)</span><span className="text-right text-xs text-slate-500">{peso(bd.pn)}</span></>}
+            <span className="font-bold border-t pt-1 mt-1">Total DV-day purchases</span><span className="text-right font-bold border-t pt-1 mt-1">{peso(bd.total)}</span>
+          </div>
+          <div className="text-[10px] text-slate-500 mt-2 italic">Only cash purchases are liquidated against the DV float. Check and bank-transfer items are already recorded through the company's usual payment process and are shown here for a complete DV-day record only.</div>
           <div className="grid grid-cols-4 gap-4 mt-10">
             <Sig who={prep} when={ca.liq_prepared_at} role="Prepared by" />
             <Sig who={chk} when={ca.liq_checked_at} role="Checked by" />
