@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 853 · Trad Sorting, Subli Sorting, DTF Pressing and Subli Pressing heads now also have the Sampling Board (alongside their own board and the read-only Production Board view).";
+const BUILD = "Live build 854 · Trad Sorting and DTF Pressing heads now also get the Daily Check-in (Subli Sorting and Subli Pressing already had it).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6954,6 +6954,8 @@ const CHECKIN_DEPTS = [
   { key:'printing',    label:'Printing',               roles:['printing'] },
   { key:'subli_pressing', label:'Sublimation Pressing', roles:['subli_pressing_head'] },
   { key:'subli_sorting',  label:'Sublimation Sorting',  roles:['subli_sorting_head'] },
+  { key:'trad_sorting',   label:'Trad Sorting',         roles:['trad_sorting_head'] },
+  { key:'dtf_pressing',   label:'DTF Pressing',         roles:['dtf_pressing_head'] },
   { key:'sewing',      label:'Sewing',                 roles:['sewing_lead'] },
   { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
   { key:'packing',     label:'Packing',                roles:['packing_head'] },
