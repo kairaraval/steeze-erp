@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 852 · Quality Control (and QC Personnel) now have the Production Board (read-only) and Sampling Board in their sidebar, for reference alongside the QC List.";
+const BUILD = "Live build 853 · Trad Sorting, Subli Sorting, DTF Pressing and Subli Pressing heads now also have the Sampling Board (alongside their own board and the read-only Production Board view).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50321,13 +50321,13 @@ function App(){
       allowed = new Set(['inbox','inventory','profile']);
       fallback = 'inventory';
     } else if(profile.role==='trad_sorting_head'){
-      allowed = new Set(['inbox','my-tasks','trad-sorting','prod','profile']); fallback = 'trad-sorting';
+      allowed = new Set(['inbox','my-tasks','trad-sorting','prod','sampling','profile']); fallback = 'trad-sorting';
     } else if(profile.role==='subli_sorting_head'){
-      allowed = new Set(['inbox','my-tasks','subli-sorting','prod','profile']); fallback = 'subli-sorting';
+      allowed = new Set(['inbox','my-tasks','subli-sorting','prod','sampling','profile']); fallback = 'subli-sorting';
     } else if(profile.role==='dtf_pressing_head'){
-      allowed = new Set(['inbox','my-tasks','dtf-pressing','prod','profile']); fallback = 'dtf-pressing';
+      allowed = new Set(['inbox','my-tasks','dtf-pressing','prod','sampling','profile']); fallback = 'dtf-pressing';
     } else if(profile.role==='subli_pressing_head'){
-      allowed = new Set(['inbox','my-tasks','subli-pressing','prod','profile']); fallback = 'subli-pressing';
+      allowed = new Set(['inbox','my-tasks','subli-pressing','prod','sampling','profile']); fallback = 'subli-pressing';
     } else if(profile.role==='packing_head'){
       allowed = new Set(['inbox','my-tasks','packing','prod','profile']); fallback = 'packing';
     } else if(profile.role==='production'){
@@ -51085,7 +51085,7 @@ function App(){
     // Pressing) — their own process board + a view-only Production Board.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ [processHeadBoard.key, processHeadBoard.title, processHeadBoard.icon], ['prod','Production Board (view)','⚙'] ] },
+      { group:'Production', items:[ [processHeadBoard.key, processHeadBoard.title, processHeadBoard.icon], ['prod','Production Board (view)','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isHR){
