@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 861 · Subcon Sewing: removed the Paid (legacy) and Undo buttons — the 28 reviewed rows keep their ✓ Paid · legacy badge but are now locked (no manual tagging going forward; all returns get logged and added to payroll). IN-HOUSE stays monitoring-only.";
+const BUILD = "Live build 862 · Subcon Sewing gains two tabs: 📒 Subcons (directory — details, bank info, pcs worked, projects) and 📈 Earnings (weekly/monthly/yearly, by period & by subcon, combining the archived old payroll + new sewing payments). The old Subcon Payroll menu item is archived (removed from nav; data preserved and shown in Earnings).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10531,7 +10531,11 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // Who can create payroll-feeding send-outs / log dated deliveries on this board.
   const canLogPayroll = ['admin','production_supervisor'].includes(profile?.role);
   // Bridge to the Subcon Payroll pipeline (subcon_sends / subcon_returns).
-  const [sbTab,setSbTab]=useState('floor'); // 'floor' = production tracker · 'payroll' = send-outs feeding payroll
+  const [sbTab,setSbTab]=useState('floor'); // 'floor' · 'payroll' · 'directory' (subcon details) · 'earnings'
+  const [earnGran,setEarnGran]=useState('month'); // 'week' | 'month' | 'year'
+  const [dirExpand,setDirExpand]=useState({});     // subcon directory expanded rows
+  const [earnExpand,setEarnExpand]=useState({});   // earnings per-subcon expanded rows
+  const [dirSearch,setDirSearch]=useState('');
   const [creatingSend,setCreatingSend]=useState(false);
   const [editingSend,setEditingSend]=useState(null);
   const [viewingSend,setViewingSend]=useState(null);
@@ -10860,6 +10864,59 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const subGroups=(()=>{ const g=new Map(); flat.forEach(({p,s})=>{ const k=s.subcon_id; if(!g.has(k)) g.set(k,{ title:s.subcon, items:[] }); g.get(k).items.push({p,s}); }); return Array.from(g.entries()).map(([k,v])=>({ key:k, ...v })).sort((a,b)=>a.title.localeCompare(b.title)); })();
 
   const TABS=[['active','Active'],['done','Done'],['all','All']];
+
+  // ── Per-subcon floor stats (projects worked, pcs out/returned/pending) ──
+  const subconStats = React.useMemo(()=>{
+    const m=new Map();
+    const ensure=(id,name)=>{ if(!m.has(id)) m.set(id,{ subcon_id:id, name, projects:[], pcsOut:0, pcsReturned:0, pcsPending:0 }); return m.get(id); };
+    projects.forEach(p=> p.rows.forEach(s=>{ if(!s.subcon_id) return; const r=ensure(s.subcon_id, s.subcon);
+      r.projects.push({ label:p.label, number:p.number, out:s.out, returned:s.returned, balance:s.balance, inhouse:s.inhouse, done:(s.out>0&&s.balance<=0) });
+      r.pcsOut+=Number(s.out||0); r.pcsReturned+=Number(s.returned||0); r.pcsPending+=Number(s.balance||0); }));
+    return m;
+  }, [projects]);
+
+  // ── Earnings events: OLD paid subcon payrolls + NEW paid subcon-sewing runs ──
+  const earnings = React.useMemo(()=>{
+    const ev=[];
+    (subconPayrolls||[]).filter(pr=>!pr.deleted_at && pr.status==='paid').forEach(pr=>{
+      ev.push({ subcon_id:pr.subcon_id, date: pr.paid_at||pr.week_ending||pr.created_at, pcs:Number(pr.total_garments||0), amount:Number(pr.total_amount||0), source:'legacy', ref:pr.number });
+    });
+    const paidBatch=new Map();
+    (payrollBatches||[]).filter(b=>!b.deleted_at).forEach(b=>{ const r=b.rfp_id?(rfps||[]).find(x=>x.id===b.rfp_id):null; if(r&&r.status==='paid') paidBatch.set(b.id,{b,r}); });
+    (queue||[]).filter(q=>!q.deleted_at && q.batch_id && paidBatch.has(q.batch_id)).forEach(q=>{
+      const { b,r }=paidBatch.get(q.batch_id);
+      ev.push({ subcon_id:q.subcon_id, date:(r&&(r.paid_at||r.date))||b.created_at||q.created_at, pcs:Number(q.qty||0), amount:Number(q.qty||0)*Number(q.rate||0), source:'sewing', ref:b.number });
+    });
+    return ev.filter(e=>e.date);
+  }, [subconPayrolls, payrollBatches, queue, rfps]);
+
+  // Bucket an ISO/date string by the chosen granularity → { key, label, sort }.
+  const bucketOf=(dateStr, gran)=>{
+    const d=new Date(dateStr); if(isNaN(d)) return { key:'?', label:'Unknown', sort:'' };
+    if(gran==='year'){ const y=d.getFullYear(); return { key:String(y), label:String(y), sort:String(y) }; }
+    if(gran==='week'){ const t=new Date(d); const day=(t.getDay()+6)%7; t.setDate(t.getDate()-day); const k=t.toISOString().slice(0,10); return { key:k, label:'Week of '+t.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}), sort:k }; }
+    const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; return { key:k, label:d.toLocaleDateString('en-US',{month:'long',year:'numeric'}), sort:k };
+  };
+  const earnView = React.useMemo(()=>{
+    const periods=new Map(); const subs=new Map(); let totAmt=0, totPcs=0;
+    earnings.forEach(e=>{
+      const b=bucketOf(e.date, earnGran);
+      const pr=periods.get(b.key)||{ ...b, amount:0, pcs:0, subs:new Set() }; pr.amount+=e.amount; pr.pcs+=e.pcs; pr.subs.add(e.subcon_id); periods.set(b.key,pr);
+      const su=subs.get(e.subcon_id)||{ subcon_id:e.subcon_id, name:subconNm(e.subcon_id), amount:0, pcs:0, legacy:0, sewing:0, last:'', count:0 };
+      su.amount+=e.amount; su.pcs+=e.pcs; su[e.source]+=e.amount; su.count+=1; if(e.date>su.last) su.last=e.date; subs.set(e.subcon_id,su);
+      totAmt+=e.amount; totPcs+=e.pcs;
+    });
+    const periodRows=Array.from(periods.values()).sort((a,b)=>b.sort.localeCompare(a.sort));
+    const subRows=Array.from(subs.values()).sort((a,b)=>b.amount-a.amount);
+    return { periodRows, subRows, totAmt, totPcs, subCount:subs.size };
+  }, [earnings, earnGran]);
+  // Earnings grouped by subcon → list of their period lines (for the expand).
+  const earnBySubPeriod=(subconId)=>{
+    const m=new Map();
+    earnings.filter(e=>e.subcon_id===subconId).forEach(e=>{ const b=bucketOf(e.date,earnGran); const r=m.get(b.key)||{ ...b, amount:0, pcs:0 }; r.amount+=e.amount; r.pcs+=e.pcs; m.set(b.key,r); });
+    return Array.from(m.values()).sort((a,b)=>b.sort.localeCompare(a.sort));
+  };
+
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -10872,6 +10929,8 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
           <button onClick={()=>setSbTab('floor')} className={`px-3 py-1.5 rounded-md ${sbTab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor tracking</button>
           <button onClick={()=>setSbTab('payroll')} className={`px-3 py-1.5 rounded-md ${sbTab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length})`:''}</button>
+          <button onClick={()=>setSbTab('directory')} className={`px-3 py-1.5 rounded-md ${sbTab==='directory'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>📒 Subcons</button>
+          <button onClick={()=>setSbTab('earnings')} className={`px-3 py-1.5 rounded-md ${sbTab==='earnings'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>📈 Earnings</button>
         </div>
       </div>
 
@@ -11068,6 +11127,116 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         ); })}</div>
       ))}
       </div>)}
+
+      {/* ─────────── SUBCONS (directory) ─────────── */}
+      {sbTab==='directory' && (()=>{
+        const list=(subcons||[]).filter(s=>!s.deleted_at).filter(s=> !dirSearch || `${s.name||''} ${s.contact_name||''} ${s.phone||''}`.toLowerCase().includes(dirSearch.toLowerCase()))
+          .sort((a,b)=> (a.active===false?1:0)-(b.active===false?1:0) || String(a.name||'').localeCompare(String(b.name||'')));
+        const lifetime=(id)=> (earnView.subRows.find(x=>x.subcon_id===id)?.amount)||0;
+        return (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs text-slate-500">{list.length} subcon{list.length===1?'':'s'} · details, bank info, lifetime earnings &amp; projects worked.</div>
+            <input value={dirSearch} onChange={e=>setDirSearch(e.target.value)} placeholder="Search subcon, contact, phone…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+          </div>
+          {list.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No subcons found.</div> :
+          <div className="space-y-2">{list.map(s=>{
+            const st=subconStats.get(s.id); const open=dirExpand[s.id];
+            const projs=(st?.projects||[]).slice().sort((a,b)=>Number(b.balance||0)-Number(a.balance||0));
+            return (
+            <div key={s.id} className="bg-white rounded-xl border overflow-hidden">
+              <button onClick={()=>setDirExpand(x=>({...x,[s.id]:!x[s.id]}))} className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 text-left">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-slate-400 text-xs">{open?'▾':'▸'}</span><span className="text-base">🧵</span>
+                  <span className="font-bold truncate">{s.name}</span>
+                  {s.active===false && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-500">inactive</span>}
+                  {s.default_rate!=null && s.default_rate!=='' && <span className="text-[11px] text-slate-400">· ₱{Number(s.default_rate).toLocaleString()}/pc</span>}
+                </div>
+                <div className="text-xs text-slate-500 whitespace-nowrap">Lifetime <b className="text-emerald-700">{peso(lifetime(s.id))}</b> · {num(st?.projects.length||0)} project{(st?.projects.length||0)===1?'':'s'}</div>
+              </button>
+              {open && <div className="border-t px-4 py-3 grid md:grid-cols-2 gap-4 text-sm">
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">Details</div>
+                  <div><span className="text-slate-500">Contact:</span> {s.contact_name||'—'}</div>
+                  <div><span className="text-slate-500">Phone:</span> {s.phone||'—'}</div>
+                  <div><span className="text-slate-500">Address:</span> {s.address||'—'}</div>
+                  <div><span className="text-slate-500">Rate:</span> {s.default_rate!=null&&s.default_rate!==''?`₱${Number(s.default_rate).toLocaleString()}/pc`:'—'}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-400 pt-2">Bank / payout</div>
+                  <div><span className="text-slate-500">Bank:</span> {s.bank_name||'—'}</div>
+                  <div><span className="text-slate-500">Account name:</span> {s.bank_account_name||'—'}</div>
+                  <div><span className="text-slate-500">Account no.:</span> {s.bank_account_number||'—'}</div>
+                  {s.notes && <div className="pt-1 text-xs text-slate-500 italic">{s.notes}</div>}
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">Work summary</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="border rounded-lg p-2 text-center"><div className="text-[9px] uppercase text-slate-400">Out</div><div className="font-bold text-indigo-700">{num(st?.pcsOut||0)}</div></div>
+                    <div className="border rounded-lg p-2 text-center"><div className="text-[9px] uppercase text-slate-400">Returned</div><div className="font-bold text-emerald-700">{num(st?.pcsReturned||0)}</div></div>
+                    <div className="border rounded-lg p-2 text-center"><div className="text-[9px] uppercase text-slate-400">Pending</div><div className={`font-bold ${(st?.pcsPending||0)>0?'text-amber-700':'text-slate-400'}`}>{num(st?.pcsPending||0)}</div></div>
+                  </div>
+                  <div className="text-[10px] uppercase font-bold text-slate-400 pt-2">Projects worked ({projs.length})</div>
+                  {projs.length===0 ? <div className="text-xs text-slate-400">No projects recorded on the floor board.</div> :
+                  <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto"><table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Project</th><th className="text-right px-2 py-1">Out</th><th className="text-right px-2 py-1">Ret.</th><th className="text-right px-2 py-1">Bal.</th></tr></thead>
+                    <tbody>{projs.map((pr,i)=>(<tr key={i} className="border-t"><td className="px-2 py-1">{pr.label}{pr.inhouse&&<span className="ml-1 text-[9px] text-sky-600">in-house</span>}{pr.done&&!pr.inhouse&&<span className="ml-1 text-emerald-600">✓</span>}</td><td className="px-2 py-1 text-right">{num(pr.out)}</td><td className="px-2 py-1 text-right text-emerald-700">{num(pr.returned)}</td><td className={`px-2 py-1 text-right ${pr.balance>0?'text-amber-700':'text-slate-400'}`}>{num(pr.balance)}</td></tr>))}</tbody>
+                  </table></div>}
+                </div>
+              </div>}
+            </div>
+          ); })}</div>}
+        </div>
+        );
+      })()}
+
+      {/* ─────────── EARNINGS (weekly / monthly / yearly) ─────────── */}
+      {sbTab==='earnings' && (()=>{
+        return (
+        <div className="space-y-4">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800">Combined subcon earnings — the archived <b>old subcon payroll</b> plus payments made through the new <b>Subcon Sewing</b> flow (only runs already paid are counted).</div>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+              {[['week','Weekly'],['month','Monthly'],['year','Yearly']].map(([k,l])=>(
+                <button key={k} onClick={()=>setEarnGran(k)} className={`px-3 py-1 rounded-md ${earnGran===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Total paid</div><div className="text-2xl font-bold text-emerald-700">{peso(earnView.totAmt)}</div></div>
+            <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Total pcs</div><div className="text-2xl font-bold">{num(earnView.totPcs)}</div></div>
+            <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Subcons paid</div><div className="text-2xl font-bold">{earnView.subCount}</div></div>
+            <div className="bg-white rounded-xl border p-3"><div className="text-[10px] uppercase text-slate-400">Periods</div><div className="text-2xl font-bold">{earnView.periodRows.length}</div></div>
+          </div>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-xl border overflow-hidden">
+              <div className="px-4 py-2.5 border-b text-sm font-bold bg-slate-50">By period</div>
+              {earnView.periodRows.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No earnings recorded yet.</div> :
+              <div className="overflow-x-auto max-h-[28rem] overflow-y-auto"><table className="w-full text-sm">
+                <thead className="bg-white text-[10px] uppercase text-slate-400 border-b sticky top-0"><tr><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Subcons</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
+                <tbody>{earnView.periodRows.map((r,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2 font-medium">{r.label}</td><td className="px-3 py-2 text-right text-slate-500">{r.subs.size}</td><td className="px-3 py-2 text-right">{num(r.pcs)}</td><td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(r.amount)}</td></tr>))}</tbody>
+              </table></div>}
+            </div>
+            <div className="bg-white rounded-xl border overflow-hidden">
+              <div className="px-4 py-2.5 border-b text-sm font-bold bg-slate-50">By subcon (lifetime)</div>
+              {earnView.subRows.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No earnings recorded yet.</div> :
+              <div className="overflow-x-auto max-h-[28rem] overflow-y-auto"><table className="w-full text-sm">
+                <thead className="bg-white text-[10px] uppercase text-slate-400 border-b sticky top-0"><tr><th className="text-left px-3 py-2">Subcon</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Last paid</th></tr></thead>
+                <tbody>{earnView.subRows.map((r,i)=>{ const open=earnExpand[r.subcon_id]; const lines=open?earnBySubPeriod(r.subcon_id):[]; return (
+                  <React.Fragment key={i}>
+                  <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setEarnExpand(x=>({...x,[r.subcon_id]:!x[r.subcon_id]}))}>
+                    <td className="px-3 py-2 font-medium"><span className="text-slate-400 text-xs mr-1">{open?'▾':'▸'}</span>{r.name}{r.legacy>0&&r.sewing>0?<span className="ml-1 text-[9px] text-slate-400">(old+new)</span>:r.legacy>0?<span className="ml-1 text-[9px] text-slate-400">(old)</span>:null}</td>
+                    <td className="px-3 py-2 text-right">{num(r.pcs)}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(r.amount)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{r.last?fmtDate(r.last):'—'}</td>
+                  </tr>
+                  {open && lines.map((ln,j)=>(<tr key={i+'-'+j} className="bg-slate-50/60 text-xs"><td className="px-3 py-1 pl-8 text-slate-500">{ln.label}</td><td className="px-3 py-1 text-right text-slate-500">{num(ln.pcs)}</td><td className="px-3 py-1 text-right text-slate-600">{peso(ln.amount)}</td><td></td></tr>))}
+                  </React.Fragment>
+                ); })}</tbody>
+              </table></div>}
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {editing && <SubconAssignModal profile={profile} subcons={subcons} leads={leads} clients={clients} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); load(); reload&&reload(); }} />}
       {floorReturn && <SubconFloorReturnModal p={floorReturn.p} s={floorReturn.s} onSave={(vals)=>saveFloorReturn(floorReturn.p, floorReturn.s, vals)} onClose={()=>setFloorReturn(null)} />}
@@ -51058,7 +51227,7 @@ function App(){
       { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
@@ -51165,7 +51334,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -51204,7 +51373,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -51241,7 +51410,7 @@ function App(){
       FINANCE_FULL,
       { group:'Payees', items:[ ['suppliers','Expense Payees','🧾'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon','Subcon Payroll','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
       PERSONAL_GROUP,
@@ -51304,7 +51473,7 @@ function App(){
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon','Subcon Payroll','🧶'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
