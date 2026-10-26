@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 857 · Sewing Line Lead view trimmed: removed Pattern, In House Cutting, Fabric Calculator, Subcon Cutting and the Logistics module. Keeps Production/Sampling/Sewing/Subcon Sewing boards, Sewing Payroll and Budget Requests.";
+const BUILD = "Live build 858 · Sales (managers, reps, associates) Production module trimmed to Production Board, Sampling Board, Graphic Design, Printing, Embroidery and Knitting. Removed Pattern, In House Cutting, Fabric Calculator, QC, Sewing and Packing.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50289,16 +50289,16 @@ function App(){
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
       // Lands on their personal Home (Workbench) by default.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','budgets','sales-orders','commissions','sales-resources','materials-library','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources','materials-library','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='sales_representative'){
       // Sales Representative — same access as Sales Manager, plus their own
       // Home (Workbench) which is their default landing page.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(isManagerRole(profile.role)){
       // Sales Manager — identical access, lands on their Home (Workbench).
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern','fabric-calc','inbox','my-tasks','profile','prod','sampling']);
@@ -51227,7 +51227,7 @@ function App(){
     NAV = [
       { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -51245,7 +51245,7 @@ function App(){
       { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
