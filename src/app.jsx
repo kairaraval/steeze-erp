@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 858 · Sales (managers, reps, associates) Production module trimmed to Production Board, Sampling Board, Graphic Design, Printing, Embroidery and Knitting. Removed Pattern, In House Cutting, Fabric Calculator, QC, Sewing and Packing.";
+const BUILD = "Live build 859 · Subcon Sewing: a subcon's work on a chain can be tagged 'Paid (legacy)' when it was already settled through the old manual subcon payroll — it hides the For-payment / Add-to-payroll prompts, shows a ✓ Paid · legacy badge, and is excluded from the new payroll. Reversible. 28 rows from the Oct 2026 review were pre-tagged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10557,6 +10557,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const [floorReturn,setFloorReturn]=useState(null); // { p, s } — log a return on the floor
   const [rowFilter,setRowFilter]=useState('all');     // 'all' | 'open' | 'returned'
   const [queue,setQueue]=useState([]);                // subcon_payroll_queue (staged for payroll)
+  const [legacyPaid,setLegacyPaid]=useState([]);      // subcon_legacy_paid — rows paid via the OLD manual subcon payroll
   const [payrollBatches,setPayrollBatches]=useState([]); // signed subcon payroll runs
   const [signingRun,setSigningRun]=useState(false);   // prepare & sign modal open
   const [viewRun,setViewRun]=useState(null);          // batch being viewed/printed
@@ -10570,6 +10571,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
     try{ const { data }=await sb.from('sorting_batches').select('*').eq('destination_type','subcon').is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
     try{ const { data }=await sb.from('subcon_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
     try{ const { data }=await sb.from('subcon_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
+    try{ const { data }=await sb.from('subcon_legacy_paid').select('*').is('deleted_at',null); setLegacyPaid(data||[]); }catch(_){ setLegacyPaid([]); }
     try{ const { data }=await sb.from('subcon_payroll_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setPayrollBatches(data||[]); }catch(_){ setPayrollBatches([]); }
     setBusy(false);
   }
@@ -10619,13 +10621,19 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.paid=qRows.filter(q=>q.status==='sent' && q.sent_send_id && paidSendIds.has(q.sent_send_id)).reduce((t,q)=>t+Number(q.qty||0),0);
         s.payable=Math.max(0, Number(s.returned||0) - s.staged); // good returns not yet added to payroll
         s.unpaid=Math.max(0, s.staged - s.paid);                  // on payroll but not yet paid
+        // Legacy-paid: this subcon's work on this chain was already paid through the
+        // OLD manual subcon payroll. Suppress all payment prompts for it.
+        const lp=(legacyPaid||[]).find(x=>!x.deleted_at && x.lead_id===p.lead_id && x.subcon_id===s.subcon_id);
+        s.legacyPaid = !!lp;
+        s.legacyPaidRec = lp||null;
+        if(s.legacyPaid){ s.payable=0; s.unpaid=0; }
         return s;
       }).sort((a,b)=>a.subcon.localeCompare(b.subcon));
       p.out=p.rows.reduce((x,s)=>x+s.out,0); p.returned=p.rows.reduce((x,s)=>x+s.returned,0); p.balance=p.rows.reduce((x,s)=>x+s.balance,0);
       p.overdue=p.rows.some(s=>s.overdue);
       return p;
     });
-  }, [assigns, batches, subcons, leads, clients, prodJobs, queue, paidSendIds]);
+  }, [assigns, batches, subcons, leads, clients, prodJobs, queue, paidSendIds, legacyPaid]);
 
   const q=search.trim().toLowerCase();
   const matchP=(p)=> !q || `${p.label} ${p.number} ${p.rows.map(s=>s.subcon+' '+s.itemList).join(' ')}`.toLowerCase().includes(q);
@@ -10706,6 +10714,30 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
     const { error }=await sb.from('subcon_payroll_queue').insert({ subcon_id:s.subcon_id, lead_id:p.lead_id||null, item_label:(s.itemList||null), garment:(s.itemList||p.item||null), qty:Number(qty)||0, rate: (rate===''||rate==null)? (sub?.default_rate??null) : Number(rate), return_date: return_date||todayManila(), status:'staged', source_assignment_id: s.assignment?.id||null, added_by:profile.id });
     if(error) throw error; load(); reload&&reload();
   }
+  // Mark a subcon's work on a chain as already paid through the OLD manual subcon
+  // payroll. Suppresses the For-payment / Add-to-payroll prompts and pulls any
+  // not-yet-paid staged pieces out of the new payroll queue so it can't pay twice.
+  async function markLegacyPaid(p, s){
+    if(s.legacyPaid){ alert('This row is already tagged as paid from the legacy payroll.'); return; }
+    if(!s.subcon_id){ alert('No subcon on this row.'); return; }
+    if(!confirm(`Tag "${s.subcon}" on ${p.label} as already PAID via the old manual subcon payroll?\n\nThis hides the payment prompt and removes its items from the new payroll queue so it won't be paid again. You can undo this later.`)) return;
+    try{
+      await sb.from('subcon_legacy_paid').insert({ lead_id:p.lead_id||null, subcon_id:s.subcon_id, qty:Number(s.returned||s.out||0)||null, note:'Paid via legacy manual subcon payroll', marked_by:profile.id });
+      // De-queue any staged/sent-but-unpaid items for this subcon+chain (don't touch
+      // rows already settled in a PAID payroll, or already in a signed/requested run).
+      const qRows=(queue||[]).filter(q=>!q.deleted_at && q.subcon_id===s.subcon_id && q.lead_id===p.lead_id && (q.status==='staged' || (q.status==='sent' && !(q.sent_send_id && paidSendIds.has(q.sent_send_id)))));
+      if(qRows.length){ await sb.from('subcon_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).in('id', qRows.map(q=>q.id)); }
+      load(); reload&&reload();
+    }catch(e){ alert('Failed: '+(e.message||e)); }
+  }
+  async function unmarkLegacyPaid(p, s){
+    if(!s.legacyPaidRec) return;
+    if(!confirm(`Remove the legacy-paid tag from "${s.subcon}" on ${p.label}? Its returned pieces will show as For-payment again. (Items pulled from the payroll queue are not auto-restored.)`)) return;
+    try{
+      await sb.from('subcon_legacy_paid').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', s.legacyPaidRec.id);
+      load(); reload&&reload();
+    }catch(e){ alert('Failed: '+(e.message||e)); }
+  }
   async function updateQueueRow(id, patch){ try{ await sb.from('subcon_payroll_queue').update(patch).eq('id', id); load(); }catch(e){ alert(e.message||e); } }
   async function removeQueueRow(q){ if(!confirm('Remove this item from the For-payroll list?')) return; await sb.from('subcon_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id', q.id); load(); reload&&reload(); }
   // Send staged items to the Subcon Payroll module: create a send + a good-return
@@ -10772,8 +10804,10 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
       {s.subcon_id && (Number(s.balance||0)>0 || !p.projectDone) && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
-      {s.subcon_id && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
-      {s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
+      {s.subcon_id && !s.legacyPaid && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
+      {!s.legacyPaid && s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
+      {s.subcon_id && !s.legacyPaid && <button onClick={()=>markLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-amber-600 hover:underline mr-2" title="This subcon was already paid through the old manual subcon payroll — tag it so it isn't paid again">⚑ Paid (legacy)</button>}
+      {s.legacyPaid && <button onClick={()=>unmarkLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-rose-500 hover:underline mr-2" title="Remove the legacy-paid tag">Undo legacy-paid</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
     </td>
@@ -10783,7 +10817,9 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const subRow=(p,s,i,showProject)=>(
     <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
       <td className="px-3 py-2 font-medium"><button onClick={()=>setRowDetail({p,s})} className="text-left hover:text-indigo-600 hover:underline" title="Open — see all returns + payroll entries for this subcon">{showProject?p.label:s.subcon}</button>
-        {s.out>0 && s.staged>0 && s.unpaid<=0 && s.balance<=0 && s.payable<=0
+        {s.legacyPaid
+          ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700" title="Already paid through the old manual subcon payroll">✓ paid · legacy</span>
+          : s.out>0 && s.staged>0 && s.unpaid<=0 && s.balance<=0 && s.payable<=0
           ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ paid</span>
           : s.unpaid>0
             ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">on payroll</span>
@@ -11238,6 +11274,7 @@ function SubconRowDetailModal({ p, s, queue, profiles, canLog, onAddReturn, onAd
     <Modal title={`🧵 ${s.subcon} — ${p.label}`} onClose={onClose} wide>
       <div className="space-y-4">
         {s.itemList && <div className="text-xs text-slate-500">{s.itemList}</div>}
+        {s.legacyPaid && <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-3 py-2">✓ Already paid through the old manual subcon payroll — excluded from the new payroll.</div>}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           <Stat label="Assigned" value={s.qty?num(s.qty):'—'} />
           <Stat label="Out" value={num(s.out)} cls="text-indigo-700" />
