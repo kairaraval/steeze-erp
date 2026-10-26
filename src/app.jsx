@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 854 · Trad Sorting and DTF Pressing heads now also get the Daily Check-in (Subli Sorting and Subli Pressing already had it).";
+const BUILD = "Live build 855 · Graphic Design, Printing and Knit/Embro Lead views trimmed: Production group now shows only Production Board, Sampling Board, Graphic Design, Printing, Embroidery and Knitting. Budget Requests kept; Logistics module removed. Added My Tasks + Daily Check-in.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50346,10 +50346,10 @@ function App(){
       allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
+      allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','budgets','profile']);
       fallback = 'graphic';
     } else if(profile.role==='printing'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
+      allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','budgets','profile']);
       fallback = 'printing';
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
@@ -50376,9 +50376,9 @@ function App(){
       allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','sewing','profile','subcon-sewing','subcon-cutting']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
-      // Knit / Embro Team Lead — sees Production + Sampling boards for context,
-      // owns the Knitting + Embroidery boards. Plus inbox + profile (signature).
-      allowed = new Set(['inbox','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile']);
+      // Knit / Embro Team Lead — Production & Sampling boards + the four process
+      // boards (graphic, printing, embroidery, knitting). Plus budgets + profile.
+      allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','budgets','profile']);
       fallback = 'knitting';
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
@@ -51132,14 +51132,22 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       PERSONAL_GROUP,
     ];
-  } else if(isProduction || isGraphicTeam || isPrintingTeam){
-    // Production / Graphic Design / Printing teams all share the same nav —
-    // Inbox + Production space + Logistics + Budget Requests. They differ only in their default landing page.
+  } else if(isProduction){
+    // Production team — full production space + Logistics + Budget Requests.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
+      PERSONAL_GROUP,
+    ];
+  } else if(isGraphicTeam || isPrintingTeam){
+    // Graphic Design / Printing — Production & Sampling boards + the four
+    // process boards, plus Budget Requests. No logistics.
+    NAV = [
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
     ];
   } else if(isPurchasingAdmin){
@@ -51208,8 +51216,9 @@ function App(){
     // Production + Sampling boards for context. Plus inbox + their profile
     // (for setting up their signature on techpack rows and other docs).
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
     ];
   } else if(isAssistant){
