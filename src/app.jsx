@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 860 · Subcon Sewing: IN-HOUSE rows are now monitoring-only — they track that pieces came back but are never added to the subcon payroll (paid via the in-house sewing payroll) and no longer keep a project floating as open. Plus the legacy-paid tagging from build 859.";
+const BUILD = "Live build 861 · Subcon Sewing: removed the Paid (legacy) and Undo buttons — the 28 reviewed rows keep their ✓ Paid · legacy badge but are now locked (no manual tagging going forward; all returns get logged and added to payroll). IN-HOUSE stays monitoring-only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10813,8 +10813,6 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       {s.subcon_id && (Number(s.balance||0)>0 || !p.projectDone) && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
       {s.subcon_id && !s.inhouse && !s.legacyPaid && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
       {!s.inhouse && !s.legacyPaid && s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
-      {s.subcon_id && !s.inhouse && !s.legacyPaid && <button onClick={()=>markLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-amber-600 hover:underline mr-2" title="This subcon was already paid through the old manual subcon payroll — tag it so it isn't paid again">⚑ Paid (legacy)</button>}
-      {!s.inhouse && s.legacyPaid && <button onClick={()=>unmarkLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-rose-500 hover:underline mr-2" title="Remove the legacy-paid tag">Undo legacy-paid</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
     </td>
