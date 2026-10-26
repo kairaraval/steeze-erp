@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 848 · Settings → Team now has a search box to find people by name, email or role (works alongside the role filter chips).";
+const BUILD = "Live build 849 · Cutting Department (Roland) now has an Inbox (so he can be @mentioned and see mentions), a Daily Check-in, My Tasks and his Profile \u2014 alongside the In House Cutting board and Fabric Calculator.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6957,6 +6957,7 @@ const CHECKIN_DEPTS = [
   { key:'sewing',      label:'Sewing',                 roles:['sewing_lead'] },
   { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
   { key:'packing',     label:'Packing',                roles:['packing_head'] },
+  { key:'cutting',     label:'Cutting',                roles:['cutting_dept'] },
   { key:'purchasing',  label:'Purchasing',             roles:['purchasing_admin','purchasing_personnel','purchasing'] },
   { key:'sales',       label:'Sales',                  roles:['manager','sales_representative','assistant'] },
   { key:'hr',          label:'HR / People',            roles:['hr'] },
@@ -50300,7 +50301,7 @@ function App(){
       allowed = new Set(['pattern','fabric-calc']);
       fallback = 'pattern';
     } else if(profile.role==='cutting_dept'){
-      allowed = new Set(['cutting','fabric-calc']);
+      allowed = new Set(['cutting','fabric-calc','inbox','my-tasks','profile']);
       fallback = 'cutting';
     } else if(profile.role==='qc'){
       // Quality Control team — QC List + techpacks (for reference) + inbox + profile.
@@ -51028,9 +51029,12 @@ function App(){
       { items:[ ['pattern','Pattern','✂'], ['fabric-calc','Fabric Calculator','📐'] ] },
     ];
   } else if(isCuttingDept){
-    // Cutting Department — the In House Cutting board + the Fabric Calculator.
+    // Cutting Department — In House Cutting + Fabric Calculator, plus Inbox,
+    // My Tasks, Daily Check-in and their Profile.
     NAV = [
-      { items:[ ['cutting','In House Cutting','🔪'], ['fabric-calc','Fabric Calculator','📐'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Cutting', items:[ ['cutting','In House Cutting','🔪'], ['fabric-calc','Fabric Calculator','📐'] ] },
+      PERSONAL_GROUP,
     ];
   } else if(isQc){
     // Quality Control team — the QC List + techpacks for reference + inbox.
