@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 859 · Subcon Sewing: a subcon's work on a chain can be tagged 'Paid (legacy)' when it was already settled through the old manual subcon payroll — it hides the For-payment / Add-to-payroll prompts, shows a ✓ Paid · legacy badge, and is excluded from the new payroll. Reversible. 28 rows from the Oct 2026 review were pre-tagged.";
+const BUILD = "Live build 860 · Subcon Sewing: IN-HOUSE rows are now monitoring-only — they track that pieces came back but are never added to the subcon payroll (paid via the in-house sewing payroll) and no longer keep a project floating as open. Plus the legacy-paid tagging from build 859.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10627,6 +10627,13 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.legacyPaid = !!lp;
         s.legacyPaidRec = lp||null;
         if(s.legacyPaid){ s.payable=0; s.unpaid=0; }
+        // IN-HOUSE sewing is paid through the in-house sewing payroll, NOT here.
+        // In Subcon Sewing it's monitoring-only: track that pieces came back, but
+        // never prompt for payment and never keep a project "open" just because
+        // in-house returns weren't added to this payroll. (Balance still matters:
+        // if pieces are still out, the row stays open so we know it's not all sewn.)
+        s.inhouse = /in[-\s]?house/i.test(s.subcon||'');
+        if(s.inhouse){ s.payable=0; s.unpaid=0; }
         return s;
       }).sort((a,b)=>a.subcon.localeCompare(b.subcon));
       p.out=p.rows.reduce((x,s)=>x+s.out,0); p.returned=p.rows.reduce((x,s)=>x+s.returned,0); p.balance=p.rows.reduce((x,s)=>x+s.balance,0);
@@ -10804,10 +10811,10 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
       {s.subcon_id && (Number(s.balance||0)>0 || !p.projectDone) && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
-      {s.subcon_id && !s.legacyPaid && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
-      {!s.legacyPaid && s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
-      {s.subcon_id && !s.legacyPaid && <button onClick={()=>markLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-amber-600 hover:underline mr-2" title="This subcon was already paid through the old manual subcon payroll — tag it so it isn't paid again">⚑ Paid (legacy)</button>}
-      {s.legacyPaid && <button onClick={()=>unmarkLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-rose-500 hover:underline mr-2" title="Remove the legacy-paid tag">Undo legacy-paid</button>}
+      {s.subcon_id && !s.inhouse && !s.legacyPaid && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
+      {!s.inhouse && !s.legacyPaid && s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
+      {s.subcon_id && !s.inhouse && !s.legacyPaid && <button onClick={()=>markLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-amber-600 hover:underline mr-2" title="This subcon was already paid through the old manual subcon payroll — tag it so it isn't paid again">⚑ Paid (legacy)</button>}
+      {!s.inhouse && s.legacyPaid && <button onClick={()=>unmarkLegacyPaid(p,s)} className="text-xs text-slate-400 hover:text-rose-500 hover:underline mr-2" title="Remove the legacy-paid tag">Undo legacy-paid</button>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
     </td>
@@ -10817,7 +10824,9 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const subRow=(p,s,i,showProject)=>(
     <tr key={i} className={`border-t ${s.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
       <td className="px-3 py-2 font-medium"><button onClick={()=>setRowDetail({p,s})} className="text-left hover:text-indigo-600 hover:underline" title="Open — see all returns + payroll entries for this subcon">{showProject?p.label:s.subcon}</button>
-        {s.legacyPaid
+        {s.inhouse
+          ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="In-house sewing — monitoring only. Paid through the in-house sewing payroll, not here.">in-house · monitor</span>
+          : s.legacyPaid
           ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700" title="Already paid through the old manual subcon payroll">✓ paid · legacy</span>
           : s.out>0 && s.staged>0 && s.unpaid<=0 && s.balance<=0 && s.payable<=0
           ? <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ paid</span>
@@ -11274,6 +11283,7 @@ function SubconRowDetailModal({ p, s, queue, profiles, canLog, onAddReturn, onAd
     <Modal title={`🧵 ${s.subcon} — ${p.label}`} onClose={onClose} wide>
       <div className="space-y-4">
         {s.itemList && <div className="text-xs text-slate-500">{s.itemList}</div>}
+        {s.inhouse && <div className="text-xs bg-sky-50 border border-sky-200 text-sky-800 rounded-lg px-3 py-2">🏠 In-house sewing — monitoring only. Paid through the in-house sewing payroll, not the subcon payroll.</div>}
         {s.legacyPaid && <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-3 py-2">✓ Already paid through the old manual subcon payroll — excluded from the new payroll.</div>}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           <Stat label="Assigned" value={s.qty?num(s.qty):'—'} />
