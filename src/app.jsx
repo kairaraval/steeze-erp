@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 855 · Graphic Design, Printing and Knit/Embro Lead views trimmed: Production group now shows only Production Board, Sampling Board, Graphic Design, Printing, Embroidery and Knitting. Budget Requests kept; Logistics module removed. Added My Tasks + Daily Check-in.";
+const BUILD = "Live build 856 · Every role now has an Inbox \u2014 added to all sidebars and access sets so anyone can be @mentioned and see their mentions (including Logistics, which had none before).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50407,6 +50407,8 @@ function App(){
     // Trip Tickets ride alongside the Daily Schedule — anyone who can see the
     // Logistics module can open them (drivers log, HR/finance review).
     if(allowed.has('logistics')) allowed.add('trip-tickets');
+    // Every role gets the Inbox (so everyone can be @mentioned and see mentions).
+    allowed.add('inbox');
     // Anyone can open the evaluations HR assigned to them to rate.
     allowed.add('my-evals');
     // Every staff member can open the Daily Check-in page (to submit their
@@ -51275,6 +51277,15 @@ function App(){
   // Inbox / My Tasks (the first, ungrouped items block) for every role that has
   // a profile view. Roles without a profile (e.g. Logistics) are untouched.
   if(Array.isArray(NAV)){
+    // Every role gets an Inbox link. If a role's nav has no Inbox anywhere, add
+    // it to the first items block (creating one if the nav opens with a group).
+    if(NAV.length && !NAV.some(g=> (g.items||[]).some(it=>it[0]==='inbox'))){
+      if(NAV[0] && Array.isArray(NAV[0].items) && !NAV[0].group){
+        NAV[0] = { ...NAV[0], items: [['inbox','Inbox','📥'], ...NAV[0].items] };
+      } else {
+        NAV = [ { items:[ ['inbox','Inbox','📥'] ] }, ...NAV ];
+      }
+    }
     // Training is invite-only — show it only to admins and enrolled participants.
     if(isTrainingParticipant && !NAV.some(g=> (g.items||[]).some(it=>it[0]==='training'))){
       NAV = [...NAV, { group:'Learning', items:[ ['training','Training','🎓'] ] }];
