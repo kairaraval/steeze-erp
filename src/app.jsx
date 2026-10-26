@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 850 · Cutting Department now also has the Production Board (read-only reference) and the Sampling Board in its sidebar.";
+const BUILD = "Live build 851 · Pattern Maker (Oye) now has the same setup as Cutting: Inbox (mentionable), Daily Check-in, My Tasks, Profile, plus read-only Production Board and Sampling Board \u2014 alongside the Pattern board and Fabric Calculator.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -6958,6 +6958,7 @@ const CHECKIN_DEPTS = [
   { key:'knit_embro',  label:'Knitting & Embroidery',  roles:['knit_embro_lead'] },
   { key:'packing',     label:'Packing',                roles:['packing_head'] },
   { key:'cutting',     label:'Cutting',                roles:['cutting_dept'] },
+  { key:'pattern',     label:'Pattern',                roles:['pattern_maker'] },
   { key:'purchasing',  label:'Purchasing',             roles:['purchasing_admin','purchasing_personnel','purchasing'] },
   { key:'sales',       label:'Sales',                  roles:['manager','sales_representative','assistant'] },
   { key:'hr',          label:'HR / People',            roles:['hr'] },
@@ -50298,7 +50299,7 @@ function App(){
       allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','pattern','cutting','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='pattern_maker'){
-      allowed = new Set(['pattern','fabric-calc']);
+      allowed = new Set(['pattern','fabric-calc','inbox','my-tasks','profile','prod','sampling']);
       fallback = 'pattern';
     } else if(profile.role==='cutting_dept'){
       allowed = new Set(['cutting','fabric-calc','inbox','my-tasks','profile','prod','sampling']);
@@ -51024,9 +51025,13 @@ function App(){
       { items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'] ] },
     ];
   } else if(isPatternMaker){
-    // Pattern Maker — the Pattern board + the Fabric Calculator.
+    // Pattern Maker — Pattern board + Fabric Calculator, plus Inbox, My Tasks,
+    // Daily Check-in, Profile, and read-only Production & Sampling boards.
     NAV = [
-      { items:[ ['pattern','Pattern','✂'], ['fabric-calc','Fabric Calculator','📐'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Pattern', items:[ ['pattern','Pattern','✂'], ['fabric-calc','Fabric Calculator','📐'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
+      PERSONAL_GROUP,
     ];
   } else if(isCuttingDept){
     // Cutting Department — In House Cutting + Fabric Calculator, plus Inbox,
@@ -51443,7 +51448,7 @@ function App(){
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','cutting_dept'].includes(profile.role)} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','cutting_dept','pattern_maker'].includes(profile.role)} />}
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
