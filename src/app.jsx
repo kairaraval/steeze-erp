@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 856 · Every role now has an Inbox \u2014 added to all sidebars and access sets so anyone can be @mentioned and see their mentions (including Logistics, which had none before).";
+const BUILD = "Live build 857 · Sewing Line Lead view trimmed: removed Pattern, In House Cutting, Fabric Calculator, Subcon Cutting and the Logistics module. Keeps Production/Sampling/Sewing/Subcon Sewing boards, Sewing Payroll and Budget Requests.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50373,7 +50373,7 @@ function App(){
       // Sewing Line Lead gets view access to Production + Sampling boards
       // (read-only — they don't own status changes, but need to see what's
       // coming down to the floor).
-      allowed = new Set(['inbox','payroll','logistics','delivery-receipts','budgets','prod','pattern','cutting','sampling','sewing','profile','subcon-sewing','subcon-cutting']);
+      allowed = new Set(['inbox','my-tasks','payroll','budgets','prod','sampling','sewing','profile','subcon-sewing']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
       // Knit / Embro Team Lead — Production & Sampling boards + the four process
@@ -51206,11 +51206,10 @@ function App(){
     // plus read access to Production + Sampling boards so they can see what's
     // coming down to the floor.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
       FINANCE_DEPT_ONLY,
-      LOGISTICS_GROUP,
       PERSONAL_GROUP,
     ];
   } else if(isKnitEmbroLead){
