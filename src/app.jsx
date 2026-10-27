@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 869 · In-House Sewing Payroll now shows in the admin Production menu (the correct admin nav block). Appears right after Sewing.";
+const BUILD = "Live build 870 · In-House Sewing Payroll now manages its own Sewers roster and Garments & operation-breakdown templates (two new tabs, shared with the old payroll data) &mdash; so the old Sewing Payroll can be archived without losing them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30253,6 +30253,17 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
   async function removeLog(l){ if(l.status!=='staged'){ alert('Only items still in “For payroll” can be removed.'); return; } if(!confirm('Remove this logged pcs?')) return; await sb.from('inhouse_sew_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); load(); }
   async function confirmLogs(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.pcs)>0)); if(bad.length){ alert('Set a rate on the operation and pcs first.'); return; } await sb.from('inhouse_sew_logs').update({ status:'sent' }).in('id',ids); load(); }
 
+  // ── Garment-template management (shared payroll_garments) ──
+  async function addGarment(name){ if(!name.trim()){ alert('Enter a garment name.'); return; } const { data, error }=await sb.from('payroll_garments').insert({ name:name.trim(), operations:[] }).select().single(); if(error){ alert(error.message); return; } setGarments(prev=>[...prev,data].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))); }
+  async function updateGarmentOps(g, ops){ setGarments(prev=>prev.map(x=>x.id===g.id?{...x,operations:ops}:x)); const { error }=await sb.from('payroll_garments').update({ operations:ops }).eq('id',g.id); if(error){ alert('Save failed: '+error.message); load(); } }
+  async function renameGarment(g){ const n=(prompt('Rename garment:', g.name)||'').trim(); if(!n) return; setGarments(prev=>prev.map(x=>x.id===g.id?{...x,name:n}:x)); const { error }=await sb.from('payroll_garments').update({ name:n }).eq('id',g.id); if(error){ alert('Save failed: '+error.message); load(); } }
+  async function deleteGarment(g){ if(!confirm(`Delete garment "${g.name}"? (Projects already set up keep their copied operations.)`)) return; setGarments(prev=>prev.filter(x=>x.id!==g.id)); const { error }=await sb.from('payroll_garments').delete().eq('id',g.id); if(error){ alert('Delete failed: '+error.message); load(); } }
+  // ── Sewer roster management (shared payroll_sewers) ──
+  async function addSewerRow(name){ if(!name.trim()){ alert('Enter a sewer name.'); return; } const { data, error }=await sb.from('payroll_sewers').insert({ name:name.trim(), active:true }).select().single(); if(error){ alert(error.message); return; } setSewers(prev=>[...prev,data].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))); }
+  async function renameSewerRow(s){ const n=(prompt('Rename sewer:', s.name)||'').trim(); if(!n) return; setSewers(prev=>prev.map(x=>x.id===s.id?{...x,name:n}:x)); await sb.from('payroll_sewers').update({ name:n }).eq('id',s.id); }
+  async function toggleSewerRow(s){ setSewers(prev=>prev.map(x=>x.id===s.id?{...x,active:!s.active}:x)); await sb.from('payroll_sewers').update({ active:!s.active }).eq('id',s.id); }
+  async function deleteSewerRow(s){ if(!confirm(`Delete sewer "${s.name}"? Deactivate instead if they have past payroll.`)) return; setSewers(prev=>prev.filter(x=>x.id!==s.id)); const { error }=await sb.from('payroll_sewers').delete().eq('id',s.id); if(error){ alert('Delete failed — they may have logs. Deactivate instead.'); load(); } }
+
   const sewerNm=(id)=>(sewers||[]).find(s=>s.id===id)?.name||'Sewer';
   return (
     <div className="p-6">
@@ -30263,6 +30274,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
           <button onClick={()=>setTab('floor')} className={`px-3 py-1.5 rounded-md ${tab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor &amp; operations</button>
           <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length>0?` (${(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length})`:''}</button>
+          <button onClick={()=>setTab('garments')} className={`px-3 py-1.5 rounded-md ${tab==='garments'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>👕 Garments &amp; operations</button>
+          <button onClick={()=>setTab('sewers')} className={`px-3 py-1.5 rounded-md ${tab==='sewers'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>✂ Sewers</button>
         </div>
       </div>
 
@@ -30371,6 +30384,41 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
                 <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
               ); })}</tbody>
             </table></div>)}
+        </div>
+        );
+      })()}
+
+      {tab==='garments' && (
+        <div className="space-y-2">
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Garment operation templates (shared with the old payroll). Each garment holds the operations + price per piece that load when you set up a project.</div>
+          <PayrollGarments garments={garments} money={peso} addGarment={addGarment} updateGarmentOps={updateGarmentOps} renameGarment={renameGarment} deleteGarment={deleteGarment} />
+        </div>
+      )}
+
+      {tab==='sewers' && (()=>{
+        const list=[...(sewers||[])].sort((a,b)=> (a.active===false?1:0)-(b.active===false?1:0) || String(a.name||'').localeCompare(String(b.name||'')));
+        return (
+        <div className="space-y-3">
+          <div className="bg-white border rounded-xl p-4">
+            <div className="flex gap-2 items-end">
+              <div className="flex-1"><label className="text-[10px] uppercase text-slate-500">New sewer name</label><input id="ihs-newsewer" className="input mt-0.5 text-sm" placeholder="e.g. Maria Santos" onKeyDown={e=>{ if(e.key==='Enter'){ addSewerRow(e.currentTarget.value); e.currentTarget.value=''; } }} /></div>
+              <button onClick={()=>{ const el=document.getElementById('ihs-newsewer'); if(el){ addSewerRow(el.value); el.value=''; } }} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Add sewer</button>
+            </div>
+          </div>
+          <div className="bg-white border rounded-xl overflow-x-auto">
+            <div className="px-4 py-2.5 border-b text-sm font-bold bg-slate-50">Sewer roster ({list.length})</div>
+            {list.length===0 ? <div className="p-8 text-center text-sm text-slate-400">No sewers yet. Add one above.</div> :
+            <table className="w-full text-sm"><thead className="text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-4 py-2">Name</th><th className="px-4 py-2">Status</th><th></th></tr></thead>
+            <tbody>{list.map(s=>(<tr key={s.id} className="border-t">
+              <td className="px-4 py-2 font-medium">{s.name}</td>
+              <td className="px-4 py-2 text-center">{s.active!==false?<span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Active</span>:<span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 font-semibold">Inactive</span>}</td>
+              <td className="px-4 py-2 text-right whitespace-nowrap">
+                <button onClick={()=>renameSewerRow(s)} className="text-xs text-slate-500 hover:underline mr-2">Rename</button>
+                <button onClick={()=>toggleSewerRow(s)} className="text-xs text-slate-500 hover:underline mr-2">{s.active!==false?'Deactivate':'Reactivate'}</button>
+                <button onClick={()=>deleteSewerRow(s)} className="text-xs text-rose-500 hover:underline">Delete</button>
+              </td>
+            </tr>))}</tbody></table>}
+          </div>
         </div>
         );
       })()}
