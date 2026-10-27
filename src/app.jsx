@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 870 · In-House Sewing Payroll now manages its own Sewers roster and Garments & operation-breakdown templates (two new tabs, shared with the old payroll data) &mdash; so the old Sewing Payroll can be archived without losing them.";
+const BUILD = "Live build 871 · In-House Sewing Payroll: each project on the floor now has a 📋 Techpack button to view its techpack while setting up operations and logging pcs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30189,7 +30189,7 @@ function SubliCutSignModal({ rows, cutters, leads, clients, profile, onClose, on
    template, editable + custom), assigns sewers to each operation, then logs the
    pcs each sewer did per operation off the floor. Those logs ARE the payroll
    lines (rate × pcs). She signs a run → one RFP → AGM → Finance (skips Admin). */
-function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
+function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpack, reload }){
   const canEdit = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
   const canSign = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
   const [tab,setTab]=useState('floor');
@@ -30300,6 +30300,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
               </button>
               <div className="flex items-center gap-3 whitespace-nowrap">
                 <span className="text-xs text-slate-500">{num(projPcs)} pcs sewn · <b className="text-emerald-700">{peso(projAmt)}</b></span>
+                {(()=>{ const lead=(leads||[]).find(l=>l.id===p.job.lead_id); return lead && lead.techpack && openTechpack ? <button onClick={()=>openTechpack(lead)} className="text-xs px-2.5 py-1 rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-semibold" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button> : null; })()}
                 {canEdit && <button onClick={()=>setSetupFor({ job:p.job })} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Operations</button>}
               </div>
             </div>
@@ -52611,7 +52612,7 @@ function App(){
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='subli-cutting' && <SubliCuttingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} reload={loadAll} />}
-        {view==='inhouse-sewing' && <InhouseSewingView profile={profile} profiles={profiles} leads={leads} clients={clients} rfps={rfps} reload={loadAll} />}
+        {view==='inhouse-sewing' && <InhouseSewingView profile={profile} profiles={profiles} leads={leads} clients={clients} rfps={rfps} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
