@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 871 · In-House Sewing Payroll: each project on the floor now has a 📋 Techpack button to view its techpack while setting up operations and logging pcs.";
+const BUILD = "Live build 872 · In-House Sewing Payroll floor upgrades: Production vs Sampling tag + filter (Production pinned by default; samples auto-appear and are flagged as daily-rate, not piece-rate). Projects now also come from trad/subli sorting releases; each shows due date, whole-project qty, qty released to in-house by sorting, and balance.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30195,6 +30195,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   const [tab,setTab]=useState('floor');
   const [payrollSub,setPayrollSub]=useState('staged');
   const [jobs,setJobs]=useState([]);
+  const [samples,setSamples]=useState([]);
+  const [sortBatches,setSortBatches]=useState([]);
   const [ops,setOps]=useState([]);
   const [logs,setLogs]=useState([]);
   const [batches,setBatches]=useState([]);
@@ -30202,6 +30204,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   const [sewers,setSewers]=useState([]);
   const [busy,setBusy]=useState(false);
   const [search,setSearch]=useState('');
+  const [srcFilter,setSrcFilter]=useState('production'); // 'production' (pinned) | 'sampling' | 'all'
   const [collapsed,setCollapsed]=useState({});
   const [setupFor,setSetupFor]=useState(null);     // { job } operation setup
   const [assignFor,setAssignFor]=useState(null);    // { op } assign sewers
@@ -30213,6 +30216,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
 
   async function load(){ setBusy(true);
     try{ const { data }=await sb.from('sewing_jobs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setJobs(data||[]); }catch(_){ setJobs([]); }
+    try{ const { data }=await sb.from('sampling_jobs').select('*').is('deleted_at',null).neq('status','delivered').order('created_at',{ascending:false}); setSamples(data||[]); }catch(_){ setSamples([]); }
+    try{ const { data }=await sb.from('sorting_batches').select('id,lead_id,garment_qty,destination_type,expected_due_date,process,status').eq('destination_type','inhouse').is('deleted_at',null); setSortBatches(data||[]); }catch(_){ setSortBatches([]); }
     try{ const { data }=await sb.from('inhouse_sew_ops').select('*').is('deleted_at',null).order('position',{ascending:true}); setOps(data||[]); }catch(_){ setOps([]); }
     try{ const { data }=await sb.from('inhouse_sew_logs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setLogs(data||[]); }catch(_){ setLogs([]); }
     try{ const { data }=await sb.from('inhouse_sew_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
@@ -30227,18 +30232,38 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   const logsByOp=(opId)=>(logs||[]).filter(l=>l.op_id===opId);
   const opAmount=(opId)=>logsByOp(opId).reduce((t,l)=>t+Number(l.pcs||0)*Number(l.rate||0),0);
   const opPcs=(opId)=>logsByOp(opId).reduce((t,l)=>t+Number(l.pcs||0),0);
+  const opsFor=(opKey)=>(ops||[]).filter(o=>o.job_id===opKey);
 
-  // Active projects: not done, or anything with ops/logs already.
-  const jobsWithWork=new Set([...(ops||[]).map(o=>o.job_id), ...(logs||[]).map(l=>l.job_id)]);
-  const projects=(jobs||[]).filter(j=> (!SEWING_DONE.includes(j.status)) || jobsWithWork.has(j.id))
-    .map(j=>({ job:j, label:projLabel(j), ops:(ops||[]).filter(o=>o.job_id===j.id) }))
-    .filter(p=> !search || `${p.label} ${p.job.number||''} ${p.ops.map(o=>o.op_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))
-    .sort((a,b)=>a.label.localeCompare(b.label));
+  // Qty released to in-house by the sorting team (trad + subli sorting), per lead.
+  const relByLead = React.useMemo(()=>{ const m=new Map(); (sortBatches||[]).forEach(b=>{ if(!b.lead_id) return; m.set(b.lead_id,(m.get(b.lead_id)||0)+Number(b.garment_qty||0)); }); return m; }, [sortBatches]);
+  const relDueByLead = React.useMemo(()=>{ const m=new Map(); (sortBatches||[]).forEach(b=>{ if(b.lead_id&&b.expected_due_date){ const cur=m.get(b.lead_id); if(!cur||b.expected_due_date<cur) m.set(b.lead_id,b.expected_due_date); } }); return m; }, [sortBatches]);
+
+  // Union of project sources: Production (active sewing jobs + in-house sorting
+  // releases) and Sampling (all samples are in-house). Each carries a stable
+  // opKey used to attach operation rows.
+  const allProjects = React.useMemo(()=>{
+    const list=[]; const seenLead=new Set();
+    (jobs||[]).forEach(j=>{ const active=!SEWING_DONE.includes(j.status) || (ops||[]).some(o=>o.job_id===j.id); if(!active) return; if(j.lead_id) seenLead.add(j.lead_id);
+      list.push({ pkey:'prod:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', job:j, label:projLabel(j), number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
+    });
+    (sortBatches||[]).forEach(b=>{ if(!b.lead_id||seenLead.has(b.lead_id)) return; seenLead.add(b.lead_id);
+      const l=(leads||[]).find(x=>x.id===b.lead_id); const label=(l?[l.client_id?clientName(l.client_id):'', l.title].filter(Boolean).join(' · '):'')||b.client_name||b.item||'Project';
+      list.push({ pkey:'lead:'+b.lead_id, opKey:b.lead_id, lead_id:b.lead_id, source:'production', job:{ lead_id:b.lead_id, item:b.item, client_name:b.client_name, quantity:relByLead.get(b.lead_id)||0 }, label, number:'', qty:0, due:relDueByLead.get(b.lead_id)||null, released:relByLead.get(b.lead_id)||0 });
+    });
+    (samples||[]).forEach(s=>{ list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, label:projLabel(s), number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:relByLead.get(s.lead_id)||0 }); });
+    return list.map(p=>({ ...p, ops:(ops||[]).filter(o=>o.job_id===p.opKey) })).sort((a,b)=>a.label.localeCompare(b.label));
+  }, [jobs, samples, sortBatches, ops, leads, clients, relByLead, relDueByLead]);
+  const prodCount=allProjects.filter(p=>p.source==='production').length;
+  const smpCount=allProjects.filter(p=>p.source==='sampling').length;
+  const projects=allProjects
+    .filter(p=> srcFilter==='all' ? true : p.source===srcFilter)
+    .filter(p=> !search || `${p.label} ${p.number||''} ${p.ops.map(o=>o.op_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()));
 
   // ── actions ──
-  async function saveSetup(job, rows){
-    const base=(ops||[]).filter(o=>o.job_id===job.id).length;
-    const payload=rows.filter(r=>r.op_name && r.op_name.trim()).map((r,i)=>({ job_id:job.id, lead_id:job.lead_id||null, source_job_id:job.source_job_id||null, garment_id:r.garment_id||null, op_name:r.op_name.trim(), rate:(r.rate===''||r.rate==null)?null:Number(r.rate), target_qty:(r.target_qty===''||r.target_qty==null)?(Number(job.quantity)||null):Number(r.target_qty), sewers:[], position:base+i, created_by:profile.id }));
+  async function saveSetup(p, rows){
+    const base=(ops||[]).filter(o=>o.job_id===p.opKey).length;
+    const dflt=Number(p.qty)||Number(p.released)||null;
+    const payload=rows.filter(r=>r.op_name && r.op_name.trim()).map((r,i)=>({ job_id:p.opKey, lead_id:p.lead_id||null, source_job_id:(p.job&&p.job.source_job_id)||null, garment_id:r.garment_id||null, op_name:r.op_name.trim(), rate:(r.rate===''||r.rate==null)?null:Number(r.rate), target_qty:(r.target_qty===''||r.target_qty==null)?dflt:Number(r.target_qty), sewers:[], position:base+i, created_by:profile.id }));
     if(payload.length){ await sb.from('inhouse_sew_ops').insert(payload); }
     setSetupFor(null); load(); reload&&reload();
   }
@@ -30281,31 +30306,45 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
 
       {tab==='floor' && (<div>
         <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-          <div className="text-xs text-slate-500">{projects.length} project{projects.length===1?'':'s'} · set up operations, assign sewers, log pcs.</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs" title="Piece-rate payroll is for Production. Samples are usually daily-rate (e.g. Maricel) and not piece-rate.">
+              {[['production',`🏭 Production (${prodCount})`],['sampling',`🧪 Sampling (${smpCount})`],['all','All']].map(([k,l])=>(
+                <button key={k} onClick={()=>setSrcFilter(k)} className={`px-2.5 py-1 rounded-md ${srcFilter===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
+              ))}
+            </div>
+            <span className="text-xs text-slate-400">{projects.length} shown</span>
+          </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, operation…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
         </div>
+        {srcFilter==='sampling' && <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-800 mb-3">Samples are made in-house, usually by daily-rate staff — they're shown for visibility but normally aren't part of the piece-rate payroll.</div>}
         {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
-         projects.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No active sewing projects.</div> :
-        <div className="space-y-3">{projects.map(p=>{ const isCol=collapsed[p.job.id];
+         projects.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No {srcFilter==='all'?'':srcFilter+' '}projects here.</div> :
+        <div className="space-y-3">{projects.map(p=>{ const isCol=collapsed[p.pkey];
           const projPcs=p.ops.reduce((t,o)=>t+opPcs(o.id),0); const projAmt=p.ops.reduce((t,o)=>t+opAmount(o.id),0);
+          const lastOp=p.ops.slice().sort((a,b)=>Number(b.position||0)-Number(a.position||0))[0];
+          const finished=lastOp?opPcs(lastOp.id):0; const bal=p.released>0?Math.max(0,p.released-finished):null;
+          const overdue=p.due && p.due<todayManila() && (p.released? bal>0 : true);
           return (
-          <div key={p.job.id} className="bg-white rounded-xl border overflow-hidden">
+          <div key={p.pkey} className={`bg-white rounded-xl border overflow-hidden ${overdue?'border-rose-200':''}`}>
             <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
-              <button onClick={()=>setCollapsed(c=>({...c,[p.job.id]:!c[p.job.id]}))} className="flex items-center gap-2 min-w-0 text-left">
-                <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">📦</span>
+              <button onClick={()=>setCollapsed(c=>({...c,[p.pkey]:!c[p.pkey]}))} className="flex items-center gap-2 min-w-0 text-left flex-wrap">
+                <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">{p.source==='sampling'?'🧪':'📦'}</span>
                 <span className="font-bold truncate">{p.label}</span>
-                {p.job.number && <span className="text-[10px] text-slate-400 font-mono">{p.job.number}</span>}
-                {p.job.quantity>0 && <span className="text-[11px] text-slate-500">· {num(p.job.quantity)} pcs</span>}
+                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${p.source==='sampling'?'bg-purple-100 text-purple-700':'bg-indigo-100 text-indigo-700'}`}>{p.source==='sampling'?'Sampling':'Production'}</span>
+                {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
+                {p.qty>0 && <span className="text-[11px] text-slate-500">· {num(p.qty)} pcs</span>}
+                {p.released>0 && <span className="text-[11px] text-sky-700" title="Released to in-house by the sorting team">· ⬇ {num(p.released)} released{bal!=null?` · ${num(bal)} bal`:''}</span>}
+                {p.due && <span className={`text-[10px] px-1.5 py-0.5 rounded ${overdue?'bg-rose-100 text-rose-700 font-semibold':'text-slate-500'}`}>📅 {fmtDate(p.due)}{overdue?' ⚠':''}</span>}
                 <span className="text-[10px] text-slate-400">· {p.ops.length} op{p.ops.length===1?'':'s'}</span>
               </button>
               <div className="flex items-center gap-3 whitespace-nowrap">
                 <span className="text-xs text-slate-500">{num(projPcs)} pcs sewn · <b className="text-emerald-700">{peso(projAmt)}</b></span>
-                {(()=>{ const lead=(leads||[]).find(l=>l.id===p.job.lead_id); return lead && lead.techpack && openTechpack ? <button onClick={()=>openTechpack(lead)} className="text-xs px-2.5 py-1 rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-semibold" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button> : null; })()}
-                {canEdit && <button onClick={()=>setSetupFor({ job:p.job })} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Operations</button>}
+                {(()=>{ const lead=(leads||[]).find(l=>l.id===p.lead_id); return lead && lead.techpack && openTechpack ? <button onClick={()=>openTechpack(lead)} className="text-xs px-2.5 py-1 rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-semibold" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button> : null; })()}
+                {canEdit && <button onClick={()=>setSetupFor(p)} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Operations</button>}
               </div>
             </div>
             {!isCol && (p.ops.length===0 ? (
-              <div className="p-4 text-center text-xs text-slate-400">No operations set up yet.{canEdit && <> <button onClick={()=>setSetupFor({ job:p.job })} className="text-indigo-600 hover:underline font-medium">Set up operations</button></>}</div>
+              <div className="p-4 text-center text-xs text-slate-400">No operations set up yet.{canEdit && <> <button onClick={()=>setSetupFor(p)} className="text-indigo-600 hover:underline font-medium">Set up operations</button></>}</div>
             ) : (
               <div className="divide-y">{p.ops.map(op=>{ const oLogs=logsByOp(op.id); const open=opExpand[op.id]; const asg=Array.isArray(op.sewers)?op.sewers:[]; return (
                 <div key={op.id} className="px-4 py-2.5">
@@ -30346,7 +30385,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
         const bySewer=(()=>{ const m=new Map(); sent.forEach(l=>{ const k=l.sewer_id||l.sewer_name; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(l); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); return Array.from(m.values()).sort((a,b)=>a.name.localeCompare(b.name)); })();
         const rfpFor=(b)=>b.rfp_id?(rfps||[]).find(r=>r.id===b.rfp_id):null;
         const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
-        const projNm=(leadId,jobId)=>{ const j=(jobs||[]).find(x=>x.id===jobId); return j?projLabel(j):''; };
+        const projNm=(leadId,jobId)=>{ const p=allProjects.find(x=>x.opKey===jobId||(leadId&&x.lead_id===leadId)); return p?p.label:''; };
         return (
         <div className="space-y-3">
           <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: logged pcs land here. Check them, then <b>Confirm</b> → <b>In payroll</b>. There Maricel <b>signs</b> the run → one <b>Request for Payment</b> → AGM → Finance.</div>
@@ -30424,7 +30463,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
         );
       })()}
 
-      {setupFor && <InhouseOpsSetupModal job={setupFor.job} garments={garments} onClose={()=>setSetupFor(null)} onSave={(rows)=>saveSetup(setupFor.job, rows)} />}
+      {setupFor && <InhouseOpsSetupModal job={{ client_name:setupFor.label, item:'', quantity:(setupFor.qty||setupFor.released||0) }} garments={garments} onClose={()=>setSetupFor(null)} onSave={(rows)=>saveSetup(setupFor, rows)} />}
       {assignFor && <InhouseAssignSewersModal op={assignFor.op} sewers={sewers} onClose={()=>setAssignFor(null)} onSave={(chosen)=>saveAssign(assignFor.op, chosen)} />}
       {logFor && <InhouseLogPcsModal op={logFor.op} sewers={sewers} onClose={()=>setLogFor(null)} onSave={(vals)=>saveLog(logFor.op, vals)} />}
       {editingOp && <InhouseOpEditModal op={editingOp} onClose={()=>setEditingOp(null)} onSave={(patch)=>updateOp(editingOp, patch)} />}
