@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 864 · New Subli Cutting module (🔪): sublimated in-progress projects auto-appear (planned qty + pressed pcs shown); assign cutters from a separate cutter roster, log qty out & received, then per-piece payroll — supervisor signs one run → RFP → AGM → Finance (skips Admin). Old Subcon Payroll stays archived.";
+const BUILD = "Live build 865 · Subli Cutting board now lists ONLY projects whose subli pressing has actually started (in progress / pressed), not to-do projects — so the board isn't flooded. Planned qty + pressed pcs still shown.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29796,7 +29796,7 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
     try{ const { data }=await sb.from('subli_cut_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
     try{ const { data }=await sb.from('subli_cut_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
     try{ const { data }=await sb.from('subli_cut_payroll_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
-    try{ const { data }=await sb.from('process_worklist').select('id,source_job_id,lead_id,qty_done,process').eq('process','subli_pressing'); setPressRows(data||[]); }catch(_){ setPressRows([]); }
+    try{ const { data }=await sb.from('process_worklist').select('id,source_job_id,lead_id,qty_done,process,status,run_since,start_at,start_date,end_at,done_at').eq('process','subli_pressing'); setPressRows(data||[]); }catch(_){ setPressRows([]); }
     setBusy(false);
   }
   useEffect(()=>{ load(); },[]);
@@ -29809,9 +29809,13 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
   // part of the subli flow (planned to be subli-pressed, or pressing already
   // logged). Planned qty = order qty; pressed qty = subli-pressing output.
   const projects = useMemo(()=>{
-    const pressByJob=new Map(); (pressRows||[]).forEach(r=>{ if(!r.source_job_id) return; pressByJob.set(r.source_job_id,(pressByJob.get(r.source_job_id)||0)+Number(r.qty_done||0)); });
-    const isSubli=(j)=> (Array.isArray(j.plan_processes)&&j.plan_processes.includes('subli_pressing')) || pressByJob.has(j.id);
-    const jobs=(prodJobs||[]).filter(j=>!j.deleted_at && !PRODUCTION_DONE.includes(j.status) && isSubli(j));
+    // A subli-pressing task counts only once it has actually STARTED (in progress,
+    // currently running, has output, or already done) — a plain to-do task does
+    // NOT qualify, so the board isn't flooded with projects not yet being pressed.
+    const started=(r)=> r.status==='in_progress' || !!r.run_since || Number(r.qty_done||0)>0 || !!r.start_at || !!r.start_date || !!r.end_at || !!r.done_at;
+    const pressByJob=new Map(); const startedJobs=new Set();
+    (pressRows||[]).forEach(r=>{ if(!r.source_job_id) return; pressByJob.set(r.source_job_id,(pressByJob.get(r.source_job_id)||0)+Number(r.qty_done||0)); if(started(r)) startedJobs.add(r.source_job_id); });
+    const jobs=(prodJobs||[]).filter(j=>!j.deleted_at && !PRODUCTION_DONE.includes(j.status) && startedJobs.has(j.id));
     return jobs.map(j=>{
       const rowsByCutter=new Map();
       (assigns||[]).filter(a=>a.lead_id===j.lead_id).forEach(a=>{
@@ -29886,7 +29890,7 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, cutter…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
         </div>
         {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
-         projShown.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No projects yet. A sublimated project appears here once it's in progress and has subli pressing in its flow.</div> :
+         projShown.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No projects yet. A project appears here only once its <b>subli pressing is in progress</b> — to-do projects are not shown.</div> :
         <div className="space-y-3">{projShown.map(p=>{ const isCol=collapsed[p.key]; return (
           <div key={p.key} className={`bg-white rounded-xl border overflow-hidden ${p.overdue?'border-rose-200':''}`}>
             <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
