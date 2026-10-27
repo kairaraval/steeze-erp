@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 872 · In-House Sewing Payroll floor upgrades: Production vs Sampling tag + filter (Production pinned by default; samples auto-appear and are flagged as daily-rate, not piece-rate). Projects now also come from trad/subli sorting releases; each shows due date, whole-project qty, qty released to in-house by sorting, and balance.";
+const BUILD = "Live build 873 · Approval sign-off review (AGM/Admin): attachments on the request are now shown as viewable thumbnails (images open in a lightbox, PDFs open to view) right in the modal, instead of only a count telling you to open the source module.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40045,7 +40045,10 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
         {/* ── Controls (not printed) ── */}
         <div className="no-print space-y-3">
           {kind==='rfp' && data.origin==='subcon_payroll' && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">🧵 View &amp; check the Subcon Payroll Sheet</button>}
-          {nAtt>0 && <div className="text-xs text-slate-600">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request — open it in the source module to view the files.</div>}
+          {nAtt>0 && <div className="border rounded-lg p-3 bg-slate-50">
+            <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request</div>
+            <AttachmentList attachments={data.attachments} inline />
+          </div>}
           {!sign && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">You don't have an e-signature saved yet. Set one up in <strong>My Profile → signature</strong> so your approval is signed.</div>}
           <TpLbl t="Note (optional — shows on the sheet; required if returning)"><textarea className="input min-h-[52px]" value={note} onChange={e=>setNote(e.target.value)} placeholder="Any condition or question…" /></TpLbl>
           <div className="flex gap-2 flex-wrap">
