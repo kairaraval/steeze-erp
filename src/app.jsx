@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 866 · Subli Cutting board fix: now lists only projects whose subli pressing task status is IN PROGRESS (not 'open'/to-do — the queued start_date was wrongly matching all). Projects with cutters already assigned stay on the board so in-flight cutting doesn't disappear.";
+const BUILD = "Live build 867 · New In-House Sewing Payroll (🧵): break a project into operations (loaded from a Garment template, editable + custom), assign sewers, log pcs per sewer per operation off the floor → straight to payroll. Maricel signs one run → RFP → AGM → Finance (skips Admin). Reuses the Garment & Sewer lists from the old payroll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30184,6 +30184,345 @@ function SubliCutSignModal({ rows, cutters, leads, clients, profile, onClose, on
   );
 }
 
+/* ═══════════════ IN-HOUSE SEWING (operations → sewers → payroll) ═══════════════
+   Maricel breaks a project into sewing operations (loaded from a garment
+   template, editable + custom), assigns sewers to each operation, then logs the
+   pcs each sewer did per operation off the floor. Those logs ARE the payroll
+   lines (rate × pcs). She signs a run → one RFP → AGM → Finance (skips Admin). */
+function InhouseSewingView({ profile, profiles, leads, clients, rfps, reload }){
+  const canEdit = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
+  const canSign = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
+  const [tab,setTab]=useState('floor');
+  const [payrollSub,setPayrollSub]=useState('staged');
+  const [jobs,setJobs]=useState([]);
+  const [ops,setOps]=useState([]);
+  const [logs,setLogs]=useState([]);
+  const [batches,setBatches]=useState([]);
+  const [garments,setGarments]=useState([]);
+  const [sewers,setSewers]=useState([]);
+  const [busy,setBusy]=useState(false);
+  const [search,setSearch]=useState('');
+  const [collapsed,setCollapsed]=useState({});
+  const [setupFor,setSetupFor]=useState(null);     // { job } operation setup
+  const [assignFor,setAssignFor]=useState(null);    // { op } assign sewers
+  const [logFor,setLogFor]=useState(null);          // { op } log pcs
+  const [editingOp,setEditingOp]=useState(null);    // inline edit op
+  const [signing,setSigning]=useState(false);
+  const [opExpand,setOpExpand]=useState({});
+  const num=(n)=>Number(n||0).toLocaleString();
+
+  async function load(){ setBusy(true);
+    try{ const { data }=await sb.from('sewing_jobs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setJobs(data||[]); }catch(_){ setJobs([]); }
+    try{ const { data }=await sb.from('inhouse_sew_ops').select('*').is('deleted_at',null).order('position',{ascending:true}); setOps(data||[]); }catch(_){ setOps([]); }
+    try{ const { data }=await sb.from('inhouse_sew_logs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setLogs(data||[]); }catch(_){ setLogs([]); }
+    try{ const { data }=await sb.from('inhouse_sew_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
+    try{ const { data }=await sb.from('payroll_garments').select('*').order('name',{ascending:true}); setGarments(data||[]); }catch(_){ setGarments([]); }
+    try{ const { data }=await sb.from('payroll_sewers').select('*').order('name',{ascending:true}); setSewers(data||[]); }catch(_){ setSewers([]); }
+    setBusy(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
+  const projLabel=(job)=>{ const l=(leads||[]).find(x=>x.id===job.lead_id); const c=l?clientName(l.client_id):(job.client_name||''); const parts=[]; if(c) parts.push(c); if(l&&l.title) parts.push(l.title); else if(job.item) parts.push(job.item); return parts.filter(Boolean).join(' · ')||job.client_name||job.item||'Project'; };
+  const logsByOp=(opId)=>(logs||[]).filter(l=>l.op_id===opId);
+  const opAmount=(opId)=>logsByOp(opId).reduce((t,l)=>t+Number(l.pcs||0)*Number(l.rate||0),0);
+  const opPcs=(opId)=>logsByOp(opId).reduce((t,l)=>t+Number(l.pcs||0),0);
+
+  // Active projects: not done, or anything with ops/logs already.
+  const jobsWithWork=new Set([...(ops||[]).map(o=>o.job_id), ...(logs||[]).map(l=>l.job_id)]);
+  const projects=(jobs||[]).filter(j=> (!SEWING_DONE.includes(j.status)) || jobsWithWork.has(j.id))
+    .map(j=>({ job:j, label:projLabel(j), ops:(ops||[]).filter(o=>o.job_id===j.id) }))
+    .filter(p=> !search || `${p.label} ${p.job.number||''} ${p.ops.map(o=>o.op_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b)=>a.label.localeCompare(b.label));
+
+  // ── actions ──
+  async function saveSetup(job, rows){
+    const base=(ops||[]).filter(o=>o.job_id===job.id).length;
+    const payload=rows.filter(r=>r.op_name && r.op_name.trim()).map((r,i)=>({ job_id:job.id, lead_id:job.lead_id||null, source_job_id:job.source_job_id||null, garment_id:r.garment_id||null, op_name:r.op_name.trim(), rate:(r.rate===''||r.rate==null)?null:Number(r.rate), target_qty:(r.target_qty===''||r.target_qty==null)?(Number(job.quantity)||null):Number(r.target_qty), sewers:[], position:base+i, created_by:profile.id }));
+    if(payload.length){ await sb.from('inhouse_sew_ops').insert(payload); }
+    setSetupFor(null); load(); reload&&reload();
+  }
+  async function updateOp(op, patch){ await sb.from('inhouse_sew_ops').update(patch).eq('id',op.id); setEditingOp(null); load(); }
+  async function removeOp(op){ if(logsByOp(op.id).length){ alert('This operation already has logged pcs — remove those first.'); return; } if(!confirm(`Remove operation "${op.op_name}"?`)) return; await sb.from('inhouse_sew_ops').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',op.id); load(); }
+  async function saveAssign(op, chosen){ await sb.from('inhouse_sew_ops').update({ sewers:chosen }).eq('id',op.id); setAssignFor(null); load(); }
+  async function saveLog(op, vals){
+    const s=(sewers||[]).find(x=>x.id===vals.sewer_id);
+    await sb.from('inhouse_sew_logs').insert({ op_id:op.id, job_id:op.job_id, lead_id:op.lead_id||null, sewer_id:vals.sewer_id, sewer_name:s?.name||vals.sewer_name||null, op_name:op.op_name, rate:op.rate, pcs:Number(vals.pcs)||0, log_date:vals.log_date||todayManila(), note:vals.note||null, status:'staged', created_by:profile.id });
+    setLogFor(null); load(); reload&&reload();
+  }
+  async function removeLog(l){ if(l.status!=='staged'){ alert('Only items still in “For payroll” can be removed.'); return; } if(!confirm('Remove this logged pcs?')) return; await sb.from('inhouse_sew_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); load(); }
+  async function confirmLogs(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.pcs)>0)); if(bad.length){ alert('Set a rate on the operation and pcs first.'); return; } await sb.from('inhouse_sew_logs').update({ status:'sent' }).in('id',ids); load(); }
+
+  const sewerNm=(id)=>(sewers||[]).find(s=>s.id===id)?.name||'Sewer';
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🧵 In-House Sewing Payroll</h1><p className="text-slate-500 text-sm">Break each project into operations, assign sewers, log pcs off the floor → straight to payroll (sign → AGM → Finance).</p></div>
+        </div>
+        <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
+          <button onClick={()=>setTab('floor')} className={`px-3 py-1.5 rounded-md ${tab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor &amp; operations</button>
+          <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length>0?` (${(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length})`:''}</button>
+        </div>
+      </div>
+
+      {tab==='floor' && (<div>
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+          <div className="text-xs text-slate-500">{projects.length} project{projects.length===1?'':'s'} · set up operations, assign sewers, log pcs.</div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, operation…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+        </div>
+        {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
+         projects.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No active sewing projects.</div> :
+        <div className="space-y-3">{projects.map(p=>{ const isCol=collapsed[p.job.id];
+          const projPcs=p.ops.reduce((t,o)=>t+opPcs(o.id),0); const projAmt=p.ops.reduce((t,o)=>t+opAmount(o.id),0);
+          return (
+          <div key={p.job.id} className="bg-white rounded-xl border overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
+              <button onClick={()=>setCollapsed(c=>({...c,[p.job.id]:!c[p.job.id]}))} className="flex items-center gap-2 min-w-0 text-left">
+                <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">📦</span>
+                <span className="font-bold truncate">{p.label}</span>
+                {p.job.number && <span className="text-[10px] text-slate-400 font-mono">{p.job.number}</span>}
+                {p.job.quantity>0 && <span className="text-[11px] text-slate-500">· {num(p.job.quantity)} pcs</span>}
+                <span className="text-[10px] text-slate-400">· {p.ops.length} op{p.ops.length===1?'':'s'}</span>
+              </button>
+              <div className="flex items-center gap-3 whitespace-nowrap">
+                <span className="text-xs text-slate-500">{num(projPcs)} pcs sewn · <b className="text-emerald-700">{peso(projAmt)}</b></span>
+                {canEdit && <button onClick={()=>setSetupFor({ job:p.job })} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Operations</button>}
+              </div>
+            </div>
+            {!isCol && (p.ops.length===0 ? (
+              <div className="p-4 text-center text-xs text-slate-400">No operations set up yet.{canEdit && <> <button onClick={()=>setSetupFor({ job:p.job })} className="text-indigo-600 hover:underline font-medium">Set up operations</button></>}</div>
+            ) : (
+              <div className="divide-y">{p.ops.map(op=>{ const oLogs=logsByOp(op.id); const open=opExpand[op.id]; const asg=Array.isArray(op.sewers)?op.sewers:[]; return (
+                <div key={op.id} className="px-4 py-2.5">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <button onClick={()=>setOpExpand(x=>({...x,[op.id]:!x[op.id]}))} className="text-left">
+                        <span className="text-slate-400 text-xs mr-1">{open?'▾':'▸'}</span>
+                        <span className="font-semibold">{op.op_name}</span>
+                        <span className="text-xs text-slate-500 ml-2">{op.rate!=null?`₱${Number(op.rate).toLocaleString()}/pc`:<span className="text-rose-500">no rate</span>}</span>
+                        <span className="text-xs text-slate-400 ml-2">· {num(opPcs(op.id))}{op.target_qty?` / ${num(op.target_qty)}`:''} pcs · {peso(opAmount(op.id))}</span>
+                      </button>
+                      <div className="text-[11px] text-slate-500 mt-0.5">Sewers: {asg.length?asg.map(s=>s.name).join(', '):<span className="text-slate-400">none assigned</span>}</div>
+                    </div>
+                    {canEdit && <div className="flex items-center gap-2 whitespace-nowrap">
+                      <button onClick={()=>setAssignFor({ op })} className="text-xs text-indigo-600 hover:underline">Assign sewers</button>
+                      <button onClick={()=>setLogFor({ op })} className="text-xs text-emerald-700 hover:underline font-semibold">+ Log pcs</button>
+                      <button onClick={()=>setEditingOp(op)} className="text-xs text-slate-500 hover:underline">Edit</button>
+                      <button onClick={()=>removeOp(op)} className="text-xs text-rose-500 hover:underline">✕</button>
+                    </div>}
+                  </div>
+                  {open && (oLogs.length===0 ? <div className="text-xs text-slate-400 pl-5 py-1">No pcs logged yet.</div> :
+                    <table className="w-full text-xs mt-1"><thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Sewer</th><th className="text-right px-2 py-1">Pcs</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Status</th>{canEdit&&<th></th>}</tr></thead>
+                    <tbody>{oLogs.map(l=>(<tr key={l.id} className="border-t"><td className="px-2 py-1">{l.sewer_name||sewerNm(l.sewer_id)}</td><td className="px-2 py-1 text-right">{num(l.pcs)}</td><td className="px-2 py-1 text-right">{peso(Number(l.pcs||0)*Number(l.rate||0))}</td><td className="px-2 py-1">{l.log_date?fmtDate(l.log_date):'—'}</td><td className="px-2 py-1"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${l.status==='staged'?'bg-amber-100 text-amber-700':l.status==='sent'?'bg-violet-100 text-violet-700':l.status==='requested'?'bg-sky-100 text-sky-700':'bg-slate-100 text-slate-500'}`}>{l.status==='staged'?'for payroll':l.status==='sent'?'in payroll':l.status}</span></td>{canEdit&&<td className="px-2 py-1 text-right">{l.status==='staged'&&<button onClick={()=>removeLog(l)} className="text-rose-400 hover:text-rose-600">✕</button>}</td>}</tr>))}</tbody></table>)}
+                </div>
+              ); })}</div>
+            ))}
+          </div>
+        ); })}</div>}
+      </div>)}
+
+      {tab==='payroll' && (()=>{
+        const staged=(logs||[]).filter(l=>l.status==='staged');
+        const sent=(logs||[]).filter(l=>l.status==='sent' && !l.batch_id);
+        const runs=(batches||[]).filter(b=>!b.deleted_at);
+        const amtOf=(l)=>Number(l.pcs||0)*Number(l.rate||0);
+        const stAmt=staged.reduce((t,l)=>t+amtOf(l),0), stPcs=staged.reduce((t,l)=>t+Number(l.pcs||0),0);
+        const sentAmt=sent.reduce((t,l)=>t+amtOf(l),0), sentPcs=sent.reduce((t,l)=>t+Number(l.pcs||0),0);
+        const bySewer=(()=>{ const m=new Map(); sent.forEach(l=>{ const k=l.sewer_id||l.sewer_name; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(l); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); return Array.from(m.values()).sort((a,b)=>a.name.localeCompare(b.name)); })();
+        const rfpFor=(b)=>b.rfp_id?(rfps||[]).find(r=>r.id===b.rfp_id):null;
+        const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
+        const projNm=(leadId,jobId)=>{ const j=(jobs||[]).find(x=>x.id===jobId); return j?projLabel(j):''; };
+        return (
+        <div className="space-y-3">
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: logged pcs land here. Check them, then <b>Confirm</b> → <b>In payroll</b>. There Maricel <b>signs</b> the run → one <b>Request for Payment</b> → AGM → Finance.</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">{SUB('staged','For payroll')}{SUB('ready','In payroll')}{SUB('runs','Signed runs')}</div>
+            {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(stPcs)} pcs · <b className="text-slate-700">{peso(stAmt)}</b></div>}
+            {payrollSub==='staged' && canSign && staged.length>0 && <button onClick={()=>confirmLogs(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✓ Confirm all for payroll ({staged.length})</button>}
+            {payrollSub==='ready' && canSign && sent.length>0 && <button onClick={()=>setSigning(true)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✍ Sign &amp; request payment</button>}
+          </div>
+
+          {payrollSub==='staged' && (staged.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing staged. Log pcs on the Floor &amp; operations tab.</div> :
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Sewer</th><th className="text-left px-3 py-2">Project · Operation</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>{canSign&&<th></th>}</tr></thead>
+              <tbody>{staged.map(l=>(<tr key={l.id} className="border-t">
+                <td className="px-3 py-2 font-medium">{l.sewer_name||sewerNm(l.sewer_id)}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{projNm(l.lead_id,l.job_id)} · {l.op_name}</td>
+                <td className="px-3 py-2 text-right">{num(l.pcs)}</td><td className="px-3 py-2 text-right">{peso(l.rate)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(l))}</td>
+                {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>confirmLogs([l])} className="text-xs text-violet-700 hover:underline font-semibold mr-2">✓ Confirm</button><button onClick={()=>removeLog(l)} className="text-xs text-rose-500 hover:underline">Remove</button></td>}
+              </tr>))}</tbody>
+            </table></div>)}
+
+          {payrollSub==='ready' && (sent.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing in payroll yet.</div> :
+            <div className="space-y-2">
+              <div className="text-xs text-slate-500">{bySewer.length} sewer(s) · {num(sentPcs)} pcs · <b className="text-slate-700">{peso(sentAmt)}</b></div>
+              {bySewer.map((g,i)=>(<div key={i} className="bg-white rounded-xl border overflow-hidden">
+                <div className="px-4 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">🧵 {g.name}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b>{peso(g.amt)}</b></span></div>
+                <table className="w-full text-sm"><tbody>{g.rows.map(l=>(<tr key={l.id} className="border-t"><td className="px-3 py-1.5 text-xs text-slate-500">{projNm(l.lead_id,l.job_id)} · {l.op_name}</td><td className="px-3 py-1.5 text-right">{num(l.pcs)}</td><td className="px-3 py-1.5 text-right">{peso(l.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(l))}</td></tr>))}</tbody></table>
+              </div>))}
+            </div>)}
+
+          {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
+              <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
+                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
+              ); })}</tbody>
+            </table></div>)}
+        </div>
+        );
+      })()}
+
+      {setupFor && <InhouseOpsSetupModal job={setupFor.job} garments={garments} onClose={()=>setSetupFor(null)} onSave={(rows)=>saveSetup(setupFor.job, rows)} />}
+      {assignFor && <InhouseAssignSewersModal op={assignFor.op} sewers={sewers} onClose={()=>setAssignFor(null)} onSave={(chosen)=>saveAssign(assignFor.op, chosen)} />}
+      {logFor && <InhouseLogPcsModal op={logFor.op} sewers={sewers} onClose={()=>setLogFor(null)} onSave={(vals)=>saveLog(logFor.op, vals)} />}
+      {editingOp && <InhouseOpEditModal op={editingOp} onClose={()=>setEditingOp(null)} onSave={(patch)=>updateOp(editingOp, patch)} />}
+      {signing && <InhouseSewSignModal rows={(logs||[]).filter(l=>l.status==='sent' && !l.batch_id)} sewers={sewers} jobs={jobs} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
+    </div>
+  );
+}
+
+// Set up a project's operations — load from a garment template, then edit/add.
+function InhouseOpsSetupModal({ job, garments, onClose, onSave }){
+  const [rows,setRows]=useState([{ op_name:'', rate:'', target_qty:'' }]);
+  const [gid,setGid]=useState('');
+  const setRow=(i,k,v)=>setRows(rs=>rs.map((r,idx)=>idx===i?{...r,[k]:v}:r));
+  const addRow=()=>setRows(rs=>[...rs,{ op_name:'', rate:'', target_qty:'' }]);
+  const removeRow=(i)=>setRows(rs=>rs.length===1?rs:rs.filter((_,idx)=>idx!==i));
+  function loadTemplate(id){ setGid(id); const g=(garments||[]).find(x=>x.id===id); if(!g){ return; } const ops=(Array.isArray(g.operations)?g.operations:[]); setRows(ops.length?ops.map(o=>({ op_name:o.name||'', rate:(o.price??''), target_qty:'', garment_id:id })):[{ op_name:'', rate:'', target_qty:'' }]); }
+  return (
+    <Modal title="➕ Set up operations" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">{job?.client_name||job?.item||'Project'} · {Number(job?.quantity||0).toLocaleString()} pcs. Load a garment's operations, then tweak rates or add rows.</div>
+        <div><label className="text-[10px] uppercase text-slate-500">Load from garment</label>
+          <select className="input mt-0.5 text-sm" value={gid} onChange={e=>loadTemplate(e.target.value)}><option value="">— pick a garment template —</option>{(garments||[]).map(g=><option key={g.id} value={g.id}>{g.name} ({(Array.isArray(g.operations)?g.operations:[]).length} ops)</option>)}</select>
+        </div>
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-12 gap-2 text-[10px] uppercase text-slate-400 px-1"><div className="col-span-6">Operation</div><div className="col-span-3 text-right">Rate/pc</div><div className="col-span-2 text-right">Target</div><div></div></div>
+          {rows.map((r,i)=>(<div key={i} className="grid grid-cols-12 gap-2 items-center">
+            <input className="input text-sm col-span-6" value={r.op_name} onChange={e=>setRow(i,'op_name',e.target.value)} placeholder="e.g. Attach collar" />
+            <input type="number" min="0" step="0.01" className="input text-sm text-right col-span-3" value={r.rate} onChange={e=>setRow(i,'rate',e.target.value)} placeholder="rate" />
+            <input type="number" min="0" className="input text-sm text-right col-span-2" value={r.target_qty} onChange={e=>setRow(i,'target_qty',e.target.value)} placeholder={String(job?.quantity||'')} />
+            <button onClick={()=>removeRow(i)} className="text-rose-400 hover:text-rose-600 text-sm col-span-1">✕</button>
+          </div>))}
+          <button onClick={addRow} className="text-xs text-indigo-600 hover:underline font-medium">+ Add operation</button>
+        </div>
+        <div className="flex gap-2 pt-2 border-t"><button onClick={()=>onSave(rows)} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save operations</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function InhouseOpEditModal({ op, onClose, onSave }){
+  const [f,setF]=useState({ op_name:op?.op_name||'', rate:op?.rate??'', target_qty:op?.target_qty??'' });
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  return (
+    <Modal title="✎ Edit operation" onClose={onClose}>
+      <div className="space-y-3">
+        <div><label className="text-[10px] uppercase text-slate-500">Operation</label><input className="input mt-0.5 text-sm" value={f.op_name} onChange={e=>up('op_name',e.target.value)} /></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Rate/pc</label><input type="number" min="0" step="0.01" className="input mt-0.5 text-sm text-right" value={f.rate} onChange={e=>up('rate',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Target qty</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.target_qty} onChange={e=>up('target_qty',e.target.value)} /></div>
+        </div>
+        <div className="flex gap-2 pt-2 border-t"><button onClick={()=>onSave({ op_name:f.op_name.trim()||op.op_name, rate:f.rate===''?null:Number(f.rate), target_qty:f.target_qty===''?null:Number(f.target_qty) })} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function InhouseAssignSewersModal({ op, sewers, onClose, onSave }){
+  const cur=new Set((Array.isArray(op?.sewers)?op.sewers:[]).map(s=>s.id));
+  const [chosen,setChosen]=useState(cur);
+  const list=(sewers||[]).filter(s=>s.active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const toggle=(id)=>setChosen(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  function save(){ const arr=list.filter(s=>chosen.has(s.id)).map(s=>({ id:s.id, name:s.name })); onSave(arr); }
+  return (
+    <Modal title={`Assign sewers — ${op?.op_name||''}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Pick the sewers who will do this operation. You still log each sewer's own pcs.</div>
+        <div className="max-h-72 overflow-y-auto border rounded-lg divide-y">{list.length===0?<div className="p-3 text-xs text-slate-400">No sewers in the roster yet.</div>:list.map(s=>(
+          <label key={s.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer"><input type="checkbox" checked={chosen.has(s.id)} onChange={()=>toggle(s.id)} /> {s.name}</label>
+        ))}</div>
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function InhouseLogPcsModal({ op, sewers, onClose, onSave }){
+  const assigned=(Array.isArray(op?.sewers)?op.sewers:[]);
+  const roster=(sewers||[]).filter(s=>s.active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const opts=assigned.length?assigned.map(a=>({ id:a.id, name:a.name })):roster.map(s=>({ id:s.id, name:s.name }));
+  const [f,setF]=useState({ sewer_id:opts[0]?.id||'', pcs:'', log_date:todayManila(), note:'' });
+  const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  function save(){ if(!f.sewer_id){ setMsg('Pick a sewer.'); return; } if(!(Number(f.pcs)>0)){ setMsg('Enter pcs.'); return; } onSave(f); }
+  return (
+    <Modal title={`+ Log pcs — ${op?.op_name||''}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Rate: {op?.rate!=null?`₱${Number(op.rate).toLocaleString()}/pc`:'— set a rate first'}. Logged pcs go straight to payroll (rate × pcs).</div>
+        <div><label className="text-[10px] uppercase text-slate-500">Sewer</label><select className="input mt-0.5 text-sm" value={f.sewer_id} onChange={e=>up('sewer_id',e.target.value)}><option value="">— select —</option>{opts.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Pcs done</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.pcs} onChange={e=>up('pcs',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" className="input mt-0.5 text-sm" value={f.log_date} onChange={e=>up('log_date',e.target.value)} /></div>
+        </div>
+        {Number(f.pcs)>0 && op?.rate>0 && <div className="text-xs text-slate-600">Amount: <b>{peso(Number(f.pcs)*Number(op.rate))}</b></div>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">+ Log pcs</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Sign the whole in-payroll run → raise ONE RFP → AGM → Finance.
+function InhouseSewSignModal({ rows, sewers, jobs, profile, onClose, onSaved }){
+  const [sig,setSig]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const num=(n)=>Number(n||0).toLocaleString();
+  const sewerNm=(id)=>(sewers||[]).find(s=>s.id===id)?.name||'Sewer';
+  const amtOf=(l)=>Number(l.pcs||0)*Number(l.rate||0);
+  const pcs=rows.reduce((t,l)=>t+Number(l.pcs||0),0); const amount=rows.reduce((t,l)=>t+amtOf(l),0);
+  const sewerCount=new Set(rows.map(l=>l.sewer_id||l.sewer_name)).size;
+  async function save(){
+    if(!rows.length){ setMsg('Nothing to sign.'); return; }
+    if(!sig.trim()){ setMsg('Type your name to sign.'); return; }
+    setBusy(true);
+    try{
+      const monthKey=new Date().toISOString().slice(0,7);
+      const { data:bRows }=await sb.from('inhouse_sew_batches').select('number').like('number',`ISR-${monthKey}-%`);
+      let max=0; (bRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+      const number=`ISR-${monthKey}-${String(max+1).padStart(3,'0')}`;
+      const { data:batch, error:be }=await sb.from('inhouse_sew_batches').insert({ number, status:'signed', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, created_by:profile.id }).select('id,number').single();
+      if(be) throw be;
+      await sb.from('inhouse_sew_logs').update({ status:'batched', batch_id:batch.id }).in('id', rows.map(r=>r.id));
+      const rfpNo=await nextRfpNumber();
+      const particulars=`[In-House Sewing Payroll] ${batch.number} — ${sewerCount} sewer${sewerCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${sig.trim()}.`;
+      const { data:rfp, error:re }=await sb.from('rfps').insert({ number:rfpNo, date:todayManila(), status:'pending_agm', origin:'inhouse_sewing', supplier_name:'In-House Sewing Payroll', amount, particulars, payment_method:'cash', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
+      if(re) throw re;
+      await sb.from('inhouse_sew_batches').update({ status:'requested', rfp_id:rfp.id }).eq('id',batch.id);
+      await sb.from('inhouse_sew_logs').update({ status:'requested' }).eq('batch_id',batch.id).is('deleted_at',null);
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧵 In-house sewing payroll ${batch.number} signed — ${peso(amount)} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'rfp', ref_id:rfp.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+      setBusy(false); alert(`Request for Payment ${rfp.number} raised. It goes to the AGM, then Finance.`); onSaved&&onSaved();
+    }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
+  }
+  return (
+    <Modal title="✍ Sign in-house sewing payroll & request payment" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-600 bg-violet-50 border border-violet-200 rounded p-2">You're confirming you checked every sewer's pcs &amp; rate. Signing raises <b>one Request for Payment</b> → AGM → Finance.</div>
+        <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto"><table className="w-full text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Sewer</th><th className="text-left px-3 py-1.5">Operation</th><th className="text-right px-3 py-1.5">Pcs</th><th className="text-right px-3 py-1.5">Rate</th><th className="text-right px-3 py-1.5">Amount</th></tr></thead>
+          <tbody>{rows.map(l=>(<tr key={l.id} className="border-t"><td className="px-3 py-1.5">{l.sewer_name||sewerNm(l.sewer_id)}</td><td className="px-3 py-1.5 text-slate-500">{l.op_name}</td><td className="px-3 py-1.5 text-right">{num(l.pcs)}</td><td className="px-3 py-1.5 text-right">{peso(l.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(l))}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5" colSpan="2">Total</td><td className="px-3 py-1.5 text-right">{num(pcs)}</td><td></td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(amount)}</td></tr></tfoot>
+        </table></div>
+        <div><label className="text-[10px] uppercase text-slate-500">Sign — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. Maricel …" /></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Sign & request payment'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function InventoryView({ profile, suppliers, items, departments, requests, reload }){
   // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
@@ -37006,7 +37345,7 @@ async function nextRfpNumber(){
 }
 // Origins whose RFP skips the Admin step: AGM approval is the final approval and
 // sends it straight to Finance to pay (e.g. subli cutting payroll).
-const RFP_SKIP_ADMIN_ORIGINS = ['subli_cutting'];
+const RFP_SKIP_ADMIN_ORIGINS = ['subli_cutting','inhouse_sewing'];
 // Create the Accounts Payable Voucher for an approved RFP (idempotent). Used both
 // by the normal Admin-approve path and by AGM-final origins that skip Admin.
 async function createApVoucherForRfp(rfp, approverId){
@@ -51026,7 +51365,7 @@ function App(){
       // visibility; money-write/banking/approval views are gated inside each view.
       allowed = new Set(['ops-command','agm-approvals','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
-        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting',
+        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
@@ -51088,7 +51427,7 @@ function App(){
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','subcon-sewing','subcon-cutting','subli-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','inhouse-sewing','budgets','profile','subcon','subcon-sewing','subcon-cutting','subli-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
     } else if(profile.role==='production_assistant'){
       // Production Assistant — production boards + the Replacement Requests queue (view).
@@ -51122,7 +51461,7 @@ function App(){
       // Sewing Line Lead gets view access to Production + Sampling boards
       // (read-only — they don't own status changes, but need to see what's
       // coming down to the floor).
-      allowed = new Set(['inbox','my-tasks','payroll','budgets','prod','sampling','sewing','profile','subcon-sewing']);
+      allowed = new Set(['inbox','my-tasks','payroll','inhouse-sewing','budgets','prod','sampling','sewing','profile','subcon-sewing']);
       fallback = 'payroll';
     } else if(profile.role==='knit_embro_lead'){
       // Knit / Embro Team Lead — Production & Sampling boards + the four process
@@ -51768,7 +52107,7 @@ function App(){
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       ADMIN_OFFICE_GROUP,
       PERSONAL_GROUP,
     ];
@@ -51872,7 +52211,7 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
     ];
@@ -51957,7 +52296,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
     ];
@@ -52224,6 +52563,7 @@ function App(){
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='subli-cutting' && <SubliCuttingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} reload={loadAll} />}
+        {view==='inhouse-sewing' && <InhouseSewingView profile={profile} profiles={profiles} leads={leads} clients={clients} rfps={rfps} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
