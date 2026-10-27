@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 865 · Subli Cutting board now lists ONLY projects whose subli pressing has actually started (in progress / pressed), not to-do projects — so the board isn't flooded. Planned qty + pressed pcs still shown.";
+const BUILD = "Live build 866 · Subli Cutting board fix: now lists only projects whose subli pressing task status is IN PROGRESS (not 'open'/to-do — the queued start_date was wrongly matching all). Projects with cutters already assigned stay on the board so in-flight cutting doesn't disappear.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29809,13 +29809,15 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
   // part of the subli flow (planned to be subli-pressed, or pressing already
   // logged). Planned qty = order qty; pressed qty = subli-pressing output.
   const projects = useMemo(()=>{
-    // A subli-pressing task counts only once it has actually STARTED (in progress,
-    // currently running, has output, or already done) — a plain to-do task does
-    // NOT qualify, so the board isn't flooded with projects not yet being pressed.
-    const started=(r)=> r.status==='in_progress' || !!r.run_since || Number(r.qty_done||0)>0 || !!r.start_at || !!r.start_date || !!r.end_at || !!r.done_at;
-    const pressByJob=new Map(); const startedJobs=new Set();
-    (pressRows||[]).forEach(r=>{ if(!r.source_job_id) return; pressByJob.set(r.source_job_id,(pressByJob.get(r.source_job_id)||0)+Number(r.qty_done||0)); if(started(r)) startedJobs.add(r.source_job_id); });
-    const jobs=(prodJobs||[]).filter(j=>!j.deleted_at && !PRODUCTION_DONE.includes(j.status) && startedJobs.has(j.id));
+    // A project qualifies only when its subli-pressing task is actually
+    // IN PROGRESS (status==='in_progress') — NOT 'open'/to-do (every row carries a
+    // start_date from when it was queued, so that can't be used). Once cutters are
+    // assigned we keep the project on the board even after pressing is marked done,
+    // so in-flight cutting work doesn't vanish.
+    const pressByJob=new Map(); const inProgressJobs=new Set();
+    (pressRows||[]).forEach(r=>{ if(!r.source_job_id) return; pressByJob.set(r.source_job_id,(pressByJob.get(r.source_job_id)||0)+Number(r.qty_done||0)); if(r.status==='in_progress') inProgressJobs.add(r.source_job_id); });
+    const assignedLeads=new Set((assigns||[]).map(a=>a.lead_id));
+    const jobs=(prodJobs||[]).filter(j=>!j.deleted_at && !PRODUCTION_DONE.includes(j.status) && (inProgressJobs.has(j.id) || assignedLeads.has(j.lead_id)));
     return jobs.map(j=>{
       const rowsByCutter=new Map();
       (assigns||[]).filter(a=>a.lead_id===j.lead_id).forEach(a=>{
