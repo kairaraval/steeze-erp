@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 863 · Inventory: new ⚖ Adjust button to correct on-hand (physical count, damage, loss, recount). Enter a ± amount or the counted qty; pick a reason + note. Posts an auditable adjustment movement (logged in Stock Movements) that updates on-hand — no purchase/payment created.";
+const BUILD = "Live build 864 · New Subli Cutting module (🔪): sublimated in-progress projects auto-appear (planned qty + pressed pcs shown); assign cutters from a separate cutter roster, log qty out & received, then per-piece payroll — supervisor signs one run → RFP → AGM → Finance (skips Admin). Old Subcon Payroll stays archived.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29763,6 +29763,421 @@ function StockAdjustModal({ profile, items, onClose, onSaved }){
   );
 }
 
+/* ═══════════════ SUBLI CUTTING (board + per-cutter payroll) ═══════════════
+   Joan (subli pressing head) presses sublimated items, then sends them to
+   cutting people to cut. Projects auto-appear here once they're in progress and
+   have subli pressing in their flow — planned qty is shown alongside pressed
+   pcs. Each cutter gets qty OUT + RECEIVED logged; received pieces go to a
+   per-piece payroll that the supervisor signs → one RFP → AGM → Finance. */
+const SUBLI_CUT_REASONS=['defect','short cut','lost','other'];
+function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, reload }){
+  const canEdit = ['admin','production_supervisor','subli_pressing_head'].includes(profile?.role);
+  const canSign = ['admin','production_supervisor','subli_pressing_head'].includes(profile?.role);
+  const [tab,setTab]=useState('board');            // 'board' | 'payroll' | 'cutters'
+  const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'ready' | 'runs'
+  const [cutters,setCutters]=useState([]);
+  const [assigns,setAssigns]=useState([]);
+  const [queue,setQueue]=useState([]);
+  const [batches,setBatches]=useState([]);
+  const [pressRows,setPressRows]=useState([]);
+  const [busy,setBusy]=useState(false);
+  const [search,setSearch]=useState('');
+  const [collapsed,setCollapsed]=useState({});
+  const [editing,setEditing]=useState(null);        // assign modal { lead_id, ... }
+  const [editingCutter,setEditingCutter]=useState(null);
+  const [receiving,setReceiving]=useState(null);    // { p, row } log received
+  const [addPayroll,setAddPayroll]=useState(null);  // { p, row }
+  const [signing,setSigning]=useState(false);
+  const num=(n)=>Number(n||0).toLocaleString();
+  const todayISO=todayManila();
+
+  async function load(){ setBusy(true);
+    try{ const { data }=await sb.from('cutting_people').select('*').is('deleted_at',null); setCutters(data||[]); }catch(_){ setCutters([]); }
+    try{ const { data }=await sb.from('subli_cut_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
+    try{ const { data }=await sb.from('subli_cut_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
+    try{ const { data }=await sb.from('subli_cut_payroll_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
+    try{ const { data }=await sb.from('process_worklist').select('id,source_job_id,lead_id,qty_done,process').eq('process','subli_pressing'); setPressRows(data||[]); }catch(_){ setPressRows([]); }
+    setBusy(false);
+  }
+  useEffect(()=>{ load(); },[]);
+
+  const cutterName=(id)=>(cutters||[]).find(c=>c.id===id)?.name||'Cutter';
+  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
+  const projLabel=(leadId, fbClient, fbItem)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l?clientName(l.client_id):''; const parts=[]; if(c) parts.push(c); else if(fbClient) parts.push(fbClient); if(l&&l.title) parts.push(l.title); else if(fbItem) parts.push(fbItem); return parts.filter(Boolean).join(' · ')||(fbClient||fbItem||'Project'); };
+
+  // Projects that belong on the cutting board: in progress (not delivered) AND
+  // part of the subli flow (planned to be subli-pressed, or pressing already
+  // logged). Planned qty = order qty; pressed qty = subli-pressing output.
+  const projects = useMemo(()=>{
+    const pressByJob=new Map(); (pressRows||[]).forEach(r=>{ if(!r.source_job_id) return; pressByJob.set(r.source_job_id,(pressByJob.get(r.source_job_id)||0)+Number(r.qty_done||0)); });
+    const isSubli=(j)=> (Array.isArray(j.plan_processes)&&j.plan_processes.includes('subli_pressing')) || pressByJob.has(j.id);
+    const jobs=(prodJobs||[]).filter(j=>!j.deleted_at && !PRODUCTION_DONE.includes(j.status) && isSubli(j));
+    return jobs.map(j=>{
+      const rowsByCutter=new Map();
+      (assigns||[]).filter(a=>a.lead_id===j.lead_id).forEach(a=>{
+        const k=a.cutter_id||'?'; const r=rowsByCutter.get(k)||{ cutter_id:a.cutter_id, assignment:a, out:0, received:0, variance:0, items:new Set(), returnLog:[], due:null };
+        r.assignment=a; r.out+=Number(a.out_qty||0); if(a.item_label) r.items.add(a.item_label);
+        (Array.isArray(a.returns)?a.returns:[]).forEach(x=>{ r.received+=Number(x.good||0); r.variance+=Number(x.variance||0); r.returnLog.push(x); });
+        if(a.target_return_date) r.due=a.target_return_date;
+        rowsByCutter.set(k,r);
+      });
+      const rows=Array.from(rowsByCutter.values()).map(r=>{
+        r.cutter=cutterName(r.cutter_id);
+        r.balance=Math.max(0, r.out - r.received - r.variance);
+        r.itemList=Array.from(r.items).filter(Boolean).join(', ');
+        const qRows=(queue||[]).filter(q=>!q.deleted_at && q.cutter_id===r.cutter_id && q.lead_id===j.lead_id);
+        r.staged=qRows.reduce((t,q)=>t+Number(q.qty||0),0);
+        r.payable=Math.max(0, r.received - r.staged);
+        r.overdue=!!(r.due && r.due<todayISO && r.balance>0);
+        return r;
+      }).sort((a,b)=>a.cutter.localeCompare(b.cutter));
+      return { key:j.id, lead_id:j.lead_id, job:j, number:j.number, label:projLabel(j.lead_id, j.client_name, j.item), plannedQty:Number(j.quantity||0), pressedQty:pressByJob.get(j.id)||0, rows,
+        out:rows.reduce((s,r)=>s+r.out,0), received:rows.reduce((s,r)=>s+r.received,0), balance:rows.reduce((s,r)=>s+r.balance,0), payable:rows.reduce((s,r)=>s+r.payable,0), overdue:rows.some(r=>r.overdue) };
+    }).sort((a,b)=>a.label.localeCompare(b.label));
+  }, [prodJobs, assigns, queue, cutters, pressRows, leads, clients]);
+
+  const q=search.trim().toLowerCase();
+  const projShown=projects.filter(p=> !q || `${p.label} ${p.number} ${p.rows.map(r=>r.cutter).join(' ')}`.toLowerCase().includes(q));
+
+  // ── actions ──
+  async function saveAssign(vals){
+    const payload={ lead_id:vals.lead_id, cutter_id:vals.cutter_id, item_label:vals.item_label||null, out_qty:Number(vals.out_qty)||0, qty:Number(vals.qty)||null, rate:(vals.rate===''||vals.rate==null)?null:Number(vals.rate), target_return_date:vals.target_return_date||null };
+    if(vals.id){ await sb.from('subli_cut_assignments').update({ ...payload, updated_at:new Date().toISOString() }).eq('id',vals.id); }
+    else { await sb.from('subli_cut_assignments').insert({ ...payload, created_by:profile.id }); }
+    setEditing(null); load(); reload&&reload();
+  }
+  async function delAssign(a){ if(!confirm('Remove this cutter from the project?')) return; await sb.from('subli_cut_assignments').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',a.id); load(); reload&&reload(); }
+  async function saveReceived(p, row, vals){
+    const a=row.assignment; if(!a){ alert('No assignment to log against.'); return; }
+    const entry={ date:vals.date||todayManila(), good:Number(vals.good)||0, variance:Number(vals.variance)||0, reason:vals.reason||null, by:profile.id };
+    const returns=[...(Array.isArray(a.returns)?a.returns:[]), entry];
+    await sb.from('subli_cut_assignments').update({ returns, updated_at:new Date().toISOString() }).eq('id',a.id);
+    setReceiving(null); load(); reload&&reload();
+  }
+  async function addToPayroll(p, row, vals){
+    const c=(cutters||[]).find(x=>x.id===row.cutter_id);
+    await sb.from('subli_cut_payroll_queue').insert({ cutter_id:row.cutter_id, lead_id:p.lead_id, item_label:row.itemList||null, garment:row.itemList||p.job?.item||null, qty:Number(vals.qty)||0, rate:(vals.rate===''||vals.rate==null)?(c?.default_rate??null):Number(vals.rate), return_date:vals.return_date||todayManila(), status:'staged', source_assignment_id:row.assignment?.id||null, added_by:profile.id });
+    setAddPayroll(null); load(); reload&&reload();
+  }
+  async function updateQueueRow(id, patch){ try{ await sb.from('subli_cut_payroll_queue').update(patch).eq('id',id); load(); }catch(e){ alert(e.message||e); } }
+  async function removeQueueRow(qr){ if(!confirm('Remove this item from the For-payroll list?')) return; await sb.from('subli_cut_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',qr.id); load(); }
+  async function confirmQueue(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.qty)>0)); if(bad.length){ alert('Set a rate and qty first for: '+bad.map(r=>cutterName(r.cutter_id)).join(', ')); return; } await sb.from('subli_cut_payroll_queue').update({ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id }).in('id',ids); load(); }
+
+  const cutterNm=cutterName;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🔪 Subli Cutting</h1><p className="text-slate-500 text-sm">Sublimated projects sent out for cutting — qty out, received &amp; per-cutter payroll (sign → AGM → Finance).</p></div>
+          <div className="flex gap-2">
+            {canEdit && tab==='cutters' && <button onClick={()=>setEditingCutter({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add cutter</button>}
+          </div>
+        </div>
+        <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
+          <button onClick={()=>setTab('board')} className={`px-3 py-1.5 rounded-md ${tab==='board'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Cutting board</button>
+          <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length})`:''}</button>
+          <button onClick={()=>setTab('cutters')} className={`px-3 py-1.5 rounded-md ${tab==='cutters'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>✂ Cutters</button>
+        </div>
+      </div>
+
+      {tab==='board' && (<div>
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+          <div className="text-xs text-slate-500">{projShown.length} project{projShown.length===1?'':'s'} in the subli flow · assign cutters, log received, then add to payroll.</div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, cutter…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+        </div>
+        {busy ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
+         projShown.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No projects yet. A sublimated project appears here once it's in progress and has subli pressing in its flow.</div> :
+        <div className="space-y-3">{projShown.map(p=>{ const isCol=collapsed[p.key]; return (
+          <div key={p.key} className={`bg-white rounded-xl border overflow-hidden ${p.overdue?'border-rose-200':''}`}>
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
+              <button onClick={()=>setCollapsed(c=>({...c,[p.key]:!c[p.key]}))} className="flex items-center gap-2 min-w-0 text-left">
+                <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">📦</span>
+                <span className="font-bold truncate">{p.label}</span>
+                {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
+                <span className="text-[11px] text-slate-500">· Planned {num(p.plannedQty)}{p.pressedQty>0?` · Pressed ${num(p.pressedQty)}`:''}</span>
+                {p.overdue && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}
+              </button>
+              <div className="flex items-center gap-3 whitespace-nowrap">
+                <span className="text-xs text-slate-500">{num(p.out)} out · <b className={p.balance>0?'text-amber-700':'text-emerald-700'}>{num(p.balance)} to receive</b></span>
+                {canEdit && <button onClick={()=>setEditing({ lead_id:p.lead_id })} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Cutter</button>}
+              </div>
+            </div>
+            {!isCol && (p.rows.length===0 ? (
+              <div className="p-4 text-center text-xs text-slate-400">No cutter assigned yet.{canEdit && <> <button onClick={()=>setEditing({ lead_id:p.lead_id })} className="text-indigo-600 hover:underline font-medium">Assign a cutter</button></>}</div>
+            ) : (
+              <div className="overflow-x-auto"><table className="w-full text-sm">
+                <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr>
+                  <th className="text-left px-3 py-2">Cutter</th><th className="text-left px-3 py-2">Item</th>
+                  <th className="text-right px-3 py-2">Out</th><th className="text-right px-3 py-2">Received</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Due</th>{canEdit&&<th></th>}
+                </tr></thead>
+                <tbody>{p.rows.map((r,i)=>(
+                  <tr key={i} className={`border-t ${r.overdue?'bg-rose-50/50':''}`}>
+                    <td className="px-3 py-2 font-medium">{r.cutter}
+                      {r.out>0 && r.balance<=0 && r.payable>0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">for payment</span>}
+                      {r.staged>0 && r.payable<=0 && r.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">on payroll</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{r.itemList||'—'}</td>
+                    <td className="px-3 py-2 text-right">{num(r.out)}</td>
+                    <td className="px-3 py-2 text-right text-emerald-700">{num(r.received)}{r.variance>0&&<span className="text-[10px] text-rose-500 ml-1" title="variance">+{num(r.variance)}v</span>}</td>
+                    <td className="px-3 py-2 text-right font-semibold"><span className={r.balance>0?'text-amber-700':'text-emerald-700'}>{num(r.balance)}</span></td>
+                    <td className="px-3 py-2 text-xs">{r.due?<span className={r.overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.due)}{r.overdue?' ⚠':''}</span>:'—'}</td>
+                    {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button onClick={()=>setReceiving({p,row:r})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Receive</button>
+                      {r.payable>0 && <button onClick={()=>setAddPayroll({p,row:r})} className="text-xs text-violet-700 hover:underline font-semibold mr-2">💰 Add to payroll ({num(r.payable)})</button>}
+                      {r.staged>0 && <span className="text-[10px] text-violet-600 mr-2">💰 {num(r.staged)} added</span>}
+                      <button onClick={()=>setEditing(r.assignment)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                      {r.assignment && <button onClick={()=>delAssign(r.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
+                    </td>}
+                  </tr>
+                ))}</tbody>
+              </table></div>
+            ))}
+          </div>
+        ); })}</div>}
+      </div>)}
+
+      {tab==='payroll' && (()=>{
+        const staged=(queue||[]).filter(q=>!q.deleted_at && q.status==='staged');
+        const sent=(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id);
+        const runs=(batches||[]).filter(b=>!b.deleted_at);
+        const projNm=(leadId)=>projLabel(leadId);
+        const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+        const stAmt=staged.reduce((t,q)=>t+amtOf(q),0);
+        const sentAmt=sent.reduce((t,q)=>t+amtOf(q),0), sentPcs=sent.reduce((t,q)=>t+Number(q.qty||0),0);
+        const bySub=(()=>{ const m=new Map(); sent.forEach(q=>{ const k=q.cutter_id; if(!m.has(k)) m.set(k,{ cutter:cutterNm(q.cutter_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.cutter.localeCompare(b.cutter)); })();
+        const rfpFor=(b)=> b.rfp_id?(rfps||[]).find(r=>r.id===b.rfp_id):null;
+        const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
+        return (
+        <div className="space-y-3">
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: check each cutter's qty &amp; rate, then <b>Confirm</b> → moves to <b>In payroll</b>. There the supervisor <b>signs</b> the run, which raises <b>one Request for Payment</b> → AGM → Finance.</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">{SUB('staged','For payroll')}{SUB('ready','In payroll')}{SUB('runs','Signed runs')}</div>
+            {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(staged.reduce((t,q)=>t+Number(q.qty||0),0))} pcs · <b className="text-slate-700">{peso(stAmt)}</b></div>}
+            {payrollSub==='staged' && canSign && staged.length>0 && <button onClick={()=>confirmQueue(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✓ Confirm all for payroll ({staged.length})</button>}
+            {payrollSub==='ready' && canSign && sent.length>0 && <button onClick={()=>setSigning(true)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✍ Sign &amp; request payment</button>}
+          </div>
+
+          {payrollSub==='staged' && (staged.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing staged. On the Cutting board, log received then click “💰 Add to payroll”.</div> :
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Cutter</th><th className="text-left px-3 py-2">Project</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>{canSign&&<th></th>}</tr></thead>
+              <tbody>{staged.map(qr=>(<tr key={qr.id} className="border-t">
+                <td className="px-3 py-2 font-medium">{cutterNm(qr.cutter_id)}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{projNm(qr.lead_id)}</td>
+                <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" defaultValue={qr.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(qr.qty)) updateQueueRow(qr.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:num(qr.qty)}</td>
+                <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" step="0.01" defaultValue={qr.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==qr.rate) updateQueueRow(qr.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:peso(qr.rate)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(qr))}</td>
+                {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>confirmQueue([qr])} className="text-xs text-violet-700 hover:underline font-semibold mr-2">✓ Confirm</button><button onClick={()=>removeQueueRow(qr)} className="text-xs text-rose-500 hover:underline">Remove</button></td>}
+              </tr>))}</tbody>
+            </table></div>)}
+
+          {payrollSub==='ready' && (sent.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing in payroll. Confirm items from <b>For payroll</b> first.</div> :
+            <div className="space-y-2">
+              <div className="text-xs text-slate-500">{bySub.length} cutter(s) · {num(sentPcs)} pcs · <b className="text-slate-700">{peso(sentAmt)}</b> — review, then sign &amp; request payment.</div>
+              {bySub.map((g,i)=>(<div key={i} className="bg-white rounded-xl border overflow-hidden">
+                <div className="px-4 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">✂ {g.cutter}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b>{peso(g.amt)}</b></span></div>
+                <table className="w-full text-sm"><tbody>{g.rows.map(qr=>(<tr key={qr.id} className="border-t"><td className="px-3 py-1.5 text-xs text-slate-500">{projNm(qr.lead_id)}</td><td className="px-3 py-1.5 text-right">{num(qr.qty)}</td><td className="px-3 py-1.5 text-right">{peso(qr.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(qr))}</td></tr>))}</tbody></table>
+              </div>))}
+            </div>)}
+
+          {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
+              <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
+                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
+              ); })}</tbody>
+            </table></div>)}
+        </div>
+        );
+      })()}
+
+      {tab==='cutters' && (()=>{
+        const list=(cutters||[]).slice().sort((a,b)=> (a.active===false?1:0)-(b.active===false?1:0) || String(a.name||'').localeCompare(String(b.name||'')));
+        return (
+        <div className="space-y-2">
+          <div className="text-xs text-slate-500">{list.length} cutter{list.length===1?'':'s'} · separate roster for subli cutting (name, rate, bank).</div>
+          {list.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No cutters yet. Click “+ Add cutter”.</div> :
+          <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">Contact</th><th className="text-right px-3 py-2">Rate/pc</th><th className="text-left px-3 py-2">Bank</th>{canEdit&&<th></th>}</tr></thead>
+            <tbody>{list.map(c=>(<tr key={c.id} className="border-t">
+              <td className="px-3 py-2 font-medium">{c.name}{c.active===false&&<span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-500">inactive</span>}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{c.contact_name||'—'}{c.phone?` · ${c.phone}`:''}</td>
+              <td className="px-3 py-2 text-right">{c.default_rate!=null&&c.default_rate!==''?`₱${Number(c.default_rate).toLocaleString()}`:'—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">{c.bank_name||'—'}{c.bank_account_number?` · ${c.bank_account_number}`:''}</td>
+              {canEdit&&<td className="px-3 py-2 text-right"><button onClick={()=>setEditingCutter(c)} className="text-xs text-indigo-600 hover:underline">Edit</button></td>}
+            </tr>))}</tbody>
+          </table></div>}
+        </div>
+        );
+      })()}
+
+      {editing && <SubliCutAssignModal existing={editing} cutters={cutters} project={projects.find(p=>p.lead_id===editing.lead_id)} onClose={()=>setEditing(null)} onSave={saveAssign} />}
+      {editingCutter && <CuttingPersonModal profile={profile} existing={editingCutter} onClose={()=>setEditingCutter(null)} onSaved={()=>{ setEditingCutter(null); load(); }} />}
+      {receiving && <SubliCutReceiveModal row={receiving.row} onClose={()=>setReceiving(null)} onSave={(vals)=>saveReceived(receiving.p, receiving.row, vals)} />}
+      {addPayroll && <SubliCutAddPayrollModal row={addPayroll.row} cutters={cutters} onClose={()=>setAddPayroll(null)} onSave={(vals)=>addToPayroll(addPayroll.p, addPayroll.row, vals)} />}
+      {signing && <SubliCutSignModal rows={(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id)} cutters={cutters} leads={leads} clients={clients} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
+    </div>
+  );
+}
+
+// Assign / edit a cutter on a project (qty out + optional rate & due date).
+function SubliCutAssignModal({ existing, cutters, project, onClose, onSave }){
+  const [f,setF]=useState({ id:existing?.id, lead_id:existing?.lead_id||project?.lead_id, cutter_id:existing?.cutter_id||'', item_label:existing?.item_label||'', out_qty:existing?.out_qty??'', qty:existing?.qty??'', rate:existing?.rate??'', target_return_date:existing?.target_return_date||'' });
+  const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  const list=(cutters||[]).filter(c=>c.active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  function save(){ if(!f.cutter_id){ setMsg('Pick a cutter.'); return; } if(!(Number(f.out_qty)>0)){ setMsg('Enter the quantity sent out to cut.'); return; } onSave(f); }
+  return (
+    <Modal title={existing?.id?'✂ Edit cutter assignment':'✂ Assign cutter'} onClose={onClose}>
+      <div className="space-y-3">
+        {project && <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">{project.label} · Planned {Number(project.plannedQty||0).toLocaleString()}{project.pressedQty>0?` · Pressed ${Number(project.pressedQty).toLocaleString()}`:''}</div>}
+        <div><label className="text-[10px] uppercase text-slate-500">Cutter</label><select className="input mt-0.5 text-sm" value={f.cutter_id} onChange={e=>up('cutter_id',e.target.value)}><option value="">— select —</option>{list.map(c=><option key={c.id} value={c.id}>{c.name}{c.default_rate!=null&&c.default_rate!==''?` (₱${Number(c.default_rate).toLocaleString()}/pc)`:''}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Qty out *</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.out_qty} onChange={e=>up('out_qty',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Rate/pc (optional)</label><input type="number" min="0" step="0.01" className="input mt-0.5 text-sm text-right" value={f.rate} onChange={e=>up('rate',e.target.value)} placeholder="cutter default" /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Item (optional)</label><input className="input mt-0.5 text-sm" value={f.item_label} onChange={e=>up('item_label',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Due back (optional)</label><input type="date" className="input mt-0.5 text-sm" value={f.target_return_date} onChange={e=>up('target_return_date',e.target.value)} /></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Log pieces a cutter returned (good + variance).
+function SubliCutReceiveModal({ row, onClose, onSave }){
+  const [f,setF]=useState({ date:todayManila(), good:'', variance:'', reason:'' });
+  const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  function save(){ if(!(Number(f.good)>0) && !(Number(f.variance)>0)){ setMsg('Enter received good pcs and/or variance.'); return; } onSave(f); }
+  return (
+    <Modal title={`↩ Receive — ${row?.cutter||'cutter'}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Out {Number(row?.out||0).toLocaleString()} · already received {Number(row?.received||0).toLocaleString()} · balance {Number(row?.balance||0).toLocaleString()}</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Good pcs received</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.good} onChange={e=>up('good',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Variance (defect/lost)</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.variance} onChange={e=>up('variance',e.target.value)} /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" className="input mt-0.5 text-sm" value={f.date} onChange={e=>up('date',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Reason (if variance)</label><select className="input mt-0.5 text-sm" value={f.reason} onChange={e=>up('reason',e.target.value)}><option value="">—</option>{SUBLI_CUT_REASONS.map(r=><option key={r}>{r}</option>)}</select></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">↩ Record received</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Add received pcs to the cutting payroll queue.
+function SubliCutAddPayrollModal({ row, cutters, onClose, onSave }){
+  const c=(cutters||[]).find(x=>x.id===row?.cutter_id);
+  const [f,setF]=useState({ qty:row?.payable||'', rate:(c?.default_rate??''), return_date:todayManila() });
+  const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  function save(){ if(!(Number(f.qty)>0)){ setMsg('Enter a quantity.'); return; } if(Number(f.qty)>Number(row?.payable||0)){ setMsg(`Only ${Number(row?.payable||0).toLocaleString()} pcs are available to add.`); return; } onSave(f); }
+  return (
+    <Modal title={`💰 Add to payroll — ${row?.cutter||'cutter'}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Received not yet on payroll: <b>{Number(row?.payable||0).toLocaleString()}</b> pcs.</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Qty to pay</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.qty} onChange={e=>up('qty',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Rate/pc</label><input type="number" min="0" step="0.01" className="input mt-0.5 text-sm text-right" value={f.rate} onChange={e=>up('rate',e.target.value)} /></div>
+        </div>
+        <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" className="input mt-0.5 text-sm" value={f.return_date} onChange={e=>up('return_date',e.target.value)} /></div>
+        {Number(f.qty)>0 && Number(f.rate)>0 && <div className="text-xs text-slate-600">Amount: <b>{peso(Number(f.qty)*Number(f.rate))}</b></div>}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold">💰 Add to payroll</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Add / edit a cutting person (roster).
+function CuttingPersonModal({ profile, existing, onClose, onSaved }){
+  const [f,setF]=useState({ name:existing?.name||'', contact_name:existing?.contact_name||'', phone:existing?.phone||'', address:existing?.address||'', default_rate:existing?.default_rate??'', active:existing?.active!==false, notes:existing?.notes||'', bank_name:existing?.bank_name||'', bank_account_name:existing?.bank_account_name||'', bank_account_number:existing?.bank_account_number||'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  async function save(){ if(!f.name.trim()){ setMsg('Name is required.'); return; } setBusy(true);
+    const payload={ name:f.name.trim(), contact_name:f.contact_name||null, phone:f.phone||null, address:f.address||null, default_rate:f.default_rate===''?null:Number(f.default_rate), active:!!f.active, notes:f.notes||null, bank_name:f.bank_name||null, bank_account_name:f.bank_account_name||null, bank_account_number:f.bank_account_number||null };
+    try{ if(existing?.id){ await sb.from('cutting_people').update(payload).eq('id',existing.id); } else { await sb.from('cutting_people').insert({ ...payload, created_by:profile.id }); } setBusy(false); onSaved&&onSaved(); }
+    catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={existing?.id?'✂ Edit cutter':'✂ Add cutter'} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Name *</label><input className="input mt-0.5 text-sm" value={f.name} onChange={e=>up('name',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Default rate/pc</label><input type="number" min="0" step="0.01" className="input mt-0.5 text-sm text-right" value={f.default_rate} onChange={e=>up('default_rate',e.target.value)} /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Contact</label><input className="input mt-0.5 text-sm" value={f.contact_name} onChange={e=>up('contact_name',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Phone</label><input className="input mt-0.5 text-sm" value={f.phone} onChange={e=>up('phone',e.target.value)} /></div>
+        </div>
+        <div><label className="text-[10px] uppercase text-slate-500">Address</label><input className="input mt-0.5 text-sm" value={f.address} onChange={e=>up('address',e.target.value)} /></div>
+        <div className="grid grid-cols-3 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Bank</label><input className="input mt-0.5 text-sm" value={f.bank_name} onChange={e=>up('bank_name',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Account name</label><input className="input mt-0.5 text-sm" value={f.bank_account_name} onChange={e=>up('bank_account_name',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Account no.</label><input className="input mt-0.5 text-sm" value={f.bank_account_number} onChange={e=>up('bank_account_number',e.target.value)} /></div>
+        </div>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.active} onChange={e=>up('active',e.target.checked)} /> Active</label>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Sign the whole in-payroll run and raise ONE Request for Payment → AGM → Finance.
+function SubliCutSignModal({ rows, cutters, leads, clients, profile, onClose, onSaved }){
+  const [sig,setSig]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const num=(n)=>Number(n||0).toLocaleString();
+  const cutterNm=(id)=>(cutters||[]).find(c=>c.id===id)?.name||'Cutter';
+  const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+  const pcs=rows.reduce((t,q)=>t+Number(q.qty||0),0); const amount=rows.reduce((t,q)=>t+amtOf(q),0);
+  const cutterCount=new Set(rows.map(q=>q.cutter_id)).size;
+  async function save(){
+    if(!rows.length){ setMsg('Nothing to sign.'); return; }
+    if(!sig.trim()){ setMsg('Type your name to sign.'); return; }
+    setBusy(true);
+    try{
+      const monthKey=new Date().toISOString().slice(0,7);
+      const { data:bRows }=await sb.from('subli_cut_payroll_batches').select('number').like('number',`SCP-${monthKey}-%`);
+      let max=0; (bRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+      const number=`SCP-${monthKey}-${String(max+1).padStart(3,'0')}`;
+      const { data:batch, error:be }=await sb.from('subli_cut_payroll_batches').insert({ number, status:'signed', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, created_by:profile.id }).select('id,number').single();
+      if(be) throw be;
+      await sb.from('subli_cut_payroll_queue').update({ status:'batched', batch_id:batch.id }).in('id', rows.map(r=>r.id));
+      // Raise the RFP → AGM first, then Finance (origin routes it past Admin).
+      const rfpNo=await nextRfpNumber();
+      const particulars=`[Subli Cutting Payroll] ${batch.number} — ${cutterCount} cutter${cutterCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${sig.trim()}.`;
+      const { data:rfp, error:re }=await sb.from('rfps').insert({ number:rfpNo, date:todayManila(), status:'pending_agm', origin:'subli_cutting', supplier_name:'Subli Cutting Payroll', amount, particulars, payment_method:'cash', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
+      if(re) throw re;
+      await sb.from('subli_cut_payroll_batches').update({ status:'requested', rfp_id:rfp.id }).eq('id',batch.id);
+      await sb.from('subli_cut_payroll_queue').update({ status:'requested' }).eq('batch_id',batch.id).is('deleted_at',null);
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔪 Subli cutting payroll ${batch.number} signed — ${peso(amount)} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'rfp', ref_id:rfp.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+      setBusy(false); alert(`Request for Payment ${rfp.number} raised. It goes to the AGM, then Finance.`); onSaved&&onSaved();
+    }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
+  }
+  return (
+    <Modal title="✍ Sign cutting payroll & request payment" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-600 bg-violet-50 border border-violet-200 rounded p-2">You're confirming you checked every cutter's qty &amp; rate. Signing raises <b>one Request for Payment</b> → AGM → Finance.</div>
+        <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto"><table className="w-full text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Cutter</th><th className="text-right px-3 py-1.5">Pcs</th><th className="text-right px-3 py-1.5">Rate</th><th className="text-right px-3 py-1.5">Amount</th></tr></thead>
+          <tbody>{rows.map(qr=>(<tr key={qr.id} className="border-t"><td className="px-3 py-1.5">{cutterNm(qr.cutter_id)}</td><td className="px-3 py-1.5 text-right">{num(qr.qty)}</td><td className="px-3 py-1.5 text-right">{peso(qr.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(qr))}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5">Total</td><td className="px-3 py-1.5 text-right">{num(pcs)}</td><td></td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(amount)}</td></tr></tfoot>
+        </table></div>
+        <div><label className="text-[10px] uppercase text-slate-500">Sign — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. Joan …" /></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Sign & request payment'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function InventoryView({ profile, suppliers, items, departments, requests, reload }){
   // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
@@ -36583,6 +36998,22 @@ async function nextRfpNumber(){
   let maxSeq=0; (monthRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>maxSeq) maxSeq=n; } });
   return `RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
 }
+// Origins whose RFP skips the Admin step: AGM approval is the final approval and
+// sends it straight to Finance to pay (e.g. subli cutting payroll).
+const RFP_SKIP_ADMIN_ORIGINS = ['subli_cutting'];
+// Create the Accounts Payable Voucher for an approved RFP (idempotent). Used both
+// by the normal Admin-approve path and by AGM-final origins that skip Admin.
+async function createApVoucherForRfp(rfp, approverId){
+  try{
+    const { data:existingAp } = await sb.from('ap_vouchers').select('id').eq('rfp_id', rfp.id).is('deleted_at',null).limit(1);
+    if(existingAp && existingAp[0]) return;
+    const monthKey=new Date().toISOString().slice(0,7);
+    const { data:apRows } = await sb.from('ap_vouchers').select('number').like('number', `APV-${monthKey}-%`);
+    let max=0; (apRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+    const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+    await sb.from('ap_vouchers').insert({ number, rfp_id:rfp.id, po_id:rfp.po_id||null, supplier_name:rfp.supplier_name||null, amount:Number(rfp.amount||0), particulars:rfp.particulars||null, payment_method:rfp.payment_method||null, payment_method_detail:rfp.payment_method_detail||null, due_date:rfp.due_date||null, bank_name:rfp.bank_name||null, bank_account_name:rfp.bank_account_name||null, bank_account_number:rfp.bank_account_number||null, finance_approved_by:rfp.finance_approved_by||null, finance_approved_at:rfp.finance_approved_at||null, admin_approved_by:approverId, admin_approved_at:new Date().toISOString(), status:'for_payment', created_by:approverId });
+  }catch(e){ console.warn('AP voucher creation failed:', e?.message||e); }
+}
 function HRPaymentRequestModal({ profile, existing, onClose, onSaved, origin='hr', categories }){
   const isEdit=!!existing?.id;
   const CATS = (categories && categories.length) ? categories : HR_PAYMENT_CATEGORIES;
@@ -37217,7 +37648,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   async function approveAgm(){
     if(!isAgm && !isAdmin){ setMsg('Only the AGM (or Admin) can approve at this step.'); return; }
     setBusy(true);
-    const { error } = await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:new Date().toISOString(), agm_note:notes||null }).eq('id', rfp.id);
+    const skipAdmin=RFP_SKIP_ADMIN_ORIGINS.includes(rfp.origin);
+    const agmAt=new Date().toISOString();
+    if(skipAdmin){
+      // AGM is the final approval for these origins → straight to Finance to pay.
+      const { error } = await sb.from('rfps').update({ status:'approved', agm_approved_by:profile.id, agm_approved_at:agmAt, agm_note:notes||null, admin_approved_by:profile.id, admin_approved_at:agmAt, admin_notes:'Auto — AGM-final (Admin step skipped)' }).eq('id', rfp.id);
+      setBusy(false); if(error){ setMsg(error.message); return; }
+      await createApVoucherForRfp(rfp, profile.id);
+      try{ const { data:acct }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer']); const rows=(acct||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💵 RFP ${rfp.number||''} approved by AGM — ready to pay · ${rfp.supplier_name||''} ${peso(rfp.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      onSaved(); return;
+    }
+    const { error } = await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:agmAt, agm_note:notes||null }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
     // Notify Admin it's their turn.
     try{ const { data:admins }=await sb.from('profiles').select('id').eq('role','admin'); const rows=(admins||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🧾 RFP ${rfp.number||''} approved by AGM — awaiting your approval · ${rfp.supplier_name||''} ${peso(rfp.amount)}`, link_view:'approvals', ref_type:'rfp', ref_id:rfp.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
@@ -39209,7 +39650,16 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   async function approvePR(pr, note){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['purchasing','purchasing_admin','purchasing_personnel'], `✅ Department request ${pr.number||''} approved by AGM — ready for Purchasing to review.`, 'requests','purchase_request',pr.id); reload&&reload(); }
   async function returnPR(pr, note){ note = note===undefined ? prompt('Return this request to the department. What needs fixing?') : note; if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // RFPs
-  async function approveRFP(r, note){ const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
+  async function approveRFP(r, note){
+    if(RFP_SKIP_ADMIN_ORIGINS.includes(r.origin)){
+      const at=stamp();
+      const { error }=await sb.from('rfps').update({ status:'approved', agm_approved_by:profile.id, agm_approved_at:at, agm_note:nn(note), admin_approved_by:profile.id, admin_approved_at:at, admin_notes:'Auto — AGM-final (Admin step skipped)' }).eq('id',r.id);
+      if(error){ alert(error.message); return; }
+      await createApVoucherForRfp(r, profile.id);
+      await notifyRoles(['accounting','accounting_officer'], `💵 RFP ${r.number||''} approved by AGM — ready to pay · ${r.supplier_name||''} ${peso(r.amount)}`, 'rfps','rfp',r.id);
+      reload&&reload(); return;
+    }
+    const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
   async function returnRFP(r, note){ note = note===undefined ? prompt('Reason for returning / rejecting this RFP?') : note; if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:nn(note), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // Budget liquidation
   async function approveBudget(b, note){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
@@ -50570,7 +51020,7 @@ function App(){
       // visibility; money-write/banking/approval views are gated inside each view.
       allowed = new Set(['ops-command','agm-approvals','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
-        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting',
+        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
@@ -50622,21 +51072,21 @@ function App(){
     } else if(profile.role==='dtf_pressing_head'){
       allowed = new Set(['inbox','my-tasks','dtf-pressing','prod','sampling','profile']); fallback = 'dtf-pressing';
     } else if(profile.role==='subli_pressing_head'){
-      allowed = new Set(['inbox','my-tasks','subli-pressing','prod','sampling','profile']); fallback = 'subli-pressing';
+      allowed = new Set(['inbox','my-tasks','subli-pressing','subli-cutting','prod','sampling','profile']); fallback = 'subli-pressing';
     } else if(profile.role==='packing_head'){
       allowed = new Set(['inbox','my-tasks','packing','prod','profile']); fallback = 'packing';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting']);
+      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting','subli-cutting']);
       fallback = 'prod';
       // (QC list is visible to production floor for reference; QC role owns edits.)
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','subcon-sewing','subcon-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','budgets','profile','subcon','subcon-sewing','subcon-cutting','subli-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
     } else if(profile.role==='production_assistant'){
       // Production Assistant — production boards + the Replacement Requests queue (view).
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting']);
+      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting','subli-cutting']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','budgets','profile']);
@@ -51306,7 +51756,7 @@ function App(){
       { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
@@ -51382,7 +51832,7 @@ function App(){
     // Pressing) — their own process board + a view-only Production Board.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ [processHeadBoard.key, processHeadBoard.title, processHeadBoard.icon], ['prod','Production Board (view)','⚙'], ['sampling','Sampling Board','🧵'] ] },
+      { group:'Production', items:[ [processHeadBoard.key, processHeadBoard.title, processHeadBoard.icon], ...(profile.role==='subli_pressing_head'?[['subli-cutting','Subli Cutting','🔪']]:[]), ['prod','Production Board (view)','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isHR){
@@ -51413,7 +51863,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
@@ -51424,14 +51874,14 @@ function App(){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction){
     // Production team — full production space + Logistics + Budget Requests.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -51452,7 +51902,7 @@ function App(){
       { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -51489,7 +51939,7 @@ function App(){
       FINANCE_FULL,
       { group:'Payees', items:[ ['suppliers','Expense Payees','🧾'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
       PERSONAL_GROUP,
@@ -51552,7 +52002,7 @@ function App(){
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
@@ -51767,6 +52217,7 @@ function App(){
         {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','cutting_dept','pattern_maker','qc','qc_personnel'].includes(profile.role)} />}
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
+        {view==='subli-cutting' && <SubliCuttingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
