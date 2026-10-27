@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 862 · Subcon Sewing gains two tabs: 📒 Subcons (directory — details, bank info, pcs worked, projects) and 📈 Earnings (weekly/monthly/yearly, by period & by subcon, combining the archived old payroll + new sewing payments). The old Subcon Payroll menu item is archived (removed from nav; data preserved and shown in Earnings).";
+const BUILD = "Live build 863 · Inventory: new ⚖ Adjust button to correct on-hand (physical count, damage, loss, recount). Enter a ± amount or the counted qty; pick a reason + note. Posts an auditable adjustment movement (logged in Stock Movements) that updates on-hand — no purchase/payment created.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -29687,6 +29687,82 @@ function StockInModal({ profile, items, onClose, onSaved }){
   );
 }
 
+// Inventory adjustment — CORRECT on-hand (physical count, damage, loss, recount,
+// data-entry fix). Posts a stock_movements row ('in' for +, 'out' for −) so the
+// DB trigger updates items.qty and the change is auditable in Stock Movements.
+const ADJUST_REASONS=['Physical count correction','Damage / spoilage','Loss / missing','Found / recount','Data-entry correction','Other'];
+function StockAdjustModal({ profile, items, onClose, onSaved }){
+  const [itemId,setItemId]=useState('');
+  const [mode,setMode]=useState('delta');   // 'delta' = ±amount · 'set' = counted qty
+  const [amount,setAmount]=useState('');     // signed for delta, absolute for set
+  const [reason,setReason]=useState(ADJUST_REASONS[0]);
+  const [note,setNote]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const num=(n)=>Number(n||0).toLocaleString();
+  const opts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const it=(items||[]).find(x=>x.id===itemId);
+  const onHand=Number(it?.qty||0);
+  const delta = mode==='delta' ? (Number(amount)||0) : ((amount===''?onHand:Number(amount)||0) - onHand);
+  const newQty = onHand + delta;
+  async function save(){
+    if(!itemId){ setMsg('Pick an item.'); return; }
+    if(mode==='delta' && (!amount || Number(amount)===0)){ setMsg('Enter an adjustment amount (+ to add, − to subtract).'); return; }
+    if(mode==='set' && amount===''){ setMsg('Enter the counted quantity.'); return; }
+    if(delta===0){ setMsg('No change — the counted quantity matches on-hand.'); return; }
+    if(newQty<0 && !confirm(`This will make on-hand negative (${num(newQty)} ${it?.unit||''}). Continue anyway?`)) return;
+    if(!confirm(`Adjust "${it?.name||'item'}" from ${num(onHand)} to ${num(newQty)} ${it?.unit||''} (${delta>0?'+':''}${num(delta)})?\nReason: ${reason}${note?` — ${note}`:''}`)) return;
+    setBusy(true); setMsg('');
+    try{
+      const rsn=`Adjustment · ${reason}${note?` — ${note}`:''}`.slice(0,300);
+      const mv={ item_id:itemId, type: delta>0?'in':'out', qty:Math.abs(delta), reason:rsn, ref_type:'adjustment', actor_id:profile?.id||null, date:todayManila() };
+      let { error }=await sb.from('stock_movements').insert(mv);
+      if(error){ const { date, ...rest }=mv; const r=await sb.from('stock_movements').insert(rest); if(r.error) throw r.error; }
+      // items.qty is updated automatically by the stock_movements trigger.
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg('Could not save: '+(e.message||e)); }
+  }
+  return (
+    <Modal title="⚖ Adjust inventory" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded p-2">Correct on-hand quantity to match reality — physical count, damage, loss, or a recount. This posts an <strong>adjustment movement</strong> (logged in Stock Movements with who, when &amp; why) and updates on-hand. It does <strong>not</strong> create a purchase or payment.</div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500">Item</label>
+          <select className="input mt-0.5 text-sm" value={itemId} onChange={e=>{ setItemId(e.target.value); setAmount(''); }}>
+            <option value="">— select —</option>
+            {opts.map(o=><option key={o.id} value={o.id}>{o.name}{o.color?` · ${o.color}`:''}{o.sku?` (${o.sku})`:''} — {Number(o.qty||0)} {o.unit||''} on hand</option>)}
+          </select>
+        </div>
+        {it && <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">On hand</div><div className="font-bold">{num(onHand)} <span className="text-[10px] text-slate-400">{it.unit||''}</span></div></div>
+          <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">Change</div><div className={`font-bold ${delta>0?'text-emerald-700':delta<0?'text-rose-600':'text-slate-400'}`}>{delta>0?'+':''}{num(delta)}</div></div>
+          <div className={`border rounded-lg p-2 ${newQty<0?'bg-rose-50 border-rose-200':''}`}><div className="text-[9px] uppercase text-slate-400">New on hand</div><div className={`font-bold ${newQty<0?'text-rose-600':''}`}>{num(newQty)} <span className="text-[10px] text-slate-400">{it.unit||''}</span></div></div>
+        </div>}
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+          <button onClick={()=>{ setMode('delta'); setAmount(''); }} className={`px-3 py-1 rounded-md ${mode==='delta'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>± Adjust by</button>
+          <button onClick={()=>{ setMode('set'); setAmount(''); }} className={`px-3 py-1 rounded-md ${mode==='set'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Set to counted</button>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500">{mode==='delta'?'Adjustment amount (use − to subtract)':'Counted quantity'}</label>
+          <input type="number" inputMode="decimal" step="any" className="input mt-0.5 text-sm text-right" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={mode==='delta'?'e.g. -5 or 12':'e.g. 120'} />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500">Reason</label>
+          <select className="input mt-0.5 text-sm" value={reason} onChange={e=>setReason(e.target.value)}>{ADJUST_REASONS.map(r=><option key={r}>{r}</option>)}</select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500">Note (optional)</label>
+          <input className="input mt-0.5 text-sm" value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. counted during month-end stock take" />
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy||!itemId||delta===0} onClick={save} className="flex-1 py-2 rounded-lg bg-amber-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'⚖ Post adjustment'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function InventoryView({ profile, suppliers, items, departments, requests, reload }){
   // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
@@ -29699,6 +29775,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
   const [showLow,setShowLow]=useState(false);
   const [importing,setImporting]=useState(false);
   const [stockingIn,setStockingIn]=useState(false);
+  const [adjusting,setAdjusting]=useState(false);
   // Item photo viewer — opens IN-PAGE only (resolve the private-bucket signed URL).
   const [imgView,setImgView]=useState(null);
   async function openImg(path){ if(!path) return; try{ const u=await signedUrl(path); setImgView({url:u}); }catch(_){} }
@@ -29757,6 +29834,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
           <div><h1 className="text-2xl font-bold">📦 Inventory</h1><p className="text-slate-500 text-sm">{items.length} items total · {peso(Object.values(stats).reduce((s,x)=>s+x.value,0))} total value · {Object.values(stats).reduce((s,x)=>s+x.low,0)} below reorder</p></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setStockingIn(true)} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700" title="Return excess materials (e.g. leftover fabric from production) into inventory">📥 Stock In</button>
+            <button onClick={()=>setAdjusting(true)} className="px-4 py-2 rounded-lg bg-white border border-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-50" title="Correct on-hand quantity (physical count, damage, loss, recount) — logs an adjustment movement">⚖ Adjust</button>
             <button onClick={()=>setImporting(true)} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">⇪ Import CSV</button>
             <button onClick={()=>setBulkAdding(true)} className="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-semibold hover:bg-indigo-50">+ Multi-color</button>
             <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New item</button>
@@ -29882,6 +29960,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
       {bulkAdding && <BulkColorItemForm defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>setBulkAdding(false)} onSaved={()=>{ setBulkAdding(false); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
       {stockingIn && <StockInModal profile={profile} items={items} onClose={()=>setStockingIn(false)} onSaved={()=>{ setStockingIn(false); reload(); }} />}
+      {adjusting && <StockAdjustModal profile={profile} items={items} onClose={()=>setAdjusting(false)} onSaved={()=>{ setAdjusting(false); reload(); }} />}
       {imgView && <MediaLightbox url={imgView.url} kind="image" name="Item photo" onClose={()=>setImgView(null)} />}
     </div>
   );
