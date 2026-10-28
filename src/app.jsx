@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 874 · In-House Sewing Payroll: (1) client name now shown on every project + a Client column in For-payroll; (2) samples get a one-person Sample Maker (employee + price); (3) logging/edits are seamless now - no full refresh, you stay on the project; (4) blocks logging more pcs than the operation quantity (shows remaining + over-by warning); (5) adjustments (+ add / - deduct, e.g. damage) can be added when signing the final payroll run.";
+const BUILD = "Live build 875 · In-House Sewing Payroll: Production projects now come ONLY from the sorting department (trad + subli releases to in-house, exact piece counts) - no longer from the production/sewing board, so sampling-stage jobs (e.g. CASA) no longer leak into Production. New left Scheduled tab shows in-house sewing planned in Anjelica production plan (forward schedule); the Floor & operations tab stays sorting-sourced.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30189,13 +30189,14 @@ function SubliCutSignModal({ rows, cutters, leads, clients, profile, onClose, on
    template, editable + custom), assigns sewers to each operation, then logs the
    pcs each sewer did per operation off the floor. Those logs ARE the payroll
    lines (rate × pcs). She signs a run → one RFP → AGM → Finance (skips Admin). */
-function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpack, reload }){
+function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, openTechpack, reload }){
   const canEdit = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
   const canSign = ['admin','production_supervisor','sewing_lead'].includes(profile?.role);
   const [tab,setTab]=useState('floor');
   const [payrollSub,setPayrollSub]=useState('staged');
   const [jobs,setJobs]=useState([]);
   const [samples,setSamples]=useState([]);
+  const [planEntries,setPlanEntries]=useState([]);
   const [sortBatches,setSortBatches]=useState([]);
   const [ops,setOps]=useState([]);
   const [logs,setLogs]=useState([]);
@@ -30217,7 +30218,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   async function load(silent){ if(!silent) setBusy(true);
     try{ const { data }=await sb.from('sewing_jobs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setJobs(data||[]); }catch(_){ setJobs([]); }
     try{ const { data }=await sb.from('sampling_jobs').select('*').is('deleted_at',null).neq('status','delivered').order('created_at',{ascending:false}); setSamples(data||[]); }catch(_){ setSamples([]); }
-    try{ const { data }=await sb.from('sorting_batches').select('id,lead_id,garment_qty,destination_type,expected_due_date,process,status').eq('destination_type','inhouse').is('deleted_at',null); setSortBatches(data||[]); }catch(_){ setSortBatches([]); }
+    try{ const { data }=await sb.from('sorting_batches').select('id,lead_id,garment_qty,destination_type,expected_due_date,process,status,client_name,item,item_label').eq('destination_type','inhouse').is('deleted_at',null); setSortBatches(data||[]); }catch(_){ setSortBatches([]); }
+    try{ const { data }=await sb.from('production_plan_entries').select('*').eq('stage','sewing').eq('sewing_mode','inhouse'); setPlanEntries(data||[]); }catch(_){ setPlanEntries([]); }
     try{ const { data }=await sb.from('inhouse_sew_ops').select('*').is('deleted_at',null).order('position',{ascending:true}); setOps(data||[]); }catch(_){ setOps([]); }
     try{ const { data }=await sb.from('inhouse_sew_logs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setLogs(data||[]); }catch(_){ setLogs([]); }
     try{ const { data }=await sb.from('inhouse_sew_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
@@ -30245,19 +30247,27 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   const clientOf=(leadId, fallback)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l&&l.client_id?clientName(l.client_id):''; return c||fallback||''; };
   const titleOf=(leadId, fallback)=>{ const l=(leads||[]).find(x=>x.id===leadId); return (l&&l.title)||fallback||''; };
   const allProjects = React.useMemo(()=>{
-    const list=[]; const seenLead=new Set();
-    (jobs||[]).forEach(j=>{ const active=!SEWING_DONE.includes(j.status) || (ops||[]).some(o=>o.job_id===j.id); if(!active) return; if(j.lead_id) seenLead.add(j.lead_id);
-      const client=clientOf(j.lead_id, j.client_name); const title=titleOf(j.lead_id, j.item);
-      list.push({ pkey:'prod:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', job:j, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
+    const list=[];
+    // PRODUCTION — comes ONLY from the sorting department (trad + subli sorting
+    // releases to in-house). Sorting carries the exact piece count. We do NOT
+    // pull from the production/sewing board, so projects still in sampling don't
+    // leak in. Aggregated per lead (a lead may have several release batches).
+    const byLead=new Map();
+    (sortBatches||[]).forEach(b=>{ if(!b.lead_id) return; const g=byLead.get(b.lead_id)||{ released:0, due:null, client_name:b.client_name, item:(b.item||b.item_label) };
+      g.released+=Number(b.garment_qty||0);
+      if(b.expected_due_date && (!g.due || b.expected_due_date<g.due)) g.due=b.expected_due_date;
+      if(!g.client_name && b.client_name) g.client_name=b.client_name;
+      if(!g.item && (b.item||b.item_label)) g.item=(b.item||b.item_label);
+      byLead.set(b.lead_id,g);
     });
-    (sortBatches||[]).forEach(b=>{ if(!b.lead_id||seenLead.has(b.lead_id)) return; seenLead.add(b.lead_id);
-      const client=clientOf(b.lead_id, b.client_name); const title=titleOf(b.lead_id, b.item);
-      list.push({ pkey:'lead:'+b.lead_id, opKey:b.lead_id, lead_id:b.lead_id, source:'production', job:{ lead_id:b.lead_id, item:b.item, client_name:b.client_name, quantity:relByLead.get(b.lead_id)||0 }, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:'', qty:0, due:relDueByLead.get(b.lead_id)||null, released:relByLead.get(b.lead_id)||0 });
+    byLead.forEach((g,leadId)=>{ const client=clientOf(leadId,g.client_name); const title=titleOf(leadId,g.item);
+      list.push({ pkey:'lead:'+leadId, opKey:leadId, lead_id:leadId, source:'production', job:{ lead_id:leadId, item:g.item, client_name:g.client_name, quantity:g.released }, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:'', qty:g.released, due:g.due, released:g.released });
     });
+    // SAMPLING — all samples are in-house.
     (samples||[]).forEach(s=>{ const client=clientOf(s.lead_id, s.client_name); const title=titleOf(s.lead_id, s.item);
-      list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:relByLead.get(s.lead_id)||0 }); });
+      list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:0 }); });
     return list.map(p=>({ ...p, ops:(ops||[]).filter(o=>o.job_id===p.opKey) })).sort((a,b)=>a.label.localeCompare(b.label));
-  }, [jobs, samples, sortBatches, ops, leads, clients, relByLead, relDueByLead]);
+  }, [samples, sortBatches, ops, leads, clients]);
   const prodCount=allProjects.filter(p=>p.source==='production').length;
   const smpCount=allProjects.filter(p=>p.source==='sampling').length;
   const projects=allProjects
@@ -30312,12 +30322,44 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
           <div><h1 className="text-2xl font-bold">🧵 In-House Sewing Payroll</h1><p className="text-slate-500 text-sm">Break each project into operations, assign sewers, log pcs off the floor → straight to payroll (sign → AGM → Finance).</p></div>
         </div>
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
+          <button onClick={()=>setTab('scheduled')} className={`px-3 py-1.5 rounded-md ${tab==='scheduled'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>📋 Scheduled</button>
           <button onClick={()=>setTab('floor')} className={`px-3 py-1.5 rounded-md ${tab==='floor'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Floor &amp; operations</button>
           <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length>0?` (${(logs||[]).filter(l=>l.status==='staged'||l.status==='sent').length})`:''}</button>
           <button onClick={()=>setTab('garments')} className={`px-3 py-1.5 rounded-md ${tab==='garments'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>👕 Garments &amp; operations</button>
           <button onClick={()=>setTab('sewers')} className={`px-3 py-1.5 rounded-md ${tab==='sewers'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>✂ Sewers</button>
         </div>
       </div>
+
+      {tab==='scheduled' && (()=>{
+        const jobById=new Map((prodJobs||[]).map(j=>[j.id,j]));
+        const rows=(planEntries||[]).map(e=>{ const j=jobById.get(e.production_job_id);
+          const client=j?clientOf(j.lead_id, j.client_name):''; const title=j?titleOf(j.lead_id, j.item):'';
+          return { id:e.id, client, title:title||j?.item||'(project)', number:j?.number||'', date:e.date, deadline:e.deadline, qty:Number(e.quantity||0), released:Number(e.released_qty||0), received:Number(e.received_qty||0), done:!!e.done };
+        }).sort((a,b)=> String(a.deadline||a.date||'').localeCompare(String(b.deadline||b.date||'')));
+        const totQ=rows.reduce((t,r)=>t+r.qty,0);
+        return (
+        <div className="space-y-3">
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Scheduled in-house sewing from the <b>production plan</b> (Anjelica). This is the forward schedule only — a project lands on the <b>Floor &amp; operations</b> tab for payroll once the <b>sorting team</b> releases the actual pieces to in-house.</div>
+          {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No in-house sewing scheduled in the production plan.</div> :
+          <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Scheduled</th><th className="text-left px-3 py-2">Deadline</th><th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Released</th><th className="text-right px-3 py-2">Received</th><th className="px-3 py-2">Status</th></tr></thead>
+            <tbody>{rows.map(r=>{ const overdue=r.deadline && r.deadline<todayManila() && !r.done; return (
+              <tr key={r.id} className={`border-t ${overdue?'bg-rose-50/50':''}`}>
+                <td className="px-3 py-2 font-medium">{r.client||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-600">{r.title}{r.number&&<span className="text-slate-400 font-mono ml-1">{r.number}</span>}</td>
+                <td className="px-3 py-2 text-xs">{r.date?fmtDate(r.date):'—'}</td>
+                <td className="px-3 py-2 text-xs">{r.deadline?<span className={overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.deadline)}{overdue?' ⚠':''}</span>:'—'}</td>
+                <td className="px-3 py-2 text-right">{num(r.qty)}</td>
+                <td className="px-3 py-2 text-right text-sky-700">{r.released?num(r.released):'—'}</td>
+                <td className="px-3 py-2 text-right text-emerald-700">{r.received?num(r.received):'—'}</td>
+                <td className="px-3 py-2 text-center">{r.done?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>:r.released>0?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">released</span>:<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">scheduled</span>}</td>
+              </tr>
+            ); })}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="4">{rows.length} scheduled</td><td className="px-3 py-2 text-right">{num(totQ)}</td><td colSpan="3"></td></tr></tfoot>
+          </table></div>}
+        </div>
+        );
+      })()}
 
       {tab==='floor' && (<div>
         <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
@@ -52750,7 +52792,7 @@ function App(){
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={loadAll} />}
         {view==='subli-cutting' && <SubliCuttingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} reload={loadAll} />}
-        {view==='inhouse-sewing' && <InhouseSewingView profile={profile} profiles={profiles} leads={leads} clients={clients} rfps={rfps} openTechpack={openTechpackView} reload={loadAll} />}
+        {view==='inhouse-sewing' && <InhouseSewingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='prod-timeline' && <ProductionTimelineView profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} subcons={subcons} reload={loadAll} />}
         {view==='pattern' && <PatternView profile={profile} profiles={profiles} patterns={patterns} patternWorklist={patternWorklist} sampleJobs={sampleJobs} prodJobs={prodJobs} leads={leads} sizeCharts={sizeCharts} openTechpack={openTechpackView} reload={loadAll} />}
         {view==='cutting' && <CuttingView profile={profile} profiles={profiles} patterns={patterns} cuttingWorklist={cuttingWorklist} prodJobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} stockMovements={stockMovements} openTechpack={openTechpackView} reload={loadAll} />}
