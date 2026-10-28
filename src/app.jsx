@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 876 · In-House Sewing Payroll: projects whose production job is already DELIVERED are now hidden from the board (clears finished work). Any delivered project that still has unpaid payroll stays visible so nothing owed is lost. A "Show N delivered" toggle reveals them; nothing is deleted (reopening a job brings it back).";
+const BUILD = "Live build 876 · In-House Sewing Payroll: projects whose production job is already DELIVERED are now hidden from the board (clears finished work). Any delivered project that still has unpaid payroll stays visible so nothing owed is lost. A Show-delivered toggle reveals them; nothing is deleted (reopening a job brings it back).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
