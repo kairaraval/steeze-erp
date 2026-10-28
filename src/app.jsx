@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 873 · Approval sign-off review (AGM/Admin): attachments on the request are now shown as viewable thumbnails (images open in a lightbox, PDFs open to view) right in the modal, instead of only a count telling you to open the source module.";
+const BUILD = "Live build 874 · In-House Sewing Payroll: (1) client name now shown on every project + a Client column in For-payroll; (2) samples get a one-person Sample Maker (employee + price); (3) logging/edits are seamless now - no full refresh, you stay on the project; (4) blocks logging more pcs than the operation quantity (shows remaining + over-by warning); (5) adjustments (+ add / - deduct, e.g. damage) can be added when signing the final payroll run.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30214,7 +30214,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   const [opExpand,setOpExpand]=useState({});
   const num=(n)=>Number(n||0).toLocaleString();
 
-  async function load(){ setBusy(true);
+  async function load(silent){ if(!silent) setBusy(true);
     try{ const { data }=await sb.from('sewing_jobs').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setJobs(data||[]); }catch(_){ setJobs([]); }
     try{ const { data }=await sb.from('sampling_jobs').select('*').is('deleted_at',null).neq('status','delivered').order('created_at',{ascending:false}); setSamples(data||[]); }catch(_){ setSamples([]); }
     try{ const { data }=await sb.from('sorting_batches').select('id,lead_id,garment_qty,destination_type,expected_due_date,process,status').eq('destination_type','inhouse').is('deleted_at',null); setSortBatches(data||[]); }catch(_){ setSortBatches([]); }
@@ -30223,9 +30223,10 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
     try{ const { data }=await sb.from('inhouse_sew_batches').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setBatches(data||[]); }catch(_){ setBatches([]); }
     try{ const { data }=await sb.from('payroll_garments').select('*').order('name',{ascending:true}); setGarments(data||[]); }catch(_){ setGarments([]); }
     try{ const { data }=await sb.from('payroll_sewers').select('*').order('name',{ascending:true}); setSewers(data||[]); }catch(_){ setSewers([]); }
-    setBusy(false);
+    if(!silent) setBusy(false);
   }
   useEffect(()=>{ load(); },[]);
+  const [sampleMakerFor,setSampleMakerFor]=useState(null); // { p } sampling → one maker + price
 
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
   const projLabel=(job)=>{ const l=(leads||[]).find(x=>x.id===job.lead_id); const c=l?clientName(l.client_id):(job.client_name||''); const parts=[]; if(c) parts.push(c); if(l&&l.title) parts.push(l.title); else if(job.item) parts.push(job.item); return parts.filter(Boolean).join(' · ')||job.client_name||job.item||'Project'; };
@@ -30241,16 +30242,20 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
   // Union of project sources: Production (active sewing jobs + in-house sorting
   // releases) and Sampling (all samples are in-house). Each carries a stable
   // opKey used to attach operation rows.
+  const clientOf=(leadId, fallback)=>{ const l=(leads||[]).find(x=>x.id===leadId); const c=l&&l.client_id?clientName(l.client_id):''; return c||fallback||''; };
+  const titleOf=(leadId, fallback)=>{ const l=(leads||[]).find(x=>x.id===leadId); return (l&&l.title)||fallback||''; };
   const allProjects = React.useMemo(()=>{
     const list=[]; const seenLead=new Set();
     (jobs||[]).forEach(j=>{ const active=!SEWING_DONE.includes(j.status) || (ops||[]).some(o=>o.job_id===j.id); if(!active) return; if(j.lead_id) seenLead.add(j.lead_id);
-      list.push({ pkey:'prod:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', job:j, label:projLabel(j), number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
+      const client=clientOf(j.lead_id, j.client_name); const title=titleOf(j.lead_id, j.item);
+      list.push({ pkey:'prod:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', job:j, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
     });
     (sortBatches||[]).forEach(b=>{ if(!b.lead_id||seenLead.has(b.lead_id)) return; seenLead.add(b.lead_id);
-      const l=(leads||[]).find(x=>x.id===b.lead_id); const label=(l?[l.client_id?clientName(l.client_id):'', l.title].filter(Boolean).join(' · '):'')||b.client_name||b.item||'Project';
-      list.push({ pkey:'lead:'+b.lead_id, opKey:b.lead_id, lead_id:b.lead_id, source:'production', job:{ lead_id:b.lead_id, item:b.item, client_name:b.client_name, quantity:relByLead.get(b.lead_id)||0 }, label, number:'', qty:0, due:relDueByLead.get(b.lead_id)||null, released:relByLead.get(b.lead_id)||0 });
+      const client=clientOf(b.lead_id, b.client_name); const title=titleOf(b.lead_id, b.item);
+      list.push({ pkey:'lead:'+b.lead_id, opKey:b.lead_id, lead_id:b.lead_id, source:'production', job:{ lead_id:b.lead_id, item:b.item, client_name:b.client_name, quantity:relByLead.get(b.lead_id)||0 }, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:'', qty:0, due:relDueByLead.get(b.lead_id)||null, released:relByLead.get(b.lead_id)||0 });
     });
-    (samples||[]).forEach(s=>{ list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, label:projLabel(s), number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:relByLead.get(s.lead_id)||0 }); });
+    (samples||[]).forEach(s=>{ const client=clientOf(s.lead_id, s.client_name); const title=titleOf(s.lead_id, s.item);
+      list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:relByLead.get(s.lead_id)||0 }); });
     return list.map(p=>({ ...p, ops:(ops||[]).filter(o=>o.job_id===p.opKey) })).sort((a,b)=>a.label.localeCompare(b.label));
   }, [jobs, samples, sortBatches, ops, leads, clients, relByLead, relDueByLead]);
   const prodCount=allProjects.filter(p=>p.source==='production').length;
@@ -30264,19 +30269,29 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
     const base=(ops||[]).filter(o=>o.job_id===p.opKey).length;
     const dflt=Number(p.qty)||Number(p.released)||null;
     const payload=rows.filter(r=>r.op_name && r.op_name.trim()).map((r,i)=>({ job_id:p.opKey, lead_id:p.lead_id||null, source_job_id:(p.job&&p.job.source_job_id)||null, garment_id:r.garment_id||null, op_name:r.op_name.trim(), rate:(r.rate===''||r.rate==null)?null:Number(r.rate), target_qty:(r.target_qty===''||r.target_qty==null)?dflt:Number(r.target_qty), sewers:[], position:base+i, created_by:profile.id }));
-    if(payload.length){ await sb.from('inhouse_sew_ops').insert(payload); }
-    setSetupFor(null); load(); reload&&reload();
+    if(payload.length){ const { data }=await sb.from('inhouse_sew_ops').insert(payload).select(); if(data) setOps(prev=>[...prev,...data]); }
+    setSetupFor(null); load(true);
   }
-  async function updateOp(op, patch){ await sb.from('inhouse_sew_ops').update(patch).eq('id',op.id); setEditingOp(null); load(); }
-  async function removeOp(op){ if(logsByOp(op.id).length){ alert('This operation already has logged pcs — remove those first.'); return; } if(!confirm(`Remove operation "${op.op_name}"?`)) return; await sb.from('inhouse_sew_ops').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',op.id); load(); }
-  async function saveAssign(op, chosen){ await sb.from('inhouse_sew_ops').update({ sewers:chosen }).eq('id',op.id); setAssignFor(null); load(); }
+  async function updateOp(op, patch){ setOps(prev=>prev.map(o=>o.id===op.id?{...o,...patch}:o)); setEditingOp(null); await sb.from('inhouse_sew_ops').update(patch).eq('id',op.id); load(true); }
+  async function removeOp(op){ if(logsByOp(op.id).length){ alert('This operation already has logged pcs — remove those first.'); return; } if(!confirm(`Remove operation "${op.op_name}"?`)) return; setOps(prev=>prev.filter(o=>o.id!==op.id)); await sb.from('inhouse_sew_ops').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',op.id); load(true); }
+  async function saveAssign(op, chosen){ setOps(prev=>prev.map(o=>o.id===op.id?{...o,sewers:chosen}:o)); setAssignFor(null); await sb.from('inhouse_sew_ops').update({ sewers:chosen }).eq('id',op.id); load(true); }
   async function saveLog(op, vals){
     const s=(sewers||[]).find(x=>x.id===vals.sewer_id);
-    await sb.from('inhouse_sew_logs').insert({ op_id:op.id, job_id:op.job_id, lead_id:op.lead_id||null, sewer_id:vals.sewer_id, sewer_name:s?.name||vals.sewer_name||null, op_name:op.op_name, rate:op.rate, pcs:Number(vals.pcs)||0, log_date:vals.log_date||todayManila(), note:vals.note||null, status:'staged', created_by:profile.id });
-    setLogFor(null); load(); reload&&reload();
+    const { data }=await sb.from('inhouse_sew_logs').insert({ op_id:op.id, job_id:op.job_id, lead_id:op.lead_id||null, sewer_id:vals.sewer_id, sewer_name:s?.name||vals.sewer_name||null, op_name:op.op_name, rate:op.rate, pcs:Number(vals.pcs)||0, log_date:vals.log_date||todayManila(), note:vals.note||null, status:'staged', created_by:profile.id }).select();
+    if(data) setLogs(prev=>[...(data||[]),...prev]);
+    setLogFor(null); load(true);
   }
-  async function removeLog(l){ if(l.status!=='staged'){ alert('Only items still in “For payroll” can be removed.'); return; } if(!confirm('Remove this logged pcs?')) return; await sb.from('inhouse_sew_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); load(); }
-  async function confirmLogs(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.pcs)>0)); if(bad.length){ alert('Set a rate on the operation and pcs first.'); return; } await sb.from('inhouse_sew_logs').update({ status:'sent' }).in('id',ids); load(); }
+  async function saveSampleMaker(p, vals){
+    // Samples are made by one person for a fixed price — stored as a single op + log.
+    const { data:opRow }=await sb.from('inhouse_sew_ops').insert({ job_id:p.opKey, lead_id:p.lead_id||null, source_job_id:(p.job&&p.job.source_job_id)||null, op_name:vals.op_name||'Sample making', rate:Number(vals.price)||0, target_qty:Number(vals.qty)||1, sewers: vals.maker_id?[{id:vals.maker_id,name:vals.maker_name}]:[], position:(ops||[]).filter(o=>o.job_id===p.opKey).length, created_by:profile.id }).select().single();
+    if(opRow){ setOps(prev=>[...prev,opRow]);
+      const { data:logRow }=await sb.from('inhouse_sew_logs').insert({ op_id:opRow.id, job_id:p.opKey, lead_id:p.lead_id||null, sewer_id:vals.maker_id||null, sewer_name:vals.maker_name||null, op_name:opRow.op_name, rate:opRow.rate, pcs:Number(vals.qty)||1, log_date:todayManila(), status:'staged', created_by:profile.id }).select();
+      if(logRow) setLogs(prev=>[...(logRow||[]),...prev]);
+    }
+    setSampleMakerFor(null); load(true);
+  }
+  async function removeLog(l){ if(l.status!=='staged'){ alert('Only items still in “For payroll” can be removed.'); return; } if(!confirm('Remove this logged pcs?')) return; setLogs(prev=>prev.filter(x=>x.id!==l.id)); await sb.from('inhouse_sew_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); load(true); }
+  async function confirmLogs(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.pcs)>0)); if(bad.length){ alert('Set a rate on the operation and pcs first.'); return; } setLogs(prev=>prev.map(x=>ids.includes(x.id)?{...x,status:'sent'}:x)); await sb.from('inhouse_sew_logs').update({ status:'sent' }).in('id',ids); load(true); }
 
   // ── Garment-template management (shared payroll_garments) ──
   async function addGarment(name){ if(!name.trim()){ alert('Enter a garment name.'); return; } const { data, error }=await sb.from('payroll_garments').insert({ name:name.trim(), operations:[] }).select().single(); if(error){ alert(error.message); return; } setGarments(prev=>[...prev,data].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))); }
@@ -30340,13 +30355,15 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
               <div className="flex items-center gap-3 whitespace-nowrap">
                 <span className="text-xs text-slate-500">{num(projPcs)} pcs sewn · <b className="text-emerald-700">{peso(projAmt)}</b></span>
                 {(()=>{ const lead=(leads||[]).find(l=>l.id===p.lead_id); return lead && lead.techpack && openTechpack ? <button onClick={()=>openTechpack(lead)} className="text-xs px-2.5 py-1 rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-semibold" title={'View techpack '+(lead.techpack_number||'')}>📋 Techpack</button> : null; })()}
+                {canEdit && p.source==='sampling' && <button onClick={()=>setSampleMakerFor(p)} className="text-xs px-2.5 py-1 rounded-lg border text-purple-700 border-purple-300 hover:bg-purple-50 font-semibold" title="One person usually makes the sample — record the maker + price">+ Sample maker</button>}
                 {canEdit && <button onClick={()=>setSetupFor(p)} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Operations</button>}
               </div>
             </div>
             {!isCol && (p.ops.length===0 ? (
               <div className="p-4 text-center text-xs text-slate-400">No operations set up yet.{canEdit && <> <button onClick={()=>setSetupFor(p)} className="text-indigo-600 hover:underline font-medium">Set up operations</button></>}</div>
             ) : (
-              <div className="divide-y">{p.ops.map(op=>{ const oLogs=logsByOp(op.id); const open=opExpand[op.id]; const asg=Array.isArray(op.sewers)?op.sewers:[]; return (
+              <div className="divide-y">{p.ops.map(op=>{ const oLogs=logsByOp(op.id); const open=opExpand[op.id]; const asg=Array.isArray(op.sewers)?op.sewers:[];
+                const cap=Number(op.target_qty)||Number(p.qty)||Number(p.released)||0; const done=opPcs(op.id); const remaining=cap>0?Math.max(0,cap-done):null; const over=cap>0&&done>cap; return (
                 <div key={op.id} className="px-4 py-2.5">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="min-w-0">
@@ -30354,13 +30371,15 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
                         <span className="text-slate-400 text-xs mr-1">{open?'▾':'▸'}</span>
                         <span className="font-semibold">{op.op_name}</span>
                         <span className="text-xs text-slate-500 ml-2">{op.rate!=null?`₱${Number(op.rate).toLocaleString()}/pc`:<span className="text-rose-500">no rate</span>}</span>
-                        <span className="text-xs text-slate-400 ml-2">· {num(opPcs(op.id))}{op.target_qty?` / ${num(op.target_qty)}`:''} pcs · {peso(opAmount(op.id))}</span>
+                        <span className="text-xs text-slate-400 ml-2">· {num(done)}{cap>0?` / ${num(cap)}`:''} pcs · {peso(opAmount(op.id))}</span>
+                        {over && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">over by {num(done-cap)}</span>}
+                        {!over && remaining===0 && cap>0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">complete</span>}
                       </button>
                       <div className="text-[11px] text-slate-500 mt-0.5">Sewers: {asg.length?asg.map(s=>s.name).join(', '):<span className="text-slate-400">none assigned</span>}</div>
                     </div>
                     {canEdit && <div className="flex items-center gap-2 whitespace-nowrap">
                       <button onClick={()=>setAssignFor({ op })} className="text-xs text-indigo-600 hover:underline">Assign sewers</button>
-                      <button onClick={()=>setLogFor({ op })} className="text-xs text-emerald-700 hover:underline font-semibold">+ Log pcs</button>
+                      <button onClick={()=>setLogFor({ op, remaining, cap })} className="text-xs text-emerald-700 hover:underline font-semibold">+ Log pcs</button>
                       <button onClick={()=>setEditingOp(op)} className="text-xs text-slate-500 hover:underline">Edit</button>
                       <button onClick={()=>removeOp(op)} className="text-xs text-rose-500 hover:underline">✕</button>
                     </div>}
@@ -30385,7 +30404,10 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
         const bySewer=(()=>{ const m=new Map(); sent.forEach(l=>{ const k=l.sewer_id||l.sewer_name; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(l); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); return Array.from(m.values()).sort((a,b)=>a.name.localeCompare(b.name)); })();
         const rfpFor=(b)=>b.rfp_id?(rfps||[]).find(r=>r.id===b.rfp_id):null;
         const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
-        const projNm=(leadId,jobId)=>{ const p=allProjects.find(x=>x.opKey===jobId||(leadId&&x.lead_id===leadId)); return p?p.label:''; };
+        const findProj=(jobId,leadId)=>allProjects.find(x=>x.opKey===jobId||(leadId&&x.lead_id===leadId));
+        const projNm=(leadId,jobId)=>{ const p=findProj(jobId,leadId); return p?p.label:''; };
+        const clientNm=(jobId,leadId)=>{ const p=findProj(jobId,leadId); return p?(p.client||''):''; };
+        const projTitle=(leadId,jobId)=>{ const p=findProj(jobId,leadId); return p?(p.title||p.label||''):''; };
         return (
         <div className="space-y-3">
           <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: logged pcs land here. Check them, then <b>Confirm</b> → <b>In payroll</b>. There Maricel <b>signs</b> the run → one <b>Request for Payment</b> → AGM → Finance.</div>
@@ -30398,10 +30420,11 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
 
           {payrollSub==='staged' && (staged.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing staged. Log pcs on the Floor &amp; operations tab.</div> :
             <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Sewer</th><th className="text-left px-3 py-2">Project · Operation</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>{canSign&&<th></th>}</tr></thead>
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Sewer</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project · Operation</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>{canSign&&<th></th>}</tr></thead>
               <tbody>{staged.map(l=>(<tr key={l.id} className="border-t">
                 <td className="px-3 py-2 font-medium">{l.sewer_name||sewerNm(l.sewer_id)}</td>
-                <td className="px-3 py-2 text-xs text-slate-500">{projNm(l.lead_id,l.job_id)} · {l.op_name}</td>
+                <td className="px-3 py-2 text-xs font-medium text-slate-700">{clientNm(l.job_id,l.lead_id)||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{projTitle(l.lead_id,l.job_id)} · {l.op_name}</td>
                 <td className="px-3 py-2 text-right">{num(l.pcs)}</td><td className="px-3 py-2 text-right">{peso(l.rate)}</td>
                 <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(l))}</td>
                 {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>confirmLogs([l])} className="text-xs text-violet-700 hover:underline font-semibold mr-2">✓ Confirm</button><button onClick={()=>removeLog(l)} className="text-xs text-rose-500 hover:underline">Remove</button></td>}
@@ -30465,7 +30488,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, rfps, openTechpa
 
       {setupFor && <InhouseOpsSetupModal job={{ client_name:setupFor.label, item:'', quantity:(setupFor.qty||setupFor.released||0) }} garments={garments} onClose={()=>setSetupFor(null)} onSave={(rows)=>saveSetup(setupFor, rows)} />}
       {assignFor && <InhouseAssignSewersModal op={assignFor.op} sewers={sewers} onClose={()=>setAssignFor(null)} onSave={(chosen)=>saveAssign(assignFor.op, chosen)} />}
-      {logFor && <InhouseLogPcsModal op={logFor.op} sewers={sewers} onClose={()=>setLogFor(null)} onSave={(vals)=>saveLog(logFor.op, vals)} />}
+      {logFor && <InhouseLogPcsModal op={logFor.op} remaining={logFor.remaining} cap={logFor.cap} sewers={sewers} onClose={()=>setLogFor(null)} onSave={(vals)=>saveLog(logFor.op, vals)} />}
+      {sampleMakerFor && <InhouseSampleMakerModal project={sampleMakerFor} sewers={sewers} onClose={()=>setSampleMakerFor(null)} onSave={(vals)=>saveSampleMaker(sampleMakerFor, vals)} />}
       {editingOp && <InhouseOpEditModal op={editingOp} onClose={()=>setEditingOp(null)} onSave={(patch)=>updateOp(editingOp, patch)} />}
       {signing && <InhouseSewSignModal rows={(logs||[]).filter(l=>l.status==='sent' && !l.batch_id)} sewers={sewers} jobs={jobs} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
     </div>
@@ -30539,26 +30563,71 @@ function InhouseAssignSewersModal({ op, sewers, onClose, onSave }){
   );
 }
 
-function InhouseLogPcsModal({ op, sewers, onClose, onSave }){
+function InhouseLogPcsModal({ op, remaining, cap, sewers, onClose, onSave }){
   const assigned=(Array.isArray(op?.sewers)?op.sewers:[]);
   const roster=(sewers||[]).filter(s=>s.active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   const opts=assigned.length?assigned.map(a=>({ id:a.id, name:a.name })):roster.map(s=>({ id:s.id, name:s.name }));
   const [f,setF]=useState({ sewer_id:opts[0]?.id||'', pcs:'', log_date:todayManila(), note:'' });
   const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(s=>({...s,[k]:v}));
-  function save(){ if(!f.sewer_id){ setMsg('Pick a sewer.'); return; } if(!(Number(f.pcs)>0)){ setMsg('Enter pcs.'); return; } onSave(f); }
+  const hasCap = remaining!=null;
+  const over = hasCap && Number(f.pcs)>remaining;
+  function save(){
+    if(!f.sewer_id){ setMsg('Pick a sewer.'); return; }
+    if(!(Number(f.pcs)>0)){ setMsg('Enter pcs.'); return; }
+    if(hasCap && Number(f.pcs)>remaining){ setMsg(`Only ${Number(remaining).toLocaleString()} pc(s) left for this operation (cap ${Number(cap).toLocaleString()}). You can't log more than the quantity.`); return; }
+    onSave(f);
+  }
   return (
     <Modal title={`+ Log pcs — ${op?.op_name||''}`} onClose={onClose}>
       <div className="space-y-3">
         <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Rate: {op?.rate!=null?`₱${Number(op.rate).toLocaleString()}/pc`:'— set a rate first'}. Logged pcs go straight to payroll (rate × pcs).</div>
+        {hasCap && <div className={`text-xs rounded p-2 border ${remaining>0?'bg-sky-50 border-sky-200 text-sky-800':'bg-rose-50 border-rose-200 text-rose-700'}`}>{remaining>0?<><b>{Number(remaining).toLocaleString()}</b> pc(s) left to log for this operation (cap {Number(cap).toLocaleString()}).</>:<>This operation is already at its quantity cap ({Number(cap).toLocaleString()}). You can't log more.</>}</div>}
         <div><label className="text-[10px] uppercase text-slate-500">Sewer</label><select className="input mt-0.5 text-sm" value={f.sewer_id} onChange={e=>up('sewer_id',e.target.value)}><option value="">— select —</option>{opts.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-2">
-          <div><label className="text-[10px] uppercase text-slate-500">Pcs done</label><input type="number" min="0" className="input mt-0.5 text-sm text-right" value={f.pcs} onChange={e=>up('pcs',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Pcs done{hasCap?` (max ${Number(remaining).toLocaleString()})`:''}</label><input type="number" min="0" max={hasCap?remaining:undefined} className={`input mt-0.5 text-sm text-right ${over?'border-rose-400':''}`} value={f.pcs} onChange={e=>up('pcs',e.target.value)} /></div>
           <div><label className="text-[10px] uppercase text-slate-500">Date</label><input type="date" className="input mt-0.5 text-sm" value={f.log_date} onChange={e=>up('log_date',e.target.value)} /></div>
         </div>
+        {over && <div className="text-xs text-rose-600">That's more than the {Number(remaining).toLocaleString()} pc(s) remaining.</div>}
         {Number(f.pcs)>0 && op?.rate>0 && <div className="text-xs text-slate-600">Amount: <b>{peso(Number(f.pcs)*Number(op.rate))}</b></div>}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">+ Log pcs</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} disabled={over||(hasCap&&remaining<=0)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">+ Log pcs</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Record the one person who made a sample + their price (samples = single maker).
+function InhouseSampleMakerModal({ project, sewers, onClose, onSave }){
+  const roster=(sewers||[]).filter(s=>s.active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const [mode,setMode]=useState('roster'); // 'roster' | 'name'
+  const [f,setF]=useState({ maker_id:roster[0]?.id||'', maker_name:'', op_name:'Sample making', qty:1, price:'' });
+  const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  function save(){
+    const maker_id = mode==='roster'? f.maker_id : null;
+    const maker_name = mode==='roster'? (roster.find(s=>s.id===f.maker_id)?.name||'') : f.maker_name.trim();
+    if(!maker_name){ setMsg('Choose or type the sample maker.'); return; }
+    if(!(Number(f.price)>0)){ setMsg('Enter the price.'); return; }
+    onSave({ maker_id, maker_name, op_name:f.op_name.trim()||'Sample making', qty:Number(f.qty)||1, price:Number(f.price) });
+  }
+  return (
+    <Modal title="+ Sample maker" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500 bg-purple-50 border border-purple-200 rounded p-2">{project?.label} — record who made the sample and the agreed price. This goes to payroll like any other line.</div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
+          <button onClick={()=>setMode('roster')} className={`px-3 py-1 rounded-md ${mode==='roster'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>From roster</button>
+          <button onClick={()=>setMode('name')} className={`px-3 py-1 rounded-md ${mode==='name'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Type a name</button>
+        </div>
+        {mode==='roster'
+          ? <div><label className="text-[10px] uppercase text-slate-500">Sample maker</label><select className="input mt-0.5 text-sm" value={f.maker_id} onChange={e=>up('maker_id',e.target.value)}><option value="">— select —</option>{roster.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+          : <div><label className="text-[10px] uppercase text-slate-500">Sample maker (name)</label><input className="input mt-0.5 text-sm" value={f.maker_name} onChange={e=>up('maker_name',e.target.value)} placeholder="e.g. employee name" /></div>}
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase text-slate-500">Label</label><input className="input mt-0.5 text-sm" value={f.op_name} onChange={e=>up('op_name',e.target.value)} /></div>
+          <div><label className="text-[10px] uppercase text-slate-500">Price (₱)</label><input type="number" min="0" step="0.01" className="input mt-0.5 text-sm text-right" value={f.price} onChange={e=>up('price',e.target.value)} /></div>
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-purple-600 text-white font-semibold">Save sample maker</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
       </div>
     </Modal>
   );
@@ -30567,25 +30636,35 @@ function InhouseLogPcsModal({ op, sewers, onClose, onSave }){
 // Sign the whole in-payroll run → raise ONE RFP → AGM → Finance.
 function InhouseSewSignModal({ rows, sewers, jobs, profile, onClose, onSaved }){
   const [sig,setSig]=useState(''); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [adjs,setAdjs]=useState([]); // { label, amount(+/-), note }
   const num=(n)=>Number(n||0).toLocaleString();
   const sewerNm=(id)=>(sewers||[]).find(s=>s.id===id)?.name||'Sewer';
   const amtOf=(l)=>Number(l.pcs||0)*Number(l.rate||0);
-  const pcs=rows.reduce((t,l)=>t+Number(l.pcs||0),0); const amount=rows.reduce((t,l)=>t+amtOf(l),0);
+  const pcs=rows.reduce((t,l)=>t+Number(l.pcs||0),0); const baseAmount=rows.reduce((t,l)=>t+amtOf(l),0);
+  const adjTotal=adjs.reduce((t,a)=>t+(Number(a.amount)||0),0);
+  const amount=baseAmount+adjTotal;
   const sewerCount=new Set(rows.map(l=>l.sewer_id||l.sewer_name)).size;
+  const addAdj=()=>setAdjs(a=>[...a,{ label:'', amount:'', note:'' }]);
+  const setAdj=(i,k,v)=>setAdjs(a=>a.map((x,idx)=>idx===i?{...x,[k]:v}:x));
+  const rmAdj=(i)=>setAdjs(a=>a.filter((_,idx)=>idx!==i));
   async function save(){
     if(!rows.length){ setMsg('Nothing to sign.'); return; }
     if(!sig.trim()){ setMsg('Type your name to sign.'); return; }
+    if(adjs.some(a=>a.amount!=='' && !(Number.isFinite(Number(a.amount))))){ setMsg('Adjustment amounts must be numbers (use − for a deduction).'); return; }
+    if(amount<0){ setMsg('Adjustments make the run total negative — please review.'); return; }
     setBusy(true);
     try{
+      const cleanAdjs=adjs.filter(a=>Number(a.amount)!==0 && a.amount!=='').map(a=>({ label:(a.label||'Adjustment').trim(), amount:Number(a.amount)||0, note:(a.note||'').trim() }));
       const monthKey=new Date().toISOString().slice(0,7);
       const { data:bRows }=await sb.from('inhouse_sew_batches').select('number').like('number',`ISR-${monthKey}-%`);
       let max=0; (bRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
       const number=`ISR-${monthKey}-${String(max+1).padStart(3,'0')}`;
-      const { data:batch, error:be }=await sb.from('inhouse_sew_batches').insert({ number, status:'signed', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, created_by:profile.id }).select('id,number').single();
+      const { data:batch, error:be }=await sb.from('inhouse_sew_batches').insert({ number, status:'signed', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, adjustments:cleanAdjs, created_by:profile.id }).select('id,number').single();
       if(be) throw be;
       await sb.from('inhouse_sew_logs').update({ status:'batched', batch_id:batch.id }).in('id', rows.map(r=>r.id));
       const rfpNo=await nextRfpNumber();
-      const particulars=`[In-House Sewing Payroll] ${batch.number} — ${sewerCount} sewer${sewerCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${sig.trim()}.`;
+      const adjNote=cleanAdjs.length?` Incl. ${cleanAdjs.length} adjustment(s): ${adjTotal>=0?'+':''}${num(adjTotal)}.`:'';
+      const particulars=`[In-House Sewing Payroll] ${batch.number} — ${sewerCount} sewer${sewerCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${sig.trim()}.${adjNote}`;
       const { data:rfp, error:re }=await sb.from('rfps').insert({ number:rfpNo, date:todayManila(), status:'pending_agm', origin:'inhouse_sewing', supplier_name:'In-House Sewing Payroll', amount, particulars, payment_method:'cash', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
       if(re) throw re;
       await sb.from('inhouse_sew_batches').update({ status:'requested', rfp_id:rfp.id }).eq('id',batch.id);
@@ -30601,8 +30680,25 @@ function InhouseSewSignModal({ rows, sewers, jobs, profile, onClose, onSaved }){
         <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto"><table className="w-full text-xs">
           <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Sewer</th><th className="text-left px-3 py-1.5">Operation</th><th className="text-right px-3 py-1.5">Pcs</th><th className="text-right px-3 py-1.5">Rate</th><th className="text-right px-3 py-1.5">Amount</th></tr></thead>
           <tbody>{rows.map(l=>(<tr key={l.id} className="border-t"><td className="px-3 py-1.5">{l.sewer_name||sewerNm(l.sewer_id)}</td><td className="px-3 py-1.5 text-slate-500">{l.op_name}</td><td className="px-3 py-1.5 text-right">{num(l.pcs)}</td><td className="px-3 py-1.5 text-right">{peso(l.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(l))}</td></tr>))}</tbody>
-          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5" colSpan="2">Total</td><td className="px-3 py-1.5 text-right">{num(pcs)}</td><td></td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(amount)}</td></tr></tfoot>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5" colSpan="2">Sewing subtotal</td><td className="px-3 py-1.5 text-right">{num(pcs)}</td><td></td><td className="px-3 py-1.5 text-right text-slate-700">{peso(baseAmount)}</td></tr></tfoot>
         </table></div>
+        <div className="border rounded-lg p-3 bg-amber-50/40">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-xs font-semibold text-slate-700">Adjustments <span className="font-normal text-slate-500">(+ add / − deduct — e.g. damage, extra work)</span></div>
+            <button onClick={addAdj} className="text-xs text-amber-700 hover:underline font-semibold">+ Add adjustment</button>
+          </div>
+          {adjs.length===0 ? <div className="text-[11px] text-slate-400">No adjustments.</div> :
+          <div className="space-y-1.5">{adjs.map((a,i)=>(<div key={i} className="grid grid-cols-12 gap-2 items-center">
+            <input className="input text-sm col-span-4" placeholder="Label (e.g. damage deduction)" value={a.label} onChange={e=>setAdj(i,'label',e.target.value)} />
+            <input type="number" step="0.01" className="input text-sm text-right col-span-3" placeholder="+ / − amount" value={a.amount} onChange={e=>setAdj(i,'amount',e.target.value)} />
+            <input className="input text-sm col-span-4" placeholder="Note (optional)" value={a.note} onChange={e=>setAdj(i,'note',e.target.value)} />
+            <button onClick={()=>rmAdj(i)} className="text-rose-400 hover:text-rose-600 text-sm col-span-1">✕</button>
+          </div>))}</div>}
+        </div>
+        <div className="flex items-center justify-between px-1 text-sm">
+          <span className="text-slate-500">{adjs.length>0?`Adjustments: ${adjTotal>=0?'+':''}${peso(adjTotal)}`:''}</span>
+          <span className="font-bold">Run total: <span className="text-emerald-700">{peso(amount)}</span></span>
+        </div>
         <div><label className="text-[10px] uppercase text-slate-500">Sign — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. Maricel …" /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Sign & request payment'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
