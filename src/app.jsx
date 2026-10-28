@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 880 · Team Overview: each sales person profile is now a full review with tabs - Overview, Bookings (monthly & yearly sales orders with per-client item prices), Pipeline (open deals by stage, hot ones flagged), Sampling (sample fee, paid?, and whether it pushed to production), and Hero items (best-sellers by value).";
+const BUILD = "Live build 881 · Subcon Sewing legacy-paid now covers a set quantity, not everything: extra returns beyond the legacy-paid amount can be added to payroll again. Irene Javier on Winston Blue: 640 covered by legacy, the later 267 returns are now payable.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10626,11 +10626,19 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.payable=Math.max(0, Number(s.returned||0) - s.staged); // good returns not yet added to payroll
         s.unpaid=Math.max(0, s.staged - s.paid);                  // on payroll but not yet paid
         // Legacy-paid: this subcon's work on this chain was already paid through the
-        // OLD manual subcon payroll. Suppress all payment prompts for it.
+        // OLD manual subcon payroll. The tag COVERS a quantity (lp.qty): if qty is
+        // null it covers everything (no payment prompt ever); if a qty is set, only
+        // that many pieces are considered already paid, so any EXTRA returns beyond
+        // it (e.g. a later balance that came back) can still be added to payroll.
         const lp=(legacyPaid||[]).find(x=>!x.deleted_at && x.lead_id===p.lead_id && x.subcon_id===s.subcon_id);
         s.legacyPaid = !!lp;
         s.legacyPaidRec = lp||null;
-        if(s.legacyPaid){ s.payable=0; s.unpaid=0; }
+        if(s.legacyPaid){
+          const covered = (lp.qty==null||lp.qty==='') ? (Number(s.returned||0)) : Number(lp.qty||0);
+          s.legacyCovered = covered;
+          s.payable = Math.max(0, Number(s.returned||0) - s.staged - covered);
+          if(s.payable<=0) s.unpaid=0;
+        }
         // IN-HOUSE sewing is paid through the in-house sewing payroll, NOT here.
         // In Subcon Sewing it's monitoring-only: track that pieces came back, but
         // never prompt for payment and never keep a project "open" just because
@@ -10815,7 +10823,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const ActionCell=({p,s})=> !canEdit ? null : (
     <td className="px-3 py-2 text-right whitespace-nowrap">
       {s.subcon_id && (Number(s.balance||0)>0 || !p.projectDone) && <button onClick={()=>setFloorReturn({p,s})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
-      {s.subcon_id && !s.inhouse && !s.legacyPaid && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title="Add the returned pieces to the For-payroll list (partial is fine)">💰 Add to payroll ({num(s.payable)})</button>}
+      {s.subcon_id && !s.inhouse && s.payable>0 && <button onClick={()=>setAddPayroll({p,s})} className="text-xs text-violet-700 hover:underline font-semibold mr-2" title={s.legacyPaid?'Extra returns beyond the legacy-paid amount — add them to payroll':'Add the returned pieces to the For-payroll list (partial is fine)'}>💰 Add to payroll ({num(s.payable)})</button>}
       {!s.inhouse && !s.legacyPaid && s.staged>0 && <span className="text-[10px] text-violet-600 mr-2" title="Pieces already added to the payroll list">💰 {num(s.staged)} added</span>}
       <button onClick={()=>setEditing(s.assignment||{ lead_id:p.lead_id, subcon_id:s.subcon_id })} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
       {s.assignment && <button onClick={()=>del(s.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
