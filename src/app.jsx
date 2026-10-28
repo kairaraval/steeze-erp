@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 877 · Scheduled tab now keys off the production jobs actual status: rows whose job is delivered (or plan marked done) are hidden, since the plan done-flag was often left unset. A Show-finished toggle reveals them.";
+const BUILD = "Live build 878 · In-House Sewing Payroll now sources from the Sewing jobs (the real data): to-do jobs show in the Scheduled tab, in-progress (or any with operations set up) show on the Floor, and delivered jobs were archived out. Fixes operations entered earlier that had disappeared.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30250,38 +30250,32 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
   const titleOf=(leadId, fallback)=>{ const l=(leads||[]).find(x=>x.id===leadId); return (l&&l.title)||fallback||''; };
   const allProjects = React.useMemo(()=>{
     const list=[];
-    // PRODUCTION — comes ONLY from the sorting department (trad + subli sorting
-    // releases to in-house). Sorting carries the exact piece count. We do NOT
-    // pull from the production/sewing board, so projects still in sampling don't
-    // leak in. Aggregated per lead (a lead may have several release batches).
-    const byLead=new Map();
-    (sortBatches||[]).forEach(b=>{ if(!b.lead_id) return; const g=byLead.get(b.lead_id)||{ released:0, due:null, client_name:b.client_name, item:(b.item||b.item_label) };
-      g.released+=Number(b.garment_qty||0);
-      if(b.expected_due_date && (!g.due || b.expected_due_date<g.due)) g.due=b.expected_due_date;
-      if(!g.client_name && b.client_name) g.client_name=b.client_name;
-      if(!g.item && (b.item||b.item_label)) g.item=(b.item||b.item_label);
-      byLead.set(b.lead_id,g);
+    // PRODUCTION — the real data is the Sewing jobs Anjelica tagged for sewing.
+    //   • status 'to do'        → Scheduled (forward list)
+    //   • status 'in progress'  → on the Floor (being worked now)
+    //   • has operations set up → treated as on the Floor too (work started,
+    //     even if the status flag wasn't moved yet)
+    // Delivered sewing jobs are archived out, so they don't appear here.
+    // Sorting releases (trad/subli) give the exact "released to in-house" count.
+    (jobs||[]).forEach(j=>{ if(SEWING_DONE.includes(j.status)) return;
+      const hasOps=(ops||[]).some(o=>o.job_id===j.id);
+      const stage = (j.status==='in progress' || hasOps) ? 'floor' : (j.status==='to do' ? 'scheduled' : 'floor');
+      const client=clientOf(j.lead_id, j.client_name); const title=titleOf(j.lead_id, j.item);
+      list.push({ pkey:'sew:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', stage, job:j, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
     });
-    byLead.forEach((g,leadId)=>{ const client=clientOf(leadId,g.client_name); const title=titleOf(leadId,g.item);
-      list.push({ pkey:'lead:'+leadId, opKey:leadId, lead_id:leadId, source:'production', job:{ lead_id:leadId, item:g.item, client_name:g.client_name, quantity:g.released }, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:'', qty:g.released, due:g.due, released:g.released });
-    });
-    // SAMPLING — all samples are in-house.
+    // SAMPLING — all samples are in-house (daily-rate; one sample maker).
     (samples||[]).forEach(s=>{ const client=clientOf(s.lead_id, s.client_name); const title=titleOf(s.lead_id, s.item);
-      list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:0 }); });
+      list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', stage:'floor', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:0 }); });
     return list.map(p=>({ ...p, ops:(ops||[]).filter(o=>o.job_id===p.opKey) })).sort((a,b)=>a.label.localeCompare(b.label));
-  }, [samples, sortBatches, ops, leads, clients]);
+  }, [jobs, samples, ops, leads, clients, relByLead, relDueByLead]);
   // Leads whose production job is already DELIVERED → hide from the board by
   // default (they're finished). Keep any that still have unpaid payroll so work
   // owed is never hidden. Nothing is deleted — reopening the job brings it back.
-  const deliveredLeads = React.useMemo(()=> new Set((prodJobs||[]).filter(j=>!j.deleted_at && j.status==='delivered' && j.lead_id).map(j=>j.lead_id)), [prodJobs]);
-  const hasPendingPay=(p)=> (logs||[]).some(l=>l.job_id===p.opKey && (l.status==='staged'||l.status==='sent'));
-  const isDeliveredProj=(p)=> p.source==='production' && deliveredLeads.has(p.lead_id) && !hasPendingPay(p);
-  const prodCount=allProjects.filter(p=>p.source==='production' && (showDelivered || !isDeliveredProj(p))).length;
-  const smpCount=allProjects.filter(p=>p.source==='sampling').length;
-  const deliveredHidden=allProjects.filter(p=>isDeliveredProj(p)).length;
-  const projects=allProjects
+  const floorProjects=allProjects.filter(p=>p.stage==='floor');
+  const prodCount=floorProjects.filter(p=>p.source==='production').length;
+  const smpCount=floorProjects.filter(p=>p.source==='sampling').length;
+  const projects=floorProjects
     .filter(p=> srcFilter==='all' ? true : p.source===srcFilter)
-    .filter(p=> showDelivered || !isDeliveredProj(p))
     .filter(p=> !search || `${p.label} ${p.number||''} ${p.ops.map(o=>o.op_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()));
 
   // ── actions ──
@@ -30341,35 +30335,28 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
       </div>
 
       {tab==='scheduled' && (()=>{
-        const jobById=new Map((prodJobs||[]).map(j=>[j.id,j]));
-        const allRows=(planEntries||[]).map(e=>{ const j=jobById.get(e.production_job_id);
-          const client=j?clientOf(j.lead_id, j.client_name):''; const title=j?titleOf(j.lead_id, j.item):'';
-          const delivered = j ? (j.status==='delivered') : false;
-          return { id:e.id, client, title:title||j?.item||'(project)', number:j?.number||'', date:e.date, deadline:e.deadline, qty:Number(e.quantity||0), released:Number(e.released_qty||0), received:Number(e.received_qty||0), done:(!!e.done||delivered), delivered, jobDeleted: j?!!j.deleted_at:false };
-        }).filter(r=>!r.jobDeleted).sort((a,b)=> String(a.deadline||a.date||'').localeCompare(String(b.deadline||b.date||'')));
-        const doneCount=allRows.filter(r=>r.done).length;
-        const rows=allRows.filter(r=> showSchedDone || !r.done);
+        const rows=allProjects.filter(p=>p.stage==='scheduled').sort((a,b)=> String(a.due||'').localeCompare(String(b.due||'')));
         const totQ=rows.reduce((t,r)=>t+r.qty,0);
         return (
         <div className="space-y-3">
-          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Scheduled in-house sewing from the <b>production plan</b> (Anjelica). This is the forward schedule only — a project lands on the <b>Floor &amp; operations</b> tab for payroll once the <b>sorting team</b> releases the actual pieces to in-house. Finished (delivered/done) rows are hidden.</div>
-          {doneCount>0 && <div className="text-xs"><button onClick={()=>setShowSchedDone(v=>!v)} className="text-slate-500 hover:text-slate-800 underline">{showSchedDone?`Hide ${doneCount} finished`:`Show ${doneCount} finished`}</button></div>}
-          {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No in-house sewing scheduled{!showSchedDone&&doneCount>0?' (all scheduled items are already delivered/done)':''}.</div> :
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">To-do sewing jobs Anjelica tagged for in-house sewing — the forward schedule. A job moves to the <b>Floor &amp; operations</b> tab once it's marked <b>in progress</b> on the Sewing board, or once you set up its operations here. Delivered jobs are archived out.</div>
+          {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No to-do sewing jobs scheduled.</div> :
           <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Scheduled</th><th className="text-left px-3 py-2">Deadline</th><th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Released</th><th className="text-right px-3 py-2">Received</th><th className="px-3 py-2">Status</th></tr></thead>
-            <tbody>{rows.map(r=>{ const overdue=r.deadline && r.deadline<todayManila() && !r.done; return (
-              <tr key={r.id} className={`border-t ${overdue?'bg-rose-50/50':''}`}>
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Due</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Released by sorting</th>{canEdit&&<th></th>}</tr></thead>
+            <tbody>{rows.map(r=>{ const overdue=r.due && r.due<todayManila(); const lead=(leads||[]).find(l=>l.id===r.lead_id); return (
+              <tr key={r.pkey} className={`border-t ${overdue?'bg-rose-50/50':''}`}>
                 <td className="px-3 py-2 font-medium">{r.client||'—'}</td>
-                <td className="px-3 py-2 text-xs text-slate-600">{r.title}{r.number&&<span className="text-slate-400 font-mono ml-1">{r.number}</span>}</td>
-                <td className="px-3 py-2 text-xs">{r.date?fmtDate(r.date):'—'}</td>
-                <td className="px-3 py-2 text-xs">{r.deadline?<span className={overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.deadline)}{overdue?' ⚠':''}</span>:'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-600">{r.title||r.label}{r.number&&<span className="text-slate-400 font-mono ml-1">{r.number}</span>}</td>
+                <td className="px-3 py-2 text-xs">{r.due?<span className={overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.due)}{overdue?' ⚠':''}</span>:'—'}</td>
                 <td className="px-3 py-2 text-right">{num(r.qty)}</td>
                 <td className="px-3 py-2 text-right text-sky-700">{r.released?num(r.released):'—'}</td>
-                <td className="px-3 py-2 text-right text-emerald-700">{r.received?num(r.received):'—'}</td>
-                <td className="px-3 py-2 text-center">{r.done?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">done</span>:r.released>0?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">released</span>:<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">scheduled</span>}</td>
+                {canEdit&&<td className="px-3 py-2 text-right whitespace-nowrap">
+                  {lead && lead.techpack && openTechpack && <button onClick={()=>openTechpack(lead)} className="text-xs text-teal-700 hover:underline mr-2">📋 Techpack</button>}
+                  <button onClick={()=>{ setTab('floor'); setTimeout(()=>setSetupFor(r),0); }} className="text-xs text-indigo-600 hover:underline">Set up operations →</button>
+                </td>}
               </tr>
             ); })}</tbody>
-            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="4">{rows.length} scheduled</td><td className="px-3 py-2 text-right">{num(totQ)}</td><td colSpan="3"></td></tr></tfoot>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="3">{rows.length} scheduled</td><td className="px-3 py-2 text-right">{num(totQ)}</td><td colSpan={canEdit?2:1}></td></tr></tfoot>
           </table></div>}
         </div>
         );
@@ -30384,7 +30371,6 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
               ))}
             </div>
             <span className="text-xs text-slate-400">{projects.length} shown</span>
-            {deliveredHidden>0 && <button onClick={()=>setShowDelivered(v=>!v)} className="text-xs text-slate-500 hover:text-slate-800 underline">{showDelivered?`Hide ${deliveredHidden} delivered`:`Show ${deliveredHidden} delivered`}</button>}
           </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, operation…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
         </div>
@@ -30403,7 +30389,6 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
                 <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">{p.source==='sampling'?'🧪':'📦'}</span>
                 <span className="font-bold truncate">{p.label}</span>
                 <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${p.source==='sampling'?'bg-purple-100 text-purple-700':'bg-indigo-100 text-indigo-700'}`}>{p.source==='sampling'?'Sampling':'Production'}</span>
-                {isDeliveredProj(p) && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600" title="Production job already delivered">delivered</span>}
                 {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
                 {p.qty>0 && <span className="text-[11px] text-slate-500">· {num(p.qty)} pcs</span>}
                 {p.released>0 && <span className="text-[11px] text-sky-700" title="Released to in-house by the sorting team">· ⬇ {num(p.released)} released{bal!=null?` · ${num(bal)} bal`:''}</span>}
