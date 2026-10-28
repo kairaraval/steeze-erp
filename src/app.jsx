@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 878 · In-House Sewing Payroll now sources from the Sewing jobs (the real data): to-do jobs show in the Scheduled tab, in-progress (or any with operations set up) show on the Floor, and delivered jobs were archived out. Fixes operations entered earlier that had disappeared.";
+const BUILD = "Live build 879 · In-House Sewing: Scheduled tab now shows a Production/Sampling tag too; a sewing job whose lead is still in the Sampling stage (e.g. CASA) is tagged Sampling, not Production. Removed the NING ICASAS test operations from the floor.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30260,8 +30260,12 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
     (jobs||[]).forEach(j=>{ if(SEWING_DONE.includes(j.status)) return;
       const hasOps=(ops||[]).some(o=>o.job_id===j.id);
       const stage = (j.status==='in progress' || hasOps) ? 'floor' : (j.status==='to do' ? 'scheduled' : 'floor');
+      // Production vs Sampling follows the lead's stage — a sewing job whose lead
+      // is still in the Sampling stage (e.g. CASA) is sample work, not production.
+      const leadStage=(leads||[]).find(x=>x.id===j.lead_id)?.stage;
+      const source = leadStage==='sampling' ? 'sampling' : 'production';
       const client=clientOf(j.lead_id, j.client_name); const title=titleOf(j.lead_id, j.item);
-      list.push({ pkey:'sew:'+j.id, opKey:j.id, lead_id:j.lead_id, source:'production', stage, job:j, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
+      list.push({ pkey:'sew:'+j.id, opKey:j.id, lead_id:j.lead_id, source, stage, job:j, client, title, label:[client,title].filter(Boolean).join(' · ')||'Project', number:j.number, qty:Number(j.quantity||0), due:j.due_date||relDueByLead.get(j.lead_id)||null, released:relByLead.get(j.lead_id)||0 });
     });
     // SAMPLING — all samples are in-house (daily-rate; one sample maker).
     (samples||[]).forEach(s=>{ const client=clientOf(s.lead_id, s.client_name); const title=titleOf(s.lead_id, s.item);
@@ -30342,9 +30346,10 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
           <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">To-do sewing jobs Anjelica tagged for in-house sewing — the forward schedule. A job moves to the <b>Floor &amp; operations</b> tab once it's marked <b>in progress</b> on the Sewing board, or once you set up its operations here. Delivered jobs are archived out.</div>
           {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No to-do sewing jobs scheduled.</div> :
           <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Due</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Released by sorting</th>{canEdit&&<th></th>}</tr></thead>
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Due</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Released by sorting</th>{canEdit&&<th></th>}</tr></thead>
             <tbody>{rows.map(r=>{ const overdue=r.due && r.due<todayManila(); const lead=(leads||[]).find(l=>l.id===r.lead_id); return (
               <tr key={r.pkey} className={`border-t ${overdue?'bg-rose-50/50':''}`}>
+                <td className="px-3 py-2"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${r.source==='sampling'?'bg-purple-100 text-purple-700':'bg-indigo-100 text-indigo-700'}`}>{r.source==='sampling'?'Sampling':'Production'}</span></td>
                 <td className="px-3 py-2 font-medium">{r.client||'—'}</td>
                 <td className="px-3 py-2 text-xs text-slate-600">{r.title||r.label}{r.number&&<span className="text-slate-400 font-mono ml-1">{r.number}</span>}</td>
                 <td className="px-3 py-2 text-xs">{r.due?<span className={overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.due)}{overdue?' ⚠':''}</span>:'—'}</td>
@@ -30356,7 +30361,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
                 </td>}
               </tr>
             ); })}</tbody>
-            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="3">{rows.length} scheduled</td><td className="px-3 py-2 text-right">{num(totQ)}</td><td colSpan={canEdit?2:1}></td></tr></tfoot>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="4">{rows.length} scheduled</td><td className="px-3 py-2 text-right">{num(totQ)}</td><td colSpan={canEdit?2:1}></td></tr></tfoot>
           </table></div>}
         </div>
         );
