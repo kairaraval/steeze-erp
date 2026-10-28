@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 876 · In-House Sewing Payroll: projects whose production job is already DELIVERED are now hidden from the board (clears finished work). Any delivered project that still has unpaid payroll stays visible so nothing owed is lost. A Show-delivered toggle reveals them; nothing is deleted (reopening a job brings it back).";
+const BUILD = "Live build 877 · Scheduled tab now keys off the production jobs actual status: rows whose job is delivered (or plan marked done) are hidden, since the plan done-flag was often left unset. A Show-finished toggle reveals them.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30207,6 +30207,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
   const [search,setSearch]=useState('');
   const [srcFilter,setSrcFilter]=useState('production'); // 'production' (pinned) | 'sampling' | 'all'
   const [showDelivered,setShowDelivered]=useState(false); // hide delivered projects from the board by default
+  const [showSchedDone,setShowSchedDone]=useState(false);  // hide delivered/done rows on the Scheduled tab
   const [collapsed,setCollapsed]=useState({});
   const [setupFor,setSetupFor]=useState(null);     // { job } operation setup
   const [assignFor,setAssignFor]=useState(null);    // { op } assign sewers
@@ -30341,15 +30342,19 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
 
       {tab==='scheduled' && (()=>{
         const jobById=new Map((prodJobs||[]).map(j=>[j.id,j]));
-        const rows=(planEntries||[]).map(e=>{ const j=jobById.get(e.production_job_id);
+        const allRows=(planEntries||[]).map(e=>{ const j=jobById.get(e.production_job_id);
           const client=j?clientOf(j.lead_id, j.client_name):''; const title=j?titleOf(j.lead_id, j.item):'';
-          return { id:e.id, client, title:title||j?.item||'(project)', number:j?.number||'', date:e.date, deadline:e.deadline, qty:Number(e.quantity||0), released:Number(e.released_qty||0), received:Number(e.received_qty||0), done:!!e.done };
-        }).sort((a,b)=> String(a.deadline||a.date||'').localeCompare(String(b.deadline||b.date||'')));
+          const delivered = j ? (j.status==='delivered') : false;
+          return { id:e.id, client, title:title||j?.item||'(project)', number:j?.number||'', date:e.date, deadline:e.deadline, qty:Number(e.quantity||0), released:Number(e.released_qty||0), received:Number(e.received_qty||0), done:(!!e.done||delivered), delivered, jobDeleted: j?!!j.deleted_at:false };
+        }).filter(r=>!r.jobDeleted).sort((a,b)=> String(a.deadline||a.date||'').localeCompare(String(b.deadline||b.date||'')));
+        const doneCount=allRows.filter(r=>r.done).length;
+        const rows=allRows.filter(r=> showSchedDone || !r.done);
         const totQ=rows.reduce((t,r)=>t+r.qty,0);
         return (
         <div className="space-y-3">
-          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Scheduled in-house sewing from the <b>production plan</b> (Anjelica). This is the forward schedule only — a project lands on the <b>Floor &amp; operations</b> tab for payroll once the <b>sorting team</b> releases the actual pieces to in-house.</div>
-          {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No in-house sewing scheduled in the production plan.</div> :
+          <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Scheduled in-house sewing from the <b>production plan</b> (Anjelica). This is the forward schedule only — a project lands on the <b>Floor &amp; operations</b> tab for payroll once the <b>sorting team</b> releases the actual pieces to in-house. Finished (delivered/done) rows are hidden.</div>
+          {doneCount>0 && <div className="text-xs"><button onClick={()=>setShowSchedDone(v=>!v)} className="text-slate-500 hover:text-slate-800 underline">{showSchedDone?`Hide ${doneCount} finished`:`Show ${doneCount} finished`}</button></div>}
+          {rows.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No in-house sewing scheduled{!showSchedDone&&doneCount>0?' (all scheduled items are already delivered/done)':''}.</div> :
           <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Scheduled</th><th className="text-left px-3 py-2">Deadline</th><th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Released</th><th className="text-right px-3 py-2">Received</th><th className="px-3 py-2">Status</th></tr></thead>
             <tbody>{rows.map(r=>{ const overdue=r.deadline && r.deadline<todayManila() && !r.done; return (
