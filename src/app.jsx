@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 875 · In-House Sewing Payroll: Production projects now come ONLY from the sorting department (trad + subli releases to in-house, exact piece counts) - no longer from the production/sewing board, so sampling-stage jobs (e.g. CASA) no longer leak into Production. New left Scheduled tab shows in-house sewing planned in Anjelica production plan (forward schedule); the Floor & operations tab stays sorting-sourced.";
+const BUILD = "Live build 876 · In-House Sewing Payroll: projects whose production job is already DELIVERED are now hidden from the board (clears finished work). Any delivered project that still has unpaid payroll stays visible so nothing owed is lost. A "Show N delivered" toggle reveals them; nothing is deleted (reopening a job brings it back).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30206,6 +30206,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
   const [busy,setBusy]=useState(false);
   const [search,setSearch]=useState('');
   const [srcFilter,setSrcFilter]=useState('production'); // 'production' (pinned) | 'sampling' | 'all'
+  const [showDelivered,setShowDelivered]=useState(false); // hide delivered projects from the board by default
   const [collapsed,setCollapsed]=useState({});
   const [setupFor,setSetupFor]=useState(null);     // { job } operation setup
   const [assignFor,setAssignFor]=useState(null);    // { op } assign sewers
@@ -30268,10 +30269,18 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
       list.push({ pkey:'smp:'+s.id, opKey:s.id, lead_id:s.lead_id, source:'sampling', job:s, client, title, label:[client,title].filter(Boolean).join(' · ')||'Sample', number:s.number, qty:Number(s.quantity||0), due:s.due_date||null, released:0 }); });
     return list.map(p=>({ ...p, ops:(ops||[]).filter(o=>o.job_id===p.opKey) })).sort((a,b)=>a.label.localeCompare(b.label));
   }, [samples, sortBatches, ops, leads, clients]);
-  const prodCount=allProjects.filter(p=>p.source==='production').length;
+  // Leads whose production job is already DELIVERED → hide from the board by
+  // default (they're finished). Keep any that still have unpaid payroll so work
+  // owed is never hidden. Nothing is deleted — reopening the job brings it back.
+  const deliveredLeads = React.useMemo(()=> new Set((prodJobs||[]).filter(j=>!j.deleted_at && j.status==='delivered' && j.lead_id).map(j=>j.lead_id)), [prodJobs]);
+  const hasPendingPay=(p)=> (logs||[]).some(l=>l.job_id===p.opKey && (l.status==='staged'||l.status==='sent'));
+  const isDeliveredProj=(p)=> p.source==='production' && deliveredLeads.has(p.lead_id) && !hasPendingPay(p);
+  const prodCount=allProjects.filter(p=>p.source==='production' && (showDelivered || !isDeliveredProj(p))).length;
   const smpCount=allProjects.filter(p=>p.source==='sampling').length;
+  const deliveredHidden=allProjects.filter(p=>isDeliveredProj(p)).length;
   const projects=allProjects
     .filter(p=> srcFilter==='all' ? true : p.source===srcFilter)
+    .filter(p=> showDelivered || !isDeliveredProj(p))
     .filter(p=> !search || `${p.label} ${p.number||''} ${p.ops.map(o=>o.op_name).join(' ')}`.toLowerCase().includes(search.toLowerCase()));
 
   // ── actions ──
@@ -30370,6 +30379,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
               ))}
             </div>
             <span className="text-xs text-slate-400">{projects.length} shown</span>
+            {deliveredHidden>0 && <button onClick={()=>setShowDelivered(v=>!v)} className="text-xs text-slate-500 hover:text-slate-800 underline">{showDelivered?`Hide ${deliveredHidden} delivered`:`Show ${deliveredHidden} delivered`}</button>}
           </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project, operation…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
         </div>
@@ -30388,6 +30398,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
                 <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span><span className="text-base">{p.source==='sampling'?'🧪':'📦'}</span>
                 <span className="font-bold truncate">{p.label}</span>
                 <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${p.source==='sampling'?'bg-purple-100 text-purple-700':'bg-indigo-100 text-indigo-700'}`}>{p.source==='sampling'?'Sampling':'Production'}</span>
+                {isDeliveredProj(p) && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600" title="Production job already delivered">delivered</span>}
                 {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
                 {p.qty>0 && <span className="text-[11px] text-slate-500">· {num(p.qty)} pcs</span>}
                 {p.released>0 && <span className="text-[11px] text-sky-700" title="Released to in-house by the sorting team">· ⬇ {num(p.released)} released{bal!=null?` · ${num(bal)} bal`:''}</span>}
