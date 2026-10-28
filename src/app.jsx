@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 879 · In-House Sewing: Scheduled tab now shows a Production/Sampling tag too; a sewing job whose lead is still in the Sampling stage (e.g. CASA) is tagged Sampling, not Production. Removed the NING ICASAS test operations from the floor.";
+const BUILD = "Live build 880 · Team Overview: each sales person profile is now a full review with tabs - Overview, Bookings (monthly & yearly sales orders with per-client item prices), Pipeline (open deals by stage, hot ones flagged), Sampling (sample fee, paid?, and whether it pushed to production), and Hero items (best-sellers by value).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25963,22 +25963,76 @@ function TrashView({ profile, profiles, reload }){
 
 function MemberProfileModal({ member, leads, clients, onClose }){
   const mine=leads.filter(l=>l.manager_id===member.id);
+  const myLeadIds=mine.map(l=>l.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
   const open=mine.filter(l=>!CLOSED_STAGES.includes(l.stage));
   const wonVal=won.reduce((s,l)=>s+(Number(l.value)||0),0);
   const openVal=open.reduce((s,l)=>s+(Number(l.value)||0),0);
   const _now=new Date();
-  const wonThisMonth=won.filter(l=>{ if(!l.won_at) return false; const d=new Date(l.won_at+'T00:00:00'); return d.getMonth()===_now.getMonth()&&d.getFullYear()===_now.getFullYear(); });
-  const wonMonthVal=wonThisMonth.reduce((s,l)=>s+(Number(l.value)||0),0);
-  const months=[];
-  for(let i=5;i>=0;i--){ const d=new Date(_now.getFullYear(), _now.getMonth()-i, 1); months.push({ key:d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
-  won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
-  const maxM=Math.max(1,...months.map(m=>m.total));
-  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.company||'—';
+  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.company||'';
   const roleLbl = roleLabel(member.role);
-  const recentWon=won.slice().sort((a,b)=>(b.won_at||'').localeCompare(a.won_at||'')).slice(0,8);
+  const num=(n)=>Number(n||0).toLocaleString();
+  const [tab,setTab]=useState('overview');
+  const [busy,setBusy]=useState(true);
+  const [sos,setSos]=useState([]); const [ests,setEsts]=useState([]); const [smps,setSmps]=useState([]);
+  const [bkYear,setBkYear]=useState(_now.getFullYear());
+  const [bkMonth,setBkMonth]=useState(_now.getMonth());
+  useEffect(()=>{ let on=true; setBusy(true); (async()=>{
+    let so=[],es=[],sm=[];
+    try{ const orClause=myLeadIds.length?`manager_id.eq.${member.id},lead_id.in.(${myLeadIds.join(',')})`:`manager_id.eq.${member.id}`;
+      const q=await sb.from('sales_orders').select('id,number,date,lead_id,client_id,client_name,items,total,status,kind,manager_id,voided_at,created_at').or(orClause).is('deleted_at',null); so=q.data||[]; }catch(_){}
+    if(myLeadIds.length){
+      try{ const q=await sb.from('estimates').select('id,number,lead_id,purpose,total,status,sales_order_id,created_at').in('lead_id',myLeadIds); es=q.data||[]; }catch(_){}
+      try{ const q=await sb.from('sampling_jobs').select('id,number,lead_id,client_name,item,quantity,status,due_date,created_at').is('deleted_at',null).in('lead_id',myLeadIds); sm=q.data||[]; }catch(_){}
+    }
+    if(on){ // de-dup SOs
+      const seen=new Set(); so=so.filter(x=>{ if(seen.has(x.id)) return false; seen.add(x.id); return true; });
+      setSos(so); setEsts(es); setSmps(sm); setBusy(false);
+    }
+  })(); return ()=>{on=false;}; }, [member.id]);
+
+  const liveSos=sos.filter(s=>!s.voided_at && s.status!=='cancelled');
+  const soLead=(s)=> mine.find(l=>l.id===s.lead_id);
+  const soClient=(s)=> s.client_name || clientName(s.client_id) || (soLead(s)?clientName(soLead(s).client_id):'') || '—';
+  const soItems=(s)=> Array.isArray(s.items)?s.items:[];
+  // ----- Overview: won last 6 months -----
+  const months6=[];
+  for(let i=5;i>=0;i--){ const d=new Date(_now.getFullYear(), _now.getMonth()-i, 1); months6.push({ key:d.getMonth()+'-'+d.getFullYear(), label:d.toLocaleString('en-PH',{ month:'short' }), m:d.getMonth(), y:d.getFullYear(), total:0 }); }
+  won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months6.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot) slot.total+=Number(l.value)||0; });
+  const maxM=Math.max(1,...months6.map(m=>m.total));
+  // ----- Bookings (sales orders) by year/month -----
+  const years=Array.from(new Set(liveSos.map(s=>Number(String(s.date||s.created_at||'').slice(0,4))).filter(Boolean))); if(!years.includes(_now.getFullYear())) years.push(_now.getFullYear()); years.sort((a,b)=>b-a);
+  const soDate=(s)=> String(s.date||s.created_at||'').slice(0,10);
+  const yearSos=liveSos.filter(s=> Number(soDate(s).slice(0,4))===Number(bkYear));
+  const yearTotal=yearSos.reduce((t,s)=>t+Number(s.total||0),0);
+  const byMonth=Array.from({length:12},(_,m)=>{ const list=yearSos.filter(s=>Number(soDate(s).slice(5,7))===m+1); return { m, label:new Date(2000,m,1).toLocaleString('en-PH',{month:'short'}), total:list.reduce((t,s)=>t+Number(s.total||0),0), count:list.length }; });
+  const maxBk=Math.max(1,...byMonth.map(x=>x.total));
+  const monthSos=yearSos.filter(s=>Number(soDate(s).slice(5,7))===bkMonth+1).sort((a,b)=>soDate(b).localeCompare(soDate(a)));
+  // group month SOs by client
+  const monthByClient=(()=>{ const m=new Map(); monthSos.forEach(s=>{ const k=soClient(s); if(!m.has(k)) m.set(k,{ client:k, sos:[], total:0 }); const g=m.get(k); g.sos.push(s); g.total+=Number(s.total||0); }); return Array.from(m.values()).sort((a,b)=>b.total-a.total); })();
+  // ----- Pipeline by stage -----
+  const PIPE=['new','qualified','proposal','negotiation','sampling'];
+  const HOT=new Set(['proposal','negotiation','sampling']);
+  const pipeByStage=PIPE.map(st=>{ const list=open.filter(l=>l.stage===st); return { st, meta:STAGES.find(x=>x.key===st), list, val:list.reduce((s,l)=>s+(Number(l.value)||0),0) }; });
+  // ----- Sampling analysis -----
+  const sampleRows=smps.map(s=>{ const lead=mine.find(l=>l.id===s.lead_id);
+    const sampleEst=ests.filter(e=>e.lead_id===s.lead_id && e.purpose==='sample').sort((a,b)=>Number(b.total||0)-Number(a.total||0))[0];
+    const sampleSO=liveSos.find(x=>x.lead_id===s.lead_id && x.kind==='sample');
+    const samplePaid=!!(sampleSO && (sampleSO.status==='paid'||sampleSO.status==='partial'));
+    const prodSO=liveSos.find(x=>x.lead_id===s.lead_id && x.kind!=='sample');
+    const wonLead=lead && SOLD_STAGES.includes(lead.stage);
+    return { s, client:(s.client_name||(lead?clientName(lead.client_id):''))||'—', fee:sampleEst?Number(sampleEst.total||0):null, feeStatus:sampleEst?sampleEst.status:null, samplePaid, pushed:!!(prodSO||wonLead), prodSO };
+  }).sort((a,b)=>String(b.s.created_at||'').localeCompare(String(a.s.created_at||'')));
+  const sampCount=sampleRows.length; const sampWithFee=sampleRows.filter(r=>r.fee).length; const sampPushed=sampleRows.filter(r=>r.pushed).length;
+  // ----- Hero items (from booked SO items) -----
+  const heroes=(()=>{ const m=new Map(); liveSos.forEach(s=> soItems(s).forEach(it=>{ const name=(it.itemType||it.description||'Item').toString().slice(0,60); if(!m.has(name)) m.set(name,{ name, qty:0, value:0, orders:0 }); const g=m.get(name); g.qty+=Number(it.quantity||0); g.value+=Number(it.lineTotal||((Number(it.pricePerItem||0))*(Number(it.quantity||0)))||0); g.orders+=1; })); return Array.from(m.values()).sort((a,b)=>b.value-a.value).slice(0,15); })();
+  const heroMax=Math.max(1,...heroes.map(h=>h.value));
+
+  const TabBtn=({k,label})=>(<button onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md text-xs ${tab===k?'bg-indigo-600 text-white font-semibold':'text-slate-600 hover:bg-slate-100'}`}>{label}</button>);
+  const Stat=({label,value,sub,cls})=>(<div className={`border rounded-lg p-3 ${cls||'bg-slate-50'}`}><div className="text-[10px] uppercase text-slate-400">{label}</div><div className="text-xl font-bold mt-0.5">{value}</div>{sub&&<div className="text-[11px] text-slate-500">{sub}</div>}</div>);
+
   return (
-    <Modal title="Team member" onClose={onClose} wide>
+    <Modal title="Sales person — full review" onClose={onClose} wide>
       <div className="space-y-4">
         <div className="flex items-center gap-3"><Avatar profile={member} />
           <div>
@@ -25986,38 +26040,113 @@ function MemberProfileModal({ member, leads, clients, onClose }){
             <div className="text-xs text-slate-500">{roleLbl} · {member.email}</div>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Open pipeline</div><div className="text-xl font-bold mt-0.5">{peso(openVal)}</div><div className="text-[11px] text-slate-500">{open.length} lead{open.length===1?'':'s'}</div></div>
-          <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-3"><div className="text-[10px] uppercase text-emerald-700">Won this month</div><div className="text-xl font-bold mt-0.5 text-emerald-800">{peso(wonMonthVal)}</div><div className="text-[11px] text-emerald-600">{wonThisMonth.length} deal{wonThisMonth.length===1?'':'s'}</div></div>
-          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Won (all-time)</div><div className="text-xl font-bold mt-0.5 text-emerald-700">{peso(wonVal)}</div><div className="text-[11px] text-slate-500">{won.length} deal{won.length===1?'':'s'}</div></div>
-          <div className="bg-slate-50 border rounded-lg p-3"><div className="text-[10px] uppercase text-slate-400">Win rate</div><div className="text-xl font-bold mt-0.5">{mine.length?Math.round(won.length/mine.length*100):0}%</div><div className="text-[11px] text-slate-500">{mine.length} total leads</div></div>
+        <div className="inline-flex flex-wrap gap-1 bg-slate-100 rounded-lg p-0.5 border">
+          <TabBtn k="overview" label="📊 Overview" />
+          <TabBtn k="bookings" label="💰 Bookings" />
+          <TabBtn k="pipeline" label="🧭 Pipeline" />
+          <TabBtn k="sampling" label="🧪 Sampling" />
+          <TabBtn k="heroes" label="🏆 Hero items" />
         </div>
-        <div className="bg-slate-50 border rounded-lg p-3">
-          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Closed Won — last 6 months</div>
-          <div className="flex items-end gap-2 h-28">{months.map(m=>(
-            <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1">
-              <div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div>
-              <div className="w-full bg-emerald-500 rounded-t" style={{ height:Math.max(2,(m.total/maxM*100))+'%', minHeight:m.total?'4px':'2px' }}></div>
-              <div className="text-[10px] text-slate-500">{m.label}</div>
+        {busy && <div className="text-xs text-slate-400 py-2">Loading sales data…</div>}
+
+        {tab==='overview' && (<div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Open pipeline" value={peso(openVal)} sub={`${open.length} lead${open.length===1?'':'s'}`} />
+            <Stat label="Booked this year" value={peso(yearTotal)} sub={`${yearSos.length} order${yearSos.length===1?'':'s'} · ${bkYear}`} cls="bg-emerald-50 border-emerald-100" />
+            <Stat label="Won (all-time)" value={peso(wonVal)} sub={`${won.length} deal${won.length===1?'':'s'}`} />
+            <Stat label="Win rate" value={`${mine.length?Math.round(won.length/mine.length*100):0}%`} sub={`${mine.length} total leads`} />
+          </div>
+          <div className="bg-slate-50 border rounded-lg p-3">
+            <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Closed Won — last 6 months</div>
+            <div className="flex items-end gap-2 h-28">{months6.map(m=>(
+              <div key={m.key} className="flex-1 flex flex-col items-center justify-end gap-1">
+                <div className="text-[9px] text-slate-500">{m.total?peso(m.total).replace('₱',''):''}</div>
+                <div className="w-full bg-emerald-500 rounded-t" style={{ height:Math.max(2,(m.total/maxM*100))+'%', minHeight:m.total?'4px':'2px' }}></div>
+                <div className="text-[10px] text-slate-500">{m.label}</div>
+              </div>
+            ))}</div>
+          </div>
+        </div>)}
+
+        {tab==='bookings' && (<div className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="text-xs text-slate-500">Confirmed sales orders (bookings). Pick a month to see clients &amp; the prices given.</div>
+            <select value={bkYear} onChange={e=>setBkYear(Number(e.target.value))} className="border rounded-lg px-2 py-1 text-sm">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label={`Year total (${bkYear})`} value={peso(yearTotal)} sub={`${yearSos.length} orders`} cls="bg-emerald-50 border-emerald-100" />
+            <Stat label="This month" value={peso(byMonth[bkMonth]?.total||0)} sub={`${byMonth[bkMonth]?.count||0} orders · ${byMonth[bkMonth]?.label}`} />
+            <Stat label="Avg order" value={peso(yearSos.length?yearTotal/yearSos.length:0)} />
+            <Stat label="Clients booked" value={new Set(yearSos.map(s=>soClient(s))).size} sub={bkYear} />
+          </div>
+          <div className="bg-white border rounded-lg p-3">
+            <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Monthly bookings — {bkYear} (click a month)</div>
+            <div className="flex items-end gap-1.5 h-28">{byMonth.map(mn=>(
+              <button key={mn.m} onClick={()=>setBkMonth(mn.m)} className="flex-1 flex flex-col items-center justify-end gap-1 group">
+                <div className="text-[8px] text-slate-500">{mn.total?Math.round(mn.total/1000)+'k':''}</div>
+                <div className={`w-full rounded-t ${bkMonth===mn.m?'bg-indigo-600':'bg-indigo-300 group-hover:bg-indigo-400'}`} style={{ height:Math.max(2,(mn.total/maxBk*100))+'%', minHeight:mn.total?'4px':'2px' }}></div>
+                <div className={`text-[10px] ${bkMonth===mn.m?'font-bold text-indigo-700':'text-slate-500'}`}>{mn.label}</div>
+              </button>
+            ))}</div>
+          </div>
+          <div className="text-xs font-semibold text-slate-600">{byMonth[bkMonth]?.label} {bkYear} — {monthByClient.length} client{monthByClient.length===1?'':'s'} · {peso(byMonth[bkMonth]?.total||0)}</div>
+          {monthByClient.length===0 ? <div className="bg-white border rounded-lg p-6 text-center text-slate-400 text-sm">No bookings this month.</div> :
+          monthByClient.map((g,i)=>(<div key={i} className="bg-white border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">{g.client}</span><span className="text-xs text-slate-500">{g.sos.length} order{g.sos.length===1?'':'s'} · <b>{peso(g.total)}</b></span></div>
+            <table className="w-full text-xs"><tbody>{g.sos.map(s=>(<React.Fragment key={s.id}>
+              <tr className="border-t bg-slate-50/40"><td className="px-3 py-1.5 font-mono text-slate-500" colSpan="2">{s.number}{s.kind==='sample'?' · sample':''}</td><td className="px-3 py-1.5 text-xs text-slate-400">{fmtDate(soDate(s))}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(s.total)}</td></tr>
+              {soItems(s).map((it,j)=>(<tr key={j} className="border-t"><td className="px-3 py-1 pl-6 text-slate-600">{it.itemType||it.description||'Item'}</td><td className="px-3 py-1 text-right text-slate-500">{num(it.quantity)} × {peso(it.pricePerItem)}</td><td className="px-3 py-1 text-slate-400">{it.category||''}</td><td className="px-3 py-1 text-right">{peso(it.lineTotal)}</td></tr>))}
+            </React.Fragment>))}</tbody></table>
+          </div>))}
+        </div>)}
+
+        {tab==='pipeline' && (<div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Open leads" value={open.length} sub={peso(openVal)} />
+            <Stat label="🔥 Hot (prop/nego/sampling)" value={open.filter(l=>HOT.has(l.stage)).length} sub={peso(open.filter(l=>HOT.has(l.stage)).reduce((s,l)=>s+(Number(l.value)||0),0))} cls="bg-amber-50 border-amber-100" />
+            <Stat label="Lost (all-time)" value={mine.filter(l=>l.stage==='lost').length} />
+            <Stat label="Total leads" value={mine.length} />
+          </div>
+          {pipeByStage.map(({st,meta,list,val})=>(<div key={st} className={`border rounded-lg overflow-hidden ${HOT.has(st)?'border-amber-200':''}`}>
+            <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between">
+              <span className="flex items-center gap-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${meta?.color||''}`}>{meta?.label||st}</span>{HOT.has(st)&&<span className="text-[10px] text-amber-600 font-semibold">🔥 push these</span>}</span>
+              <span className="text-xs text-slate-500">{list.length} · <b>{peso(val)}</b></span>
             </div>
-          ))}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-slate-500 font-semibold mb-2">Most recent Closed Won</div>
-          {recentWon.length===0 ? <div className="text-xs text-slate-400 py-2">No won deals yet.</div> :
-            <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Client</th><th className="text-left px-2 py-1.5">Lead</th><th className="text-right px-2 py-1.5">Value</th></tr></thead>
-              <tbody>{recentWon.map(l=>(
-                <tr key={l.id} className="border-t">
-                  <td className="px-2 py-1 text-xs text-slate-500">{fmtDate(l.won_at)}</td>
-                  <td className="px-2 py-1">{clientName(l.client_id)}</td>
-                  <td className="px-2 py-1 text-slate-700">{l.title}</td>
-                  <td className="px-2 py-1 text-right font-semibold">{peso(l.value)}</td>
-                </tr>
-              ))}</tbody>
-            </table></div>
-          }
-        </div>
+            {list.length>0 && <table className="w-full text-xs"><tbody>{list.sort((a,b)=>(Number(b.value)||0)-(Number(a.value)||0)).map(l=>(
+              <tr key={l.id} className="border-t"><td className="px-3 py-1.5">{clientName(l.client_id)||'—'}</td><td className="px-3 py-1.5 text-slate-600">{l.title}</td><td className="px-3 py-1.5 text-[10px] text-slate-400">{l.stage_changed_at?('in stage since '+fmtDate(String(l.stage_changed_at).slice(0,10))):''}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(l.value)}</td></tr>
+            ))}</tbody></table>}
+          </div>))}
+        </div>)}
+
+        {tab==='sampling' && (<div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Samples made" value={sampCount} />
+            <Stat label="With a sample fee" value={sampWithFee} sub={`${sampCount-sampWithFee} free`} />
+            <Stat label="Pushed to production" value={sampPushed} sub={sampCount?`${Math.round(sampPushed/sampCount*100)}% convert`:''} cls="bg-emerald-50 border-emerald-100" />
+            <Stat label="Still open" value={sampleRows.filter(r=>!r.pushed).length} />
+          </div>
+          {sampleRows.length===0 ? <div className="bg-white border rounded-lg p-6 text-center text-slate-400 text-sm">No samples yet.</div> :
+          <div className="bg-white border rounded-lg overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Client</th><th className="text-left px-3 py-2">Sample</th><th className="text-right px-3 py-2">Qty</th><th className="text-left px-3 py-2">Sample fee</th><th className="text-center px-3 py-2">Fee paid?</th><th className="text-center px-3 py-2">→ Production?</th></tr></thead>
+            <tbody>{sampleRows.map(r=>(<tr key={r.s.id} className="border-t">
+              <td className="px-3 py-2 font-medium">{r.client}</td>
+              <td className="px-3 py-2 text-xs text-slate-600">{r.s.item||r.s.number}<span className="text-slate-400 font-mono ml-1">{r.s.number}</span></td>
+              <td className="px-3 py-2 text-right">{num(r.s.quantity)}</td>
+              <td className="px-3 py-2 text-xs">{r.fee!=null?<span className="font-semibold">{peso(r.fee)}</span>:<span className="text-slate-400">no fee</span>}{r.feeStatus&&<span className="text-[10px] text-slate-400 ml-1">({r.feeStatus})</span>}</td>
+              <td className="px-3 py-2 text-center">{r.fee==null?<span className="text-slate-300">—</span>:r.samplePaid?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">paid</span>:<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">unpaid</span>}</td>
+              <td className="px-3 py-2 text-center">{r.pushed?<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">won{r.prodSO?' · '+r.prodSO.number:''}</span>:<span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">not yet</span>}</td>
+            </tr>))}</tbody>
+          </table></div>}
+        </div>)}
+
+        {tab==='heroes' && (<div className="space-y-3">
+          <div className="text-xs text-slate-500">Top items across this person's booked sales orders — their best-sellers by value.</div>
+          {heroes.length===0 ? <div className="bg-white border rounded-lg p-6 text-center text-slate-400 text-sm">No booked items yet.</div> :
+          <div className="bg-white border rounded-lg overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">#</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Orders</th><th className="text-right px-3 py-2">Total value</th><th className="px-3 py-2 w-28"></th></tr></thead>
+            <tbody>{heroes.map((h,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2 text-slate-400">{i+1}</td><td className="px-3 py-2 font-medium">{h.name}</td><td className="px-3 py-2 text-right">{num(h.qty)}</td><td className="px-3 py-2 text-right text-slate-500">{h.orders}</td><td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(h.value)}</td><td className="px-3 py-2"><div className="h-2 rounded bg-emerald-500" style={{width:Math.max(4,(h.value/heroMax*100))+'%'}}></div></td></tr>))}</tbody>
+          </table></div>}
+        </div>)}
       </div>
     </Modal>
   );
