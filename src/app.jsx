@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 887 · Subcon Cutting: signed runs now have a printable Payroll Sheet (per-subcon breakdown, totals, signatures) with Save PDF - it rides with the RFP so AGM, Admin and Finance can open and check it before approving/paying.";
+const BUILD = "Live build 888 · Subcon Cutting payroll sheet now shows the client name on each line (stored on the payroll row + backfilled for existing runs), as a Client column next to the project.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11754,7 +11754,7 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
   });
   async function addToPayroll(task, qty, rate){
     const q=Number(qty)||0; if(q<=0){ alert('Enter a quantity.'); return; }
-    await sb.from('subcon_cut_payroll_queue').insert({ subcon_id:task.subcon_id, lead_id:task.lead_id||null, source_task_id:task.id, item_label:task.item||null, garment:task.item||null, qty:q, rate:(rate===''||rate==null)?null:Number(rate), return_date:todayManila(), status:'staged', added_by:profile.id });
+    await sb.from('subcon_cut_payroll_queue').insert({ subcon_id:task.subcon_id, lead_id:task.lead_id||null, source_task_id:task.id, item_label:task.item||null, garment:task.item||null, client_name:task.client_name||null, qty:q, rate:(rate===''||rate==null)?null:Number(rate), return_date:todayManila(), status:'staged', added_by:profile.id });
     setAddFor(null); load(true);
   }
   async function updateQueueRow(id, patch){ await sb.from('subcon_cut_payroll_queue').update(patch).eq('id',id); load(true); }
@@ -11935,7 +11935,8 @@ function SubconCutPayrollDoc({ batch, rfp, profiles, onClose }){
   if(!st.b) return <Modal title="Subcon Cutting Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">No signed payroll sheet is linked.{st.err?` (${st.err})`:''}</div></Modal>;
   const b=st.b; const rows=st.rows||[];
   const subconNm=(id)=>(st.subcons||[]).find(s=>s.id===id)?.name||'Subcon';
-  const projNm=(leadId)=>{ const l=(st.leads||[]).find(x=>x.id===leadId); const c=l&&l.client_id?((st.clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
+  const clientOf=(q)=>{ const l=(st.leads||[]).find(x=>x.id===q.lead_id); const c=l&&l.client_id?((st.clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return q.client_name || c || '—'; };
+  const projTitle=(q)=>{ const l=(st.leads||[]).find(x=>x.id===q.lead_id); return (l&&l.title)||q.item_label||q.garment||'Project'; };
   const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
   const bySub=(()=>{ const m=new Map(); rows.forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
   const totalPcs=rows.reduce((t,q)=>t+Number(q.qty||0),0), totalAmt=rows.reduce((t,q)=>t+amtOf(q),0);
@@ -11965,8 +11966,8 @@ function SubconCutPayrollDoc({ batch, rfp, profiles, onClose }){
           {bySub.map((g,gi)=>(
             <div key={gi} className="mb-3">
               <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">{g.subcon}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
-              <table className="w-full text-xs"><tbody>
-                {g.rows.map(q=>(<tr key={q.id} className="border-b"><td className="px-2 py-1 text-slate-500">{projNm(q.lead_id)}</td><td className="px-2 py-1">{q.item_label||q.garment||'Cutting'}</td><td className="px-2 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
+              <table className="w-full text-xs"><thead><tr className="text-[9px] uppercase text-slate-400"><th className="text-left px-2 py-0.5">Client</th><th className="text-left px-2 py-0.5">Project</th><th className="text-right px-2 py-0.5">Qty × rate</th><th className="text-right px-2 py-0.5">Amount</th></tr></thead><tbody>
+                {g.rows.map(q=>(<tr key={q.id} className="border-b"><td className="px-2 py-1 font-medium">{clientOf(q)}</td><td className="px-2 py-1 text-slate-500">{projTitle(q)}</td><td className="px-2 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
               </tbody></table>
             </div>
           ))}
