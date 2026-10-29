@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 889 · Approval review (AGM + Admin) now shows ALL receipts and supporting documents on a liquidation - gathered from every field (liquidation receipts, supporting docs, per-line files, attachments) as tappable thumbnails - so each approver can verify them before signing. AGM still reviews/approves first, then it comes to Admin.";
+const BUILD = "Live build 890 · Admin Liquidations final-approval panel now has a Review receipts button per item - opens the full liquidation breakdown (expense lines + total) and every receipt/supporting document as tappable thumbnails, so you can verify before Approve & post.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40928,8 +40928,52 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   );
 }
 
+// View a liquidation's full breakdown + all receipts / supporting documents
+// before posting. Read-only — approve/return stay on the row behind it.
+function LiquidationDocsModal({ kind, data, profiles, onClose }){
+  const nm=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const allAtts=(()=>{ const out=[]; const seen=new Set();
+    const add=(arr)=>{ (Array.isArray(arr)?arr:[]).forEach(a=>{ if(!a) return; const k=a.path||a.url||a.name; if((a.path||a.url)&&k&&!seen.has(k)){ seen.add(k); out.push(a); } }); };
+    add(data.attachments); add(data.liquidation_receipts); add(data.supporting_docs);
+    if(data.attachment_url) add([{ url:data.attachment_url, name:'attachment' }]);
+    (Array.isArray(data.liquidation_lines)?data.liquidation_lines:[]).forEach(l=>{ add(l.attachments); add(l.files); if(l.receipt) add([l.receipt]); });
+    (Array.isArray(data.receipts)?data.receipts:[]).forEach(l=>{ if(l&&(l.path||l.url)) add([l]); add(l&&l.attachments); add(l&&l.files); });
+    return out;
+  })();
+  const lines = kind==='budget' ? (Array.isArray(data.liquidation_lines)?data.liquidation_lines:[]) : (Array.isArray(data.receipts)?data.receipts:[]);
+  const lineAmt=(l)=>Number(l.amount||l.cost||0);
+  const linesTotal=lines.reduce((t,l)=>t+lineAmt(l),0);
+  const title = kind==='budget' ? `Budget Liquidation${data.purpose?` · ${data.purpose}`:''}` : `Cash Advance Liquidation · ${data.number||''} ${data.custodian_name||''}`;
+  return (
+    <Modal title="📄 Review liquidation" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div>
+          <div className="font-bold text-slate-900">{title}</div>
+          <div className="text-xs text-slate-500">{kind==='budget'?<>Dept {data.department||'—'} · by {nm(data.requested_by)} · Liquidated {peso(data.amount_liquidated||0)}{data.amount!=null?` of ${peso(data.amount)} budget`:''}</>:<>Issued {peso(data.amount||0)} · Liquidated {peso(data.amount_liquidated||0)} · by {nm(data.requested_by||data.created_by)}</>}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Expense lines</div>
+          {lines.length===0 ? <div className="text-xs text-slate-400">No line items recorded.</div> :
+          <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Description</th><th className="text-left px-3 py-1.5">Category</th><th className="text-right px-3 py-1.5">Amount</th></tr></thead>
+            <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-3 py-1.5">{l.description||l.name||'(expense)'}{(l.supplier||l.payee)?<span className="text-slate-400"> · {l.supplier||l.payee}</span>:''}</td><td className="px-3 py-1.5 text-slate-500">{l.category||l.payment_method||'—'}</td><td className="px-3 py-1.5 text-right font-medium">{peso(lineAmt(l))}</td></tr>))}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5" colSpan="2">Total</td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(linesTotal)}</td></tr></tfoot>
+          </table></div>}
+        </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">📎 Receipts & supporting documents ({allAtts.length})</div>
+          {allAtts.length===0 ? <div className="text-xs text-slate-400">No files attached to this liquidation.</div> :
+            <div className="border rounded-lg p-3 bg-slate-50"><AttachmentList attachments={allAtts} inline /></div>}
+        </div>
+        <div className="flex justify-end pt-2 border-t"><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Close</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, cashAdvances, reload }){
   const [openRfp,setOpenRfp]=useState(null);
+  const [liqDocs,setLiqDocs]=useState(null); // { kind, data } — view a liquidation's receipts before posting
   const [payingBank,setPayingBank]=useState(null); // RFP being marked paid — pick which of our banks
   const [openBudget,setOpenBudget]=useState(null);
   const [openVoucher,setOpenVoucher]=useState(null);
@@ -41285,13 +41329,13 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
             {liqBudgets.map(b=>(
               <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
                 <div className="flex-1 min-w-[200px]"><div className="font-medium">Budget · {(b.purpose||'').slice(0,60)} · <span className="text-emerald-700">{peso(b.amount_liquidated||0)}</span></div><div className="text-xs text-slate-500">{b.department||''} · by {caName(b.requested_by)} · {Array.isArray(b.liquidation_lines)?b.liquidation_lines.length:0} line(s)</div></div>
-                <div className="flex gap-2 shrink-0"><button onClick={()=>finalApproveBudgetLiq(b)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnBudgetLiq(b)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
+                <div className="flex gap-2 shrink-0"><button onClick={()=>setLiqDocs({ kind:'budget', data:b })} className="px-3 py-1.5 rounded-lg border border-cyan-300 text-cyan-700 text-xs font-semibold hover:bg-cyan-50">📄 Review receipts</button><button onClick={()=>finalApproveBudgetLiq(b)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnBudgetLiq(b)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
               </div>
             ))}
             {liqCAs.map(c=>(
               <div key={c.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
                 <div className="flex-1 min-w-[200px]"><div className="font-medium">Cash advance · {c.number||''} {c.custodian_name||''} · <span className="text-emerald-700">{peso(c.amount_liquidated||0)}</span></div><div className="text-xs text-slate-500">Issued {peso(c.amount||0)} · {Array.isArray(c.receipts)?c.receipts.length:0} receipt(s)</div></div>
-                <div className="flex gap-2 shrink-0"><button onClick={()=>finalApproveCALiq(c)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnCALiq(c)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
+                <div className="flex gap-2 shrink-0"><button onClick={()=>setLiqDocs({ kind:'ca', data:c })} className="px-3 py-1.5 rounded-lg border border-cyan-300 text-cyan-700 text-xs font-semibold hover:bg-cyan-50">📄 Review receipts</button><button onClick={()=>finalApproveCALiq(c)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve & post</button><button onClick={()=>returnCALiq(c)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">↩ Return</button></div>
               </div>
             ))}
           </div>
@@ -41465,6 +41509,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       {payingBank && <BankPaidPickModal rfp={payingBank} bankAccounts={bankAccounts} onClose={()=>setPayingBank(null)} onConfirm={(bankId,ref)=>doMarkBankPaid(payingBank,bankId,ref)} />}
       {/* Budget request approval — reuses the form modal which has approve/reject buttons for admins */}
       {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
+      {liqDocs && <LiquidationDocsModal kind={liqDocs.kind} data={liqDocs.data} profiles={profiles} onClose={()=>setLiqDocs(null)} />}
       {/* Voucher review — uses the same view modal as the Vouchers list,
          giving Admin access to the Approve & Sign button + Print there too. */}
       {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} costCenters={costCenters} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
