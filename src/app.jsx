@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 882 · Subcon Cutting now has a Payroll tab: returned pieces per subcon can be added to payroll (rate x pcs), confirmed, then the supervisor signs one run that raises a Request for Payment through AGM to Admin to Finance - same flow as Subcon Sewing.";
+const BUILD = "Live build 883 · Inbox mobile UI fix: header stacks and the filter pills scroll on phones; each message now uses a responsive layout (no fixed-width column) with the title, preview, sender, badges and an always-tappable Clear button - no more hover-only clear or overflow on small screens.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15837,20 +15837,23 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
     return d.toLocaleDateString([], sameYear?{ month:'short', day:'numeric' }:{ month:'short', day:'numeric', year:'numeric' });
   }
   return (
-    <div className="p-6 max-w-5xl mx-auto">
-      {/* Sticky header with filter + clear all */}
-      <div className="flex items-center justify-between mb-5">
+    <div className="p-4 sm:p-6 max-w-5xl mx-auto">
+      {/* Header — stacks on phones; filter pills scroll horizontally if cramped */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold">📥 Inbox</h1>
           <p className="text-slate-500 text-sm">{unread.length?`${unread.length} unread`:'All caught up.'}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">
-            <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({nonArchivedMentions.length})</button>
-            <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
-            <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 Mentions ({realCount})</button>
-            <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 Notifications ({autoCount})</button>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="-mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto">
+            <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs whitespace-nowrap">
+              <button onClick={()=>setFilter('all')} className={`px-3 py-1.5 rounded-md ${filter==='all'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>All ({nonArchivedMentions.length})</button>
+              <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
+              <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 ({realCount})</button>
+              <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 ({autoCount})</button>
+            </div>
           </div>
+          <div className="flex items-center gap-2 flex-wrap">
           {selected.size>0 ? (
             <>
               <button onClick={clearSelected} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-pink-600 text-white hover:bg-pink-700 font-semibold">✓ Clear selected ({selected.size})</button>
@@ -15864,6 +15867,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
               </button>
             )}
           </>)}
+          </div>
         </div>
       </div>
 
@@ -15886,56 +15890,45 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                 const replyCount = m.thread_count || 0; // future: real reply count
                 const busy = busyIds.has(m.id);
                 return (
-                  <div key={m.id+m.source} className={`group relative flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition ${isArchived(m) ? 'bg-slate-50/60 opacity-60' : (isUnread ? '' : 'opacity-70')}`}>
+                  <div key={m.id+m.source} className={`group relative flex items-start gap-2.5 sm:gap-3 px-3 sm:px-4 py-3 hover:bg-slate-50 transition ${isArchived(m) ? 'bg-slate-50/60 opacity-60' : (isUnread ? '' : 'opacity-70')}`}>
                     {/* Bulk-select checkbox */}
-                    <input type="checkbox" checked={selected.has(dedupKey(m))} onChange={()=>toggleSelect(dedupKey(m))} className="shrink-0" title="Select to clear" />
+                    <input type="checkbox" checked={selected.has(dedupKey(m))} onChange={()=>toggleSelect(dedupKey(m))} className="shrink-0 mt-1 w-4 h-4" title="Select to clear" />
                     {/* Unread dot + source icon */}
-                    <div className="shrink-0 w-6 flex items-center justify-center">
+                    <div className="shrink-0 w-6 flex items-center justify-center mt-0.5">
                       {isUnread ? (
                         <span className={`w-5 h-5 rounded-full border-2 ${c.color.replace('text-','border-')} flex items-center justify-center text-[10px] ${c.color}`}>{c.icon}</span>
                       ) : (
                         <span className="w-5 h-5 rounded-full border border-slate-200 flex items-center justify-center text-[10px] text-slate-400">{c.icon}</span>
                       )}
                     </div>
-                    {/* Company + task title — company is shown as a distinct
-                        chip so it's never lost in the truncation. */}
-                    <button onClick={()=>{ markGroupRead(m); onGoToTask(m); }} className="shrink-0 w-64 text-left hover:underline" title={c.label}>
-                      {c.company && (
-                        <div className={`text-[10px] uppercase font-bold tracking-wide truncate ${c.color}`}>{c.company}</div>
-                      )}
-                      <div className={`truncate font-medium text-sm text-slate-900 ${c.company ? '-mt-0.5' : ''}`}>{c.title || c.label}</div>
-                    </button>
-                    {/* Sender avatar */}
-                    <div className="shrink-0">
-                      {sender ? <Avatar profile={sender} size="sm" /> : <div className="w-7 h-7 rounded-full bg-slate-200" />}
+                    {/* Main content — title + preview stack; stays readable on phones */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start gap-2">
+                        <button onClick={()=>{ markGroupRead(m); onGoToTask(m); }} className="min-w-0 flex-1 text-left hover:underline" title={c.label}>
+                          {c.company && <div className={`text-[10px] uppercase font-bold tracking-wide truncate ${c.color}`}>{c.company}</div>}
+                          <div className={`truncate font-medium text-sm text-slate-900 ${c.company ? '-mt-0.5' : ''}`}>{c.title || c.label}</div>
+                        </button>
+                        <div className="shrink-0 text-[11px] text-slate-400 whitespace-nowrap mt-0.5">{fmtShortDate(m.created_at)}</div>
+                      </div>
+                      <button onClick={()=>{ markGroupRead(m); onOpen(m); }} className="block w-full text-left text-xs sm:text-sm text-slate-600 truncate hover:underline mt-0.5">
+                        {renderCommentText(m.text, profiles)}
+                      </button>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <div className="shrink-0">{sender ? <Avatar profile={sender} size="sm" /> : <div className="w-6 h-6 rounded-full bg-slate-200" />}</div>
+                        {(groupedCounts[dedupKey(m)]||0) > 1 && (
+                          <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold whitespace-nowrap" title={`${groupedCounts[dedupKey(m)]} mentions in this thread`}>+{groupedCounts[dedupKey(m)]-1} more</span>
+                        )}
+                        {replyCount>0 && (
+                          <span className="shrink-0 min-w-[1.25rem] h-5 px-1 rounded-full border border-slate-200 text-[10px] text-slate-500 inline-flex items-center justify-center font-medium">{replyCount}</span>
+                        )}
+                        <div className="flex-1" />
+                        {/* Clear — always tappable (not hover-only, so it works on touch) */}
+                        <button onClick={()=>clearOne(m)} disabled={busy} title="Clear — removes this conversation from your inbox for good"
+                          className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-200 text-slate-500 hover:bg-pink-600 hover:text-white hover:border-pink-600 sm:opacity-0 sm:group-hover:opacity-100 transition disabled:opacity-50">
+                          <span>✓</span> {busy?'…':'Clear'}
+                        </button>
+                      </div>
                     </div>
-                    {/* Message preview */}
-                    <button onClick={()=>{ markGroupRead(m); onOpen(m); }} className="flex-1 min-w-0 text-left text-sm text-slate-600 truncate hover:underline">
-                      {renderCommentText(m.text, profiles)}
-                    </button>
-                    {/* Thread-count badge — appears when this row represents
-                       multiple mentions in the same lead / job. Tells the user
-                       "the latest message is shown, but N mentions are bundled." */}
-                    {(groupedCounts[dedupKey(m)]||0) > 1 && (
-                      <div className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold whitespace-nowrap" title={`${groupedCounts[dedupKey(m)]} mentions in this thread — clear to dismiss all`}>+{groupedCounts[dedupKey(m)]-1} more</div>
-                    )}
-                    {/* Reply count badge */}
-                    {replyCount>0 && (
-                      <div className="shrink-0 w-6 h-6 rounded-full border border-slate-200 text-[10px] text-slate-500 flex items-center justify-center font-medium">{replyCount}</div>
-                    )}
-                    {/* Date column */}
-                    <div className="shrink-0 w-16 text-right text-xs text-slate-400 whitespace-nowrap">{fmtShortDate(m.created_at)}</div>
-                    {/* Hover-reveal action button:
-                          - Clear (archives) for any non-archived notification
-                          - Unarchive for ones currently shown via "Show archived" */}
-                    <button
-                      onClick={()=>clearOne(m)}
-                      disabled={busy}
-                      title="Clear — removes this conversation from your inbox for good"
-                      className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pink-600 text-white text-xs font-semibold hover:bg-pink-700 shadow disabled:opacity-50"
-                    >
-                      <span>✓</span> {busy?'Clearing…':'Clear'}
-                    </button>
                   </div>
                 );
               })}
