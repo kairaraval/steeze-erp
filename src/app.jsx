@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 890 · Admin Liquidations final-approval panel now has a Review receipts button per item - opens the full liquidation breakdown (expense lines + total) and every receipt/supporting document as tappable thumbnails, so you can verify before Approve & post.";
+const BUILD = "Live build 891 · AGM now has Finance access to Petty Cash, Cash Advances, Request for Payment and Expense Log (view & the comment/mention threads) so she can double-check petty cash for approval/liquidation and see tags addressed to her.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -52237,7 +52237,7 @@ function App(){
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
-        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates',
+        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
@@ -52974,7 +52974,7 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'] ] },
+      { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll (old)','✂'] ] },
