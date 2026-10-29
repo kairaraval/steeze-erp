@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 885 · Team Overview per-rep review gains a Commission tab: progressive (tiered) or flat commission computed on the month booked revenue, with tier breakdown, 50% at booking + the rest as orders are paid. Eunice set to tiered (quota 750k; bands 2/4/6/7). Admin can edit a reps model, quota and bands.";
+const BUILD = "Live build 886 · Commissions module is now tiered-aware: for progressive reps (Eunice) each sales order earns its marginal slice of the months cumulative booked revenue, so the per-SO breakdown adds up to the tiered total. Sync auto-re-rates tiered reps; a Recompute tiered button is also available. Her October now totals the tiered amount, not flat 2%.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -37286,6 +37286,38 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     return Array.from(ids).map(id => (profiles||[]).find(p => p.id === id)).filter(Boolean).sort((a,b) => (a.name||a.email).localeCompare(b.name||b.email));
   })();
 
+  // ── Tiered (progressive) commission support ──
+  // A tiered rep's commission on each SO is the MARGINAL slice of that SO within
+  // the month's cumulative booked revenue (ordered by booking date), so the
+  // per-SO rows add up to the month's progressive total. Flat reps are unchanged.
+  const isTieredRep=(id)=> (profiles||[]).find(p=>p.id===id)?.commission_model==='tiered';
+  const tieredMarg = React.useMemo(()=>{
+    const out=new Map();
+    (profiles||[]).filter(p=>p.commission_model==='tiered').forEach(rep=>{
+      const quota=Number(rep.commission_quota||0), tiers=rep.commission_tiers;
+      const mySos=(salesOrders||[]).filter(so=>{ if(so.deleted_at||so.voided_at) return false; if(so.manager_id===rep.id) return true; const l=(leads||[]).find(x=>x.id===so.lead_id); return !!(l&&l.manager_id===rep.id); });
+      const byMonth=new Map();
+      mySos.forEach(so=>{ const k=String(so.date||so.created_at||'').slice(0,7); if(!byMonth.has(k)) byMonth.set(k,[]); byMonth.get(k).push(so); });
+      const m=new Map();
+      byMonth.forEach(list=>{ list.sort((a,b)=> String(a.date||a.created_at||'').localeCompare(String(b.date||b.created_at||'')) || String(a.number||'').localeCompare(String(b.number||''))); let cum=0;
+        list.forEach(so=>{ const base=Number(so.subtotal ?? so.total ?? 0); const marg=computeTieredCommission(cum+base,quota,tiers).total - computeTieredCommission(cum,quota,tiers).total; cum+=base; m.set(so.id,{ marg, effRate: base>0?marg/base:0, base }); });
+      });
+      out.set(rep.id, m);
+    });
+    return out;
+  }, [profiles, salesOrders, leads]);
+  // Recompute every UNPAID commission row of tiered reps to its tiered amount.
+  async function recomputeTieredRows(){
+    let changed=0;
+    for(const [repId, m] of tieredMarg){
+      const rows=(salesCommissions||[]).filter(r=>r.manager_id===repId && !r.paid_at);
+      for(const r of rows){ const mg=m.get(r.sales_order_id); if(!mg) continue; const amt=0.5*mg.marg;
+        if(Math.abs(Number(r.amount||0)-amt)>0.005 || Math.abs(Number(r.rate||0)-mg.effRate)>0.00005){ const { error }=await sb.from('sales_commissions').update({ amount:amt, rate:mg.effRate }).eq('id',r.id); if(!error) changed++; }
+      }
+    }
+    return changed;
+  }
+
   const cutoff = (()=>{
     if(rangeFilter === 'all') return null;
     const d = new Date();
@@ -37432,13 +37464,14 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
         const earnedAt = k === 'booking'
           ? (so.created_at || new Date().toISOString())
           : (so.updated_at || new Date().toISOString());
+        const mg = isTieredRep(item.mgr) ? (tieredMarg.get(item.mgr)||new Map()).get(so.id) : null;
         const { error } = await sb.from('sales_commissions').insert({
           sales_order_id: so.id,
           manager_id: item.mgr,
           kind: k,
-          rate: item.rate,
+          rate: mg ? mg.effRate : item.rate,
           base_amount: base,
-          amount: base * item.rate * 0.5,
+          amount: mg ? (0.5 * mg.marg) : (base * item.rate * 0.5),
           earned_at: earnedAt,
         });
         // 23505 = unique violation = already created elsewhere — treat as success.
@@ -37450,8 +37483,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
         }
       }
     }
+    let retuned=0; try{ retuned=await recomputeTieredRows(); }catch(_){}
     setSyncing(false);
-    setSyncMsg(`Sync complete: ${created} commission row${created===1?'':'s'} created${failed>0?`, ${failed} failed`:''}.`);
+    setSyncMsg(`Sync complete: ${created} commission row${created===1?'':'s'} created${retuned?`, ${retuned} re-rated for tiered reps`:''}${failed>0?`, ${failed} failed`:''}.`);
     reload && reload();
   }
 
@@ -37584,6 +37618,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
             <div className="flex items-center gap-2">
               {gapCount > 0 && <button onClick={()=>setReconcileOpen(v=>!v)} className="text-xs px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-50">{reconcileOpen?'Hide details':'View details'}</button>}
               {canSeeAll && coverage.missing.length > 0 && <button disabled={syncing} onClick={syncCommissionsFromSOs} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">{syncing?'Syncing…':`↻ Sync ${coverage.missing.length} SO${coverage.missing.length===1?'':'s'}`}</button>}
+              {canSeeAll && tieredMarg.size>0 && <button disabled={syncing} onClick={async()=>{ setSyncing(true); setSyncMsg(''); let n=0; try{ n=await recomputeTieredRows(); }catch(e){ setSyncMsg('Recompute failed: '+(e.message||e)); } setSyncing(false); if(!syncMsg) setSyncMsg(n?`Re-rated ${n} commission row${n===1?'':'s'} for tiered reps (progressive tiers).`:'Tiered reps already up to date.'); reload&&reload(); }} className="text-xs px-3 py-1.5 rounded bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50" title="Recalculate tiered reps (e.g. Eunice) using their progressive bands">♻ Recompute tiered</button>}
             </div>
           </div>
           {syncMsg && <div className="mt-2 text-xs text-slate-700 bg-white border border-slate-200 rounded p-2">{syncMsg}</div>}
