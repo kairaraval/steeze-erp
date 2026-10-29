@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 883 · Inbox mobile UI fix: header stacks and the filter pills scroll on phones; each message now uses a responsive layout (no fixed-width column) with the title, preview, sender, badges and an always-tappable Clear button - no more hover-only clear or overflow on small screens.";
+const BUILD = "Live build 884 · Estimate preview: new Save JPEG and Save PDF buttons that work on phones (renders the estimate to an image/PDF and opens the share sheet so you can Save to Photos or Files). The old Print button is desktop-only now, since window.print was unreliable on mobile.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -511,6 +511,46 @@ function printAs(filename){
   window.addEventListener('afterprint', restore);
   setTimeout(()=>{ try{ document.title=prev; }catch(_){} }, 60000);
   window.print();
+}
+// ── Mobile-friendly document export: render a DOM node to a JPEG or PDF ──
+// window.print() is unreliable in the mobile / in-app browser, so these render
+// the node to an image and, on phones, hand it to the native share sheet so the
+// user can "Save Image" (Photos) or "Save to Files". On desktop they download.
+function _loadScriptOnce(src){ return new Promise((res,rej)=>{ try{ if([...document.scripts].some(s=>s.src===src)) return res(); const el=document.createElement('script'); el.src=src; el.onload=()=>res(); el.onerror=()=>rej(new Error('Could not load '+src)); document.head.appendChild(el); }catch(e){ rej(e); } }); }
+async function _captureCanvas(node){
+  await _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  if(!window.html2canvas) throw new Error('capture library unavailable');
+  return await window.html2canvas(node, { scale: Math.min(2, (window.devicePixelRatio||1)+1), backgroundColor:'#ffffff', useCORS:true, logging:false, scrollX:0, scrollY:-window.scrollY });
+}
+async function _deliverFile(blob, filename, mime){
+  const file = (typeof File!=='undefined') ? new File([blob], filename, { type:mime }) : null;
+  if(file && navigator.canShare && navigator.canShare({ files:[file] })){
+    try{ await navigator.share({ files:[file], title:filename }); return; }
+    catch(e){ if(e && e.name==='AbortError') return; /* fall through to download */ }
+  }
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(_){} }, 15000);
+}
+async function saveNodeAsJpeg(node, baseName){
+  const clean=String(baseName||'document').replace(/[\\/:*?"<>|]+/g,'-').trim();
+  const canvas=await _captureCanvas(node);
+  const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.92));
+  if(!blob) throw new Error('Could not create the image.');
+  await _deliverFile(blob, clean+'.jpg', 'image/jpeg');
+}
+async function saveNodeAsPdf(node, baseName){
+  const clean=String(baseName||'document').replace(/[\\/:*?"<>|]+/g,'-').trim();
+  const canvas=await _captureCanvas(node);
+  await _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const JsPDF=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF; if(!JsPDF) throw new Error('PDF library unavailable');
+  const img=canvas.toDataURL('image/jpeg',0.92);
+  const pdf=new JsPDF({ orientation:'portrait', unit:'pt', format:'a4', compress:true });
+  const pageW=pdf.internal.pageSize.getWidth(), pageH=pdf.internal.pageSize.getHeight();
+  const imgW=pageW, imgH=canvas.height*(imgW/canvas.width);
+  let heightLeft=imgH, position=0;
+  pdf.addImage(img,'JPEG',0,position,imgW,imgH,undefined,'FAST'); heightLeft-=pageH;
+  while(heightLeft>0){ position-=pageH; pdf.addPage(); pdf.addImage(img,'JPEG',0,position,imgW,imgH,undefined,'FAST'); heightLeft-=pageH; }
+  await _deliverFile(pdf.output('blob'), clean+'.pdf', 'application/pdf');
 }
 // Signed URLs are cached and reused per (path + transform) until they near
 // expiry. A fresh signed URL carries a unique token, so the CDN treats each one
@@ -2033,7 +2073,16 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
   const [estimates,setEstimates]=useState([]);   // all estimates for this lead+purpose (a lead can hold several, e.g. with-VAT vs no-VAT)
   const [view,setView]=useState(canEdit?'edit':'print'); // view-only users open straight to the PDF
   const [busy,setBusy]=useState(false);
+  const [saving,setSaving]=useState('');  // '' | 'jpg' | 'pdf'
   const [msg,setMsg]=useState('');
+  async function saveEstimate(kind){
+    const node=document.getElementById('est-doc-page'); if(!node){ alert('Could not find the estimate to save.'); return; }
+    const fname=`${(client?.company||lead.client_name||'Estimate')} - ${number}`;
+    setSaving(kind);
+    try{ if(kind==='jpg') await saveNodeAsJpeg(node, fname); else await saveNodeAsPdf(node, fname); }
+    catch(e){ alert('Could not save: '+(e.message||e)); }
+    finally{ setSaving(''); }
+  }
   // Admin + Accounting may edit and delete estimates (also enforced by RLS).
   const canDelete = profile.role==='admin' || profile.role==='accounting';
   // Sales managers + assistants can ACCEPT / REJECT a SAMPLE estimate (client
@@ -2286,12 +2335,14 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
             {!canEdit && canDecide && isSample && estimate && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('approved')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Client accepted — creates the Sample Sales Order">✅ Accept (client approved)</button>}
             {!canEdit && canDecide && isSample && estimate && status!=='rejected' && status!=='approved' && <button disabled={busy} onClick={()=>decideSample('rejected')} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700 disabled:opacity-50">✕ Decline</button>}
             {!canEdit && status==='approved' && <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 font-semibold">✓ Accepted</span>}
-            <button onClick={()=>window.print()} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button>
+            <button onClick={()=>saveEstimate('jpg')} disabled={!!saving} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50" title="Save as a photo (JPEG) — on phones you can save it to Photos or Files">{saving==='jpg'?'Saving…':'💾 Save JPEG'}</button>
+            <button onClick={()=>saveEstimate('pdf')} disabled={!!saving} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 disabled:opacity-50" title="Save as a PDF file">{saving==='pdf'?'Saving…':'📄 Save PDF'}</button>
+            <button onClick={()=>window.print()} className="no-print hidden sm:inline-flex px-3 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50" title="Print">🖨 Print</button>
             <button onClick={()=> canEdit ? setView('edit') : onClose()} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">{canEdit?'← Back to edit':'Close'}</button>
           </div>
         </div>
         <div className="tp-print py-6">
-          <div className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
+          <div id="est-doc-page" className="po-page mx-auto bg-white shadow" style={{width:'7.7in', padding:'0.2in', fontSize:'10pt', color:'#222'}}>
             <DocPrintHeader title={`${purposeLabel.toUpperCase()} ESTIMATE / QUOTATION`} rightBlocks={
               <div>
                 <div><strong>No.:</strong> {number}</div>
