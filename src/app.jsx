@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 884 · Estimate preview: new Save JPEG and Save PDF buttons that work on phones (renders the estimate to an image/PDF and opens the share sheet so you can Save to Photos or Files). The old Print button is desktop-only now, since window.print was unreliable on mobile.";
+const BUILD = "Live build 885 · Team Overview per-rep review gains a Commission tab: progressive (tiered) or flat commission computed on the month booked revenue, with tier breakdown, 50% at booking + the rest as orders are paid. Eunice set to tiered (quota 750k; bands 2/4/6/7). Admin can edit a reps model, quota and bands.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -500,6 +500,23 @@ async function insertBankTxnOnce(payload){
     }
   }catch(_){ /* fall through to normal insert */ }
   return await sb.from('bank_transactions').insert(payload).select('id').single();
+}
+// Progressive (marginal) tiered commission. `tiers` are [{to: fraction of quota
+// upper bound (null = uncapped), rate}]; each band's rate applies only to the
+// slice of booked revenue inside it. Returns {total, bands:[{from,to,fromPct,
+// toPct,rate,revenue,amount}]}.
+function computeTieredCommission(booked, quota, tiers){
+  booked=Math.max(0, Number(booked||0)); quota=Number(quota||0);
+  const t=(Array.isArray(tiers)&&tiers.length)?tiers:[];
+  const bands=[]; let prevUpper=0; let total=0;
+  for(let i=0;i<t.length;i++){
+    const upper = (t[i].to==null||t[i].to==='') ? Infinity : Number(t[i].to)*quota;
+    const rev = Math.max(0, Math.min(booked, upper) - prevUpper);
+    const rate=Number(t[i].rate||0); const amt=rev*rate;
+    bands.push({ from:prevUpper, to:(upper===Infinity?null:upper), fromPct: quota?prevUpper/quota:0, toPct:(upper===Infinity?null:(quota?upper/quota:0)), rate, revenue:rev, amount:amt });
+    total+=amt; prevUpper=upper;
+  }
+  return { total, bands };
 }
 // Print, with the browser's "Save as PDF" filename defaulting to `filename`
 // (restored afterwards). Illegal filename chars are stripped.
@@ -25666,7 +25683,7 @@ function TeamOverview({ profile, profiles, leads, clients, salesTargets, reload 
         </table></div>
       </div>
 
-      {viewingMember && <MemberProfileModal member={viewingMember} leads={leads} clients={clients} onClose={()=>setViewingMember(null)} />}
+      {viewingMember && <MemberProfileModal member={viewingMember} leads={leads} clients={clients} isAdmin={isAdmin} onClose={()=>setViewingMember(null)} />}
     </div>
   );
 }
@@ -26203,7 +26220,7 @@ function TrashView({ profile, profiles, reload }){
   );
 }
 
-function MemberProfileModal({ member, leads, clients, onClose }){
+function MemberProfileModal({ member, leads, clients, isAdmin, onClose }){
   const mine=leads.filter(l=>l.manager_id===member.id);
   const myLeadIds=mine.map(l=>l.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
@@ -26219,10 +26236,13 @@ function MemberProfileModal({ member, leads, clients, onClose }){
   const [sos,setSos]=useState([]); const [ests,setEsts]=useState([]); const [smps,setSmps]=useState([]);
   const [bkYear,setBkYear]=useState(_now.getFullYear());
   const [bkMonth,setBkMonth]=useState(_now.getMonth());
+  const [cfg,setCfg]=useState({ model:member.commission_model||'flat', quota:member.commission_quota??'', rate:member.commission_rate??'', tiers:(Array.isArray(member.commission_tiers)&&member.commission_tiers.length)?member.commission_tiers:[{to:0.6,rate:0.02},{to:1.0,rate:0.04},{to:1.3,rate:0.06},{to:null,rate:0.07}] });
+  const [editComm,setEditComm]=useState(false);
+  async function saveCfg(next){ setCfg(next); setEditComm(false); try{ await sb.from('profiles').update({ commission_model:next.model, commission_quota:next.quota===''?null:Number(next.quota), commission_rate:next.rate===''?null:Number(next.rate), commission_tiers: next.model==='tiered'?next.tiers:member.commission_tiers }).eq('id',member.id); }catch(e){ alert('Save failed: '+(e.message||e)); } }
   useEffect(()=>{ let on=true; setBusy(true); (async()=>{
     let so=[],es=[],sm=[];
     try{ const orClause=myLeadIds.length?`manager_id.eq.${member.id},lead_id.in.(${myLeadIds.join(',')})`:`manager_id.eq.${member.id}`;
-      const q=await sb.from('sales_orders').select('id,number,date,lead_id,client_id,client_name,items,total,status,kind,manager_id,voided_at,created_at').or(orClause).is('deleted_at',null); so=q.data||[]; }catch(_){}
+      const q=await sb.from('sales_orders').select('id,number,date,lead_id,client_id,client_name,items,subtotal,total,amount_paid,balance_due,status,kind,manager_id,voided_at,created_at').or(orClause).is('deleted_at',null); so=q.data||[]; }catch(_){}
     if(myLeadIds.length){
       try{ const q=await sb.from('estimates').select('id,number,lead_id,purpose,total,status,sales_order_id,created_at').in('lead_id',myLeadIds); es=q.data||[]; }catch(_){}
       try{ const q=await sb.from('sampling_jobs').select('id,number,lead_id,client_name,item,quantity,status,due_date,created_at').is('deleted_at',null).in('lead_id',myLeadIds); sm=q.data||[]; }catch(_){}
@@ -26288,6 +26308,7 @@ function MemberProfileModal({ member, leads, clients, onClose }){
           <TabBtn k="pipeline" label="🧭 Pipeline" />
           <TabBtn k="sampling" label="🧪 Sampling" />
           <TabBtn k="heroes" label="🏆 Hero items" />
+          <TabBtn k="commission" label="💵 Commission" />
         </div>
         {busy && <div className="text-xs text-slate-400 py-2">Loading sales data…</div>}
 
@@ -26389,6 +26410,84 @@ function MemberProfileModal({ member, leads, clients, onClose }){
             <tbody>{heroes.map((h,i)=>(<tr key={i} className="border-t"><td className="px-3 py-2 text-slate-400">{i+1}</td><td className="px-3 py-2 font-medium">{h.name}</td><td className="px-3 py-2 text-right">{num(h.qty)}</td><td className="px-3 py-2 text-right text-slate-500">{h.orders}</td><td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(h.value)}</td><td className="px-3 py-2"><div className="h-2 rounded bg-emerald-500" style={{width:Math.max(4,(h.value/heroMax*100))+'%'}}></div></td></tr>))}</tbody>
           </table></div>}
         </div>)}
+
+        {tab==='commission' && (()=>{
+          const base=(s)=>Number(s.subtotal ?? s.total ?? 0);
+          const monthBase=monthSos.reduce((t,s)=>t+base(s),0);
+          const collectedBase=monthSos.reduce((t,s)=>{ const b=base(s); const tot=Number(s.total||0); const paid=(s.amount_paid!=null)?Number(s.amount_paid):(s.status==='paid'?tot:0); const frac=tot>0?Math.min(1,paid/tot):(s.status==='paid'?1:0); return t+b*frac; },0);
+          const isTiered=cfg.model==='tiered';
+          const quota=Number(cfg.quota||0);
+          const comm= isTiered ? computeTieredCommission(monthBase, quota, cfg.tiers) : { total: monthBase*Number(cfg.rate||0), bands:[] };
+          const bookingPortion=0.5*comm.total;
+          const collFrac=monthBase>0?collectedBase/monthBase:0;
+          const collectionEarned=0.5*comm.total*collFrac;
+          const totalEarned=bookingPortion+collectionEarned;
+          const attain=quota>0?monthBase/quota:0;
+          return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-xs text-slate-500">Commission for <b>{byMonth[bkMonth]?.label} {bkYear}</b> — tiers run on <b>booked</b> revenue; 50% at booking, the rest as orders are paid.</div>
+              <select value={bkYear} onChange={e=>setBkYear(Number(e.target.value))} className="border rounded-lg px-2 py-1 text-sm">{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap text-xs">{byMonth.map(mn=>(<button key={mn.m} onClick={()=>setBkMonth(mn.m)} className={`px-2 py-1 rounded ${bkMonth===mn.m?'bg-indigo-600 text-white font-semibold':'bg-slate-100 text-slate-600'}`}>{mn.label}</button>))}</div>
+
+            <div className="bg-white border rounded-lg p-3 flex items-center justify-between flex-wrap gap-2">
+              <div className="text-sm"><b>Setup:</b> {isTiered?<>Tiered · quota <b>{peso(quota)}</b>/mo</>:<>Flat <b>{(Number(cfg.rate||0)*100).toFixed(1)}%</b></>}</div>
+              {isAdmin && <button onClick={()=>setEditComm(v=>!v)} className="text-xs text-indigo-600 hover:underline">{editComm?'Close':'⚙ Edit setup'}</button>}
+            </div>
+            {editComm && isAdmin && (
+              <div className="bg-slate-50 border rounded-lg p-3 space-y-2 text-sm">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1"><input type="radio" checked={cfg.model==='flat'} onChange={()=>setCfg(c=>({...c,model:'flat'}))} /> Flat</label>
+                  <label className="flex items-center gap-1"><input type="radio" checked={cfg.model==='tiered'} onChange={()=>setCfg(c=>({...c,model:'tiered'}))} /> Tiered (progressive)</label>
+                </div>
+                {cfg.model==='flat'
+                  ? <div><label className="text-[10px] uppercase text-slate-500">Flat rate %</label><input type="number" step="0.1" className="input mt-0.5 text-sm w-28" value={cfg.rate===''?'':(Number(cfg.rate)*100)} onChange={e=>setCfg(c=>({...c,rate:e.target.value===''?'':Number(e.target.value)/100}))} /></div>
+                  : <div className="space-y-1.5">
+                      <div><label className="text-[10px] uppercase text-slate-500">Monthly quota (₱)</label><input type="number" className="input mt-0.5 text-sm w-40" value={cfg.quota} onChange={e=>setCfg(c=>({...c,quota:e.target.value}))} /></div>
+                      <div className="text-[10px] uppercase text-slate-500">Bands (upper % of quota · rate %)</div>
+                      {cfg.tiers.map((b,i)=>(<div key={i} className="flex items-center gap-2">
+                        <input type="number" className="input text-sm w-24 text-right" placeholder={b.to==null?'uncapped':''} value={b.to==null?'':Number(b.to)*100} onChange={e=>setCfg(c=>{ const t=c.tiers.slice(); t[i]={...t[i],to:e.target.value===''?null:Number(e.target.value)/100}; return {...c,tiers:t}; })} />
+                        <span className="text-slate-400 text-xs">% →</span>
+                        <input type="number" step="0.1" className="input text-sm w-20 text-right" value={Number(b.rate||0)*100} onChange={e=>setCfg(c=>{ const t=c.tiers.slice(); t[i]={...t[i],rate:Number(e.target.value)/100}; return {...c,tiers:t}; })} />
+                        <span className="text-slate-400 text-xs">%</span>
+                      </div>))}
+                    </div>}
+                <button onClick={()=>saveCfg(cfg)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Save setup</button>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Stat label="Booked this month" value={peso(monthBase)} sub={isTiered?`${Math.round(attain*100)}% of quota`:''} />
+              <Stat label="Collected (of these)" value={peso(collectedBase)} sub={`${Math.round(collFrac*100)}% paid`} />
+              <Stat label="Commission earned" value={peso(comm.total)} sub="if fully paid" cls="bg-emerald-50 border-emerald-100" />
+              <Stat label="Payable now" value={peso(totalEarned)} sub="booking 50% + collected" cls="bg-emerald-50 border-emerald-100" />
+            </div>
+
+            {isTiered && (
+              <div className="bg-white border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 border-b text-sm font-bold bg-slate-50">Tier breakdown on {peso(monthBase)} booked</div>
+                <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Band</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Revenue in band</th><th className="text-right px-3 py-2">Commission</th></tr></thead>
+                <tbody>{comm.bands.map((b,i)=>(<tr key={i} className={`border-t ${b.revenue>0?'':'text-slate-300'}`}>
+                  <td className="px-3 py-2">{Math.round((b.fromPct||0)*100)}%–{b.toPct==null?'∞':Math.round(b.toPct*100)+'%'} <span className="text-[10px] text-slate-400">({peso(b.from)}{b.to==null?'+':'–'+peso(b.to)})</span></td>
+                  <td className="px-3 py-2 text-right">{(b.rate*100).toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-right">{peso(b.revenue)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(b.amount)}</td>
+                </tr>))}</tbody>
+                <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2" colSpan="3">Total commission (100% of orders paid)</td><td className="px-3 py-2 text-right text-emerald-700">{peso(comm.total)}</td></tr></tfoot>
+                </table>
+              </div>
+            )}
+
+            <div className="bg-white border rounded-lg p-3 text-sm space-y-1">
+              <div className="flex items-center justify-between"><span className="text-slate-500">Booking portion (50%, on booking)</span><b>{peso(bookingPortion)}</b></div>
+              <div className="flex items-center justify-between"><span className="text-slate-500">Collection portion (50% × {Math.round(collFrac*100)}% collected)</span><b>{peso(collectionEarned)}</b></div>
+              <div className="flex items-center justify-between border-t pt-1 mt-1"><span className="font-semibold">Payable now</span><b className="text-emerald-700 text-base">{peso(totalEarned)}</b></div>
+              {collFrac<1 && <div className="text-[11px] text-slate-400">Remaining {peso(0.5*comm.total*(1-collFrac))} releases as the rest of this month's orders get paid.</div>}
+            </div>
+          </div>
+          );
+        })()}
       </div>
     </Modal>
   );
@@ -51716,7 +51815,7 @@ function App(){
     // gating load hit the 8s statement timeout — so every page "just loaded".
     // Fetch only the small columns here; hydrate signatures once in the
     // background so printed documents still render them.
-    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null).then(r=>{ if(r.data){
+    sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate,commission_model,commission_quota,commission_tiers').is('deleted_at', null).then(r=>{ if(r.data){
       // Merge-preserve any signatures already hydrated, so the constant reloads
       // don't wipe signature_data off the team list (that made techpack/DR/PO
       // printouts lose their e-signatures after the first reload).
@@ -51737,7 +51836,7 @@ function App(){
     sb.from('daily_checkins').select('*').gte('checkin_date', new Date(Date.now()-21*86400000).toISOString().slice(0,10)).order('checkin_date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setDailyCheckins(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
-      fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate').is('deleted_at', null)),
+      fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate,commission_model,commission_quota,commission_tiers').is('deleted_at', null)),
       Promise.resolve({data:null}),  /* clients — already streamed above; skip the duplicate download */
       Promise.resolve({data:null}),  /* leads (~1.2MB) — already streamed above; skip the duplicate download */
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
