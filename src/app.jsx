@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 888 · Subcon Cutting payroll sheet now shows the client name on each line (stored on the payroll row + backfilled for existing runs), as a Client column next to the project.";
+const BUILD = "Live build 889 · Approval review (AGM + Admin) now shows ALL receipts and supporting documents on a liquidation - gathered from every field (liquidation receipts, supporting docs, per-line files, attachments) as tappable thumbnails - so each approver can verify them before signing. AGM still reviews/approves first, then it comes to Admin.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40721,7 +40721,21 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
     amount=Number(data.amount||0);
     summary=[['Replenishment', data.note||'Petty cash replenishment'],['Requested by', nameOf(whoId)],['Requested', fmtDate(String(data.requested_at||data.created_at||'').slice(0,10))]];
   }
-  const nAtt=Array.isArray(data.attachments)?data.attachments.length:0;
+  // Gather EVERY supporting file on this request so AGM + Admin can check them
+  // all before approving — receipts and support docs live in several fields
+  // depending on the kind (budget liquidation, cash-advance liquidation, etc.).
+  const allAtts=(()=>{
+    const out=[]; const seen=new Set();
+    const add=(arr)=>{ (Array.isArray(arr)?arr:[]).forEach(a=>{ if(!a) return; const k=a.path||a.url||a.name; if(k&&!seen.has(k)){ seen.add(k); out.push(a); } }); };
+    add(data.attachments);
+    add(data.liquidation_receipts); add(data.supporting_docs); add(data.receipts_files);
+    if(data.attachment_url) add([{ url:data.attachment_url, name:'attachment' }]);
+    // per-line attachments, if any
+    (Array.isArray(data.liquidation_lines)?data.liquidation_lines:[]).forEach(l=>{ add(l.attachments); add(l.files); add(l.receipt?[l.receipt]:null); });
+    (Array.isArray(data.receipts)?data.receipts:[]).forEach(l=>{ if(l&&(l.path||l.url)) add([l]); add(l&&l.attachments); add(l&&l.files); });
+    return out;
+  })();
+  const nAtt=allAtts.length;
   async function doApprove(){
     if(!sign){ if(!confirm("You don't have an e-signature on file yet. Approve without signing? You can set one up in My Profile → signature.")) return; }
     setBusy(true); await onApprove(kind, data, note); setBusy(false);
@@ -40766,8 +40780,8 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
         <div className="no-print space-y-3">
           {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
           {nAtt>0 && <div className="border rounded-lg p-3 bg-slate-50">
-            <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request</div>
-            <AttachmentList attachments={data.attachments} inline />
+            <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} receipt{nAtt===1?'':'s'} / supporting document{nAtt===1?'':'s'} — tap to view before approving</div>
+            <AttachmentList attachments={allAtts} inline />
           </div>}
           {!sign && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">You don't have an e-signature saved yet. Set one up in <strong>My Profile → signature</strong> so your approval is signed.</div>}
           <TpLbl t="Note (optional — shows on the sheet; required if returning)"><textarea className="input min-h-[52px]" value={note} onChange={e=>setNote(e.target.value)} placeholder="Any condition or question…" /></TpLbl>
