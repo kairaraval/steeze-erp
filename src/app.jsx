@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 891 · AGM now has Finance access to Petty Cash, Cash Advances, Request for Payment and Expense Log (view & the comment/mention threads) so she can double-check petty cash for approval/liquidation and see tags addressed to her.";
+const BUILD = "Live build 892 · Inbox: star a message (☆/★) to flag it and come back later - stars persist per-user across devices and even on already-read messages. New ⭐ filter shows only your starred threads.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -15771,6 +15771,16 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   },[mentions]);
   const [selected,setSelected]=useState(()=>new Set()); // dedupKeys ticked for bulk clear
   function toggleSelect(key){ setSelected(prev=>{ const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; }); }
+  // ⭐ Starred threads — flag a message (even if read) to come back to it later.
+  // Stored per-user in the DB (inbox_stars) so stars follow you across devices.
+  const [stars,setStars]=useState(()=>new Set());
+  useEffect(()=>{ let on=true; sb.from('inbox_stars').select('thread_key').eq('profile_id',profile.id).then(({data})=>{ if(on&&data) setStars(new Set(data.map(r=>r.thread_key))); }).catch(()=>{}); return ()=>{on=false;}; },[profile.id]);
+  async function toggleStar(key){
+    const starred=stars.has(key);
+    setStars(prev=>{ const n=new Set(prev); starred?n.delete(key):n.add(key); return n; });
+    try{ if(starred){ await sb.from('inbox_stars').delete().eq('profile_id',profile.id).eq('thread_key',key); } else { await sb.from('inbox_stars').insert({ profile_id:profile.id, thread_key:key }); } }
+    catch(_){ /* revert on failure */ setStars(prev=>{ const n=new Set(prev); starred?n.add(key):n.delete(key); return n; }); }
+  }
   // archived_by holds the profile ids of users who have CLEARED a conversation
   // from their personal inbox. Clearing is permanent — there's no archive view,
   // the cleared row simply never shows in this user's inbox again. The
@@ -15787,6 +15797,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
   const rawVisible = filter==='unread' ? unread
     : filter==='mention' ? nonArchivedMentions.filter(m=>!isAuto(m))
     : filter==='auto' ? nonArchivedMentions.filter(m=>isAuto(m))
+    : filter==='starred' ? nonArchivedMentions.filter(m=>stars.has(dedupKey(m)))
     : nonArchivedMentions;
   // Collapse multiple mentions in the same lead / job into a single inbox row
   // so the inbox doesn't get cluttered when a lead has a long conversation.
@@ -15990,6 +16001,7 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
               <button onClick={()=>setFilter('unread')} className={`px-3 py-1.5 rounded-md ${filter==='unread'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Unread ({unread.length})</button>
               <button onClick={()=>setFilter('mention')} className={`px-3 py-1.5 rounded-md ${filter==='mention'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Real @mentions from teammates">💬 ({realCount})</button>
               <button onClick={()=>setFilter('auto')} className={`px-3 py-1.5 rounded-md ${filter==='auto'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Automated system notifications">🔔 ({autoCount})</button>
+              <button onClick={()=>setFilter('starred')} className={`px-3 py-1.5 rounded-md ${filter==='starred'?'bg-white shadow-sm font-semibold':'text-slate-600'}`} title="Starred — things you flagged to come back to">⭐ ({stars.size})</button>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -16061,6 +16073,10 @@ function Inbox({ profile, profiles, clients, leads, graphicJobs, printingJobs, p
                           <span className="shrink-0 min-w-[1.25rem] h-5 px-1 rounded-full border border-slate-200 text-[10px] text-slate-500 inline-flex items-center justify-center font-medium">{replyCount}</span>
                         )}
                         <div className="flex-1" />
+                        {/* Star — flag to come back to it later (stays even after read) */}
+                        {(()=>{ const sk=dedupKey(m); const on=stars.has(sk); return (
+                          <button onClick={()=>toggleStar(sk)} title={on?'Starred — tap to unstar':'Star this to come back to it'} className={`shrink-0 text-base leading-none px-1.5 py-0.5 rounded-lg transition ${on?'text-amber-500':'text-slate-300 hover:text-amber-400'}`}>{on?'★':'☆'}</button>
+                        ); })()}
                         {/* Clear — always tappable (not hover-only, so it works on touch) */}
                         <button onClick={()=>clearOne(m)} disabled={busy} title="Clear — removes this conversation from your inbox for good"
                           className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-200 text-slate-500 hover:bg-pink-600 hover:text-white hover:border-pink-600 sm:opacity-0 sm:group-hover:opacity-100 transition disabled:opacity-50">
