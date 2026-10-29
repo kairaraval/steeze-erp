@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 886 · Commissions module is now tiered-aware: for progressive reps (Eunice) each sales order earns its marginal slice of the months cumulative booked revenue, so the per-SO breakdown adds up to the tiered total. Sync auto-re-rates tiered reps; a Recompute tiered button is also available. Her October now totals the tiered amount, not flat 2%.";
+const BUILD = "Live build 887 · Subcon Cutting: signed runs now have a printable Payroll Sheet (per-subcon breakdown, totals, signatures) with Save PDF - it rides with the RFP so AGM, Admin and Finance can open and check it before approving/paying.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11735,6 +11735,7 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
   const [batches,setBatches]=useState([]);
   const [signing,setSigning]=useState(false);
   const [addFor,setAddFor]=useState(null); // { task }
+  const [viewRun,setViewRun]=useState(null); // signed run → payroll sheet
   const num=(n)=>Number(n||0).toLocaleString();
   async function load(silent){
     try{ const { data }=await sb.from('subcon_tasks').select('*').eq('stage','cutting').is('deleted_at',null); setTasks(data||[]); }catch(_){ setTasks([]); }
@@ -11830,14 +11831,15 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
 
           {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
             <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
               <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
-                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
+                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td><td className="px-3 py-2 text-right"><button onClick={()=>setViewRun(b)} className="text-xs text-indigo-600 hover:underline font-semibold">📄 Payroll sheet</button></td></tr>
               ); })}</tbody>
             </table></div>)}
         </div>
       )}
 
+      {viewRun && <SubconCutPayrollDoc batch={viewRun} rfp={viewRun.rfp_id?(rfps||[]).find(r=>r.id===viewRun.rfp_id):null} profiles={profiles} onClose={()=>setViewRun(null)} />}
       {addFor && <SubconCutAddPayrollModal row={addFor} subcons={subcons} onClose={()=>setAddFor(null)} onSave={(qty,rate)=>addToPayroll(addFor.t, qty, rate)} />}
       {signing && <SubconCutSignModal rows={sent} subcons={subcons} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(true); reload&&reload(); }} />}
     </div>
@@ -11907,6 +11909,74 @@ function SubconCutSignModal({ rows, subcons, profile, onClose, onSaved }){
         <div><label className="text-[10px] uppercase text-slate-500">Sign — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. your name" /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Sign & request payment'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// Printable / PDF payroll sheet for a signed Subcon Cutting run — the document
+// that rides WITH the RFP so AGM, Admin and Finance can check it. Self-fetches
+// the run's lines (+ subcon / project names) so it works from the board OR an RFP.
+function SubconCutPayrollDoc({ batch, rfp, profiles, onClose }){
+  const [st,setSt]=useState(null);
+  useEffect(()=>{ let on=true; (async()=>{
+    let b=batch||null, rows=[];
+    try{
+      if(!b && rfp){ const r=await sb.from('subcon_cut_payroll_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1); b=(r.data&&r.data[0])||null; }
+      if(b){ const r2=await sb.from('subcon_cut_payroll_queue').select('*').eq('batch_id',b.id).is('deleted_at',null); rows=r2.data||[]; }
+    }catch(e){ if(on) setSt({ b:null, err:e.message||String(e) }); return; }
+    if(!b){ if(on) setSt({ b:null }); return; }
+    let subcons=[], leads=[], clients=[];
+    try{ const r=await sb.from('subcons').select('id,name'); subcons=r.data||[]; }catch(_){}
+    try{ const leadIds=[...new Set(rows.map(r=>r.lead_id).filter(Boolean))]; if(leadIds.length){ const r=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); leads=r.data||[]; const cIds=[...new Set(leads.map(l=>l.client_id).filter(Boolean))]; if(cIds.length){ const rc=await sb.from('clients').select('id,company').in('id',cIds); clients=rc.data||[]; } } }catch(_){}
+    if(on) setSt({ b, rows, subcons, leads, clients });
+  })(); return ()=>{ on=false; }; },[batch?.id, rfp?.id]);
+  if(!st) return <Modal title="Subcon Cutting Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">Loading payroll sheet…</div></Modal>;
+  if(!st.b) return <Modal title="Subcon Cutting Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">No signed payroll sheet is linked.{st.err?` (${st.err})`:''}</div></Modal>;
+  const b=st.b; const rows=st.rows||[];
+  const subconNm=(id)=>(st.subcons||[]).find(s=>s.id===id)?.name||'Subcon';
+  const projNm=(leadId)=>{ const l=(st.leads||[]).find(x=>x.id===leadId); const c=l&&l.client_id?((st.clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return [c,l&&l.title].filter(Boolean).join(' · ')||'Project'; };
+  const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+  const bySub=(()=>{ const m=new Map(); rows.forEach(q=>{ const k=q.subcon_id; if(!m.has(k)) m.set(k,{ subcon:subconNm(q.subcon_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.subcon.localeCompare(b.subcon)); })();
+  const totalPcs=rows.reduce((t,q)=>t+Number(q.qty||0),0), totalAmt=rows.reduce((t,q)=>t+amtOf(q),0);
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const agm=rfp?.agm_approved_by?pById(rfp.agm_approved_by):null;
+  const adm=rfp?.admin_approved_by?pById(rfp.admin_approved_by):null;
+  const SigBox=({name,sigData,when,role,fallback})=>(
+    <div className="text-center">
+      <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{sigData && <img src={sigData} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+      <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div>
+      <div className="text-[11px] text-slate-700">{name||fallback||'—'}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div>
+    </div>
+  );
+  return (
+    <Modal title={`Subcon Cutting Payroll · ${b.number}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end gap-2">
+          <button onClick={()=>{ const n=document.getElementById('scc-sheet'); if(n) saveNodeAsPdf(n, `Subcon Cutting Payroll - ${b.number}`); }} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📄 Save PDF</button>
+          <button onClick={()=>printAs(`Subcon Cutting Payroll - ${b.number}`)} className="hidden sm:inline-flex px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+        </div>
+        <style>{`@media print{ body *{visibility:hidden !important;} #scc-sheet,#scc-sheet *{visibility:visible !important;} #scc-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+        <div id="scc-sheet" className="bg-white p-2" style={{color:'#222'}}>
+          <div className="flex items-center justify-between border-b pb-2 mb-3">
+            <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Subcon Cutting Payroll</div></div>
+            <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{b.number}</div><div>{fmtDate(String(b.signed_at||b.created_at||'').slice(0,10))}</div>{rfp&&<div className="font-mono">{rfp.number}</div>}</div>
+          </div>
+          {bySub.map((g,gi)=>(
+            <div key={gi} className="mb-3">
+              <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">{g.subcon}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
+              <table className="w-full text-xs"><tbody>
+                {g.rows.map(q=>(<tr key={q.id} className="border-b"><td className="px-2 py-1 text-slate-500">{projNm(q.lead_id)}</td><td className="px-2 py-1">{q.item_label||q.garment||'Cutting'}</td><td className="px-2 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
+              </tbody></table>
+            </div>
+          ))}
+          <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {bySub.length} subcon(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
+          <div className="grid grid-cols-3 gap-6 mt-10">
+            <SigBox name={b.prepared_sig||(pById(b.signed_by)?.name)} sigData={pById(b.signed_by)?.signature_data} when={b.signed_at} role="Prepared & signed by" />
+            <SigBox name={agm?(agm.name||agm.email):null} sigData={agm?.signature_data} when={rfp?.agm_approved_at} role="Reviewed & approved — AGM" fallback="Pending AGM" />
+            <SigBox name={adm?(adm.name||adm.email):null} sigData={adm?.signature_data} when={rfp?.admin_approved_at} role="Approved — Admin" fallback="Pending Admin" />
+          </div>
+        </div>
       </div>
     </Modal>
   );
@@ -38887,10 +38957,10 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
 
         {/* Subcon Sewing payroll — the signed supporting document (supervisor + AGM + Admin). */}
-        {rfp.origin==='subcon_payroll' && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase text-violet-700">🧵 Subcon Payroll Sheet</div>
+              <div className="text-xs font-semibold uppercase text-violet-700">{rfp.origin==='subcon_cutting'?'🔪 Subcon Cutting Payroll Sheet':'🧵 Subcon Payroll Sheet'}</div>
               <div className="text-[12px] text-slate-600 truncate">The signed per-subcon payroll breakdown — the supporting document for this payment. Open it to review &amp; print before approving.</div>
             </div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
@@ -39088,7 +39158,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       </div>
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
-      {showPayrollDoc && <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
+      {showPayrollDoc && (rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -39242,9 +39312,9 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
           {Number(rfp.amount_paid||0)>0 && <div className="mb-1">Already paid <strong>{peso(rfp.amount_paid)}</strong> of {peso(rfp.amount)} · Balance <strong>{peso(rfpBalance(rfp))}</strong>.</div>}
           Paying <strong>{peso(f.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. You can change the amount below to pay partially — the RFP stays “Partially Paid” with the balance shown until it's fully settled.
         </div>
-        {rfp.origin==='subcon_payroll' && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-2.5 flex items-center justify-between gap-3">
-            <div className="text-xs text-violet-800">🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</div>
+            <div className="text-xs text-violet-800">{rfp.origin==='subcon_cutting'?<>🔪 This is a <b>subcon cutting payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>:<>🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>}</div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
           </div>
         )}
@@ -39334,7 +39404,7 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
       </div>
-      {showPayrollDoc && <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
+      {showPayrollDoc && (rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -40693,7 +40763,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
 
         {/* ── Controls (not printed) ── */}
         <div className="no-print space-y-3">
-          {kind==='rfp' && data.origin==='subcon_payroll' && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">🧵 View &amp; check the Subcon Payroll Sheet</button>}
+          {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
           {nAtt>0 && <div className="border rounded-lg p-3 bg-slate-50">
             <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} attachment{nAtt===1?'':'s'} on this request</div>
             <AttachmentList attachments={data.attachments} inline />
@@ -40707,7 +40777,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
           </div>
         </div>
       </div>
-      {showPayrollDoc && <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />}
+      {showPayrollDoc && (data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
