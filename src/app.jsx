@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 893 · Mobile fixes: all modals now clip horizontal overflow (no more content cut off the right edge on phones); Lead details header, fields and item rows reflow cleanly and the Status dropdown goes full-width on small screens; the Techpack toolbar (Saved / Edit-Preview / zoom / Save PDF / Save) now wraps instead of running off-screen.";
+const BUILD = "Live build 894 · Lead details mobile: fields now stack to a single column on phones (were cramped 2-up), the right panel no longer bleeds past the screen edge (removed a negative margin + mobile-only border), and long values wrap - so nothing is cut off on the right anymore.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3314,9 +3314,9 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
   }
   return (
     <Modal title="Lead details" onClose={onClose} xwide>
-      <div className="grid md:grid-cols-5 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-5">
         {/* Left: lead info + actions (3 cols) */}
-        <div className="md:col-span-3 space-y-4">
+        <div className="md:col-span-3 space-y-4 min-w-0">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0 flex-1">
               <div className="text-lg font-bold break-words">{lead.title}</div>
@@ -3333,7 +3333,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               <span className={`text-xs px-2 py-1 rounded font-medium ${stageMeta(lead.stage).color}`}>{stageMeta(lead.stage).label}</span>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm [&>div]:min-w-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <div><div className="text-[10px] uppercase text-slate-400">Sales Manager</div><div className="flex items-center gap-1.5">{mgr ? <><Avatar profile={mgr} size="sm" /><span className="font-medium">{mgr.name||mgr.email}</span></> : <span className="text-slate-400">— Unassigned —</span>}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Lead Source</div><div>{lead.lead_source||'—'}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Value</div><div className="font-bold">{peso(lead.value)}</div></div>
@@ -3418,7 +3418,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
           </div>
         </div>
         {/* Right: live activity */}
-        <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
+        <div className="md:col-span-2 md:border-l md:pl-5 min-h-0 min-w-0">
           <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">💬 Activity{activityCount?` · ${activityCount}`:''}</div>
           <ThreadBody profile={profile} profiles={profiles} table="lead_activity" match={{ lead_id: lead.id }} scope={'activity/'+lead.id} titleText={lead.title} afterChange={reload} headerless embedded />
         </div>
@@ -3611,7 +3611,7 @@ function LeadInfoModal({ profile, profiles, lead, client, job, jobType, canSendT
           </div>
         </div>
         {/* Right: dept-team conversation (2/5) */}
-        <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
+        <div className="md:col-span-2 md:border-l md:pl-5 min-h-0 min-w-0">
           <div className="mb-3">
             <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">💬 Team conversation</div>
             <div className="text-[10px] text-slate-400 mt-0.5">Chat with your team — the sales pipeline chat is not shown here.</div>
@@ -6255,7 +6255,7 @@ function DeptBoard({ profile, profiles, employees, title, icon, table, jobType, 
               </div>
             </div>
             {/* Right: live activity (2 cols) — scoped to THIS dept job; no lead chatter bleeds in */}
-            <div className="md:col-span-2 border-l md:pl-5 -mr-2 md:-mr-0 min-h-0">
+            <div className="md:col-span-2 md:border-l md:pl-5 min-h-0 min-w-0">
               <div className="mb-3">
                 <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">💬 {title} conversation</div>
                 <div className="text-[10px] text-slate-400 mt-0.5">Private to the {title.toLowerCase()} team — the sales lead's chat is not shown here.</div>
