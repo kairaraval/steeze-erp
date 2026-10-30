@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 892 · Inbox: star a message (☆/★) to flag it and come back later - stars persist per-user across devices and even on already-read messages. New ⭐ filter shows only your starred threads.";
+const BUILD = "Live build 893 · Mobile fixes: all modals now clip horizontal overflow (no more content cut off the right edge on phones); Lead details header, fields and item rows reflow cleanly and the Status dropdown goes full-width on small screens; the Techpack toolbar (Saved / Edit-Preview / zoom / Save PDF / Save) now wraps instead of running off-screen.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1040,7 +1040,7 @@ function Modal({ title, onClose, children, wide, xwide }){
     <div className="steeze-modal-backdrop fixed inset-0 bg-black/40 flex items-start justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
       <div className={`steeze-modal-card bg-white rounded-2xl shadow-xl w-full ${widthCls} my-8 flex flex-col max-h-[calc(100vh-4rem)]`} onClick={e=>e.stopPropagation()}>
         <div className="steeze-modal-header no-print flex items-center justify-between p-5 pb-3 border-b sticky top-0 bg-white rounded-t-2xl z-10"><h2 className="text-lg font-bold">{title}</h2><button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">✕</button></div>
-        <div className="steeze-modal-body p-5 overflow-y-auto">{children}</div>
+        <div className="steeze-modal-body p-4 sm:p-5 overflow-y-auto overflow-x-hidden break-words">{children}</div>
       </div>
     </div>
   );
@@ -3317,15 +3317,15 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
       <div className="grid md:grid-cols-5 gap-5">
         {/* Left: lead info + actions (3 cols) */}
         <div className="md:col-span-3 space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-lg font-bold truncate">{lead.title}</div>
-              <div className="text-sm text-slate-500 truncate">{client?.company||'—'}</div>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <div className="text-lg font-bold break-words">{lead.title}</div>
+              <div className="text-sm text-slate-500 break-words">{client?.company||'—'}</div>
             </div>
             {canEdit ? (
-              <div className="flex flex-col items-end gap-1">
+              <div className="flex flex-col items-start sm:items-end gap-1 w-full sm:w-auto">
                 <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Status</span>
-                <select value={lead.stage} disabled={stageBusy} onChange={e=>changeStage(e.target.value)} className={`text-xs px-2 py-1 rounded font-semibold border cursor-pointer disabled:opacity-60 ${stageMeta(lead.stage).color}`} title="Change the status of this lead">
+                <select value={lead.stage} disabled={stageBusy} onChange={e=>changeStage(e.target.value)} className={`text-xs px-2 py-1 rounded font-semibold border cursor-pointer disabled:opacity-60 w-full sm:w-auto ${stageMeta(lead.stage).color}`} title="Change the status of this lead">
                   {STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
                 </select>
               </div>
@@ -3333,7 +3333,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
               <span className={`text-xs px-2 py-1 rounded font-medium ${stageMeta(lead.stage).color}`}>{stageMeta(lead.stage).label}</span>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="grid grid-cols-2 gap-3 text-sm [&>div]:min-w-0">
             <div><div className="text-[10px] uppercase text-slate-400">Sales Manager</div><div className="flex items-center gap-1.5">{mgr ? <><Avatar profile={mgr} size="sm" /><span className="font-medium">{mgr.name||mgr.email}</span></> : <span className="text-slate-400">— Unassigned —</span>}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Lead Source</div><div>{lead.lead_source||'—'}</div></div>
             <div><div className="text-[10px] uppercase text-slate-400">Value</div><div className="font-bold">{peso(lead.value)}</div></div>
@@ -3355,7 +3355,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
                 : <div className="flex justify-between py-0.5"><span className="text-pink-600">{lead.companion_label||cm.label} <span className="text-pink-400 text-xs">· cost, not billed</span></span><span className="font-semibold text-pink-600">{peso(amt)}</span></div>}
             </div>
           ); })()}
-          {(lead.items||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Items</div><div className="border rounded-lg divide-y">{lead.items.map((it,i)=>(<div key={i} className="flex justify-between px-3 py-1.5 text-sm"><span>{it.itemType}{it.category?` · ${it.category}`:''} {it.withVat?<span className="text-[10px] text-emerald-600">+VAT</span>:''}</span><span className="font-medium">{it.quantity} × {peso(it.pricePerItem)}</span></div>))}</div></div>)}
+          {(lead.items||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Items</div><div className="border rounded-lg divide-y">{lead.items.map((it,i)=>(<div key={i} className="flex justify-between gap-2 px-3 py-1.5 text-sm"><span className="min-w-0 break-words">{it.itemType}{it.category?` · ${it.category}`:''} {it.withVat?<span className="text-[10px] text-emerald-600">+VAT</span>:''}</span><span className="font-medium whitespace-nowrap shrink-0">{it.quantity} × {peso(it.pricePerItem)}</span></div>))}</div></div>)}
           {(lead.attachments||[]).length>0 && (<div><div className="text-[10px] uppercase text-slate-400 mb-1">Attachments</div><div className="flex flex-wrap gap-2">{lead.attachments.map((a,i)=><AttachmentChip key={i} att={a} small gallery={lead.attachments} />)}</div></div>)}
           {/* Inline notes box — quick-save without opening the Edit modal */}
           <div className="border rounded-lg p-3 bg-amber-50/50 border-amber-200">
@@ -29928,7 +29928,7 @@ function TechpackEditor({ profile, profiles, lead, client, onClose, reload, read
             </div>
           ) : null; })()}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {!overrideTechpack && (
             <div className="relative">
               <button onClick={()=>setShowSnaps(v=>!v)} className="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50">🗂 Saved ({snaps.length})</button>
