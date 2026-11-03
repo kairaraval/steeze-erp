@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 911 · Tapping a push notification now opens the exact mention — the lead's activity box, or the job's board + activity thread — instead of dumping you on the landing page. Works whether the app was closed (via the notification's deep link) or already open (via the tap handler). Falls back to the Inbox if the item can't be opened.";
+const BUILD = "Live build 912 · Hotfix: the notification deep-link effect was declared after the login/loading guards, which crashed the app with React error #310 (hooks order). Moved it above the guards so the app loads normally again; push deep-linking (build 911) still works.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -53266,6 +53266,18 @@ function App(){
   // Deep-link target from a tapped push notification (cold start reads it from the
   // launch URL above; a tap while the app is open sets it from the click handler).
   const [pendingRoute,setPendingRoute]=useState(()=>{ try{ return window.__steezePendingRoute||null; }catch(_){ return null; } });
+  // A tapped push notification (cold start via launch URL, or a tap while the app
+  // is open) deep-links to the exact mention. Wait until data loads, then route it
+  // through the same handler the in-app Inbox uses. (Declared here — before the
+  // login/loading early-returns below — so the hook order stays stable.)
+  useEffect(()=>{
+    if(!pendingRoute) return;
+    const r=pendingRoute;
+    if(r.source==='lead' && r.lead_id && (leads||[]).length===0) return; // wait for leads to load
+    try{ openInboxItem(r); }catch(_){ setView('inbox'); }
+    try{ window.__steezePendingRoute=null; }catch(_){}
+    setPendingRoute(null);
+  },[pendingRoute, leads, prodJobs, salesOrders, requests, sampleJobs, graphicJobs, printingJobs, embroideryJobs, knittingJobs]);
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
@@ -54343,21 +54355,6 @@ function App(){
     setView(map[m.source]||'prod');
     setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
-
-  // A tapped push notification (cold start via launch URL, or a tap while the app
-  // is open) deep-links to the exact mention. Wait until data has loaded, then
-  // route it through the same handler the in-app Inbox uses.
-  useEffect(()=>{
-    if(!pendingRoute) return;
-    const r=pendingRoute;
-    // Wait for the records to load before routing (lists start empty). For a lead
-    // mention, hold until leads have loaded; if the id still isn't there, fall
-    // through so the user at least lands on the Inbox.
-    if(r.source==='lead' && r.lead_id && (leads||[]).length===0) return;
-    try{ openInboxItem(r); }catch(_){ setView('inbox'); }
-    try{ window.__steezePendingRoute=null; }catch(_){}
-    setPendingRoute(null);
-  },[pendingRoute, leads, prodJobs, salesOrders, requests, sampleJobs, graphicJobs, printingJobs, embroideryJobs, knittingJobs]);
 
   const isAssistant=isAssistantRole(profile.role);
   const isProduction=profile.role==='production';
