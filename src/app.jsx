@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 902 · Admin OS: new 'Purchase Requests' view lists every purchase request raised by other departments so the Admin Office (Geziel) can review each order's line items + cost and Approve before Purchasing buys (or Return it with a note). Approving sends it to Purchasing's To-Review lane.";
+const BUILD = "Live build 903 · Payroll & Attendance Phase 1+2: new Payroll Setup (editable, effective-dated SSS/PhilHealth/Pag-IBIG/BIR tables seeded with 2025 defaults, work schedules, 2026 PH holidays, pay rules/multipliers, per-employee schedule/cycle/basis/biometric ID) and a new Attendance/DTR module (ZKTeco cloud/ADMS push endpoint + CSV import + manual grid, daily time record per cutoff with build-from-punches, edit & approve). Payroll engine (Phase 3) is next.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41109,6 +41109,560 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
   );
 }
 
+/* ═══════════════════ PAYROLL & ATTENDANCE (Phase 1 + 2) ═══════════════════
+   Phase 1 — Payroll Setup: editable, effective-dated statutory tables
+   (SSS/PhilHealth/Pag-IBIG/BIR), work schedules, PH holiday calendar, payroll
+   config (daily factor, OT/holiday multipliers, deduction split) and per-employee
+   pay setup (schedule, pay cycle, pay basis, biometric enrollment id).
+   Accounting owns the statutory tables; HR owns schedules + employee setup. */
+const PAY_CYCLES=[['semi_monthly','Semi-monthly (1–15 / 16–end)'],['weekly','Weekly']];
+const PAY_BASES=[['monthly','Monthly salary'],['daily','Daily rate']];
+const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function PayrollSetupView({ profile, employees, profiles, reload }){
+  const canTables = ['admin','accounting','accounting_officer'].includes(profile.role);
+  const canHR = ['admin','hr','hr_admin'].includes(profile.role);
+  const [tab,setTab]=useState('tables');
+  const [schedules,setSchedules]=useState([]);
+  const [holidays,setHolidays]=useState([]);
+  const [taxTables,setTaxTables]=useState([]);
+  const [config,setConfig]=useState({});
+  const [loading,setLoading]=useState(true);
+  const [editSched,setEditSched]=useState(null); // schedule row or 'new'
+  const [editHol,setEditHol]=useState(null);
+  const [emps,setEmps]=useState([]);
+  async function load(){
+    setLoading(true);
+    try{ const { data }=await sb.from('work_schedules').select('*').is('deleted_at',null).order('name'); setSchedules(data||[]); }catch(_){ setSchedules([]); }
+    try{ const { data }=await sb.from('ph_holidays').select('*').is('deleted_at',null).order('holiday_date'); setHolidays(data||[]); }catch(_){ setHolidays([]); }
+    try{ const { data }=await sb.from('payroll_tax_tables').select('*').is('deleted_at',null).order('effective_date',{ascending:false}); setTaxTables(data||[]); }catch(_){ setTaxTables([]); }
+    try{ const { data }=await sb.from('payroll_config').select('*'); const m={}; (data||[]).forEach(r=>m[r.key]=r.value); setConfig(m); }catch(_){ setConfig({}); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  useEffect(()=>{ setEmps((employees||[]).filter(e=>!e.deleted_at && e.is_active!==false)); },[employees]);
+  const schedName=(id)=>schedules.find(s=>s.id===id)?.name||'—';
+  // Latest effective row for a kind/frequency.
+  const latest=(kind,freq)=> taxTables.filter(t=>t.kind===kind && (freq?t.frequency===freq:!t.frequency)).sort((a,b)=>String(b.effective_date).localeCompare(String(a.effective_date)))[0]||null;
+
+  async function saveConfig(key,value){ setConfig(c=>({...c,[key]:value})); await sb.from('payroll_config').upsert({ key, value, updated_by:profile.id, updated_at:new Date().toISOString() }); }
+  async function saveTaxData(row, data){ setTaxTables(prev=>prev.map(t=>t.id===row.id?{...t,data}:t)); const { error }=await sb.from('payroll_tax_tables').update({ data }).eq('id',row.id); if(error){ alert(error.message); load(); } }
+  async function addTaxVersion(kind, freq, baseData, effDate){ const { error }=await sb.from('payroll_tax_tables').insert({ kind, frequency:freq||null, effective_date:effDate, data:baseData, created_by:profile.id }); if(error){ alert(error.message); return; } load(); }
+  async function saveEmp(e, patch){ setEmps(prev=>prev.map(x=>x.id===e.id?{...x,...patch}:x)); const { error }=await sb.from('employees').update(patch).eq('id',e.id); if(error){ alert('Save failed: '+error.message); load(); } }
+  async function delSchedule(s){ if(!confirm(`Delete schedule "${s.name}"?`)) return; setSchedules(prev=>prev.filter(x=>x.id!==s.id)); await sb.from('work_schedules').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',s.id); }
+  async function delHoliday(h){ if(!confirm(`Delete holiday "${h.name}"?`)) return; setHolidays(prev=>prev.filter(x=>x.id!==h.id)); await sb.from('ph_holidays').update({ deleted_at:new Date().toISOString() }).eq('id',h.id); }
+
+  const TABS=[['tables','🏛 Statutory tables'],['schedules','🕒 Schedules'],['holidays','📅 Holidays'],['config','⚙ Rules & multipliers'],['employees','👥 Employee pay setup']];
+  const Lbl=({children})=> <label className="text-[10px] uppercase font-semibold text-slate-400">{children}</label>;
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div><h1 className="text-2xl font-bold">⚙️ Payroll Setup</h1><p className="text-slate-500 text-sm">Statutory tables, work schedules, holidays, pay rules and each employee's pay setup — the foundation the payroll engine reads. Government rates are editable here, no developer needed.</p></div>
+        <div className="flex gap-1 mt-3 flex-wrap text-xs">{TABS.map(([k,l])=>(<button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg ${tab===k?'bg-indigo-600 text-white font-semibold':'bg-white border hover:bg-slate-50'}`}>{l}</button>))}</div>
+      </div>
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : <>
+
+      {/* ───── Statutory tables ───── */}
+      {tab==='tables' && (
+        <div className="space-y-4">
+          {!canTables && <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">View only — statutory tables are maintained by Accounting.</div>}
+          <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-xs text-sky-800">Figures are the <b>2025</b> defaults. Accountants: confirm the exact <b>2026</b> SSS / PhilHealth / Pag-IBIG / BIR brackets before the first live run. Every table is effective-dated — add a new version when a rate changes so history is kept.</div>
+          <StatCard title="SSS" row={latest('sss')} canEdit={canTables}
+            fields={[['ee_rate','Employee share (rate)','pct'],['er_rate','Employer share (rate)','pct'],['msc_min','MSC floor','num'],['msc_max','MSC ceiling','num'],['msc_step','MSC step','num'],['min_ee','Minimum EE','num']]}
+            onSave={(d)=>saveTaxData(latest('sss'),d)} onNewVersion={(d,dt)=>addTaxVersion('sss',null,d,dt)} />
+          <StatCard title="PhilHealth" row={latest('philhealth')} canEdit={canTables}
+            fields={[['rate','Premium rate','pct'],['ee_share','Employee share of premium','pct'],['floor','Salary floor','num'],['ceiling','Salary ceiling','num']]}
+            onSave={(d)=>saveTaxData(latest('philhealth'),d)} onNewVersion={(d,dt)=>addTaxVersion('philhealth',null,d,dt)} />
+          <StatCard title="Pag-IBIG" row={latest('pagibig')} canEdit={canTables}
+            fields={[['low_rate','EE rate (basic ≤ threshold)','pct'],['high_rate','EE rate (above threshold)','pct'],['threshold','Threshold (basic)','num'],['er_rate','Employer rate','pct'],['max_comp','Max compensation','num']]}
+            onSave={(d)=>saveTaxData(latest('pagibig'),d)} onNewVersion={(d,dt)=>addTaxVersion('pagibig',null,d,dt)} />
+          <BirCard rows={['daily','weekly','semi_monthly','monthly'].map(f=>({ f, row:latest('bir',f) }))} canEdit={canTables}
+            onSave={(row,d)=>saveTaxData(row,d)} onNewVersion={(f,d,dt)=>addTaxVersion('bir',f,d,dt)} />
+        </div>
+      )}
+
+      {/* ───── Schedules ───── */}
+      {tab==='schedules' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between"><div className="text-xs text-slate-500">Shifts used to measure late / undertime / overtime. Assign one to each employee on the pay-setup tab.</div>{canHR && <button onClick={()=>setEditSched('new')} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">+ New schedule</button>}</div>
+          {schedules.length===0 ? <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No schedules yet.</div> :
+          <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Name</th><th className="text-left px-3 py-2">In</th><th className="text-left px-3 py-2">Out</th><th className="text-right px-3 py-2">Break</th><th className="text-right px-3 py-2">Grace</th><th className="text-right px-3 py-2">Hrs/day</th><th className="text-left px-3 py-2">Rest days</th>{canHR&&<th></th>}</tr></thead>
+            <tbody>{schedules.map(s=>(<tr key={s.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-medium">{s.name}</td><td className="px-3 py-2">{s.time_in||'—'}</td><td className="px-3 py-2">{s.time_out||'—'}</td>
+              <td className="px-3 py-2 text-right">{s.break_minutes||0}m</td><td className="px-3 py-2 text-right">{s.grace_minutes||0}m</td><td className="px-3 py-2 text-right">{s.daily_hours||8}</td>
+              <td className="px-3 py-2 text-xs">{(s.rest_days||[]).map(d=>DOW[d]).join(', ')||'—'}</td>
+              {canHR&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditSched(s)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>delSchedule(s)} className="text-xs text-rose-500 hover:underline">Delete</button></td>}
+            </tr>))}</tbody>
+          </table></div>}
+        </div>
+      )}
+
+      {/* ───── Holidays ───── */}
+      {tab==='holidays' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between"><div className="text-xs text-slate-500">Drives holiday pay. Regular vs special non-working. Confirm each year's official proclamation.</div>{canHR && <button onClick={()=>setEditHol('new')} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold">+ Add holiday</button>}</div>
+          <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Holiday</th><th className="text-left px-3 py-2">Type</th>{canHR&&<th></th>}</tr></thead>
+            <tbody>{holidays.map(h=>(<tr key={h.id} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2">{fmtDate(h.holiday_date)}</td><td className="px-3 py-2 font-medium">{h.name}</td>
+              <td className="px-3 py-2"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${h.type==='regular'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'}`}>{h.type}</span></td>
+              {canHR&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>setEditHol(h)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button><button onClick={()=>delHoliday(h)} className="text-xs text-rose-500 hover:underline">Delete</button></td>}
+            </tr>))}</tbody>
+          </table></div>
+        </div>
+      )}
+
+      {/* ───── Rules & multipliers ───── */}
+      {tab==='config' && (()=>{
+        const mult=config.multipliers||{}; const df=config.daily_factor||{}; const ds=config.deduction_split||{};
+        const setMult=(k,v)=>saveConfig('multipliers',{...mult,[k]:v});
+        const MN=[['regular_ot','Ordinary overtime'],['restday','Rest-day work'],['restday_ot','Rest-day overtime'],['reg_holiday','Regular holiday'],['reg_holiday_ot','Regular holiday OT'],['special','Special non-working'],['special_ot','Special non-working OT'],['night_diff','Night differential']];
+        return (
+        <div className="space-y-4 max-w-3xl">
+          {!canTables && <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">View only.</div>}
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-sm mb-2">Daily-rate factor (monthly → daily)</div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <select disabled={!canTables} value={df.rule||'actual_working_days'} onChange={e=>saveConfig('daily_factor',{...df,rule:e.target.value})} className="input w-auto">
+                <option value="actual_working_days">Actual working days in the cutoff</option>
+                <option value="fixed_26">26 days / month</option>
+                <option value="fixed_2608">313 ÷ 12 ≈ 26.08</option>
+                <option value="fixed_30">30 days / month</option>
+              </select>
+              <span className="text-xs text-slate-500">Currently: <b>actual working days in the cutoff</b> (your choice).</span>
+            </div>
+          </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-sm mb-2">Government contribution cutoff</div>
+            <select disabled={!canTables} value={ds.mode||'split_even'} onChange={e=>saveConfig('deduction_split',{...ds,mode:e.target.value})} className="input w-auto">
+              <option value="split_even">Split evenly across both cutoffs</option>
+              <option value="second">2nd cutoff of the month</option>
+              <option value="first">1st cutoff of the month</option>
+            </select>
+            <div className="text-xs text-slate-500 mt-1">Monthly SSS / PhilHealth / Pag-IBIG / tax are taken this way. Currently: <b>split evenly</b>.</div>
+          </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-sm mb-3">Pay multipliers (× the hourly/daily base)</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {MN.map(([k,l])=>(<div key={k}><Lbl>{l}</Lbl><input disabled={!canTables} type="number" step="0.01" className="input mt-0.5 text-right" value={mult[k]??''} onChange={e=>setMult(k,Number(e.target.value)||0)} /></div>))}
+            </div>
+            <label className="flex items-center gap-2 mt-3 text-sm"><input disabled={!canTables} type="checkbox" checked={!!mult.pay_night_diff} onChange={e=>setMult('pay_night_diff',e.target.checked)} className="accent-indigo-600" /> Pay night differential ({mult.nd_start||'22:00'}–{mult.nd_end||'06:00'})</label>
+            <div className="text-[10px] text-slate-400 mt-1">DOLE-standard defaults seeded. Edit to match exactly what you pay.</div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* ───── Employee pay setup ───── */}
+      {tab==='employees' && (
+        <div className="space-y-3">
+          <div className="text-xs text-slate-500">Assign each employee a schedule, pay cycle, pay basis and biometric enrollment ID. {emps.length} active employee{emps.length===1?'':'s'}.</div>
+          <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Biometric ID</th></tr></thead>
+            <tbody>{emps.slice().sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`)).map(e=>(
+              <tr key={e.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-medium">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—'}{e.employee_number?<span className="text-[10px] text-slate-400 ml-1 font-mono">{e.employee_number}</span>:null}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{e.department||'—'}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.schedule_id||''} onChange={ev=>saveEmp(e,{schedule_id:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{schedules.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>:schedName(e.schedule_id)}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.pay_cycle||''} onChange={ev=>saveEmp(e,{pay_cycle:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{PAY_CYCLES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(e.pay_cycle||'—')}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.pay_basis||''} onChange={ev=>saveEmp(e,{pay_basis:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{PAY_BASES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(e.pay_basis||'—')}</td>
+                <td className="px-3 py-2">{canHR?<input defaultValue={e.biometric_enroll_id||''} onBlur={ev=>{ const v=ev.target.value.trim()||null; if(v!==(e.biometric_enroll_id||null)) saveEmp(e,{biometric_enroll_id:v}); }} placeholder="e.g. 1024" className="input !py-1 text-xs w-24" />:(e.biometric_enroll_id||'—')}</td>
+              </tr>
+            ))}</tbody>
+          </table></div></div>
+        </div>
+      )}
+
+      </>}
+      {editSched && <ScheduleModal sched={editSched==='new'?null:editSched} profile={profile} onClose={()=>setEditSched(null)} onSaved={()=>{ setEditSched(null); load(); }} />}
+      {editHol && <HolidayModal hol={editHol==='new'?null:editHol} profile={profile} onClose={()=>setEditHol(null)} onSaved={()=>{ setEditHol(null); load(); }} />}
+    </div>
+  );
+}
+function StatCard({ title, row, fields, canEdit, onSave, onNewVersion }){
+  const [d,setD]=useState(row?.data||{});
+  const [verDate,setVerDate]=useState('');
+  useEffect(()=>{ setD(row?.data||{}); },[row?.id]);
+  if(!row) return <div className="bg-white border rounded-xl p-4 text-sm text-slate-400">No {title} table seeded.</div>;
+  const up=(k,v)=>setD(x=>({...x,[k]:v}));
+  const asPct=(v)=>v==null?'':String(v);
+  return (
+    <div className="bg-white border rounded-xl p-4">
+      <div className="flex items-center justify-between mb-2"><div className="font-semibold text-sm">{title} <span className="text-[11px] text-slate-400 font-normal">· effective {fmtDate(row.effective_date)}</span></div></div>
+      {row.note && <div className="text-[11px] text-slate-400 mb-2">{row.note}</div>}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {fields.map(([k,l,typ])=>(<div key={k}><label className="text-[10px] uppercase font-semibold text-slate-400">{l}{typ==='pct'?' (e.g. 0.05)':''}</label><input disabled={!canEdit} type="number" step={typ==='pct'?'0.001':'1'} className="input mt-0.5 text-right" value={asPct(d[k])} onChange={e=>up(k, e.target.value===''?null:Number(e.target.value))} /></div>))}
+      </div>
+      {canEdit && <div className="flex items-center gap-2 mt-3 pt-3 border-t flex-wrap">
+        <button onClick={()=>onSave(d)} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Save</button>
+        <span className="text-slate-300">|</span>
+        <input type="date" value={verDate} onChange={e=>setVerDate(e.target.value)} className="input !py-1 text-xs w-auto" />
+        <button onClick={()=>{ if(!verDate){ alert('Pick an effective date for the new version.'); return; } onNewVersion(d, verDate); setVerDate(''); }} className="px-3 py-1.5 rounded-lg border text-indigo-600 text-xs font-semibold hover:bg-indigo-50">Save as new version</button>
+      </div>}
+    </div>
+  );
+}
+function BirCard({ rows, canEdit, onSave, onNewVersion }){
+  const [freq,setFreq]=useState('semi_monthly');
+  const cur=rows.find(r=>r.f===freq);
+  const row=cur?.row;
+  const [brk,setBrk]=useState(row?.data?.brackets||[]);
+  const [verDate,setVerDate]=useState('');
+  useEffect(()=>{ setBrk(row?.data?.brackets||[]); },[row?.id]);
+  const upRow=(i,k,v)=>setBrk(b=>b.map((x,j)=>j===i?{...x,[k]:v===''?0:Number(v)}:x));
+  const addRow=()=>setBrk(b=>[...b,{over:0,base:0,rate:0}]);
+  const rmRow=(i)=>setBrk(b=>b.filter((_,j)=>j!==i));
+  return (
+    <div className="bg-white border rounded-xl p-4">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="font-semibold text-sm">BIR Withholding Tax {row && <span className="text-[11px] text-slate-400 font-normal">· effective {fmtDate(row.effective_date)}</span>}</div>
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">{[['daily','Daily'],['weekly','Weekly'],['semi_monthly','Semi-monthly'],['monthly','Monthly']].map(([k,l])=>(<button key={k} onClick={()=>setFreq(k)} className={`px-2.5 py-1 rounded-md ${freq===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>))}</div>
+      </div>
+      {!row ? <div className="text-sm text-slate-400">No {freq} table.</div> : <>
+      <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-right px-2 py-1.5">Compensation over</th><th className="text-right px-2 py-1.5">Base tax</th><th className="text-right px-2 py-1.5">Rate on excess</th>{canEdit&&<th></th>}</tr></thead>
+        <tbody>{brk.map((b,i)=>(<tr key={i} className="border-t">
+          <td className="px-2 py-1 text-right">{canEdit?<input type="number" className="input !py-1 text-xs text-right w-28" value={b.over} onChange={e=>upRow(i,'over',e.target.value)} />:Number(b.over).toLocaleString()}</td>
+          <td className="px-2 py-1 text-right">{canEdit?<input type="number" step="0.01" className="input !py-1 text-xs text-right w-28" value={b.base} onChange={e=>upRow(i,'base',e.target.value)} />:peso(b.base)}</td>
+          <td className="px-2 py-1 text-right">{canEdit?<input type="number" step="0.01" className="input !py-1 text-xs text-right w-20" value={b.rate} onChange={e=>upRow(i,'rate',e.target.value)} />:`${(b.rate*100).toFixed(0)}%`}</td>
+          {canEdit&&<td className="px-2 py-1 text-right"><button onClick={()=>rmRow(i)} className="text-rose-400 hover:text-rose-600 text-xs">✕</button></td>}
+        </tr>))}</tbody>
+      </table></div>
+      {canEdit && <div className="flex items-center gap-2 mt-3 pt-3 border-t flex-wrap">
+        <button onClick={addRow} className="px-2 py-1 rounded border text-xs font-semibold hover:bg-slate-50">+ Row</button>
+        <button onClick={()=>onSave(row,{...(row.data||{}),brackets:brk})} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Save</button>
+        <span className="text-slate-300">|</span>
+        <input type="date" value={verDate} onChange={e=>setVerDate(e.target.value)} className="input !py-1 text-xs w-auto" />
+        <button onClick={()=>{ if(!verDate){ alert('Pick an effective date.'); return; } onNewVersion(freq,{...(row.data||{}),brackets:brk},verDate); setVerDate(''); }} className="px-3 py-1.5 rounded-lg border text-indigo-600 text-xs font-semibold hover:bg-indigo-50">Save as new version</button>
+      </div>}
+      </>}
+    </div>
+  );
+}
+function ScheduleModal({ sched, profile, onClose, onSaved }){
+  const isEdit=!!sched?.id;
+  const [f,setF]=useState({ name:sched?.name||'', time_in:sched?.time_in||'08:00', time_out:sched?.time_out||'17:00', break_minutes:sched?.break_minutes??60, grace_minutes:sched?.grace_minutes??0, daily_hours:sched?.daily_hours??8, rest_days:sched?.rest_days||[0] });
+  const [busy,setBusy]=useState(false);
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  const toggleDay=(d)=>setF(x=>({...x,rest_days:(x.rest_days||[]).includes(d)?x.rest_days.filter(y=>y!==d):[...(x.rest_days||[]),d].sort()}));
+  async function save(){ if(!f.name.trim()){ alert('Name the schedule.'); return; } setBusy(true);
+    const payload={ name:f.name.trim(), time_in:f.time_in||null, time_out:f.time_out||null, break_minutes:Number(f.break_minutes)||0, grace_minutes:Number(f.grace_minutes)||0, daily_hours:Number(f.daily_hours)||8, rest_days:f.rest_days||[] };
+    const { error }= isEdit ? await sb.from('work_schedules').update(payload).eq('id',sched.id) : await sb.from('work_schedules').insert({ ...payload, created_by:profile.id });
+    setBusy(false); if(error){ alert(error.message); return; } onSaved();
+  }
+  return (<Modal title={isEdit?'Edit schedule':'New schedule'} onClose={onClose}>
+    <div className="space-y-3">
+      <TpLbl t="Name"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} placeholder="e.g. Office 8–5, Factory 7–4" /></TpLbl>
+      <div className="grid grid-cols-2 gap-2">
+        <TpLbl t="Time in"><input type="time" className="input" value={f.time_in} onChange={e=>up('time_in',e.target.value)} /></TpLbl>
+        <TpLbl t="Time out"><input type="time" className="input" value={f.time_out} onChange={e=>up('time_out',e.target.value)} /></TpLbl>
+        <TpLbl t="Break (min)"><input type="number" className="input" value={f.break_minutes} onChange={e=>up('break_minutes',e.target.value)} /></TpLbl>
+        <TpLbl t="Grace (min)"><input type="number" className="input" value={f.grace_minutes} onChange={e=>up('grace_minutes',e.target.value)} /></TpLbl>
+        <TpLbl t="Hours / day"><input type="number" step="0.5" className="input" value={f.daily_hours} onChange={e=>up('daily_hours',e.target.value)} /></TpLbl>
+      </div>
+      <div><label className="text-[10px] uppercase font-semibold text-slate-400">Rest days</label><div className="flex gap-1 mt-1">{DOW.map((d,i)=>(<button key={i} onClick={()=>toggleDay(i)} className={`px-2 py-1 rounded text-xs font-semibold ${(f.rest_days||[]).includes(i)?'bg-indigo-600 text-white':'bg-slate-100 text-slate-600'}`}>{d}</button>))}</div></div>
+      <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
+    </div>
+  </Modal>);
+}
+function HolidayModal({ hol, profile, onClose, onSaved }){
+  const isEdit=!!hol?.id;
+  const [f,setF]=useState({ holiday_date:hol?.holiday_date||todayManila(), name:hol?.name||'', type:hol?.type||'regular' });
+  const [busy,setBusy]=useState(false);
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  async function save(){ if(!f.name.trim()||!f.holiday_date){ alert('Date and name required.'); return; } setBusy(true);
+    const payload={ holiday_date:f.holiday_date, name:f.name.trim(), type:f.type };
+    const { error }= isEdit ? await sb.from('ph_holidays').update(payload).eq('id',hol.id) : await sb.from('ph_holidays').insert({ ...payload, created_by:profile.id });
+    setBusy(false); if(error){ alert(error.message); return; } onSaved();
+  }
+  return (<Modal title={isEdit?'Edit holiday':'Add holiday'} onClose={onClose}>
+    <div className="space-y-3">
+      <TpLbl t="Date"><input type="date" className="input" value={f.holiday_date} onChange={e=>up('holiday_date',e.target.value)} /></TpLbl>
+      <TpLbl t="Name"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} /></TpLbl>
+      <TpLbl t="Type"><select className="input" value={f.type} onChange={e=>up('type',e.target.value)}><option value="regular">Regular holiday</option><option value="special">Special non-working</option></select></TpLbl>
+      <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
+    </div>
+  </Modal>);
+}
+
+/* ─────────────── Attendance / DTR helpers (module-level, reused later) ─────────────── */
+function manilaParts(ts){
+  try{ const d=new Date(ts); const f=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+    const p=f.formatToParts(d).reduce((a,x)=>{a[x.type]=x.value;return a;},{}); let h=Number(p.hour); if(h===24) h=0;
+    return { ymd:`${p.year}-${p.month}-${p.day}`, min:h*60+Number(p.minute) };
+  }catch(_){ return { ymd:String(ts).slice(0,10), min:0 }; }
+}
+function hhmmToMin(s){ if(!s) return null; const m=String(s).match(/(\d{1,2}):(\d{2})/); return m?Number(m[1])*60+Number(m[2]):null; }
+function minToHHMM(m){ if(m==null) return '—'; const h=Math.floor(m/60), mm=m%60; return `${String(h).padStart(2,'0')}:${String(mm).padStart(2,'0')}`; }
+function dateRangeList(start,end){ const out=[]; let d=new Date(start+'T00:00:00'); const e=new Date(end+'T00:00:00'); while(d<=e){ out.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); } return out; }
+const DTR_STATUS_META={ present:['P','bg-emerald-100 text-emerald-700'], absent:['A','bg-rose-100 text-rose-700'], leave:['L','bg-sky-100 text-sky-700'], holiday:['H','bg-amber-100 text-amber-700'], rest:['R','bg-slate-100 text-slate-500'], missing:['!','bg-orange-100 text-orange-700'] };
+// Compute a day record from that employee's punches + schedule.
+function computeDtrDay(punches, sched, dateStr, holiday, isRest){
+  const sorted=(punches||[]).slice().sort((a,b)=>new Date(a.punch_ts)-new Date(b.punch_ts));
+  if(sorted.length===0){ return { status: holiday?'holiday':(isRest?'rest':'absent'), holiday_type:holiday?holiday.type:null, time_in:null, time_out:null, hours_worked:0, late_min:0, undertime_min:0, ot_hours:0 }; }
+  const inP=sorted[0], outP=sorted[sorted.length-1];
+  const inMin=manilaParts(inP.punch_ts).min, outMin=sorted.length>1?manilaParts(outP.punch_ts).min:null;
+  if(sorted.length===1){ return { status:'missing', holiday_type:holiday?holiday.type:null, time_in:inP.punch_ts, time_out:null, hours_worked:0, late_min:0, undertime_min:0, ot_hours:0 }; }
+  const brk=Number(sched?.break_minutes||0);
+  let worked=Math.max(0, outMin-inMin-brk);
+  const sStart=hhmmToMin(sched?.time_in), sEnd=hhmmToMin(sched?.time_out), grace=Number(sched?.grace_minutes||0);
+  const stdMin=(Number(sched?.daily_hours||8))*60;
+  let late=0, ut=0, ot=0;
+  if(sStart!=null) late=Math.max(0, inMin-(sStart+grace));
+  if(sEnd!=null){ ut=Math.max(0, sEnd-outMin); ot=Math.max(0, outMin-sEnd); }
+  else { ot=Math.max(0, worked-stdMin); }
+  return { status: holiday?'holiday':(isRest?'rest':'present'), holiday_type:holiday?holiday.type:null, time_in:inP.punch_ts, time_out:outP.punch_ts, hours_worked:Math.round(worked/6)/10, late_min:late, undertime_min:ut, ot_hours:Math.round((ot/60)*100)/100 };
+}
+function parseCsvText(text){ const lines=String(text).replace(/\r/g,'').split('\n').filter(l=>l.trim()); return lines.map(l=>{ const out=[]; let cur='',q=false; for(let i=0;i<l.length;i++){ const c=l[i]; if(c==='"'){ if(q&&l[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(c===','&&!q){ out.push(cur); cur=''; } else cur+=c; } out.push(cur); return out.map(s=>s.trim()); }); }
+
+function AttendanceDtrView({ profile, employees, reload }){
+  const canManage = ['admin','hr','hr_admin'].includes(profile.role);
+  const now=new Date();
+  const [cycle,setCycle]=useState('semi_monthly');
+  const [year,setYear]=useState(now.getFullYear());
+  const [month,setMonth]=useState(now.getMonth());  // 0-11
+  const [half,setHalf]=useState(now.getDate()<=15?1:2);
+  const [weekStart,setWeekStart]=useState(()=>{ const d=new Date(); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d.toISOString().slice(0,10); });
+  const [devices,setDevices]=useState([]);
+  const [schedules,setSchedules]=useState([]);
+  const [holidays,setHolidays]=useState([]);
+  const [punches,setPunches]=useState([]);
+  const [dtr,setDtr]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState('');
+  const [importOpen,setImportOpen]=useState(false);
+  const [deviceOpen,setDeviceOpen]=useState(null); // device or 'new'
+  const [editCell,setEditCell]=useState(null);     // { emp, date, row }
+
+  // Period → [start,end] date strings.
+  const monthEnd=new Date(year, month+1, 0).getDate();
+  let start, end, cutoffKey;
+  if(cycle==='semi_monthly'){ if(half===1){ start=`${year}-${String(month+1).padStart(2,'0')}-01`; end=`${year}-${String(month+1).padStart(2,'0')}-15`; } else { start=`${year}-${String(month+1).padStart(2,'0')}-16`; end=`${year}-${String(month+1).padStart(2,'0')}-${String(monthEnd).padStart(2,'0')}`; } cutoffKey=`${year}-${String(month+1).padStart(2,'0')}-H${half}`; }
+  else { start=weekStart; const we=new Date(weekStart+'T00:00:00'); we.setDate(we.getDate()+6); end=we.toISOString().slice(0,10); cutoffKey=`W-${weekStart}`; }
+  const dates=dateRangeList(start,end);
+
+  const activeEmps=(employees||[]).filter(e=>!e.deleted_at && e.is_active!==false).sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`));
+  const enrollMap=React.useMemo(()=>{ const m={}; activeEmps.forEach(e=>{ if(e.biometric_enroll_id) m[String(e.biometric_enroll_id)]=e.id; }); return m; },[employees]);
+  const schedOf=(e)=>schedules.find(s=>s.id===e.schedule_id)||null;
+  const holByDate=React.useMemo(()=>{ const m={}; holidays.forEach(h=>{ m[h.holiday_date]=h; }); return m; },[holidays]);
+
+  async function loadRefs(){
+    try{ const { data }=await sb.from('biometric_devices').select('*').is('deleted_at',null).order('created_at'); setDevices(data||[]); }catch(_){ setDevices([]); }
+    try{ const { data }=await sb.from('work_schedules').select('*').is('deleted_at',null); setSchedules(data||[]); }catch(_){ setSchedules([]); }
+    try{ const { data }=await sb.from('ph_holidays').select('*').is('deleted_at',null); setHolidays(data||[]); }catch(_){ setHolidays([]); }
+  }
+  async function loadPeriod(){
+    setLoading(true);
+    try{ const { data }=await sb.from('attendance_punches').select('*').gte('punch_ts',start+'T00:00:00+08:00').lte('punch_ts',end+'T23:59:59+08:00'); setPunches(data||[]); }catch(_){ setPunches([]); }
+    try{ const { data }=await sb.from('dtr_days').select('*').gte('work_date',start).lte('work_date',end); setDtr(data||[]); }catch(_){ setDtr([]); }
+    setLoading(false);
+  }
+  useEffect(()=>{ loadRefs(); },[]);
+  useEffect(()=>{ loadPeriod(); },[start,end]);
+
+  // punches grouped by employee_id + date
+  const punchIndex=React.useMemo(()=>{
+    const m={}; (punches||[]).forEach(p=>{ const eid=p.employee_id || enrollMap[String(p.enroll_id||'')]; if(!eid) return; const ymd=manilaParts(p.punch_ts).ymd; (m[eid]=m[eid]||{})[ymd]=(m[eid][ymd]||[]); m[eid][ymd].push(p); }); return m;
+  },[punches, enrollMap]);
+  const dtrIndex=React.useMemo(()=>{ const m={}; (dtr||[]).forEach(r=>{ (m[r.employee_id]=m[r.employee_id]||{})[r.work_date]=r; }); return m; },[dtr]);
+
+  async function buildDtr(){
+    if(!canManage) return;
+    setBusy('build');
+    const rows=[];
+    for(const e of activeEmps){
+      const sched=schedOf(e);
+      const restSet=new Set((sched?.rest_days)||[0]);
+      for(const ds of dates){
+        const existing=dtrIndex[e.id]?.[ds];
+        if(existing && existing.approved) continue; // never overwrite approved
+        const dow=new Date(ds+'T00:00:00').getDay();
+        const hol=holByDate[ds]||null;
+        const dayPunches=punchIndex[e.id]?.[ds]||[];
+        // Skip creating absent rows for employees with no schedule AND no punches (avoid noise),
+        // unless an existing row is present.
+        if(!existing && dayPunches.length===0 && !sched) continue;
+        const c=computeDtrDay(dayPunches, sched, ds, hol, restSet.has(dow));
+        rows.push({ employee_id:e.id, work_date:ds, cutoff_key:cutoffKey, time_in:c.time_in, time_out:c.time_out, hours_worked:c.hours_worked, late_min:c.late_min, undertime_min:c.undertime_min, ot_hours:c.ot_hours, status:c.status, holiday_type:c.holiday_type, source:'computed', updated_at:new Date().toISOString() });
+      }
+    }
+    if(rows.length){ const { error }=await sb.from('dtr_days').upsert(rows, { onConflict:'employee_id,work_date' }); if(error){ alert('Build failed: '+error.message); } }
+    await loadPeriod(); setBusy('');
+  }
+  async function approveEmp(e){ if(!canManage) return; const ids=(dtr||[]).filter(r=>r.employee_id===e.id).map(r=>r.id); if(!ids.length){ alert('Nothing to approve — build the DTR first.'); return; } setDtr(prev=>prev.map(r=>ids.includes(r.id)?{...r,approved:true,approved_by:profile.id,approved_at:new Date().toISOString()}:r)); await sb.from('dtr_days').update({ approved:true, approved_by:profile.id, approved_at:new Date().toISOString() }).in('id',ids); }
+  async function approveAll(){ if(!canManage) return; if(!confirm('Approve the whole DTR for this cutoff?')) return; const ids=(dtr||[]).map(r=>r.id); if(!ids.length) return; setDtr(prev=>prev.map(r=>({...r,approved:true,approved_by:profile.id,approved_at:new Date().toISOString()}))); await sb.from('dtr_days').update({ approved:true, approved_by:profile.id, approved_at:new Date().toISOString() }).in('id',ids); }
+
+  // Per-employee summary within the cutoff.
+  const empSummary=(e)=>{ let present=0,absent=0,late=0,ot=0,leave=0; dates.forEach(ds=>{ const r=dtrIndex[e.id]?.[ds]; if(!r) return; if(r.status==='present') present++; else if(r.status==='absent') absent++; else if(r.status==='leave') leave++; late+=Number(r.late_min||0); ot+=Number(r.ot_hours||0); }); return { present, absent, late, ot, leave }; };
+  const anyUnmapped=(punches||[]).some(p=>!p.employee_id && !enrollMap[String(p.enroll_id||'')]);
+  const monthName=new Date(year,month,1).toLocaleDateString('en-US',{month:'long'});
+  function shiftPeriod(dir){ if(cycle==='semi_monthly'){ if(half===1){ if(dir<0){ const m=month-1; if(m<0){ setMonth(11); setYear(year-1); } else setMonth(m); setHalf(2); } else setHalf(2); } else { if(dir>0){ const m=month+1; if(m>11){ setMonth(0); setYear(year+1); } else setMonth(m); setHalf(1); } else setHalf(1); } } else { const d=new Date(weekStart+'T00:00:00'); d.setDate(d.getDate()+dir*7); setWeekStart(d.toISOString().slice(0,10)); } }
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🕒 Attendance / DTR</h1><p className="text-slate-500 text-sm">Punches become a clean daily time record per cutoff. Review, correct and approve — payroll reads only approved DTRs.</p></div>
+          {canManage && <div className="flex gap-2 flex-wrap">
+            <button onClick={()=>setImportOpen(true)} className="px-3 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">⬆ Import punches (CSV)</button>
+            <button onClick={()=>setDeviceOpen('new')} className="px-3 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">📟 Biometric devices</button>
+            <button onClick={buildDtr} disabled={busy==='build'} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy==='build'?'Building…':'⚙ Build / refresh DTR'}</button>
+          </div>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">{[['semi_monthly','Semi-monthly'],['weekly','Weekly']].map(([k,l])=>(<button key={k} onClick={()=>setCycle(k)} className={`px-2.5 py-1 rounded-md ${cycle===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>))}</div>
+          <button onClick={()=>shiftPeriod(-1)} className="px-2 py-1.5 rounded-lg border bg-white text-sm">◀</button>
+          {cycle==='semi_monthly' ? (
+            <span className="text-sm font-semibold">{monthName} {year} · {half===1?'1–15':`16–${monthEnd}`}</span>
+          ) : (
+            <span className="text-sm font-semibold">Week of {fmtDate(start)} – {fmtDate(end)}</span>
+          )}
+          <button onClick={()=>shiftPeriod(1)} className="px-2 py-1.5 rounded-lg border bg-white text-sm">▶</button>
+          {canManage && (dtr||[]).length>0 && <button onClick={approveAll} className="ml-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve cutoff</button>}
+        </div>
+      </div>
+
+      {anyUnmapped && <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-3">Some punches have a biometric ID that isn't matched to an employee yet. Set each person's <b>Biometric ID</b> on Payroll Setup → Employee pay setup, then Build again.</div>}
+
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : (
+        <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+            <th className="text-left px-2 py-2 sticky left-0 bg-slate-50 z-10 min-w-[150px]">Employee</th>
+            {dates.map(d=>{ const dd=new Date(d+'T00:00:00'); const hol=holByDate[d]; return <th key={d} className={`px-1 py-2 text-center ${hol?'text-amber-600':''}`} title={hol?hol.name:''}>{dd.getDate()}<div className="text-[8px] font-normal">{DOW[dd.getDay()]}</div></th>; })}
+            <th className="px-2 py-2 text-center">P/A</th><th className="px-2 py-2 text-right">Late</th><th className="px-2 py-2 text-right">OT</th>{canManage&&<th></th>}
+          </tr></thead>
+          <tbody>{activeEmps.map(e=>{ const sum=empSummary(e); const allApproved=dates.every(ds=>{ const r=dtrIndex[e.id]?.[ds]; return !r || r.approved; }) && dates.some(ds=>dtrIndex[e.id]?.[ds]); return (
+            <tr key={e.id} className="border-t hover:bg-slate-50">
+              <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-medium whitespace-nowrap">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname}{!e.schedule_id && <span className="ml-1 text-[9px] text-rose-400" title="No schedule assigned">⚠</span>}</td>
+              {dates.map(ds=>{ const r=dtrIndex[e.id]?.[ds]; const meta=r?DTR_STATUS_META[r.status]:null; const dow=new Date(ds+'T00:00:00').getDay(); const sched=schedOf(e); const isRest=((sched?.rest_days)||[0]).includes(dow); return (
+                <td key={ds} onClick={()=>canManage&&setEditCell({ emp:e, date:ds, row:r })} className={`px-1 py-1 text-center ${canManage?'cursor-pointer hover:bg-indigo-50':''} ${holByDate[ds]?'bg-amber-50/40':isRest&&!r?'bg-slate-50':''}`}>
+                  {r ? <span title={`${r.status}${r.late_min?` · late ${r.late_min}m`:''}${r.ot_hours?` · OT ${r.ot_hours}h`:''}`}><span className={`inline-block w-5 rounded text-[9px] font-bold ${meta?meta[1]:''}`}>{meta?meta[0]:'?'}</span>{r.approved && <span className="text-emerald-500 text-[8px] align-top">✓</span>}</span> : <span className="text-slate-200">·</span>}
+                </td>
+              ); })}
+              <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="text-emerald-700 font-semibold">{sum.present}</span>/<span className="text-rose-600">{sum.absent}</span></td>
+              <td className="px-2 py-1.5 text-right">{sum.late?`${sum.late}m`:'—'}</td>
+              <td className="px-2 py-1.5 text-right">{sum.ot?`${Math.round(sum.ot*10)/10}h`:'—'}</td>
+              {canManage&&<td className="px-2 py-1.5 text-right whitespace-nowrap">{allApproved?<span className="text-[9px] text-emerald-600 font-bold">✓ approved</span>:<button onClick={()=>approveEmp(e)} className="text-[10px] text-indigo-600 hover:underline font-semibold">approve</button>}</td>}
+            </tr>
+          ); })}</tbody>
+        </table></div>
+        <div className="px-3 py-2 border-t text-[10px] text-slate-400 flex gap-3 flex-wrap">Legend: <span className="text-emerald-700 font-bold">P</span> present · <span className="text-rose-600 font-bold">A</span> absent · <span className="text-sky-700 font-bold">L</span> leave · <span className="text-amber-700 font-bold">H</span> holiday · <span className="text-slate-500 font-bold">R</span> rest · <span className="text-orange-700 font-bold">!</span> missing punch · ✓ approved</div>
+        </div>
+      )}
+
+      {importOpen && <PunchImportModal profile={profile} devices={devices} employees={activeEmps} enrollMap={enrollMap} onClose={()=>setImportOpen(false)} onSaved={()=>{ setImportOpen(false); loadPeriod(); }} />}
+      {deviceOpen && <BiometricDevicesModal profile={profile} devices={devices} onClose={()=>setDeviceOpen(null)} onChanged={loadRefs} />}
+      {editCell && <DtrCellModal cell={editCell} profile={profile} cutoffKey={cutoffKey} onClose={()=>setEditCell(null)} onSaved={()=>{ setEditCell(null); loadPeriod(); }} />}
+    </div>
+  );
+}
+function DtrCellModal({ cell, profile, cutoffKey, onClose, onSaved }){
+  const { emp, date, row }=cell;
+  const [f,setF]=useState({ status:row?.status||'present', time_in:row?.time_in?manilaParts(row.time_in).ymd===date?minToHHMM(manilaParts(row.time_in).min):'':'', time_out:row?.time_out?minToHHMM(manilaParts(row.time_out).min):'', late_min:row?.late_min??0, undertime_min:row?.undertime_min??0, ot_hours:row?.ot_hours??0, leave_paid:row?.leave_paid??true, notes:row?.notes||'' });
+  const [busy,setBusy]=useState(false);
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  async function save(){
+    setBusy(true);
+    const toTs=(hhmm)=> hhmm? `${date}T${hhmm}:00+08:00` : null;
+    const payload={ employee_id:emp.id, work_date:date, cutoff_key:cutoffKey, status:f.status,
+      time_in:toTs(f.time_in), time_out:toTs(f.time_out), late_min:Number(f.late_min)||0, undertime_min:Number(f.undertime_min)||0, ot_hours:Number(f.ot_hours)||0,
+      leave_paid: f.status==='leave'?!!f.leave_paid:null, notes:f.notes||null, source:'manual', edited_by:profile.id, updated_at:new Date().toISOString() };
+    const { error }=await sb.from('dtr_days').upsert(payload, { onConflict:'employee_id,work_date' });
+    setBusy(false); if(error){ alert(error.message); return; } onSaved();
+  }
+  async function del(){ if(!row?.id) { onClose(); return; } if(!confirm('Clear this day record?')) return; await sb.from('dtr_days').delete().eq('id',row.id); onSaved(); }
+  return (<Modal title={`${[emp.first_name,emp.last_name].filter(Boolean).join(' ')} · ${fmtDate(date)}`} onClose={onClose}>
+    <div className="space-y-3">
+      <TpLbl t="Status"><select className="input" value={f.status} onChange={e=>up('status',e.target.value)}>{['present','absent','leave','holiday','rest','missing'].map(s=><option key={s} value={s}>{s}</option>)}</select></TpLbl>
+      {f.status==='leave' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.leave_paid} onChange={e=>up('leave_paid',e.target.checked)} className="accent-indigo-600" /> Paid leave</label>}
+      {(f.status==='present'||f.status==='missing') && <div className="grid grid-cols-2 gap-2">
+        <TpLbl t="Time in"><input type="time" className="input" value={f.time_in} onChange={e=>up('time_in',e.target.value)} /></TpLbl>
+        <TpLbl t="Time out"><input type="time" className="input" value={f.time_out} onChange={e=>up('time_out',e.target.value)} /></TpLbl>
+      </div>}
+      <div className="grid grid-cols-3 gap-2">
+        <TpLbl t="Late (min)"><input type="number" className="input text-right" value={f.late_min} onChange={e=>up('late_min',e.target.value)} /></TpLbl>
+        <TpLbl t="Undertime (min)"><input type="number" className="input text-right" value={f.undertime_min} onChange={e=>up('undertime_min',e.target.value)} /></TpLbl>
+        <TpLbl t="OT (hrs)"><input type="number" step="0.25" className="input text-right" value={f.ot_hours} onChange={e=>up('ot_hours',e.target.value)} /></TpLbl>
+      </div>
+      <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+      {row?.approved && <div className="text-xs text-amber-600">This day is already approved — saving will keep it approved.</div>}
+      <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>{row?.id&&<button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold">Clear</button>}<button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
+    </div>
+  </Modal>);
+}
+function PunchImportModal({ profile, devices, employees, enrollMap, onClose, onSaved }){
+  const [text,setText]=useState(''); const [preview,setPreview]=useState(null); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [deviceId,setDeviceId]=useState('');
+  function onFile(ev){ const f=ev.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>setText(String(r.result||'')); r.readAsText(f); }
+  function doParse(){
+    const rows=parseCsvText(text); if(rows.length<1){ setMsg('Nothing to parse.'); return; }
+    // Detect header
+    let body=rows; const head=rows[0].map(h=>h.toLowerCase());
+    const hasHeader=head.some(h=>/enroll|employee|id|date|time|punch|direction|in\/out|state/.test(h));
+    let idx={ enroll:0, datetime:-1, date:1, time:2, dir:-1 };
+    if(hasHeader){ body=rows.slice(1);
+      const find=(...keys)=>head.findIndex(h=>keys.some(k=>h.includes(k)));
+      idx.enroll=Math.max(0,find('enroll','employee','userid','user id','pin','ac-no','ac no','id'));
+      idx.datetime=find('datetime','timestamp','date/time','punch time','time');
+      idx.date=find('date'); idx.time=find('time'); idx.dir=find('direction','in/out','state','status');
+    }
+    const parsed=[]; const unmapped=new Set();
+    for(const r of body){ if(!r.length||!r.join('').trim()) continue;
+      const enroll=String(r[idx.enroll]||'').trim(); if(!enroll) continue;
+      let ts=null;
+      if(idx.datetime>=0 && r[idx.datetime]){ ts=r[idx.datetime]; }
+      else if(idx.date>=0 && r[idx.date]){ ts=`${r[idx.date]} ${idx.time>=0?(r[idx.time]||''):''}`.trim(); }
+      if(!ts) continue;
+      const d=new Date(ts.replace(' ','T')); if(isNaN(d)){ const d2=new Date(ts); if(isNaN(d2)) continue; }
+      const iso=isNaN(new Date(ts.replace(' ','T')))? new Date(ts).toISOString() : new Date(ts.replace(' ','T')+(/[+Z]/.test(ts)?'':'+08:00')).toISOString();
+      const dir=(String(r[idx.dir]||'').toLowerCase().includes('out'))?'out':(String(r[idx.dir]||'').toLowerCase().includes('in')?'in':'unknown');
+      const eid=enrollMap[enroll]||null; if(!eid) unmapped.add(enroll);
+      parsed.push({ enroll_id:enroll, employee_id:eid, punch_ts:iso, direction:dir, source:'csv', device_id:deviceId||null, raw:{ csv:r } });
+    }
+    setPreview({ parsed, unmapped:Array.from(unmapped) }); setMsg(`${parsed.length} punch${parsed.length===1?'':'es'} ready${unmapped.size?` · ${unmapped.size} unmatched ID(s)`:''}.`);
+  }
+  async function save(){ if(!preview||!preview.parsed.length) return; setBusy(true);
+    const { error }=await sb.from('attendance_punches').upsert(preview.parsed, { onConflict:'device_id,enroll_id,punch_ts,source', ignoreDuplicates:true });
+    setBusy(false); if(error){ setMsg('Import failed: '+error.message); return; } onSaved();
+  }
+  return (<Modal title="⬆ Import punches (CSV)" onClose={onClose} wide>
+    <div className="space-y-3">
+      <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Export the log from your biometric and paste or upload it. Expected columns (header auto-detected): an <b>enrollment/employee ID</b>, a <b>date+time</b> (or separate date & time), and optionally <b>direction</b> (in/out). IDs are matched to employees by the Biometric ID set on Payroll Setup.</div>
+      {devices.length>0 && <TpLbl t="From device (optional)"><select className="input" value={deviceId} onChange={e=>setDeviceId(e.target.value)}><option value="">—</option>{devices.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></TpLbl>}
+      <input type="file" accept=".csv,.txt" onChange={onFile} className="text-xs" />
+      <textarea value={text} onChange={e=>setText(e.target.value)} rows={6} className="input font-mono text-xs" placeholder={"enroll_id,datetime,direction\n1024,2026-11-03 08:01,in\n1024,2026-11-03 17:05,out"} />
+      <div className="flex gap-2"><button onClick={doParse} className="px-3 py-2 rounded-lg border font-semibold text-sm hover:bg-slate-50">Preview</button>{preview&&preview.parsed.length>0&&<button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50">{busy?'Importing…':`Import ${preview.parsed.length} punches`}</button>}</div>
+      {msg && <div className="text-xs text-slate-600">{msg}</div>}
+      {preview && preview.unmapped.length>0 && <div className="text-xs text-amber-700">Unmatched IDs: {preview.unmapped.join(', ')} — these will import but won't show until you map them to employees.</div>}
+    </div>
+  </Modal>);
+}
+function BiometricDevicesModal({ profile, devices, onClose, onChanged }){
+  const [name,setName]=useState(''); const [serial,setSerial]=useState(''); const [busy,setBusy]=useState(false);
+  const endpoint=`${SUPABASE_URL}/functions/v1/biometric-ingest`;
+  function genKey(){ return 'dev_'+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10); }
+  async function add(){ if(!name.trim()){ alert('Name the device.'); return; } setBusy(true); const key=genKey(); const { error }=await sb.from('biometric_devices').insert({ name:name.trim(), serial:serial.trim()||null, device_key:key, created_by:profile.id }); setBusy(false); if(error){ alert(error.message); return; } setName(''); setSerial(''); onChanged&&onChanged(); }
+  async function del(d){ if(!confirm(`Remove device "${d.name}"?`)) return; await sb.from('biometric_devices').update({ deleted_at:new Date().toISOString() }).eq('id',d.id); onChanged&&onChanged(); }
+  return (<Modal title="📟 Biometric devices" onClose={onClose} wide>
+    <div className="space-y-3">
+      <div className="text-xs text-slate-500 bg-sky-50 border border-sky-200 rounded p-2 text-sky-800">Point your ZKTeco (cloud/ADMS) device at this endpoint so punches post automatically:<div className="font-mono text-[11px] mt-1 break-all bg-white border rounded px-2 py-1">{endpoint}</div>Each device sends its <b>key</b> (below) so only your biometric can post. On the device's ADMS/cloud setting use this URL as the server; our endpoint also accepts a simple JSON bridge.</div>
+      <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Device</th><th className="text-left px-3 py-2">Serial</th><th className="text-left px-3 py-2">Key</th><th className="text-left px-3 py-2">Last seen</th><th></th></tr></thead>
+        <tbody>
+          {devices.length===0 && <tr><td colSpan="5" className="text-center text-slate-400 py-5">No devices yet.</td></tr>}
+          {devices.map(d=>(<tr key={d.id} className="border-t"><td className="px-3 py-2 font-medium">{d.name}</td><td className="px-3 py-2 text-xs">{d.serial||'—'}</td><td className="px-3 py-2 font-mono text-[11px] break-all">{d.device_key}</td><td className="px-3 py-2 text-xs">{d.last_seen_at?fmtDate(String(d.last_seen_at).slice(0,10)):'never'}</td><td className="px-3 py-2 text-right"><button onClick={()=>del(d)} className="text-xs text-rose-500 hover:underline">Remove</button></td></tr>))}
+        </tbody>
+      </table></div>
+      <div className="flex gap-2 items-end pt-2 border-t">
+        <div className="flex-1"><TpLbl t="Device name"><input className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Main gate ZKTeco" /></TpLbl></div>
+        <div className="flex-1"><TpLbl t="Serial (optional)"><input className="input" value={serial} onChange={e=>setSerial(e.target.value)} /></TpLbl></div>
+        <button disabled={busy} onClick={add} className="py-2 px-3 rounded-lg bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50">+ Add</button>
+      </div>
+    </div>
+  </Modal>);
+}
+
 // Admin Office — Purchase Request review. Shows every purchase request raised by
 // OTHER departments (status 'department_request') so the Admin Office (Geziel)
 // can check each order and APPROVE it before Purchasing buys. Approving moves the
@@ -52679,7 +53233,7 @@ function App(){
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
-        'logistics','trip-tickets','delivery-receipts','payroll',
+        'logistics','trip-tickets','delivery-receipts','payroll','attendance','pay-setup',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
@@ -52765,7 +53319,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -52781,14 +53335,14 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','budgets','rfps','profile','trip-tickets',
         'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
       // Still part of HR (full HR module) PLUS the Admin Office module.
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','budgets','rfps','profile','trip-tickets',
         'admin-home','admin-directory','assets','admin-office','admin-pr','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
@@ -53426,7 +53980,7 @@ function App(){
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll (old)','✂'] ] },
       ADMIN_OFFICE_GROUP,
       PERSONAL_GROUP,
     ];
@@ -53505,7 +54059,7 @@ function App(){
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       ADMIN_OFFICE_GROUP,
@@ -53518,7 +54072,7 @@ function App(){
       { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
@@ -53605,7 +54159,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       LOGISTICS_GROUP,
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isSewingLead){
@@ -53671,7 +54225,7 @@ function App(){
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll (old)','✂'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
@@ -53965,6 +54519,8 @@ function App(){
         {view==='admin-directory' && <AdminDirectoryView profile={profile} adminContacts={adminContacts} reload={loadAll} />}
         {view==='admin-office' && <OfficeInventoryView profile={profile} officeItems={officeItems} officeItemLog={officeItemLog} profiles={profiles} reload={loadAll} />}
         {view==='admin-pr' && <AdminPurchaseRequestsView profile={profile} requests={requests} items={items} profiles={profiles} departments={departments} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
+        {view==='pay-setup' && <PayrollSetupView profile={profile} employees={employees} profiles={profiles} reload={loadAll} />}
+        {view==='attendance' && <AttendanceDtrView profile={profile} employees={employees} reload={loadAll} />}
         {view==='admin-requests' && <AdminRequestsView profile={profile} adminRequests={adminRequests} profiles={profiles} reload={loadAll} />}
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
