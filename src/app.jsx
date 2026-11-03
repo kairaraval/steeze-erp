@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 914 · Save JPEG / Save PDF on a laptop now download straight to your Downloads folder instead of opening the macOS share sheet. Phones & tablets still get the native share sheet (save to Files/Photos, send, etc.).";
+const BUILD = "Live build 915 · Fix: a refresh on the Sales Pipeline bounced sales/managers to their Workbench (the one-time 'open into Workbench' landing was overriding the remembered page). Now the remembered page wins on refresh; the Workbench landing only applies on a fresh login.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -53280,13 +53280,14 @@ function App(){
       if(v || nt){
         if(nt){ try{ window.__steezePendingRoute={ source:nt, lead_id:sp.get('lead')||undefined, job_id:sp.get('jid')||undefined, job_type:sp.get('jtype')||undefined }; }catch(_){} }
         try{ window.history.replaceState({}, '', window.location.pathname); }catch(_){}
+        try{ window.__steezeKeepView=true; }catch(_){}
         return v || 'inbox';
       }
     }catch(_){}
     // Stay on the page you were on across a refresh / app auto-update, instead of
     // snapping back to the landing page. The access guard below still redirects
     // if the restored view isn't allowed for this role.
-    try{ const last=localStorage.getItem('steezeLastView'); if(last) return last; }catch(_){}
+    try{ const last=localStorage.getItem('steezeLastView'); if(last){ try{ window.__steezeKeepView=true; }catch(_){} return last; } }catch(_){}
     return 'pipeline';
   });
   // Remember the current page so a refresh reopens it.
@@ -53905,6 +53906,9 @@ function App(){
   useEffect(()=>{
     if(!profile || didLandRef.current) return;
     didLandRef.current = true;
+    // If the view was restored from a saved session or a deep-link, DON'T override
+    // it with the default landing — the person refreshed on a page they were on.
+    if(window.__steezeKeepView) return;
     // Sales associates, representatives + managers open straight into their
     // personal Home (Workbench) instead of the pipeline. They can still navigate anywhere.
     if((profile.role==='assistant'||profile.role==='sales_representative'||profile.role==='manager') && view==='pipeline') setView('rep-home');
