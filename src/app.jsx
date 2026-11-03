@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 913 · Petty cash bulk upload can now tag a department: pick one 'Department for all these expenses' in the upload panel (applied to every row), or add a Department column in the CSV to set it per row (matched by code or name). The preview shows each row's department. Fixes bulk-uploaded expenses showing as 'missing a department' at month-end.";
+const BUILD = "Live build 914 · Save JPEG / Save PDF on a laptop now download straight to your Downloads folder instead of opening the macOS share sheet. Phones & tablets still get the native share sheet (save to Files/Photos, send, etc.).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -539,12 +539,24 @@ async function _captureCanvas(node){
   if(!window.html2canvas) throw new Error('capture library unavailable');
   return await window.html2canvas(node, { scale: Math.min(2, (window.devicePixelRatio||1)+1), backgroundColor:'#ffffff', useCORS:true, logging:false, scrollX:0, scrollY:-window.scrollY });
 }
+// Phones/tablets get the native share sheet (so they can save to Files, Photos,
+// send it, etc.). Laptops/desktops download straight to the Downloads folder —
+// the share sheet there just pops a menu and never saves the file.
+function _isMobileDevice(){
+  try{
+    const ua=navigator.userAgent||'';
+    const iOS=/iPhone|iPad|iPod/.test(ua) || (/Mac/.test(navigator.platform||'') && (navigator.maxTouchPoints||0)>1);
+    const android=/Android/i.test(ua);
+    return iOS || android;
+  }catch(_){ return false; }
+}
 async function _deliverFile(blob, filename, mime){
   const file = (typeof File!=='undefined') ? new File([blob], filename, { type:mime }) : null;
-  if(file && navigator.canShare && navigator.canShare({ files:[file] })){
+  if(_isMobileDevice() && file && navigator.canShare && navigator.canShare({ files:[file] })){
     try{ await navigator.share({ files:[file], title:filename }); return; }
     catch(e){ if(e && e.name==='AbortError') return; /* fall through to download */ }
   }
+  // Desktop (and any share fallback): download to the browser's download folder.
   const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(_){} }, 15000);
 }
