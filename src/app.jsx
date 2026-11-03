@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 898 · RFP sign-off queue: the 'today / Xd ago' tag moved off the Submitted date (which confusingly looked like it was submitted today) and now sits under 'Finance approved by' reading 'approved today / Xd ago' — it tracks how long an RFP has waited on you since Finance approved it, not when it was submitted.";
+const BUILD = "Live build 899 · PO line 'For:' tag now shows the project's actual ORDER quantity in pieces (e.g. 'order: 1,200 pcs') instead of repeating the fabric/material quantity from the Qty column. Backfilled all existing POs so the real order qty appears everywhere.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32472,7 +32472,7 @@ function POPrintView({ po, suppliers, profile, profiles, onClose }){
                     <td className="border border-slate-400 px-2 py-1.5 text-center text-slate-500 align-top">{i+1}</td>
                     <td className="border border-slate-400 px-2 py-1.5 align-top">
                       <div>{l.description||'—'}</div>
-                      {(l.client_name||l.project_title) && <div className="text-[8pt] text-slate-500 mt-0.5">↳ For: <strong className="text-slate-700">{l.client_name||'—'}</strong>{l.project_title?` · ${l.project_title}`:''}{l.qty?` · ${l.qty} ${l.unit||''}`.trimEnd():''}</div>}
+                      {(l.client_name||l.project_title) && <div className="text-[8pt] text-slate-500 mt-0.5">↳ For: <strong className="text-slate-700">{l.client_name||'—'}</strong>{l.project_title?` · ${l.project_title}`:''}{Number(l.project_qty)>0?<> · <strong className="text-slate-700">order: {Number(l.project_qty).toLocaleString()} pcs</strong></>:''}</div>}
                       {Number(l.stock_allocated||0)>0 && <div className="text-[8pt] text-emerald-700 mt-0.5">↳ + {l.stock_allocated} reserved from existing stock (not purchased)</div>}
                     </td>
                     <td className="border border-slate-400 px-2 py-1.5 text-right align-top">{l.qty||0}</td>
@@ -34533,6 +34533,7 @@ function MaterialsQueueView({ profile, requests, items, suppliers, leads, client
           lead_id: lead?.id || null,
           client_name: company || null,
           project_title: lead?.title || null,
+          project_qty: lead ? ((lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0) || null) : null,
         };
       });
 
@@ -34945,7 +34946,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
     const forPart = lead ? ` — for "${lead.title}"${company && company!==lead.title ? ` · ${company}` : ''}` : '';
     return (fromPR.lines||[]).map((l,idx)=>{
       const desc = l.description||'';
-      return { item_id:l.item_id||null, description: desc + (forPart && !desc.includes('— for "') ? forPart : ''), qty:Number(l.qty)||1, qty_received:0, qty_issued:0, unit_cost:Number(l.est_cost)||0, pr_id:fromPR.id, pr_line_idx:idx, lead_id: lead?.id||null, client_name: company||null, project_title: lead?.title||null };
+      return { item_id:l.item_id||null, description: desc + (forPart && !desc.includes('— for "') ? forPart : ''), qty:Number(l.qty)||1, qty_received:0, qty_issued:0, unit_cost:Number(l.est_cost)||0, pr_id:fromPR.id, pr_line_idx:idx, lead_id: lead?.id||null, client_name: company||null, project_title: lead?.title||null, project_qty: lead ? ((lead.items||[]).reduce((a,b)=>a+(Number(b.quantity)||0),0) || null) : null };
     });
   })() : [{ item_id:null, description:'', qty:1, qty_received:0, unit_cost:0 }]);
   const [f,setF]=useState({
