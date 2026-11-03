@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 897 · Clicking a Toolbox meeting mention now opens that exact meeting (the record you were tagged in) instead of dropping you on the full meetings list.";
+const BUILD = "Live build 898 · RFP sign-off queue: the 'today / Xd ago' tag moved off the Submitted date (which confusingly looked like it was submitted today) and now sits under 'Finance approved by' reading 'approved today / Xd ago' — it tracks how long an RFP has waited on you since Finance approved it, not when it was submitted.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41295,11 +41295,11 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
               return (
                 <tr key={r.id} className="border-t hover:bg-blue-50/40 cursor-pointer" onClick={()=>setOpenRfp(r)}>
                   <td className="px-3 py-2 font-mono text-xs">{r.number}</td>
-                  <td className="px-3 py-2 text-xs">{fmtDate(r.date)} <span className={`ml-1 ${waitingDays>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>· {waitingDays===0?'today':waitingDays+'d ago'}</span></td>
+                  <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
                   <td className="px-3 py-2">{r.supplier_name||'—'}</td>
                   <td className="px-3 py-2 text-xs font-mono">{po?po.number:'—'}</td>
                   <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(r.amount)}</td>
-                  <td className="px-3 py-2 text-xs">{fin?(fin.name||fin.email):'—'}</td>
+                  <td className="px-3 py-2 text-xs">{fin?(fin.name||fin.email):'—'}{r.finance_approved_at && <span className={`block text-[10px] ${waitingDays>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>approved {waitingDays===0?'today':waitingDays+'d ago'}</span>}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setOpenRfp(r);}} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Review →</button></td>
                 </tr>
               );
