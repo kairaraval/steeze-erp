@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 909 · Activity/comment boxes now auto-save your draft per thread, so if the screen refreshes or the app updates mid-typing your note is no longer wiped — it's restored when the thread reloads, and cleared once you post. Applies to every comment thread (leads, jobs, PRs, toolbox, etc.).";
+const BUILD = "Live build 910 · A refresh / app auto-update now reopens the page you were on instead of snapping back to the landing page (your last view is remembered; access rules still redirect if a page isn't allowed for your role). Plus build 909: comment drafts survive a refresh.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -53249,8 +53249,14 @@ function App(){
       const v = new URLSearchParams(window.location.search).get('view');
       if(v){ try{ window.history.replaceState({}, '', window.location.pathname); }catch(_){} return v; }
     }catch(_){}
+    // Stay on the page you were on across a refresh / app auto-update, instead of
+    // snapping back to the landing page. The access guard below still redirects
+    // if the restored view isn't allowed for this role.
+    try{ const last=localStorage.getItem('steezeLastView'); if(last) return last; }catch(_){}
     return 'pipeline';
   });
+  // Remember the current page so a refresh reopens it.
+  useEffect(()=>{ try{ if(view) localStorage.setItem('steezeLastView', view); }catch(_){} },[view]);
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
