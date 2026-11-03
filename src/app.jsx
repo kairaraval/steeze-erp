@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 895 · Toolbox meeting mention notifications now carry a link, so when you're tagged in a meeting discussion the notification opens the Toolbox (Meetings tab); backfilled 17 existing ones that couldn't open. Confirmed every role already has Toolbox access.";
+const BUILD = "Live build 896 · Toolbox Meetings are now scoped per person: admins/AGM see all, but everyone else only sees a meeting if they facilitated it, created it, own one of its action items, are listed in its attendees, or were tagged in its discussion. Not involved = it won't show on their list.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7298,16 +7298,42 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
   const [fStatus,setFStatus]=useState('');
   const [q,setQ]=useState('');
   const canEdit = ['admin','agm'].includes(profile.role);
+  const [threadIds,setThreadIds]=useState(()=>new Set()); // meeting ids where I authored or was mentioned in the discussion
   const nameOf=(id)=> (profiles||[]).find(p=>p.id===id)?.name || '—';
-  async function load(){ setLoading(true); const { data }=await sb.from('toolbox_meetings').select('*').is('deleted_at',null).order('meeting_date',{ascending:false}).order('created_at',{ascending:false}); setRows(data||[]); setLoading(false); }
+  async function load(){
+    setLoading(true);
+    const { data }=await sb.from('toolbox_meetings').select('*').is('deleted_at',null).order('meeting_date',{ascending:false}).order('created_at',{ascending:false});
+    setRows(data||[]);
+    // Non-managers only see meetings they took part in / were tagged on — gather the discussion-thread links.
+    if(!canEdit){
+      try{
+        const { data: acts }=await sb.from('toolbox_meeting_activity').select('meeting_id,actor_id,mentions');
+        const s=new Set();
+        (acts||[]).forEach(a=>{ const mids=Array.isArray(a.mentions)?a.mentions:[]; if(a.actor_id===profile.id || mids.includes(profile.id)) s.add(a.meeting_id); });
+        setThreadIds(s);
+      }catch(_){ setThreadIds(new Set()); }
+    }
+    setLoading(false);
+  }
   useEffect(()=>{ load(); },[]);
   const today=todayManila();
-  const allItems = rows.flatMap(m=> (Array.isArray(m.action_items)?m.action_items:[]).map(a=>({ ...a, _m:m })));
+  // Who may see a given meeting: managers see all; everyone else only meetings they're part of or tagged in.
+  const myName=String(profile.name||'').trim().toLowerCase();
+  const canSee=(m)=>{
+    if(canEdit) return true;
+    if(m.facilitator_id===profile.id || m.created_by===profile.id) return true;
+    if((Array.isArray(m.action_items)?m.action_items:[]).some(a=>a.owner_id===profile.id)) return true;
+    if(threadIds.has(m.id)) return true;
+    if(myName && myName.length>=3 && String(m.attendees||'').toLowerCase().includes(myName)) return true;
+    return false;
+  };
+  const visibleRows = rows.filter(canSee);
+  const allItems = visibleRows.flatMap(m=> (Array.isArray(m.action_items)?m.action_items:[]).map(a=>({ ...a, _m:m })));
   const openItems = allItems.filter(a=>!a.done);
   const overdue = openItems.filter(a=> a.due_date && a.due_date < today);
-  const thisMonth = rows.filter(m=> String(m.meeting_date||'').slice(0,7)===today.slice(0,7)).length;
+  const thisMonth = visibleRows.filter(m=> String(m.meeting_date||'').slice(0,7)===today.slice(0,7)).length;
   const qq=q.trim().toLowerCase();
-  const filtered = rows.filter(m=> (!fStatus||m.status===fStatus) && (!qq || [m.number,m.department,m.topic,m.minutes,m.issues,m.decisions,m.attendees,nameOf(m.facilitator_id)].filter(Boolean).join(' ').toLowerCase().includes(qq)));
+  const filtered = visibleRows.filter(m=> (!fStatus||m.status===fStatus) && (!qq || [m.number,m.department,m.topic,m.minutes,m.issues,m.decisions,m.attendees,nameOf(m.facilitator_id)].filter(Boolean).join(' ').toLowerCase().includes(qq)));
   const Kpi=({ic,label,value,color,alert})=>(<div className={`bg-white border rounded-xl p-3 flex items-center gap-3 ${alert?'ring-1 ring-rose-200':''}`}><div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${color}`}>{ic}</div><div><div className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">{label}</div><div className={`text-2xl font-extrabold leading-tight ${alert&&value>0?'text-rose-600':'text-slate-900'}`}>{value}</div></div></div>);
   return (
     <div className="p-6">
@@ -7327,7 +7353,7 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
         <Kpi ic="⏰" label="Overdue follow-ups" value={overdue.length} color="bg-rose-100" alert />
       </div>
       {loading ? <div className="text-slate-400 text-sm py-10 text-center">Loading…</div> : filtered.length===0 ? (
-        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No toolbox meetings logged yet.{canEdit?' Click “+ New meeting” to add the first one.':''}</div>
+        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">{canEdit?'No toolbox meetings logged yet. Click “+ New meeting” to add the first one.':'No toolbox meetings for you yet. You’ll see a meeting here once you’re a facilitator, an action-item owner, listed in attendees, or tagged in its discussion.'}</div>
       ) : (
         <div className="space-y-2.5">
           {filtered.map(m=>{ const items=Array.isArray(m.action_items)?m.action_items:[]; const doneN=items.filter(a=>a.done).length; const od=items.filter(a=>!a.done && a.due_date && a.due_date<today).length; const st=TBM_STATUS[m.status]||TBM_STATUS.routine; const atts=(Array.isArray(m.attachments)?m.attachments:[]).length; return (
