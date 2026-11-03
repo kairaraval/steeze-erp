@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 908 · Month-End Close: each failing live check now expands to show the exact records behind it (click to view) — expenses missing a GL/department, unposted draft JEs, uncategorized bank txns, and open AP vouchers (with number, payee, amount). Expenses missing a department can be fixed right there with an inline dept dropdown.";
+const BUILD = "Live build 909 · Activity/comment boxes now auto-save your draft per thread, so if the screen refreshes or the app updates mid-typing your note is no longer wiped — it's restored when the thread reloads, and cleared once you post. Applies to every comment thread (leads, jobs, PRs, toolbox, etc.).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1098,7 +1098,12 @@ function LoginScreen(){
 /* ----------------------- Generic activity thread (leads + dept jobs) ----------------------- */
 const DEPT_JOB_TABLE_BY_TYPE = { graphic:'graphic_design_jobs', printing:'printing_jobs', embroidery:'embroidery_jobs', knitting:'knitting_jobs', sampling:'sampling_jobs', production:'production_jobs' };
 function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack, afterChange, onOpenSource, openSourceLabel, embedded, headerless, onAttach, mentionNotify }){
-  const [rows,setRows]=useState(null); const [text,setText]=useState('');
+  const [rows,setRows]=useState(null);
+  // Draft persistence: keep whatever is being typed in localStorage, keyed per
+  // thread, so a background refresh / app auto-update never wipes an unsent note.
+  const draftKey='threadDraft:'+(table||'')+':'+(scope||JSON.stringify(match||{}));
+  const [text,setText]=useState(()=>{ try{ return localStorage.getItem(draftKey)||''; }catch(_){ return ''; } });
+  useEffect(()=>{ try{ if(text && text.trim()) localStorage.setItem(draftKey, text); else localStorage.removeItem(draftKey); }catch(_){} },[text, draftKey]);
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   // Inline edit state — one comment at a time.
@@ -1205,6 +1210,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
       // the follow-up work below. The mirroring + thread refresh then run in the
       // background; if they're slow, the comment still posted.
       setText(''); setPending([]); setBusy(false);
+      try{ localStorage.removeItem(draftKey); }catch(_){}
       (async()=>{
         // Mirror uploaded files onto the parent lead / dept job so they also show
         // in that record's Attachments (deduped by path/url).
