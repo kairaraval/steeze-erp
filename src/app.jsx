@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 907 · Payroll reports (Phase 5): from a run, print Remittance summaries (SSS / PhilHealth / Pag-IBIG with employee + employer share and ID numbers, plus BIR withholding by TIN) and a Bank payout list (net pay, bank & account per employee, total to transfer). New 13th-month helper totals each employee's basic earned for the year ÷ 12 across approved runs.";
+const BUILD = "Live build 908 · Month-End Close: each failing live check now expands to show the exact records behind it (click to view) — expenses missing a GL/department, unposted draft JEs, uncategorized bank txns, and open AP vouchers (with number, payee, amount). Expenses missing a department can be fixed right there with an inline dept dropdown.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46893,7 +46893,7 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
 
 // Month-End Close — live data checks + manual attestations + 3-step sign-off
 // (staff prepares → supervisor reviews → owner/admin approves & locks).
-function MonthEndClosePanel({ month, profile, profiles, bankAccounts, auto }){
+function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenters, auto, reload }){
   const role=profile.role;
   const canPrepare=['accounting','accounting_officer','admin'].includes(role);
   const canReview=['accounting_officer','admin'].includes(role);
@@ -46957,7 +46957,27 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, auto }){
   const status=row?.status||'open';
   const stMeta={ open:['Open','bg-slate-200 text-slate-700'], prepared:['Prepared','bg-amber-100 text-amber-700'], reviewed:['Reviewed','bg-blue-100 text-blue-700'], closed:['Closed & locked','bg-emerald-100 text-emerald-700'] }[status];
   const groups=[...new Set(items.map(i=>i.group))];
-  const AutoRow=({ok,label,detail})=>(<div className="flex items-start gap-2 px-4 py-2 border-b last:border-0 text-sm"><span className={ok?'text-emerald-600':'text-rose-600'}>{ok?'✓':'✕'}</span><span className="flex-1">{label}</span><span className={`text-xs font-semibold ${ok?'text-emerald-600':'text-rose-600'}`}>{detail}</span></div>);
+  const [expanded,setExpanded]=useState('');
+  const canFix=['accounting','accounting_officer','admin'].includes(role) && !closed;
+  async function assignDept(expId, ccId){ if(!ccId) return; const { error }=await sb.from('expenses').update({ cost_center_id:ccId }).eq('id',expId); if(error){ alert(error.message); return; } reload&&reload(); }
+  const ccList=(costCenters||[]).filter(c=>c.active!==false).slice().sort((a,b)=>String(a.code||a.name).localeCompare(String(b.code||b.name)));
+  const expLabel=(e)=> e.payee || e.particulars || e.expense_category || e.description || e.gl_account_code || 'Expense';
+  // One live-check row; when it's failing and has a drill-down list, it expands to show the items.
+  const AutoRow=({ok,label,detail,itemsKey,render})=>{
+    const list=itemsKey?(auto[itemsKey]||[]):[];
+    const canExpand=!ok && list.length>0;
+    const open=expanded===itemsKey;
+    return (
+      <div className="border-b last:border-0">
+        <div className={`flex items-start gap-2 px-4 py-2 text-sm ${canExpand?'cursor-pointer hover:bg-slate-50':''}`} onClick={()=>canExpand&&setExpanded(open?'':itemsKey)}>
+          <span className={ok?'text-emerald-600':'text-rose-600'}>{ok?'✓':'✕'}</span>
+          <span className="flex-1">{label}{canExpand && <span className="ml-1 text-[10px] text-slate-400">{open?'▾ hide':'▸ view'}</span>}</span>
+          <span className={`text-xs font-semibold ${ok?'text-emerald-600':'text-rose-600'}`}>{detail}</span>
+        </div>
+        {open && <div className="bg-slate-50/70 border-t px-4 py-2 max-h-72 overflow-y-auto">{list.map(render)}</div>}
+      </div>
+    );
+  };
   if(loading) return <div className="max-w-3xl mx-auto py-10 text-center text-slate-400 text-sm">Loading {monLabelOf(month)} close…</div>;
   return (
     <div className="max-w-3xl mx-auto space-y-4">
@@ -46971,11 +46991,16 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, auto }){
 
       <div className="bg-white border rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b font-semibold text-sm">Live data checks <span className="font-normal text-slate-400">· computed from the GL — can't be ticked by hand</span></div>
-        <AutoRow ok={auto.expNoGl===0} label="Every expense has a GL account" detail={auto.expNoGl===0?`${auto.expN} expenses`:`${auto.expNoGl} missing`} />
-        <AutoRow ok={auto.expNoCc===0} label="Every expense is tagged to a department" detail={auto.expNoCc===0?'all tagged':`${auto.expNoCc} missing`} />
-        <AutoRow ok={auto.jeDraft===0} label="No draft journal entries left unposted" detail={auto.jeDraft===0?'none':`${auto.jeDraft} draft`} />
-        <AutoRow ok={auto.bankUncat===0} label="All bank transactions categorized" detail={auto.bankUncat===0?'all matched':`${auto.bankUncat} open`} />
-        <AutoRow ok={auto.apOpenN===0} label="AP vouchers for the month settled or accrued" detail={auto.apOpenN===0?'all settled':`${auto.apOpenN} open · ${peso(auto.apOpenAmt)}`} />
+        <AutoRow ok={auto.expNoGl===0} label="Every expense has a GL account" detail={auto.expNoGl===0?`${auto.expN} expenses`:`${auto.expNoGl} missing`} itemsKey="expNoGlList"
+          render={(e)=>(<div key={e.id} className="flex items-center justify-between gap-2 py-1 text-xs border-b border-slate-100 last:border-0"><span className="min-w-0 truncate"><span className="text-slate-400">{fmtDate(e.date)}</span> · {expLabel(e)}</span><span className="font-semibold shrink-0">{peso(e.amount)}</span></div>)} />
+        <AutoRow ok={auto.expNoCc===0} label="Every expense is tagged to a department" detail={auto.expNoCc===0?'all tagged':`${auto.expNoCc} missing`} itemsKey="expNoCcList"
+          render={(e)=>(<div key={e.id} className="flex items-center justify-between gap-2 py-1 text-xs border-b border-slate-100 last:border-0"><span className="min-w-0 truncate flex-1"><span className="text-slate-400">{fmtDate(e.date)}</span> · {expLabel(e)} · <span className="font-semibold">{peso(e.amount)}</span></span>{canFix ? <select defaultValue="" onChange={ev=>assignDept(e.id, ev.target.value)} onClick={ev=>ev.stopPropagation()} className="text-[11px] border rounded px-1 py-0.5 bg-white shrink-0"><option value="">— set dept —</option>{ccList.map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}</select> : <span className="text-rose-500 shrink-0">no dept</span>}</div>)} />
+        <AutoRow ok={auto.jeDraft===0} label="No draft journal entries left unposted" detail={auto.jeDraft===0?'none':`${auto.jeDraft} draft`} itemsKey="jeDraftList"
+          render={(j)=>(<div key={j.id} className="flex items-center justify-between gap-2 py-1 text-xs border-b border-slate-100 last:border-0"><span className="min-w-0 truncate"><span className="text-slate-400">{fmtDate(j.date)}</span> · {j.number||j.memo||j.description||'Journal entry'}</span><span className="shrink-0 text-amber-600 font-semibold">draft</span></div>)} />
+        <AutoRow ok={auto.bankUncat===0} label="All bank transactions categorized" detail={auto.bankUncat===0?'all matched':`${auto.bankUncat} open`} itemsKey="bankUncatList"
+          render={(b)=>(<div key={b.id} className="flex items-center justify-between gap-2 py-1 text-xs border-b border-slate-100 last:border-0"><span className="min-w-0 truncate"><span className="text-slate-400">{fmtDate(b.date)}</span> · {b.description||b.reference_number||'Transaction'}</span><span className="font-semibold shrink-0">{peso(b.amount)}</span></div>)} />
+        <AutoRow ok={auto.apOpenN===0} label="AP vouchers for the month settled or accrued" detail={auto.apOpenN===0?'all settled':`${auto.apOpenN} open · ${peso(auto.apOpenAmt)}`} itemsKey="apOpenList"
+          render={(a)=>(<div key={a.id} className="flex items-center justify-between gap-2 py-1 text-xs border-b border-slate-100 last:border-0"><span className="min-w-0 truncate"><span className="font-mono text-slate-400">{a.number||'—'}</span> · {a.payee||a.supplier_name||a.particulars||'AP voucher'} <span className="text-[10px] uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700">{a.status||'open'}</span></span><span className="font-semibold shrink-0">{peso(a.amount)}</span></div>)} />
         <AutoRow ok={auto.balanced} label="GL postings balance (debits = credits)" detail={auto.balanced?'balanced':`${peso(Math.abs(auto.dr-auto.cr))} off`} />
       </div>
 
@@ -47066,15 +47091,16 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
   // ── Month-End Close: live data-health checks for the selected month ──
   const closeAuto = (()=>{
     const exps=(expenses||[]).filter(e=>!e.deleted_at && inMonth(e.date));
-    const expNoGl=exps.filter(e=>!e.gl_account_code).length;
-    const expNoCc=exps.filter(e=>!e.cost_center_id).length;
-    const jeDraft=(journalEntries||[]).filter(j=>!j.deleted_at && inMonth(j.date) && j.status==='draft').length;
-    const apOpen=(apVouchers||[]).filter(a=>!a.deleted_at && inMonth(a.created_at) && !['paid','cancelled'].includes(a.status));
-    const apOpenAmt=apOpen.reduce((s,a)=>s+(Number(a.amount)||0),0);
-    const bankUncat=(bankTransactions||[]).filter(b=>inMonth(b.date) && !b.ref_type).length;
+    const expNoGlList=exps.filter(e=>!e.gl_account_code);
+    const expNoCcList=exps.filter(e=>!e.cost_center_id);
+    const jeDraftList=(journalEntries||[]).filter(j=>!j.deleted_at && inMonth(j.date) && j.status==='draft');
+    const apOpenList=(apVouchers||[]).filter(a=>!a.deleted_at && inMonth(a.created_at) && !['paid','cancelled'].includes(a.status));
+    const apOpenAmt=apOpenList.reduce((s,a)=>s+(Number(a.amount)||0),0);
+    const bankUncatList=(bankTransactions||[]).filter(b=>inMonth(b.date) && !b.ref_type);
     const dr=monthPostings.reduce((s,p)=>s+(Number(p.debit)||0),0);
     const cr=monthPostings.reduce((s,p)=>s+(Number(p.credit)||0),0);
-    return { expN:exps.length, expNoGl, expNoCc, jeDraft, apOpenN:apOpen.length, apOpenAmt, bankUncat, balanced:Math.abs(dr-cr)<0.5, dr, cr };
+    return { expN:exps.length, expNoGl:expNoGlList.length, expNoCc:expNoCcList.length, jeDraft:jeDraftList.length, apOpenN:apOpenList.length, apOpenAmt, bankUncat:bankUncatList.length, balanced:Math.abs(dr-cr)<0.5, dr, cr,
+      expNoGlList, expNoCcList, jeDraftList, apOpenList, bankUncatList };
   })();
   const periodPostings = postings.filter(p=> (p.date||'').slice(0,4)===year);      // P&L: within the year
   const cumulativePostings = postings.filter(p=> (p.date||'').slice(0,4)<=year);    // BS: up to end of year
@@ -47248,7 +47274,7 @@ function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankT
         );
       })()}
 
-      {tab==='close' && <MonthEndClosePanel month={month} profile={profile} profiles={profiles} bankAccounts={bankAccounts} auto={closeAuto} />}
+      {tab==='close' && <MonthEndClosePanel month={month} profile={profile} profiles={profiles} bankAccounts={bankAccounts} costCenters={costCenters} auto={closeAuto} reload={reload} />}
 
       {tab==='pl' && (
         <div className="bg-white border rounded-xl max-w-2xl mx-auto overflow-hidden">
