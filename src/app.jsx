@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 903 · Payroll & Attendance Phase 1+2: new Payroll Setup (editable, effective-dated SSS/PhilHealth/Pag-IBIG/BIR tables seeded with 2025 defaults, work schedules, 2026 PH holidays, pay rules/multipliers, per-employee schedule/cycle/basis/biometric ID) and a new Attendance/DTR module (ZKTeco cloud/ADMS push endpoint + CSV import + manual grid, daily time record per cutoff with build-from-punches, edit & approve). Payroll engine (Phase 3) is next.";
+const BUILD = "Live build 904 · Payroll engine (Phase 3): new 'Payroll Runs' computes gross-to-net per employee from approved DTRs — basic (prorated on actual workdays), OT, holiday, allowances minus late/UT, SSS/PhilHealth/Pag-IBIG (from the editable tables, split per cutoff), BIR withholding tax, and gov + company loan amortizations. Draft → reviewed (Accounting) → approved (CEO); loan balances post only on approval and no funds move from the OS. Per-employee payslip + a payroll register, both printable.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41386,6 +41386,21 @@ function HolidayModal({ hol, profile, onClose, onSaved }){
   </Modal>);
 }
 
+/* ═══════════════════ PAYROLL ENGINE (Phase 3) ═══════════════════
+   Gross-to-net per employee from approved DTRs + the editable statutory tables.
+   Net = Basic(prorated) + OT + Holiday + Allowances − late/UT − SSS − PhilHealth
+         − Pag-IBIG − Tax − Gov loans − Company loans − Other.
+   Runs go draft → reviewed → approved; loan balances post only on approval and no
+   money moves from the OS (the CEO transfers in the bank). */
+const PAYRUN_STATUS={ draft:['Draft','bg-slate-100 text-slate-600'], reviewed:['Reviewed','bg-amber-100 text-amber-700'], approved:['Approved','bg-emerald-100 text-emerald-700'] };
+function pRound(v){ return Math.round((Number(v)||0)*100)/100; }
+function sssEE(basic, d){ if(!d) return 0; const step=d.msc_step||500, min=d.msc_min||0, max=d.msc_max||1e12; const b=Number(basic)||0; if(b<=0) return 0; let msc=Math.round(b/step)*step; msc=Math.max(min,Math.min(max,msc)); let ee=msc*(d.ee_rate||0); if(d.min_ee) ee=Math.max(ee,d.min_ee); return pRound(ee); }
+function philhealthEE(basic, d){ if(!d) return 0; const b=Math.max(d.floor||0, Math.min(d.ceiling||1e12, Number(basic)||0)); return pRound(b*(d.rate||0)*(d.ee_share||0.5)); }
+function pagibigEE(basic, d){ if(!d) return 0; const b=Number(basic)||0; if(b<=0) return 0; const rate=b<=(d.threshold||0)?(d.low_rate||0):(d.high_rate||0); const comp=Math.min(b, d.max_comp||1e12); return pRound(comp*rate); }
+function birTax(taxable, brackets){ if(!brackets||!brackets.length) return 0; const t=Number(taxable)||0; let chosen=brackets[0]; for(const b of brackets){ if(t>Number(b.over)) chosen=b; } return pRound(Number(chosen.base||0)+(t-Number(chosen.over||0))*Number(chosen.rate||0)); }
+function periodFraction(cycle){ return cycle==='monthly'?1 : cycle==='weekly'?(12/52) : 0.5; }
+function cycleFreq(cycle){ return cycle==='monthly'?'monthly' : cycle==='weekly'?'weekly' : 'semi_monthly'; }
+
 /* ─────────────── Attendance / DTR helpers (module-level, reused later) ─────────────── */
 function manilaParts(ts){
   try{ const d=new Date(ts); const f=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
@@ -41659,6 +41674,300 @@ function BiometricDevicesModal({ profile, devices, onClose, onChanged }){
         <div className="flex-1"><TpLbl t="Serial (optional)"><input className="input" value={serial} onChange={e=>setSerial(e.target.value)} /></TpLbl></div>
         <button disabled={busy} onClick={add} className="py-2 px-3 rounded-lg bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50">+ Add</button>
       </div>
+    </div>
+  </Modal>);
+}
+
+function PayrollEngineView({ profile, employees, profiles, reload }){
+  const canPrepare = ['admin','hr','hr_admin'].includes(profile.role);
+  const canReview = ['admin','accounting','accounting_officer'].includes(profile.role);
+  const canApprove = profile.role==='admin';
+  const [runs,setRuns]=useState([]);
+  const [openRun,setOpenRun]=useState(null);
+  const [creating,setCreating]=useState(false);
+  const [loading,setLoading]=useState(true);
+  // reference data for compute
+  const [refs,setRefs]=useState({ schedules:[], holidays:[], tax:[], config:{}, govLoans:[], coLoans:[] });
+  async function loadRuns(){ setLoading(true); try{ const { data }=await sb.from('payroll_runs').select('*').is('deleted_at',null).order('period_start',{ascending:false}).order('created_at',{ascending:false}); setRuns(data||[]); }catch(_){ setRuns([]); } setLoading(false); }
+  async function loadRefs(){
+    const out={ schedules:[], holidays:[], tax:[], config:{}, govLoans:[], coLoans:[] };
+    try{ out.schedules=(await sb.from('work_schedules').select('*').is('deleted_at',null)).data||[]; }catch(_){}
+    try{ out.holidays=(await sb.from('ph_holidays').select('*').is('deleted_at',null)).data||[]; }catch(_){}
+    try{ out.tax=(await sb.from('payroll_tax_tables').select('*').is('deleted_at',null)).data||[]; }catch(_){}
+    try{ const { data }=await sb.from('payroll_config').select('*'); (data||[]).forEach(r=>out.config[r.key]=r.value); }catch(_){}
+    try{ out.govLoans=(await sb.from('gov_loans').select('*').is('deleted_at',null)).data||[]; }catch(_){}
+    try{ out.coLoans=(await sb.from('employee_loans').select('*').is('deleted_at',null)).data||[]; }catch(_){}
+    setRefs(out);
+  }
+  useEffect(()=>{ loadRuns(); loadRefs(); },[]);
+  const latestTax=(kind,freq)=>refs.tax.filter(t=>t.kind===kind && (freq?t.frequency===freq:!t.frequency)).sort((a,b)=>String(b.effective_date).localeCompare(String(a.effective_date)))[0]?.data||null;
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">💵 Payroll Runs</h1><p className="text-slate-500 text-sm">Gross-to-net from approved DTRs. Draft → reviewed → approved. Loan balances post only on approval; the CEO releases funds in the bank.</p></div>
+          {canPrepare && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New payroll run</button>}
+        </div>
+      </div>
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : runs.length===0 ? (
+        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No payroll runs yet. {canPrepare?'Create one to compute a cutoff.':''}</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Cycle</th><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Headcount</th><th className="text-right px-3 py-2">Gross</th><th className="text-right px-3 py-2">Net</th><th className="text-center px-3 py-2">Status</th><th></th></tr></thead>
+          <tbody>{runs.map(r=>{ const st=PAYRUN_STATUS[r.status]||PAYRUN_STATUS.draft; const t=r.totals||{}; return (
+            <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setOpenRun(r)}>
+              <td className="px-3 py-2 font-mono text-xs">{r.number||'—'}</td>
+              <td className="px-3 py-2 text-xs capitalize">{(r.cycle||'').replace('_','-')}</td>
+              <td className="px-3 py-2 text-xs">{fmtDate(r.period_start)} – {fmtDate(r.period_end)}</td>
+              <td className="px-3 py-2 text-right">{t.headcount??'—'}</td>
+              <td className="px-3 py-2 text-right">{t.gross!=null?peso(t.gross):'—'}</td>
+              <td className="px-3 py-2 text-right font-semibold text-emerald-700">{t.net!=null?peso(t.net):'—'}</td>
+              <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${st[1]}`}>{st[0]}</span></td>
+              <td className="px-3 py-2 text-right"><button onClick={(e)=>{ e.stopPropagation(); setOpenRun(r); }} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">Open →</button></td>
+            </tr>
+          ); })}</tbody>
+        </table></div>
+      )}
+      {creating && <NewPayrollRunModal profile={profile} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setCreating(false)} onCreated={(run)=>{ setCreating(false); loadRuns(); setOpenRun(run); }} />}
+      {openRun && <PayrollRunDetail run={openRun} profile={profile} employees={employees} profiles={profiles} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApprove={canApprove} onClose={()=>{ setOpenRun(null); loadRuns(); }} onChanged={loadRuns} />}
+    </div>
+  );
+}
+// Build payroll items for a run from approved DTRs + refs. Returns array of item rows.
+function computePayrollItems(run, emps, dtrByEmp, refs, latestTax){
+  const cf=Number(run.contrib_factor)||0.5;
+  const pf=periodFraction(run.cycle);
+  const mult=refs.config?.multipliers||{};
+  const sss=latestTax('sss'), ph=latestTax('philhealth'), pi=latestTax('pagibig'), bir=latestTax('bir', cycleFreq(run.cycle));
+  const holSet={}; (refs.holidays||[]).forEach(h=>{ holSet[h.holiday_date]=h; });
+  const dates=dateRangeList(run.period_start, run.period_end);
+  const items=[];
+  for(const e of emps){
+    const sched=(refs.schedules||[]).find(s=>s.id===e.schedule_id)||null;
+    const restDays=new Set((sched?.rest_days)||[0]);
+    const dayHrs=Number(sched?.daily_hours||8);
+    const rows=(dtrByEmp[e.id]||[]).filter(r=>r.approved);
+    const presentish=rows.filter(r=> r.status==='present' || (r.status==='holiday'&&r.time_in) || (r.status==='leave'&&r.leave_paid));
+    const workedDays=presentish.length;
+    const lateMin=rows.reduce((a,r)=>a+Number(r.late_min||0),0);
+    const utMin=rows.reduce((a,r)=>a+Number(r.undertime_min||0),0);
+    const otHours=rows.reduce((a,r)=>a+Number(r.ot_hours||0),0);
+    const workdaysInPeriod=dates.filter(ds=>!restDays.has(new Date(ds+'T00:00:00').getDay())).length || 1;
+    const isDaily=e.pay_basis==='daily';
+    const monthlyBasic=Number(e.basic_salary)|| (e.current_rate?Number(e.current_rate)*26:0);
+    let dailyRate;
+    if(isDaily){ dailyRate=Number(e.current_rate)||0; }
+    else { const periodBase=monthlyBasic*pf; dailyRate=workdaysInPeriod>0?periodBase/workdaysInPeriod:0; }
+    dailyRate=pRound(dailyRate);
+    const hourly=dailyRate/(dayHrs||8);
+    const basic=pRound(dailyRate*workedDays);
+    const lateUt=pRound(((lateMin+utMin)/60)*hourly);
+    const ot=pRound(otHours*hourly*(mult.regular_ot||1.25));
+    // holiday pay
+    let holiday=0;
+    rows.forEach(r=>{ if(r.status!=='holiday'&&r.holiday_type!=='regular'&&r.holiday_type!=='special') return; const typ=r.holiday_type||(holSet[r.work_date]?.type); if(!typ) return; const worked=!!r.time_in;
+      if(typ==='regular'){ if(worked) holiday+=dailyRate*((mult.reg_holiday||2)-1); else if(!isDaily) holiday+=dailyRate*1; }
+      else if(typ==='special'){ if(worked) holiday+=dailyRate*((mult.special||1.3)-1); }
+    });
+    holiday=pRound(holiday);
+    const allowances=pRound((Number(e.allowances)||0)*pf);
+    const gross=pRound(basic+ot+holiday+allowances);
+    const sssEe=pRound(sssEE(monthlyBasic,sss)*cf), phEe=pRound(philhealthEE(monthlyBasic,ph)*cf), piEe=pRound(pagibigEE(monthlyBasic,pi)*cf);
+    const taxable=Math.max(0, gross-lateUt-sssEe-phEe-piEe);
+    const tax=birTax(taxable, bir?.brackets);
+    // loans
+    let govDed=0; (refs.govLoans||[]).forEach(l=>{ if(l.employee_id!==e.id) return; if(l.status==='paid'||l.status==='closed') return; const remaining=Math.max(0, Number(l.loan_amount||0)-Number(l.amount_paid||0)); if(remaining<=0) return; govDed+=Math.min(remaining, Number(l.monthly_amortization||0)*cf); });
+    govDed=pRound(govDed);
+    let coDed=0; (refs.coLoans||[]).forEach(l=>{ if(l.employee_id!==e.id) return; if(l.status==='settled'||l.status==='rejected'||l.status==='pending') return; const total=Number(l.principal||0)*(1+(Number(l.rate_pct||0)/100)); const amort=(Number(l.term_months||0)>0)?total/l.term_months:0; const remaining=Math.max(0, total-Number(l.amount_paid||0)); if(remaining<=0) return; coDed+=Math.min(remaining, amort*cf); });
+    coDed=pRound(coDed);
+    const totalDed=pRound(lateUt+sssEe+phEe+piEe+tax+govDed+coDed);
+    const net=pRound(gross-totalDed);
+    items.push({ run_id:run.id, employee_id:e.id, days_worked:workedDays, days_in_period:workdaysInPeriod, daily_rate:dailyRate, basic_pay:basic, ot_pay:ot, holiday_pay:holiday, allowances, other_earnings:0, gross, late_ut_ded:lateUt, sss_ee:sssEe, philhealth_ee:phEe, pagibig_ee:piEe, tax, gov_loan_ded:govDed, company_loan_ded:coDed, other_ded:0, total_deductions:totalDed, net_pay:net, breakdown:{ late_min:lateMin, ut_min:utMin, ot_hours:otHours } });
+  }
+  return items;
+}
+function NewPayrollRunModal({ profile, employees, refs, latestTax, onClose, onCreated }){
+  const now=new Date();
+  const [cycle,setCycle]=useState('semi_monthly');
+  const [year,setYear]=useState(now.getFullYear());
+  const [month,setMonth]=useState(now.getMonth());
+  const [half,setHalf]=useState(now.getDate()<=15?1:2);
+  const [weekStart,setWeekStart]=useState(()=>{ const d=new Date(); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d.toISOString().slice(0,10); });
+  const [payDate,setPayDate]=useState(todayManila());
+  const [contrib,setContrib]=useState(0.5);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  useEffect(()=>{ setContrib(cycle==='monthly'?1:0.5); },[cycle]);
+  const monthEnd=new Date(year,month+1,0).getDate();
+  let start,end,cutoffKey;
+  if(cycle==='semi_monthly'){ if(half===1){ start=`${year}-${String(month+1).padStart(2,'0')}-01`; end=`${year}-${String(month+1).padStart(2,'0')}-15`; } else { start=`${year}-${String(month+1).padStart(2,'0')}-16`; end=`${year}-${String(month+1).padStart(2,'0')}-${String(monthEnd).padStart(2,'0')}`; } cutoffKey=`${year}-${String(month+1).padStart(2,'0')}-H${half}`; }
+  else if(cycle==='monthly'){ start=`${year}-${String(month+1).padStart(2,'0')}-01`; end=`${year}-${String(month+1).padStart(2,'0')}-${String(monthEnd).padStart(2,'0')}`; cutoffKey=`${year}-${String(month+1).padStart(2,'0')}-M`; }
+  else { start=weekStart; const we=new Date(weekStart+'T00:00:00'); we.setDate(we.getDate()+6); end=we.toISOString().slice(0,10); cutoffKey=`W-${weekStart}`; }
+  const eligible=(employees||[]).filter(e=>!e.deleted_at && e.is_active!==false && (!e.pay_cycle || e.pay_cycle===cycle));
+  async function create(){
+    setBusy(true); setMsg('');
+    try{
+      // run number
+      const mk=cutoffKey.replace(/[^0-9A-Za-z]/g,'');
+      const { data:ex }=await sb.from('payroll_runs').select('number').like('number',`PR-${mk}-%`);
+      let max=0; (ex||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=+m[1]; if(n>max) max=n; } });
+      const number=`PR-${mk}-${String(max+1).padStart(2,'0')}`;
+      const { data:run, error }=await sb.from('payroll_runs').insert({ number, cycle, period_start:start, period_end:end, cutoff_key:cutoffKey, pay_date:payDate||null, status:'draft', contrib_factor:Number(contrib)||0.5, prepared_by:profile.id, prepared_at:new Date().toISOString(), created_by:profile.id }).select().single();
+      if(error) throw error;
+      // load approved DTR for the period
+      const { data:dtr }=await sb.from('dtr_days').select('*').gte('work_date',start).lte('work_date',end);
+      const dtrByEmp={}; (dtr||[]).forEach(r=>{ (dtrByEmp[r.employee_id]=dtrByEmp[r.employee_id]||[]).push(r); });
+      const items=computePayrollItems(run, eligible, dtrByEmp, refs, latestTax);
+      if(items.length){ const { error:ie }=await sb.from('payroll_items').insert(items); if(ie) throw ie; }
+      // totals
+      const gross=items.reduce((a,i)=>a+Number(i.gross||0),0), net=items.reduce((a,i)=>a+Number(i.net_pay||0),0), ded=items.reduce((a,i)=>a+Number(i.total_deductions||0),0);
+      await sb.from('payroll_runs').update({ totals:{ headcount:items.length, gross:pRound(gross), net:pRound(net), deductions:pRound(ded) } }).eq('id',run.id);
+      setBusy(false); onCreated({ ...run, totals:{ headcount:items.length, gross:pRound(gross), net:pRound(net), deductions:pRound(ded) } });
+    }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
+  }
+  return (<Modal title="New payroll run" onClose={onClose}>
+    <div className="space-y-3">
+      <TpLbl t="Pay cycle"><select className="input" value={cycle} onChange={e=>setCycle(e.target.value)}><option value="semi_monthly">Semi-monthly (1–15 / 16–end)</option><option value="monthly">Monthly</option><option value="weekly">Weekly (floor / project-based)</option></select></TpLbl>
+      {cycle!=='weekly' ? (
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Year"><input type="number" className="input" value={year} onChange={e=>setYear(+e.target.value)} /></TpLbl>
+          <TpLbl t="Month"><select className="input" value={month} onChange={e=>setMonth(+e.target.value)}>{Array.from({length:12}).map((_,i)=><option key={i} value={i}>{new Date(2000,i,1).toLocaleDateString('en-US',{month:'long'})}</option>)}</select></TpLbl>
+          {cycle==='semi_monthly' && <TpLbl t="Cutoff"><select className="input" value={half} onChange={e=>setHalf(+e.target.value)}><option value={1}>1–15</option><option value={2}>16–end</option></select></TpLbl>}
+        </div>
+      ) : (
+        <TpLbl t="Week starting (Mon)"><input type="date" className="input" value={weekStart} onChange={e=>setWeekStart(e.target.value)} /></TpLbl>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <TpLbl t="Pay date"><input type="date" className="input" value={payDate} onChange={e=>setPayDate(e.target.value)} /></TpLbl>
+        <TpLbl t="Contribution factor"><input type="number" step="0.1" className="input text-right" value={contrib} onChange={e=>setContrib(e.target.value)} /></TpLbl>
+      </div>
+      <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Period: <b>{fmtDate(start)} – {fmtDate(end)}</b> · <b>{eligible.length}</b> eligible employee{eligible.length===1?'':'s'}. Government contributions & loans apply at <b>×{contrib}</b> this run (your split-evenly setting). Reads <b>approved</b> DTRs only — approve attendance first.</div>
+      {msg && <div className="text-xs text-rose-600">{msg}</div>}
+      <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={create} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Computing…':'Create & compute'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
+    </div>
+  </Modal>);
+}
+function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, canPrepare, canReview, canApprove, onClose, onChanged }){
+  const [items,setItems]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState('');
+  const [slip,setSlip]=useState(null);
+  const [printReg,setPrintReg]=useState(false);
+  const [st,setSt]=useState(run.status);
+  const locked = st==='approved';
+  const empById=(id)=>(employees||[]).find(e=>e.id===id);
+  const empName=(id)=>{ const e=empById(id); return e?[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—':'—'; };
+  async function load(){ setLoading(true); try{ const { data }=await sb.from('payroll_items').select('*').eq('run_id',run.id); setItems(data||[]); }catch(_){ setItems([]); } setLoading(false); }
+  useEffect(()=>{ load(); },[run.id]);
+  const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const tot=(k)=>items.reduce((a,i)=>a+Number(i[k]||0),0);
+
+  function recalcNet(it){ const gross=pRound(Number(it.basic_pay||0)+Number(it.ot_pay||0)+Number(it.holiday_pay||0)+Number(it.allowances||0)+Number(it.other_earnings||0)); const ded=pRound(Number(it.late_ut_ded||0)+Number(it.sss_ee||0)+Number(it.philhealth_ee||0)+Number(it.pagibig_ee||0)+Number(it.tax||0)+Number(it.gov_loan_ded||0)+Number(it.company_loan_ded||0)+Number(it.other_ded||0)); return { ...it, gross, total_deductions:ded, net_pay:pRound(gross-ded) }; }
+  async function editItem(it, key, val){ if(locked) return; const v=Number(val)||0; let next={ ...it, [key]:v }; next=recalcNet(next); setItems(prev=>prev.map(x=>x.id===it.id?next:x)); await sb.from('payroll_items').update({ [key]:v, gross:next.gross, total_deductions:next.total_deductions, net_pay:next.net_pay, updated_at:new Date().toISOString() }).eq('id',it.id); }
+  async function recompute(){ if(locked) return; if(!confirm('Recompute every employee from the current approved DTRs + statutory tables? This overwrites manual edits in this run.')) return; setBusy('recompute');
+    const eligible=(employees||[]).filter(e=>items.some(i=>i.employee_id===e.id));
+    const { data:dtr }=await sb.from('dtr_days').select('*').gte('work_date',run.period_start).lte('work_date',run.period_end);
+    const dtrByEmp={}; (dtr||[]).forEach(r=>{ (dtrByEmp[r.employee_id]=dtrByEmp[r.employee_id]||[]).push(r); });
+    const fresh=computePayrollItems(run, eligible, dtrByEmp, refs, latestTax);
+    for(const f of fresh){ const ex=items.find(i=>i.employee_id===f.employee_id); if(ex) await sb.from('payroll_items').update({ ...f, id:undefined, run_id:undefined, employee_id:undefined, updated_at:new Date().toISOString() }).eq('id',ex.id); }
+    await saveTotals(fresh); await load(); setBusy('');
+  }
+  async function saveTotals(list){ const gross=list.reduce((a,i)=>a+Number(i.gross||0),0), net=list.reduce((a,i)=>a+Number(i.net_pay||0),0), ded=list.reduce((a,i)=>a+Number(i.total_deductions||0),0); await sb.from('payroll_runs').update({ totals:{ headcount:list.length, gross:pRound(gross), net:pRound(net), deductions:pRound(ded) } }).eq('id',run.id); onChanged&&onChanged(); }
+  async function setStatus(status){
+    setBusy(status);
+    const patch={ status }; const nowIso=new Date().toISOString();
+    if(status==='reviewed'){ patch.reviewed_by=profile.id; patch.reviewed_at=nowIso; }
+    if(status==='approved'){ patch.approved_by=profile.id; patch.approved_at=nowIso; }
+    const { error }=await sb.from('payroll_runs').update(patch).eq('id',run.id); if(error){ setBusy(''); alert(error.message); return; }
+    // On approval, post loan repayments.
+    if(status==='approved'){
+      for(const it of items){
+        if(Number(it.gov_loan_ded||0)>0){ let rem=Number(it.gov_loan_ded); const loans=(refs.govLoans||[]).filter(l=>l.employee_id===it.employee_id && l.status!=='paid' && l.status!=='closed').sort((a,b)=>String(a.date_granted).localeCompare(String(b.date_granted)));
+          for(const l of loans){ if(rem<=0) break; const remaining=Math.max(0,Number(l.loan_amount||0)-Number(l.amount_paid||0)); const pay=Math.min(rem,remaining); if(pay<=0) continue; const np=Number(l.amount_paid||0)+pay; await sb.from('gov_loans').update({ amount_paid:np, status: np>=Number(l.loan_amount||0)?'paid':l.status }).eq('id',l.id); rem-=pay; } }
+        if(Number(it.company_loan_ded||0)>0){ let rem=Number(it.company_loan_ded); const loans=(refs.coLoans||[]).filter(l=>l.employee_id===it.employee_id && l.status!=='settled').sort((a,b)=>String(a.date_granted).localeCompare(String(b.date_granted)));
+          for(const l of loans){ if(rem<=0) break; const total=Number(l.principal||0)*(1+(Number(l.rate_pct||0)/100)); const remaining=Math.max(0,total-Number(l.amount_paid||0)); const pay=Math.min(rem,remaining); if(pay<=0) continue; const np=Number(l.amount_paid||0)+pay; await sb.from('employee_loans').update({ amount_paid:np, status: np>=total?'settled':l.status }).eq('id',l.id); rem-=pay; } }
+      }
+      await loadRefsLoans();
+    }
+    setSt(status); setBusy(''); onChanged&&onChanged();
+  }
+  async function loadRefsLoans(){ /* refresh handled by parent reload */ }
+  async function del(){ if(!confirm(`Delete payroll run ${run.number}? (soft-delete)`)) return; await sb.from('payroll_runs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',run.id); onClose(); }
+
+  const COLS=[['basic_pay','Basic'],['ot_pay','OT'],['holiday_pay','Holiday'],['allowances','Allow.'],['other_earnings','Other+'],['late_ut_ded','Late/UT'],['sss_ee','SSS'],['philhealth_ee','PHIC'],['pagibig_ee','HDMF'],['tax','Tax'],['gov_loan_ded','GovLn'],['company_loan_ded','CoLn'],['other_ded','Other−']];
+  return (
+    <Modal title={`💵 ${run.number||'Payroll run'} · ${fmtDate(run.period_start)}–${fmtDate(run.period_end)}`} onClose={onClose} xwide>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 text-xs"><span className={`px-2 py-0.5 rounded font-semibold ${(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[1]}`}>{(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[0]}</span><span className="text-slate-500 capitalize">{(run.cycle||'').replace('_','-')} · ×{run.contrib_factor} contributions{run.pay_date?` · pay ${fmtDate(run.pay_date)}`:''}</span></div>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>setPrintReg(true)} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50">🖨 Register</button>
+            {!locked && canPrepare && <button onClick={recompute} disabled={busy==='recompute'} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50 disabled:opacity-50">{busy==='recompute'?'…':'↻ Recompute'}</button>}
+            {st==='draft' && canReview && <button onClick={()=>setStatus('reviewed')} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500 text-white font-semibold">✓ Mark reviewed</button>}
+            {st==='reviewed' && canApprove && <button onClick={()=>{ if(confirm('Approve this payroll run? Loan balances will be posted. (No funds move from the OS.)')) setStatus('approved'); }} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold">✓ Approve for release</button>}
+            {st==='reviewed' && canReview && !canApprove && <span className="text-xs text-slate-400">Awaiting CEO approval</span>}
+            {canPrepare && st==='draft' && <button onClick={del} className="text-xs px-2 py-1.5 rounded-lg border border-rose-200 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
+          </div>
+        </div>
+        {locked && <div className="text-xs bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">Approved — figures are locked. Loan balances posted. Hand the bank payout list to the CEO for release.</div>}
+        {loading ? <div className="text-center text-slate-400 py-8 text-sm">Loading…</div> : items.length===0 ? <div className="text-center text-slate-400 py-8 text-sm">No employees in this run.</div> : (
+          <div className="overflow-x-auto border rounded-lg"><table className="text-xs whitespace-nowrap">
+            <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr>
+              <th className="text-left px-2 py-1.5 sticky left-0 bg-slate-50">Employee</th><th className="text-right px-2 py-1.5">Days</th>
+              {COLS.map(([k,l])=><th key={k} className="text-right px-2 py-1.5">{l}</th>)}
+              <th className="text-right px-2 py-1.5">Gross</th><th className="text-right px-2 py-1.5">Deduct</th><th className="text-right px-2 py-1.5 font-bold">Net</th><th></th>
+            </tr></thead>
+            <tbody>{items.slice().sort((a,b)=>empName(a.employee_id).localeCompare(empName(b.employee_id))).map(it=>(
+              <tr key={it.id} className="border-t hover:bg-slate-50">
+                <td className="px-2 py-1 sticky left-0 bg-white font-medium">{empName(it.employee_id)}</td>
+                <td className="px-2 py-1 text-right text-slate-500">{Number(it.days_worked||0)}/{Number(it.days_in_period||0)}</td>
+                {COLS.map(([k])=>(<td key={k} className="px-1 py-1 text-right">{locked?num(it[k]):<input type="number" step="0.01" defaultValue={Number(it[k]||0)} key={`${it.id}-${k}-${it.updated_at||''}`} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(it[k]||0)) editItem(it,k,v); }} className="w-16 text-right border rounded px-1 py-0.5 text-[11px]" />}</td>))}
+                <td className="px-2 py-1 text-right font-semibold">{num(it.gross)}</td>
+                <td className="px-2 py-1 text-right text-rose-600">{num(it.total_deductions)}</td>
+                <td className="px-2 py-1 text-right font-bold text-emerald-700">{num(it.net_pay)}</td>
+                <td className="px-2 py-1 text-right"><button onClick={()=>setSlip(it)} className="text-[10px] text-indigo-600 hover:underline font-semibold">Payslip</button></td>
+              </tr>
+            ))}</tbody>
+            <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1.5 sticky left-0 bg-slate-50">Total ({items.length})</td><td></td>{COLS.map(([k])=><td key={k} className="px-1 py-1.5 text-right">{num(tot(k))}</td>)}<td className="px-2 py-1.5 text-right">{num(tot('gross'))}</td><td className="px-2 py-1.5 text-right text-rose-700">{num(tot('total_deductions'))}</td><td className="px-2 py-1.5 text-right text-emerald-700">{num(tot('net_pay'))}</td><td></td></tr></tfoot>
+          </table></div>
+        )}
+        <div className="text-[10px] text-slate-400">Tip: edit any cell before review to override a computed figure (the net recomputes live). Recompute rebuilds from the approved DTRs. SSS/PHIC/HDMF/Tax come from the editable statutory tables at ×{run.contrib_factor}.</div>
+      </div>
+      {slip && <PayslipModal item={slip} run={run} emp={empById(slip.employee_id)} onClose={()=>setSlip(null)} />}
+      {printReg && <PayrollRegisterModal run={run} items={items} empName={empName} onClose={()=>setPrintReg(false)} />}
+    </Modal>
+  );
+}
+function PayslipModal({ item, run, emp, onClose }){
+  const num=(n)=>peso(Number(n||0));
+  const earn=[['Basic pay',item.basic_pay],['Overtime',item.ot_pay],['Holiday pay',item.holiday_pay],['Allowances',item.allowances],['Other earnings',item.other_earnings]].filter(r=>Number(r[1]||0)!==0);
+  const ded=[['Late / undertime',item.late_ut_ded],['SSS',item.sss_ee],['PhilHealth',item.philhealth_ee],['Pag-IBIG',item.pagibig_ee],['Withholding tax',item.tax],['Gov loans',item.gov_loan_ded],['Company loans',item.company_loan_ded],['Other deductions',item.other_ded]].filter(r=>Number(r[1]||0)!==0);
+  return (<Modal title={`Payslip · ${run.number}`} onClose={onClose}>
+    <div className="space-y-3" id="payslip-print">
+      <div className="text-center border-b pb-2"><div className="font-extrabold tracking-wide">STEEZE CORPORATION</div><div className="text-[11px] text-slate-500">Payslip · {fmtDate(run.period_start)}–{fmtDate(run.period_end)}{run.pay_date?` · Pay date ${fmtDate(run.pay_date)}`:''}</div></div>
+      <div className="text-sm"><b>{[emp?.first_name,emp?.last_name].filter(Boolean).join(' ')||'—'}</b>{emp?.position?<span className="text-slate-500"> · {emp.position}</span>:null}<div className="text-xs text-slate-500">{emp?.department||''} · {Number(item.days_worked||0)}/{Number(item.days_in_period||0)} days · daily {num(item.daily_rate)}</div></div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><div className="text-[10px] uppercase font-bold text-emerald-700 mb-1">Earnings</div><table className="w-full text-xs">{earn.map(([l,v])=><tr key={l}><td className="py-0.5">{l}</td><td className="py-0.5 text-right">{num(v)}</td></tr>)}<tr className="border-t font-bold"><td className="py-0.5">Gross</td><td className="py-0.5 text-right">{num(item.gross)}</td></tr></table></div>
+        <div><div className="text-[10px] uppercase font-bold text-rose-700 mb-1">Deductions</div><table className="w-full text-xs">{ded.length?ded.map(([l,v])=><tr key={l}><td className="py-0.5">{l}</td><td className="py-0.5 text-right">{num(v)}</td></tr>):<tr><td className="text-slate-400 py-0.5">None</td></tr>}<tr className="border-t font-bold"><td className="py-0.5">Total</td><td className="py-0.5 text-right">{num(item.total_deductions)}</td></tr></table></div>
+      </div>
+      <div className="flex items-center justify-between border-t-2 border-slate-800 pt-2"><span className="font-bold">NET PAY</span><span className="font-extrabold text-lg text-emerald-700">{num(item.net_pay)}</span></div>
+      {emp?.bank_name && <div className="text-[11px] text-slate-500">Payout: {emp.bank_name} · {emp.bank_account_number||''}</div>}
+      <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
+    </div>
+  </Modal>);
+}
+function PayrollRegisterModal({ run, items, empName, onClose }){
+  const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const t=(k)=>items.reduce((a,i)=>a+Number(i[k]||0),0);
+  return (<Modal title={`Payroll register · ${run.number}`} onClose={onClose} xwide>
+    <div className="space-y-3">
+      <div className="text-center"><div className="font-extrabold tracking-wide">STEEZE CORPORATION — PAYROLL REGISTER</div><div className="text-[11px] text-slate-500">{(run.cycle||'').replace('_','-')} · {fmtDate(run.period_start)}–{fmtDate(run.period_end)}</div></div>
+      <div className="overflow-x-auto border rounded"><table className="w-full text-[11px] whitespace-nowrap">
+        <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-right px-2 py-1">Gross</th><th className="text-right px-2 py-1">SSS</th><th className="text-right px-2 py-1">PHIC</th><th className="text-right px-2 py-1">HDMF</th><th className="text-right px-2 py-1">Tax</th><th className="text-right px-2 py-1">Loans</th><th className="text-right px-2 py-1">Deduct</th><th className="text-right px-2 py-1">Net</th></tr></thead>
+        <tbody>{items.slice().sort((a,b)=>empName(a.employee_id).localeCompare(empName(b.employee_id))).map(i=>(<tr key={i.id} className="border-t"><td className="px-2 py-1">{empName(i.employee_id)}</td><td className="px-2 py-1 text-right">{num(i.gross)}</td><td className="px-2 py-1 text-right">{num(i.sss_ee)}</td><td className="px-2 py-1 text-right">{num(i.philhealth_ee)}</td><td className="px-2 py-1 text-right">{num(i.pagibig_ee)}</td><td className="px-2 py-1 text-right">{num(i.tax)}</td><td className="px-2 py-1 text-right">{num(Number(i.gov_loan_ded||0)+Number(i.company_loan_ded||0))}</td><td className="px-2 py-1 text-right text-rose-600">{num(i.total_deductions)}</td><td className="px-2 py-1 text-right font-bold text-emerald-700">{num(i.net_pay)}</td></tr>))}</tbody>
+        <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1">Total</td><td className="px-2 py-1 text-right">{num(t('gross'))}</td><td className="px-2 py-1 text-right">{num(t('sss_ee'))}</td><td className="px-2 py-1 text-right">{num(t('philhealth_ee'))}</td><td className="px-2 py-1 text-right">{num(t('pagibig_ee'))}</td><td className="px-2 py-1 text-right">{num(t('tax'))}</td><td className="px-2 py-1 text-right">{num(t('gov_loan_ded')+t('company_loan_ded'))}</td><td className="px-2 py-1 text-right">{num(t('total_deductions'))}</td><td className="px-2 py-1 text-right text-emerald-700">{num(t('net_pay'))}</td></tr></tfoot>
+      </table></div>
+      <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
     </div>
   </Modal>);
 }
@@ -53233,7 +53542,7 @@ function App(){
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
-        'logistics','trip-tickets','delivery-receipts','payroll','attendance','pay-setup',
+        'logistics','trip-tickets','delivery-receipts','payroll','attendance','pay-setup','payroll-run',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
@@ -53319,7 +53628,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -53335,14 +53644,14 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
         'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
       // Still part of HR (full HR module) PLUS the Admin Office module.
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
         'admin-home','admin-directory','assets','admin-office','admin-pr','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
@@ -53980,7 +54289,7 @@ function App(){
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       ADMIN_OFFICE_GROUP,
       PERSONAL_GROUP,
     ];
@@ -54059,7 +54368,7 @@ function App(){
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       ADMIN_OFFICE_GROUP,
@@ -54072,7 +54381,7 @@ function App(){
       { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
@@ -54159,7 +54468,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       LOGISTICS_GROUP,
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isSewingLead){
@@ -54225,7 +54534,7 @@ function App(){
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
@@ -54521,6 +54830,7 @@ function App(){
         {view==='admin-pr' && <AdminPurchaseRequestsView profile={profile} requests={requests} items={items} profiles={profiles} departments={departments} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='pay-setup' && <PayrollSetupView profile={profile} employees={employees} profiles={profiles} reload={loadAll} />}
         {view==='attendance' && <AttendanceDtrView profile={profile} employees={employees} reload={loadAll} />}
+        {view==='payroll-run' && <PayrollEngineView profile={profile} employees={employees} profiles={profiles} reload={loadAll} />}
         {view==='admin-requests' && <AdminRequestsView profile={profile} adminRequests={adminRequests} profiles={profiles} reload={loadAll} />}
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
