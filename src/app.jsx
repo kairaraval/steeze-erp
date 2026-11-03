@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 900 · Subcon Cutting no longer refreshes the whole screen while you type — the board's Sent out / Returned boxes now save when you click away (not on every digit), and payroll qty/rate edits update in place. Payroll tab restyled to match Subcon Sewing (For payroll now shows Project, Item and Return date columns).";
+const BUILD = "Live build 901 · Subcon Cutting board rebuilt to match Subcon Sewing: project cards with multiple subcons per project (+ Subcon), per-subcon Item / Out / Returned / Balance / Due, a dated ↩ Log return popup (good + variance), OVERDUE + status chips, 'N out · N pending' header and Mark done. Edits update in place (no screen refresh).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11760,6 +11760,237 @@ function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, cl
   );
 }
 
+// ─────────── SUBCON CUTTING — rich floor board (matches Subcon Sewing) ───────────
+// Project cards with multiple subcons per project (+ Subcon), per-subcon Item /
+// Out / Returned / Balance / Due, dated "Log return" popup, OVERDUE + status
+// chips, "N out · N pending" header and Mark done. Backed by subcon_tasks
+// (stage='cutting'); shares the parent's tasks state so payroll stays in sync.
+function SubconCutBoard({ profile, subcons, leads, clients, prodJobs, requests, orders, tasks, setTasks, reload }){
+  const canEdit = ['admin','production','production_supervisor','production_assistant','cutting_dept','sewing_lead'].includes(profile.role) || (typeof subconSewingCanEdit==='function' && subconSewingCanEdit(profile));
+  const [tab,setTab]=useState('active');
+  const [search,setSearch]=useState('');
+  const [addJob,setAddJob]=useState('');
+  const [collapsed,setCollapsed]=useState({});
+  const [returnFor,setReturnFor]=useState(null); // { t, proj }
+  const [editRow,setEditRow]=useState(null);      // task being edited
+  const todayISO=todayManila();
+  const num=(n)=>Number(n||0).toLocaleString();
+  const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'';
+  const projNm=(t)=>{ const l=(leads||[]).find(x=>x.id===t.lead_id); const c=l&&l.client_id?((clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return [c||t.client_name, (l&&l.title)||t.item].filter(Boolean).join(' · ')||t.item||'Project'; };
+  const live=(tasks||[]).filter(t=>!t.deleted_at);
+
+  // Optimistic mutators (no full refetch — avoids the screen refreshing as you type).
+  async function updTask(t, patch){ setTasks(prev=>prev.map(x=>x.id===t.id?{...x,...patch}:x)); const { error }=await sb.from('subcon_tasks').update(patch).eq('id',t.id); if(error){ alert('Save failed: '+error.message); reload&&reload(); return; } reload&&reload(); }
+  async function addSubcon(proj){
+    const base=proj.rows[0];
+    const row={ stage:'cutting', source_job_id:base?.source_job_id||null, lead_id:proj.lead_id||base?.lead_id||null, item:base?.item||null, item_label:null, client_name:base?.client_name||null, qty:0, qty_out:0, qty_returned:0, returns:[], due_date:base?.due_date||null, done:false, created_by:profile.id };
+    const { data, error }=await sb.from('subcon_tasks').insert(row).select().single();
+    if(error){ alert('Failed: '+error.message); return; }
+    if(data){ setTasks(prev=>[data,...prev]); setEditRow(data); }
+  }
+  async function addFromJob(){ const j=(prodJobs||[]).find(x=>x.id===addJob); if(!j) return;
+    const exists=live.some(t=>t.source_job_id===j.id);
+    if(exists){ alert('That project already has a subcon cutting task.'); return; }
+    const row={ stage:'cutting', source_job_id:j.id, lead_id:j.lead_id||null, item:j.item||null, client_name:j.client_name||null, qty:Number(j.quantity)||0, qty_out:0, qty_returned:0, returns:[], due_date:j.due_date||null, done:false, created_by:profile.id };
+    const { data, error }=await sb.from('subcon_tasks').insert(row).select().single();
+    if(error){ alert(error.message); return; }
+    if(data) setTasks(prev=>[data,...prev]); setAddJob('');
+  }
+  async function removeTask(t){ if(!confirm('Remove this subcon cutting row?')) return; setTasks(prev=>prev.filter(x=>x.id!==t.id)); const { error }=await sb.from('subcon_tasks').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',t.id); if(error){ alert(error.message); reload&&reload(); } else reload&&reload(); }
+  async function logReturn(t, vals){
+    const prevReturns=Array.isArray(t.returns)?t.returns:[];
+    const entry={ date:vals.date, good:Number(vals.good)||0, variance:Number(vals.variance)||0, reason:vals.reason||null, by:profile.id, at:new Date().toISOString() };
+    const nextReturns=[...prevReturns, entry];
+    const qty_returned=nextReturns.reduce((a,r)=>a+Number(r.good||0),0);
+    await updTask(t, { returns:nextReturns, qty_returned });
+  }
+  async function markProjectDone(proj){
+    if(!confirm(`Mark subcon cutting DONE for "${proj.label}"?`)) return;
+    const ids=proj.rows.map(r=>r.id);
+    const now=new Date().toISOString();
+    setTasks(prev=>prev.map(x=>ids.includes(x.id)?{...x,done:true}:x));
+    const { error }=await sb.from('subcon_tasks').update({ done:true }).in('id',ids);
+    if(error){ alert(error.message); reload&&reload(); } else reload&&reload();
+  }
+  async function reopenProject(proj){
+    const ids=proj.rows.map(r=>r.id);
+    setTasks(prev=>prev.map(x=>ids.includes(x.id)?{...x,done:false}:x));
+    const { error }=await sb.from('subcon_tasks').update({ done:false }).in('id',ids);
+    if(error){ alert(error.message); reload&&reload(); } else reload&&reload();
+  }
+
+  // Build per-row computed stats.
+  const rowStat=(t)=>{
+    const rets=Array.isArray(t.returns)?t.returns:[];
+    const good=rets.length? rets.reduce((a,r)=>a+Number(r.good||0),0) : Number(t.qty_returned||0);
+    const variance=rets.reduce((a,r)=>a+Number(r.variance||0),0);
+    const out=Number(t.qty_out||0);
+    const balance=Math.max(0, out - good - variance);
+    const overdue=!!(t.due_date && t.due_date<todayISO && balance>0 && !t.done);
+    const inhouse=/in[-\s]?house/i.test(subconNm(t.subcon_id)||'');
+    return { good, variance, out, balance, overdue, inhouse };
+  };
+
+  // Group tasks into projects.
+  const projects=(()=>{
+    const map=new Map();
+    live.forEach(t=>{ const k=t.source_job_id||('lead:'+(t.lead_id||t.id)); if(!map.has(k)) map.set(k,{ key:k, lead_id:t.lead_id, source_job_id:t.source_job_id, rows:[] }); map.get(k).rows.push(t); });
+    return Array.from(map.values()).map(p=>{
+      const job=(prodJobs||[]).find(j=> (p.source_job_id&&j.id===p.source_job_id) || (p.lead_id&&j.lead_id===p.lead_id && !j.deleted_at));
+      const label=projNm(p.rows[0]);
+      const plannedQty=Number(job?.quantity)|| p.rows.reduce((a,r)=>a+Number(r.qty||0),0);
+      let out=0,bal=0,overdue=false,allDone=true;
+      p.rows.forEach(t=>{ const s=rowStat(t); out+=s.out; bal+=s.balance; if(s.overdue) overdue=true; if(!t.done) allDone=false; });
+      return { ...p, job, label, number:job?.number||'', plannedQty, out, balance:bal, overdue, projectDone:allDone && p.rows.length>0, status:job?.status };
+    });
+  })();
+
+  const q=search.trim().toLowerCase();
+  const projOpen=(p)=> p.rows.some(t=>!t.done) && p.balance>=0 && !p.projectDone;
+  const shown=projects
+    .filter(p=> tab==='all'?true: tab==='done'? p.projectDone : !p.projectDone)
+    .filter(p=> !q || `${p.label} ${p.number} ${p.rows.map(t=>subconNm(t.subcon_id)+' '+(t.item_label||t.item||'')).join(' ')}`.toLowerCase().includes(q))
+    .sort((a,b)=>a.label.localeCompare(b.label));
+  const jobOpts=(prodJobs||[]).filter(j=>!j.deleted_at).map(j=>({ value:j.id, label:`${j.number||''} · ${j.client_name||''} · ${j.item||''}` }));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap mb-1">
+        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">{[['active','Active'],['done','Done'],['all','All']].map(([k,l])=>(<button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>))}</div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project / subcon…" className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 flex-1 min-w-[180px]" />
+        {canEdit && <div className="flex items-center gap-1"><div className="w-64"><SearchSelect value={addJob} onChange={setAddJob} options={jobOpts} placeholder="🔍 Add a project…" className="text-xs" /></div><button onClick={addFromJob} disabled={!addJob} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40">+ Add</button></div>}
+      </div>
+
+      {shown.length===0 ? (
+        <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No subcon cutting {tab==='done'?'completed':'projects'} yet. Add a project above, or tick “Subcon Cutting” on a project's Plan.</div>
+      ) : (
+      <div className="space-y-3">{shown.map(p=>{
+        const isCol=collapsed[p.key]; const sm=(typeof PRODUCTION_STATUSES!=='undefined'?PRODUCTION_STATUSES:[]).find(x=>x.key===p.status);
+        return (
+        <div key={p.key} className={`bg-white rounded-xl border overflow-hidden ${p.overdue?'border-rose-200':p.projectDone?'border-emerald-200':''}`}>
+          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b">
+            <button onClick={()=>setCollapsed(c=>({...c,[p.key]:!c[p.key]}))} className="flex items-center gap-2 min-w-0 text-left">
+              <span className="text-slate-400 text-xs">{isCol?'▸':'▾'}</span>
+              <span className="text-base">📦</span>
+              <span className="font-bold truncate">{p.label}</span>
+              {p.number && <span className="text-[10px] text-slate-400 font-mono">{p.number}</span>}
+              {p.plannedQty>0 && <span className="text-[11px] text-slate-500">· {num(p.plannedQty)} pcs</span>}
+              {sm && <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${sm.color||'bg-slate-100 text-slate-600'}`}>{sm.label}</span>}
+              {p.projectDone && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ done</span>}
+              {p.overdue && !p.projectDone && <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">overdue</span>}
+            </button>
+            <div className="flex items-center gap-3 whitespace-nowrap">
+              <span className="text-xs text-slate-500">{num(p.out)} out · <b className={p.balance>0?'text-amber-700':'text-emerald-700'}>{num(p.balance)} pending</b></span>
+              {canEdit && !p.projectDone && <button onClick={()=>addSubcon(p)} className="text-xs px-2.5 py-1 rounded-lg border text-indigo-600 hover:bg-indigo-50 font-semibold">+ Subcon</button>}
+              {canEdit && !p.projectDone && <button onClick={()=>markProjectDone(p)} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700">✓ Mark done</button>}
+              {canEdit && p.projectDone && <button onClick={()=>reopenProject(p)} className="text-xs px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-700 font-semibold hover:bg-amber-50">Reopen</button>}
+            </div>
+          </div>
+          {!isCol && (
+            <div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-white text-[10px] uppercase text-slate-400 border-b"><tr>
+                <th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Item</th>
+                <th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Out</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Balance</th>
+                <th className="text-left px-3 py-2">Due</th>{canEdit && <th></th>}
+              </tr></thead>
+              <tbody>{p.rows.map((t,i)=>{ const s=rowStat(t); return (
+                <tr key={t.id} className={`border-t ${t.done?'bg-emerald-50/40':s.overdue?'bg-rose-50/50':''}`}>
+                  <td className="px-3 py-2 font-medium">
+                    {canEdit && !t.subcon_id
+                      ? <select className="input !py-1 text-xs" value="" onChange={e=>updTask(t,{ subcon_id:e.target.value||null })}><option value="">— pick subcon —</option>{(subcons||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+                      : <>{subconNm(t.subcon_id)||'—'}{s.inhouse && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="In-house cutting — monitoring only. Paid through in-house payroll, not here.">in-house · monitor</span>}</>}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{t.item_label||t.item||'—'}</td>
+                  <td className="px-3 py-2 text-right">{t.qty?num(t.qty):'—'}</td>
+                  <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700">{s.good?num(s.good):'—'}{s.variance>0 && <span className="text-[10px] text-rose-500 ml-1" title="variance (defect/lost)">+{num(s.variance)}v</span>}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{s.out?<span className={s.balance>0?'text-amber-700':'text-emerald-700'}>{num(s.balance)}</span>:'—'}</td>
+                  <td className="px-3 py-2 text-xs">{t.due_date ? <span className={s.overdue?'text-rose-700 font-semibold':''}>{fmtDate(t.due_date)}{s.overdue?' ⚠':''}</span> : '—'}</td>
+                  {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {t.subcon_id && (s.balance>0 || !t.done) && <button onClick={()=>setReturnFor({ t, proj:p })} className="text-xs text-emerald-700 hover:underline font-semibold mr-2" title="Log items the subcon returned — good qty, variance, and the date received">↩ Log return</button>}
+                    <button onClick={()=>setEditRow(t)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                    <button onClick={()=>removeTask(t)} className="text-xs text-rose-500 hover:underline">Remove</button>
+                  </td>}
+                </tr>
+              ); })}</tbody>
+            </table></div>
+          )}
+        </div>
+        ); })}</div>
+      )}
+
+      {returnFor && <SubconCutReturnModal t={returnFor.t} proj={returnFor.proj} stat={rowStat(returnFor.t)} subconName={subconNm(returnFor.t.subcon_id)} onSave={(vals)=>logReturn(returnFor.t, vals)} onClose={()=>setReturnFor(null)} />}
+      {editRow && <SubconCutEditModal t={editRow} subcons={subcons} onSave={(patch)=>{ updTask(editRow, patch); setEditRow(null); }} onClose={()=>setEditRow(null)} />}
+    </div>
+  );
+}
+
+// Dated return log for a subcon cutting row (mirrors the Subcon Sewing return popup).
+function SubconCutReturnModal({ t, proj, stat, subconName, onSave, onClose }){
+  const today=todayManila();
+  const remaining=Math.max(0, Number(stat.out||0) - Number(stat.good||0) - Number(stat.variance||0));
+  const [f,setF]=useState({ date:today, good:'', variance:'', reason:'' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  const REASONS=['Defective','Lost','Damaged','Undelivered','Other'];
+  async function save(){
+    const good=Number(f.good)||0, variance=Number(f.variance)||0;
+    if(good===0 && variance===0){ setMsg('Enter a returned (good) qty and/or a variance.'); return; }
+    if(Number(stat.out||0)>0 && good+variance>remaining+0.001){ setMsg(`Only ${remaining.toLocaleString()} pcs still out. You're logging ${(good+variance).toLocaleString()}.`); return; }
+    if(variance>0 && !f.reason){ setMsg('Pick a reason for the variance.'); return; }
+    setBusy(true); setMsg('');
+    try{ await onSave({ date:f.date, good, variance, reason: variance>0?f.reason:null }); onClose(); }
+    catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`↩ Returned by ${subconName||'subcon'} — ${proj.label}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded p-3 grid grid-cols-3 gap-3 text-xs text-center">
+          <div><div className="uppercase text-slate-500 font-semibold">Out</div><div className="text-lg font-bold">{Number(stat.out||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Already returned</div><div className="text-lg font-bold text-emerald-700">{Number(stat.good||0).toLocaleString()}</div></div>
+          <div><div className="uppercase text-slate-500 font-semibold">Still out</div><div className={`text-lg font-bold ${remaining>0?'text-amber-700':'text-emerald-700'}`}>{remaining.toLocaleString()}</div></div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Date received"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Returned (good)"><input type="number" min="0" className="input text-right" value={f.good} onChange={e=>up('good',e.target.value)} placeholder="0" /></TpLbl>
+          <TpLbl t="Variance"><input type="number" min="0" className="input text-right" value={f.variance} onChange={e=>up('variance',e.target.value)} placeholder="0" /></TpLbl>
+        </div>
+        {Number(f.variance)>0 && <TpLbl t="Variance reason *"><select className="input" value={f.reason} onChange={e=>up('reason',e.target.value)}><option value="">— pick —</option>{REASONS.map(r=><option key={r}>{r}</option>)}</select></TpLbl>}
+        <div className="text-[10px] text-slate-500">Good pieces count as returned. Variance (defect/lost/damaged/undelivered) does not. Returned pieces become payable on the 💰 Payroll tab.</div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-1 border-t">
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'↩ Log return'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Edit one subcon cutting row — subcon, item, target qty, sent-out, due date.
+function SubconCutEditModal({ t, subcons, onSave, onClose }){
+  const [f,setF]=useState({ subcon_id:t.subcon_id||'', item_label:t.item_label||t.item||'', qty:t.qty??'', qty_out:t.qty_out??'', due_date:t.due_date||'' });
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  function save(){ onSave({ subcon_id:f.subcon_id||null, item_label:f.item_label.trim()||null, qty:f.qty===''?0:Number(f.qty)||0, qty_out:f.qty_out===''?0:Number(f.qty_out)||0, due_date:f.due_date||null }); }
+  return (
+    <Modal title="Edit subcon cutting row" onClose={onClose}>
+      <div className="space-y-3">
+        <TpLbl t="Subcon"><select className="input" value={f.subcon_id} onChange={e=>up('subcon_id',e.target.value)}><option value="">— pick subcon —</option>{(subcons||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></TpLbl>
+        <TpLbl t="Item / garment"><input className="input" value={f.item_label} onChange={e=>up('item_label',e.target.value)} placeholder="e.g. Jacket" /></TpLbl>
+        <div className="grid grid-cols-3 gap-2">
+          <TpLbl t="Target qty"><input type="number" min="0" className="input text-right" value={f.qty} onChange={e=>up('qty',e.target.value)} /></TpLbl>
+          <TpLbl t="Sent out"><input type="number" min="0" className="input text-right" value={f.qty_out} onChange={e=>up('qty_out',e.target.value)} /></TpLbl>
+          <TpLbl t="Due"><input type="date" className="input" value={f.due_date} onChange={e=>up('due_date',e.target.value)} /></TpLbl>
+        </div>
+        <div className="flex gap-2 pt-1 border-t">
+          <button onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ═══════════ SUBCON CUTTING — board (lite tracker) + per-subcon payroll ═══════════
    The cutting board tracks qty out / returned per subcon per project. This wraps
    it with a payroll: returned pieces → add to payroll (rate × pcs) → supervisor
@@ -11828,7 +12059,7 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
         </div>
       </div>
 
-      {tab==='board' && <SubconLiteTracker stage="cutting" title="🔪 Subcon Cutting" profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} reload={()=>{ load(true); reload&&reload(); }} embedded />}
+      {tab==='board' && <SubconCutBoard profile={profile} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} tasks={tasks} setTasks={setTasks} reload={()=>{ reload&&reload(); }} />}
 
       {tab==='payroll' && (
         <div className="space-y-3">
