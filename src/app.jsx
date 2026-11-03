@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 912 · Hotfix: the notification deep-link effect was declared after the login/loading guards, which crashed the app with React error #310 (hooks order). Moved it above the guards so the app loads normally again; push deep-linking (build 911) still works.";
+const BUILD = "Live build 913 · Petty cash bulk upload can now tag a department: pick one 'Department for all these expenses' in the upload panel (applied to every row), or add a Department column in the CSV to set it per row (matched by code or name). The preview shows each row's department. Fixes bulk-uploaded expenses showing as 'missing a department' at month-end.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -44368,6 +44368,9 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
   const [bulkRows,setBulkRows]=useState(null);   // parsed+validated preview rows
   const [bulkMsg,setBulkMsg]=useState('');
   const [bulkBusy,setBulkBusy]=useState(false);
+  const [bulkDept,setBulkDept]=useState('');     // department applied to all uploaded rows (per-row CSV overrides it)
+  const ccActive=(costCenters||[]).filter(c=>c.active!==false).slice().sort((a,b)=>String(a.code||a.name).localeCompare(String(b.code||b.name)));
+  const ccName=(id)=>{ const c=(costCenters||[]).find(x=>x.id===id); return c?(c.code?`${c.code} · ${c.name}`:c.name):''; };
   const [busy,setBusy]=useState(false);
   const [uploadingId,setUploadingId]=useState(null);
   const [msg,setMsg]=useState('');
@@ -44444,9 +44447,9 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
     finally { setBusy(false); }
   }
   // ── Bulk upload of expenses ──────────────────────────────────────────────
-  const BULK_HEADERS = ['Date','Description','Amount','Category','Vendor','GL Account Code','Input VAT'];
+  const BULK_HEADERS = ['Date','Description','Amount','Category','Vendor','GL Account Code','Input VAT','Department'];
   function downloadBulkTemplate(){
-    const example=[ todayManila(), 'Gas for delivery van', '500.00', 'Fuel & Transportation', 'Petron', '', '0.00' ];
+    const example=[ todayManila(), 'Gas for delivery van', '500.00', 'Fuel & Transportation', 'Petron', '', '0.00', '' ];
     const lines=[ BULK_HEADERS, example ].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n');
     const blob=new Blob(['﻿'+lines],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download=`petty-cash-expenses-template.csv`; a.click(); URL.revokeObjectURL(url);
@@ -44455,7 +44458,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
     const grid=parseCSV(String(text||'').trim()); if(!grid.length){ setBulkMsg('That file looks empty.'); setBulkRows(null); return; }
     const header=grid[0].map(h=>String(h||'').trim().toLowerCase());
     const col=(names)=>{ for(const n of names){ const i=header.indexOf(n); if(i>=0) return i; } return -1; };
-    const ci={ date:col(['date']), desc:col(['description','particulars','details']), amt:col(['amount','amt']), cat:col(['category']), vendor:col(['vendor','payee','supplier']), gl:col(['gl account code','gl code','account code','coa','account']), vat:col(['input vat','vat']) };
+    const ci={ date:col(['date']), desc:col(['description','particulars','details']), amt:col(['amount','amt']), cat:col(['category']), vendor:col(['vendor','payee','supplier']), gl:col(['gl account code','gl code','account code','coa','account']), vat:col(['input vat','vat']), dept:col(['department','cost center','cost centre','dept']) };
     if(ci.desc<0 || ci.amt<0){ setBulkMsg('The file needs at least "Description" and "Amount" columns. Download the template to see the format.'); setBulkRows(null); return; }
     const out=[]; const errs=[];
     for(let i=1;i<grid.length;i++){
@@ -44466,11 +44469,15 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
       const coa=glCode?(chartAccounts||[]).find(a=>String(a.code)===glCode):null;
       const dateRaw=ci.date>=0?String(r[ci.date]||'').trim():'';
       const date=/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)?dateRaw:(dateRaw? (new Date(dateRaw).toString()!=='Invalid Date'? new Date(dateRaw).toISOString().slice(0,10) : today) : today);
+      const deptRaw=ci.dept>=0?String(r[ci.dept]||'').trim():'';
+      let ccId=null;
+      if(deptRaw){ const dl=deptRaw.toLowerCase(); const m=(costCenters||[]).find(c=>String(c.code||'').toLowerCase()===dl || String(c.name||'').toLowerCase()===dl); ccId=m?m.id:null; }
       const rowErr=[];
       if(!desc) rowErr.push('no description');
       if(!(amt>0)) rowErr.push('amount must be > 0');
       if(glCode && !coa) rowErr.push(`GL code "${glCode}" not found`);
-      out.push({ _line:i+1, date, description:desc, amount:amt, category: (coa?coa.name:(ci.cat>=0?String(r[ci.cat]||'').trim():''))||'Other', gl_account_code: coa?coa.code:null, vendor: ci.vendor>=0?String(r[ci.vendor]||'').trim():'', input_vat: ci.vat>=0?(Number(String(r[ci.vat]||'').replace(/[₱,\s]/g,''))||0):0, _err: rowErr });
+      if(deptRaw && !ccId) rowErr.push(`department "${deptRaw}" not found`);
+      out.push({ _line:i+1, date, description:desc, amount:amt, category: (coa?coa.name:(ci.cat>=0?String(r[ci.cat]||'').trim():''))||'Other', gl_account_code: coa?coa.code:null, vendor: ci.vendor>=0?String(r[ci.vendor]||'').trim():'', input_vat: ci.vat>=0?(Number(String(r[ci.vat]||'').replace(/[₱,\s]/g,''))||0):0, _cc: ccId, _err: rowErr });
     }
     if(!out.length){ setBulkMsg('No data rows found under the header.'); setBulkRows(null); return; }
     setBulkMsg(''); setBulkRows(out);
@@ -44483,7 +44490,7 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
     if(total>outstanding+0.005 && !confirm(`These expenses (${peso(total)}) exceed the outstanding balance (${peso(outstanding)}). Import anyway?`)) return;
     setBulkBusy(true); setBulkMsg('');
     try{
-      const payload=valid.map(r=>({ date:r.date, category:r.category||'Other', gl_account_code:r.gl_account_code||null, cost_center_id:null, input_vat:Number(r.input_vat)||0, vendor:r.vendor||null, description:r.description, amount:Number(r.amount)||0, paid_via:'petty_cash', bank_id:null, receipt_url:null, tax_deductible:true, petty_cash_id:pc.id, created_by:profile.id }));
+      const payload=valid.map(r=>({ date:r.date, category:r.category||'Other', gl_account_code:r.gl_account_code||null, cost_center_id: r._cc || bulkDept || null, input_vat:Number(r.input_vat)||0, vendor:r.vendor||null, description:r.description, amount:Number(r.amount)||0, paid_via:'petty_cash', bank_id:null, receipt_url:null, tax_deductible:true, petty_cash_id:pc.id, created_by:profile.id }));
       const { error }=await sb.from('expenses').insert(payload);
       if(error) throw error;
       setBulkRows(null); setBulkOpen(false); onSaved && onSaved();
@@ -44553,24 +44560,33 @@ function PettyCashDetailModal({ pettyCash, expensesAll, profile, profiles, chart
                 <label className="text-xs px-2.5 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700 cursor-pointer">📁 Choose CSV file<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onBulkFile} /></label>
               </div>
             </div>
-            <div className="text-[11px] text-slate-500">Columns: <b>Date, Description, Amount, Category, Vendor, GL Account Code, Input VAT</b>. Only <b>Description</b> and <b>Amount</b> are required. Leave GL Account Code blank to set the account later.</div>
+            <div className="text-[11px] text-slate-500">Columns: <b>Date, Description, Amount, Category, Vendor, GL Account Code, Input VAT, Department</b>. Only <b>Description</b> and <b>Amount</b> are required. Leave GL Account Code blank to set the account later. A <b>Department</b> column (matched by code or name) overrides the picker below for that row.</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-semibold text-violet-800">Department for all these expenses:</span>
+              <select value={bulkDept} onChange={e=>setBulkDept(e.target.value)} className="border rounded-lg px-2 py-1 text-xs bg-white">
+                <option value="">— none (set later) —</option>
+                {ccActive.map(c=><option key={c.id} value={c.id}>{c.code?`${c.code} · `:''}{c.name}</option>)}
+              </select>
+              <span className="text-[10px] text-slate-500">applied to every row without its own Department</span>
+            </div>
             {bulkMsg && <div className="text-xs text-rose-600">{bulkMsg}</div>}
             {bulkRows && (()=>{ const ok=bulkRows.filter(r=>!r._err.length); const bad=bulkRows.filter(r=>r._err.length); const tot=ok.reduce((s,r)=>s+Number(r.amount||0),0); return (
               <div className="space-y-2">
                 <div className="text-xs text-slate-600"><b>{ok.length}</b> ready{bad.length?<> · <span className="text-rose-600 font-semibold">{bad.length} with problems (skipped)</span></>:''} · total {peso(tot)}</div>
                 <div className="max-h-56 overflow-auto border rounded-lg bg-white">
                   <table className="w-full text-xs">
-                    <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Description</th><th className="text-left px-2 py-1">Category</th><th className="text-left px-2 py-1">Vendor</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Issue</th></tr></thead>
-                    <tbody>{bulkRows.map((r,i)=>(
+                    <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 sticky top-0"><tr><th className="text-left px-2 py-1">Date</th><th className="text-left px-2 py-1">Description</th><th className="text-left px-2 py-1">Category</th><th className="text-left px-2 py-1">Department</th><th className="text-left px-2 py-1">Vendor</th><th className="text-right px-2 py-1">Amount</th><th className="text-left px-2 py-1">Issue</th></tr></thead>
+                    <tbody>{bulkRows.map((r,i)=>{ const dept=r._cc?ccName(r._cc):(bulkDept?ccName(bulkDept):''); return (
                       <tr key={i} className={`border-t ${r._err.length?'bg-rose-50':''}`}>
                         <td className="px-2 py-1 whitespace-nowrap">{fmtDate(r.date)}</td>
                         <td className="px-2 py-1">{r.description||<span className="text-rose-500">—</span>}</td>
                         <td className="px-2 py-1 text-slate-500">{r.category}</td>
+                        <td className="px-2 py-1 text-slate-500">{dept||<span className="text-amber-500">— none —</span>}</td>
                         <td className="px-2 py-1 text-slate-500">{r.vendor||'—'}</td>
                         <td className="px-2 py-1 text-right font-semibold">{r.amount>0?peso(r.amount):<span className="text-rose-500">—</span>}</td>
                         <td className="px-2 py-1 text-rose-600">{r._err.join(', ')}</td>
                       </tr>
-                    ))}</tbody>
+                    ); })}</tbody>
                   </table>
                 </div>
                 <div className="flex gap-2">
