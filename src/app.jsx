@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 904 · Payroll engine (Phase 3): new 'Payroll Runs' computes gross-to-net per employee from approved DTRs — basic (prorated on actual workdays), OT, holiday, allowances minus late/UT, SSS/PhilHealth/Pag-IBIG (from the editable tables, split per cutoff), BIR withholding tax, and gov + company loan amortizations. Draft → reviewed (Accounting) → approved (CEO); loan balances post only on approval and no funds move from the OS. Per-employee payslip + a payroll register, both printable.";
+const BUILD = "Live build 905 · Payroll runs now route draft → reviewed (Accounting) → AGM approved → CEO approved. The AGM signs off before the CEO; figures lock at AGM approval, and loan balances post only on the final CEO approval. (Engine: gross-to-net from approved DTRs — basic prorated on actual workdays, OT, holiday, allowances minus late/UT, SSS/PhilHealth/Pag-IBIG, BIR tax, gov + company loans; payslip + register.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41392,7 +41392,7 @@ function HolidayModal({ hol, profile, onClose, onSaved }){
          − Pag-IBIG − Tax − Gov loans − Company loans − Other.
    Runs go draft → reviewed → approved; loan balances post only on approval and no
    money moves from the OS (the CEO transfers in the bank). */
-const PAYRUN_STATUS={ draft:['Draft','bg-slate-100 text-slate-600'], reviewed:['Reviewed','bg-amber-100 text-amber-700'], approved:['Approved','bg-emerald-100 text-emerald-700'] };
+const PAYRUN_STATUS={ draft:['Draft','bg-slate-100 text-slate-600'], reviewed:['Reviewed','bg-amber-100 text-amber-700'], agm_approved:['AGM approved','bg-cyan-100 text-cyan-700'], approved:['Approved','bg-emerald-100 text-emerald-700'] };
 function pRound(v){ return Math.round((Number(v)||0)*100)/100; }
 function sssEE(basic, d){ if(!d) return 0; const step=d.msc_step||500, min=d.msc_min||0, max=d.msc_max||1e12; const b=Number(basic)||0; if(b<=0) return 0; let msc=Math.round(b/step)*step; msc=Math.max(min,Math.min(max,msc)); let ee=msc*(d.ee_rate||0); if(d.min_ee) ee=Math.max(ee,d.min_ee); return pRound(ee); }
 function philhealthEE(basic, d){ if(!d) return 0; const b=Math.max(d.floor||0, Math.min(d.ceiling||1e12, Number(basic)||0)); return pRound(b*(d.rate||0)*(d.ee_share||0.5)); }
@@ -41681,6 +41681,7 @@ function BiometricDevicesModal({ profile, devices, onClose, onChanged }){
 function PayrollEngineView({ profile, employees, profiles, reload }){
   const canPrepare = ['admin','hr','hr_admin'].includes(profile.role);
   const canReview = ['admin','accounting','accounting_officer'].includes(profile.role);
+  const canApproveAgm = ['admin','agm'].includes(profile.role);
   const canApprove = profile.role==='admin';
   const [runs,setRuns]=useState([]);
   const [openRun,setOpenRun]=useState(null);
@@ -41730,7 +41731,7 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
         </table></div>
       )}
       {creating && <NewPayrollRunModal profile={profile} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setCreating(false)} onCreated={(run)=>{ setCreating(false); loadRuns(); setOpenRun(run); }} />}
-      {openRun && <PayrollRunDetail run={openRun} profile={profile} employees={employees} profiles={profiles} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApprove={canApprove} onClose={()=>{ setOpenRun(null); loadRuns(); }} onChanged={loadRuns} />}
+      {openRun && <PayrollRunDetail run={openRun} profile={profile} employees={employees} profiles={profiles} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApproveAgm={canApproveAgm} canApprove={canApprove} onClose={()=>{ setOpenRun(null); loadRuns(); }} onChanged={loadRuns} />}
     </div>
   );
 }
@@ -41847,14 +41848,14 @@ function NewPayrollRunModal({ profile, employees, refs, latestTax, onClose, onCr
     </div>
   </Modal>);
 }
-function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, canPrepare, canReview, canApprove, onClose, onChanged }){
+function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, canPrepare, canReview, canApproveAgm, canApprove, onClose, onChanged }){
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState('');
   const [slip,setSlip]=useState(null);
   const [printReg,setPrintReg]=useState(false);
   const [st,setSt]=useState(run.status);
-  const locked = st==='approved';
+  const locked = st==='agm_approved' || st==='approved';
   const empById=(id)=>(employees||[]).find(e=>e.id===id);
   const empName=(id)=>{ const e=empById(id); return e?[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—':'—'; };
   async function load(){ setLoading(true); try{ const { data }=await sb.from('payroll_items').select('*').eq('run_id',run.id); setItems(data||[]); }catch(_){ setItems([]); } setLoading(false); }
@@ -41877,6 +41878,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
     setBusy(status);
     const patch={ status }; const nowIso=new Date().toISOString();
     if(status==='reviewed'){ patch.reviewed_by=profile.id; patch.reviewed_at=nowIso; }
+    if(status==='agm_approved'){ patch.agm_approved_by=profile.id; patch.agm_approved_at=nowIso; }
     if(status==='approved'){ patch.approved_by=profile.id; patch.approved_at=nowIso; }
     const { error }=await sb.from('payroll_runs').update(patch).eq('id',run.id); if(error){ setBusy(''); alert(error.message); return; }
     // On approval, post loan repayments.
@@ -41904,12 +41906,15 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
             <button onClick={()=>setPrintReg(true)} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50">🖨 Register</button>
             {!locked && canPrepare && <button onClick={recompute} disabled={busy==='recompute'} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50 disabled:opacity-50">{busy==='recompute'?'…':'↻ Recompute'}</button>}
             {st==='draft' && canReview && <button onClick={()=>setStatus('reviewed')} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500 text-white font-semibold">✓ Mark reviewed</button>}
-            {st==='reviewed' && canApprove && <button onClick={()=>{ if(confirm('Approve this payroll run? Loan balances will be posted. (No funds move from the OS.)')) setStatus('approved'); }} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold">✓ Approve for release</button>}
-            {st==='reviewed' && canReview && !canApprove && <span className="text-xs text-slate-400">Awaiting CEO approval</span>}
+            {st==='reviewed' && canApproveAgm && <button onClick={()=>setStatus('agm_approved')} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold">✓ AGM approve</button>}
+            {st==='reviewed' && !canApproveAgm && <span className="text-xs text-slate-400">Awaiting AGM approval</span>}
+            {st==='agm_approved' && canApprove && <button onClick={()=>{ if(confirm('Final CEO approval? Loan balances will be posted. (No funds move from the OS.)')) setStatus('approved'); }} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold">✓ CEO approve for release</button>}
+            {st==='agm_approved' && !canApprove && <span className="text-xs text-slate-400">Awaiting CEO approval</span>}
             {canPrepare && st==='draft' && <button onClick={del} className="text-xs px-2 py-1.5 rounded-lg border border-rose-200 text-rose-600 font-semibold hover:bg-rose-50">Delete</button>}
           </div>
         </div>
-        {locked && <div className="text-xs bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">Approved — figures are locked. Loan balances posted. Hand the bank payout list to the CEO for release.</div>}
+        {st==='agm_approved' && <div className="text-xs bg-cyan-50 border border-cyan-200 rounded p-2 text-cyan-800">AGM approved — figures are locked, awaiting final CEO approval. Loan balances post only once the CEO approves.</div>}
+        {st==='approved' && <div className="text-xs bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">Approved — figures are locked. Loan balances posted. Hand the bank payout list to the CEO for release.</div>}
         {loading ? <div className="text-center text-slate-400 py-8 text-sm">Loading…</div> : items.length===0 ? <div className="text-center text-slate-400 py-8 text-sm">No employees in this run.</div> : (
           <div className="overflow-x-auto border rounded-lg"><table className="text-xs whitespace-nowrap">
             <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr>
