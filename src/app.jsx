@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 894 · Lead details mobile: fields now stack to a single column on phones (were cramped 2-up), the right panel no longer bleeds past the screen edge (removed a negative margin + mobile-only border), and long values wrap - so nothing is cut off on the right anymore.";
+const BUILD = "Live build 895 · Toolbox meeting mention notifications now carry a link, so when you're tagged in a meeting discussion the notification opens the Toolbox (Meetings tab); backfilled 17 existing ones that couldn't open. Confirmed every role already has Toolbox access.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7048,8 +7048,9 @@ const INIT_CATEGORIES = ['Administration & Facilities','Machine Maintenance & As
 function initStatusMeta(k){ return INIT_STATUSES.find(s=>s[0]===k)||INIT_STATUSES[0]; }
 function initDeliv(i){ const d=Array.isArray(i.deliverables)?i.deliverables:[]; const done=d.filter(x=>x.done).length; return { done, total:d.length, pct: d.length? Math.round(done/d.length*100):0 }; }
 
-function ToolboxView({ profile, profiles, employees }){
-  const [tab,setTab]=useState('initiatives');
+function ToolboxView({ profile, profiles, employees, initialTab, onConsumeTab }){
+  const [tab,setTab]=useState(initialTab||'initiatives');
+  useEffect(()=>{ if(initialTab){ setTab(initialTab); onConsumeTab&&onConsumeTab(); } },[initialTab]);
   return (
     <div className="p-6">
       <div className="inline-flex rounded-lg border bg-white p-0.5 text-sm mb-1">
@@ -7480,7 +7481,7 @@ function ToolboxMeetingModal({ meeting, profile, profiles, employees, onClose, o
         </div>
         <div className="md:col-span-2 border-l md:pl-5 min-h-0">
           <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-3">💬 Discussion</div>
-          {isEdit ? <ThreadBody profile={profile} profiles={profiles} table="toolbox_meeting_activity" match={{ meeting_id: row.id }} scope={'toolbox/'+row.id} titleText={row.topic||'Toolbox meeting'} headerless embedded mentionNotify />
+          {isEdit ? <ThreadBody profile={profile} profiles={profiles} table="toolbox_meeting_activity" match={{ meeting_id: row.id }} scope={'toolbox/'+row.id} titleText={row.topic||'Toolbox meeting'} headerless embedded mentionNotify={{ link_view:'toolbox', ref_type:'toolbox_meeting', ref_id:row.id, label:row.topic||'Toolbox meeting' }} />
                   : <div className="text-xs text-slate-400">Save the meeting to start a discussion thread.</div>}
         </div>
       </div>
@@ -51816,6 +51817,7 @@ function App(){
   const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
   const [inboxPRId,setInboxPRId]=useState(null);
   const [inboxRfpId,setInboxRfpId]=useState(null);
+  const [inboxToolboxTab,setInboxToolboxTab]=useState(null); // open Toolbox on a specific tab from a notification
   const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
@@ -52762,6 +52764,9 @@ function App(){
       if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
+      if(m.ref_type==='toolbox_meeting' || m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){
@@ -52810,6 +52815,9 @@ function App(){
       if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
+      if(m.ref_type==='toolbox_meeting' || m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
     if(m.source==='pr'){
@@ -53494,7 +53502,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
-        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} />}
+        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} initialTab={inboxToolboxTab} onConsumeTab={()=>setInboxToolboxTab(null)} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
