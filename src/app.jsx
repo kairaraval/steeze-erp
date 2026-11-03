@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 910 · A refresh / app auto-update now reopens the page you were on instead of snapping back to the landing page (your last view is remembered; access rules still redirect if a page isn't allowed for your role). Plus build 909: comment drafts survive a refresh.";
+const BUILD = "Live build 911 · Tapping a push notification now opens the exact mention — the lead's activity box, or the job's board + activity thread — instead of dumping you on the landing page. Works whether the app was closed (via the notification's deep link) or already open (via the tap handler). Falls back to the Inbox if the item can't be opened.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -53246,8 +53246,14 @@ function App(){
     // Inbox instead of the default landing page. Clean the URL afterward so a
     // later manual refresh doesn't keep forcing that view.
     try{
-      const v = new URLSearchParams(window.location.search).get('view');
-      if(v){ try{ window.history.replaceState({}, '', window.location.pathname); }catch(_){} return v; }
+      const sp = new URLSearchParams(window.location.search);
+      const v = sp.get('view');
+      const nt = sp.get('nt'); // push deep-link: the mention we should open
+      if(v || nt){
+        if(nt){ try{ window.__steezePendingRoute={ source:nt, lead_id:sp.get('lead')||undefined, job_id:sp.get('jid')||undefined, job_type:sp.get('jtype')||undefined }; }catch(_){} }
+        try{ window.history.replaceState({}, '', window.location.pathname); }catch(_){}
+        return v || 'inbox';
+      }
     }catch(_){}
     // Stay on the page you were on across a refresh / app auto-update, instead of
     // snapping back to the landing page. The access guard below still redirects
@@ -53257,6 +53263,9 @@ function App(){
   });
   // Remember the current page so a refresh reopens it.
   useEffect(()=>{ try{ if(view) localStorage.setItem('steezeLastView', view); }catch(_){} },[view]);
+  // Deep-link target from a tapped push notification (cold start reads it from the
+  // launch URL above; a tap while the app is open sets it from the click handler).
+  const [pendingRoute,setPendingRoute]=useState(()=>{ try{ return window.__steezePendingRoute||null; }catch(_){ return null; } });
   const [detailLead,setDetailLead]=useState(null); const [editLead,setEditLead]=useState(null); const [activityLead,setActivityLead]=useState(null);
   // SO opened from Inbox or other deep-links. When set, renders the SO Edit modal
   // (with its built-in Activity tab) above the current view.
@@ -53892,7 +53901,7 @@ function App(){
         try { await OneSignal.User.PushSubscription.optIn(); } catch(_){}
         // If a push is tapped while the app is already open (foreground), jump
         // straight to the Inbox. Guard so we only register the listener once.
-        try { if(!window.__steezeNotifClick){ window.__steezeNotifClick = true; OneSignal.Notifications.addEventListener('click', ()=>{ setView('inbox'); }); } } catch(_){}
+        try { if(!window.__steezeNotifClick){ window.__steezeNotifClick = true; OneSignal.Notifications.addEventListener('click', (ev)=>{ try{ const d=(ev&&ev.notification&&ev.notification.additionalData)||(ev&&ev.result&&ev.result.notification&&ev.result.notification.additionalData)||{}; if(d&&d.nt){ setPendingRoute({ source:d.nt, lead_id:d.lead_id||undefined, job_id:d.job_id||undefined, job_type:d.job_type||undefined }); } else { setView('inbox'); } }catch(_){ setView('inbox'); } }); } } catch(_){}
       });
     } catch(_){}
     try { new Notification('Steeze OS notifications on', { body:'You\'ll see a ping when someone @mentions you.', icon:'/icon-192.png' }); } catch(_){}
@@ -54334,6 +54343,21 @@ function App(){
     setView(map[m.source]||'prod');
     setDeptActivity({ job:j, jobType:m.source, title:`${j.item} · ${j.client_name}` });
   }
+
+  // A tapped push notification (cold start via launch URL, or a tap while the app
+  // is open) deep-links to the exact mention. Wait until data has loaded, then
+  // route it through the same handler the in-app Inbox uses.
+  useEffect(()=>{
+    if(!pendingRoute) return;
+    const r=pendingRoute;
+    // Wait for the records to load before routing (lists start empty). For a lead
+    // mention, hold until leads have loaded; if the id still isn't there, fall
+    // through so the user at least lands on the Inbox.
+    if(r.source==='lead' && r.lead_id && (leads||[]).length===0) return;
+    try{ openInboxItem(r); }catch(_){ setView('inbox'); }
+    try{ window.__steezePendingRoute=null; }catch(_){}
+    setPendingRoute(null);
+  },[pendingRoute, leads, prodJobs, salesOrders, requests, sampleJobs, graphicJobs, printingJobs, embroideryJobs, knittingJobs]);
 
   const isAssistant=isAssistantRole(profile.role);
   const isProduction=profile.role==='production';
