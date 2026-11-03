@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 901 · Subcon Cutting board rebuilt to match Subcon Sewing: project cards with multiple subcons per project (+ Subcon), per-subcon Item / Out / Returned / Balance / Due, a dated ↩ Log return popup (good + variance), OVERDUE + status chips, 'N out · N pending' header and Mark done. Edits update in place (no screen refresh).";
+const BUILD = "Live build 902 · Admin OS: new 'Purchase Requests' view lists every purchase request raised by other departments so the Admin Office (Geziel) can review each order's line items + cost and Approve before Purchasing buys (or Return it with a note). Approving sends it to Purchasing's To-Review lane.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41109,6 +41109,132 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
   );
 }
 
+// Admin Office — Purchase Request review. Shows every purchase request raised by
+// OTHER departments (status 'department_request') so the Admin Office (Geziel)
+// can check each order and APPROVE it before Purchasing buys. Approving moves the
+// PR to Purchasing's "To Review" lane; rejecting returns it with a note. Admin and
+// the AGM can also clear these from their own queues — this is a parallel gate.
+function AdminPurchaseRequestsView({ profile, requests, items, profiles, departments, leads, clients, sampleJobs, reload }){
+  const [tab,setTab]=useState('pending');   // 'pending' | 'processed'
+  const [search,setSearch]=useState('');
+  const [review,setReview]=useState(null);  // PR being reviewed
+  const num=(n)=>Number(n||0).toLocaleString();
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const deptName=(id)=>(departments||[]).find(d=>d.id===id)?.name||'';
+  const lineName=(l)=>{ if(l.item_id){ const it=(items||[]).find(i=>i.id===l.item_id); if(it) return it.name+(it.color?` - ${it.color}`:''); } return l.description||'—'; };
+  const projectOf=(r)=>{ const l=r.linked_lead_id?(leads||[]).find(x=>x.id===r.linked_lead_id):null; const c=l&&l.client_id?((clients||[]).find(cc=>cc.id===l.client_id)?.company):''; const s=r.linked_sample_id?(sampleJobs||[]).find(x=>x.id===r.linked_sample_id):null; return [c, l?.title||s?.item].filter(Boolean).join(' · ')||(r.justification?'':'—'); };
+  const estTotal=(r)=>(r.lines||[]).reduce((s,l)=> s + (Number(l.est_cost)|| (Number(l.qty)||0)*(Number(l.unit_cost)||Number(l.price)||0)), 0);
+  const totalQty=(r)=>(r.lines||[]).reduce((s,l)=>s+(Number(l.qty)||0),0);
+
+  const live=(requests||[]).filter(r=>!r.deleted_at);
+  const pending=live.filter(r=>r.status==='department_request');
+  // Processed = department requests this office already cleared (approved/rejected),
+  // tracked by our own office_approved_at stamp, or rejected with an office note.
+  const processed=live.filter(r=> r.office_approved_at || (r.office_note && r.status==='rejected'));
+  const q=search.trim().toLowerCase();
+  const matches=(r)=> !q || [r.number, nameOf(r.requested_by), projectOf(r), r.justification, (r.lines||[]).map(lineName).join(' ')].filter(Boolean).join(' ').toLowerCase().includes(q);
+  const rows=(tab==='pending'?pending:processed).filter(matches).sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+
+  async function approve(pr, note){
+    const { error }=await sb.from('purchase_requests').update({ status:'submitted', office_approved_by:profile.id, office_approved_at:new Date().toISOString(), office_note:(note&&note.trim())||null }).eq('id',pr.id);
+    if(error){ alert(error.message); return; }
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`✅ Department request ${pr.number||''} approved by Admin Office — ready for Purchasing to review.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+    setReview(null); reload&&reload();
+  }
+  async function reject(pr, note){
+    if(!note||!note.trim()){ alert('Add a note so the department knows what to fix.'); return; }
+    const { error }=await sb.from('purchase_requests').update({ status:'rejected', office_note:note.trim(), office_approved_by:profile.id, office_approved_at:new Date().toISOString() }).eq('id',pr.id);
+    if(error){ alert(error.message); return; }
+    try{ if(pr.requested_by && pr.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:pr.requested_by, actor_id:profile.id, type:'system', text:`↩ Your purchase request ${pr.number||''} was returned by the Admin Office: ${note.trim().slice(0,90)}`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id }); }catch(_){}
+    setReview(null); reload&&reload();
+  }
+
+  const Urg=({u})=> u==='urgent' ? <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">urgent</span> : u==='high' ? <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">high</span> : null;
+
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📝 Purchase Requests — Departments</h1><p className="text-slate-500 text-sm">Every purchase request raised by other departments. Check each order and approve before Purchasing buys.</p></div>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
+            <button onClick={()=>setTab('pending')} className={`px-3 py-1.5 rounded-md ${tab==='pending'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Awaiting approval{pending.length?` (${pending.length})`:''}</button>
+            <button onClick={()=>setTab('processed')} className={`px-3 py-1.5 rounded-md ${tab==='processed'?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>Processed</button>
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search PR#, department, item…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+        </div>
+      </div>
+
+      {rows.length===0 ? (
+        <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">{tab==='pending'?'No department purchase requests awaiting your approval. 🎉':'No processed department requests yet.'}</div>
+      ) : (
+        <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+            <th className="text-left px-3 py-2">PR#</th><th className="text-left px-3 py-2">Requested by</th><th className="text-left px-3 py-2">For</th>
+            <th className="text-right px-3 py-2">Items</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Est. cost</th>
+            <th className="text-left px-3 py-2">Date</th>{tab==='processed'&&<th className="text-left px-3 py-2">Status</th>}<th></th>
+          </tr></thead>
+          <tbody>{rows.map(r=>{ const sm=prMeta(r.status); return (
+            <tr key={r.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setReview(r)}>
+              <td className="px-3 py-2 font-mono text-xs">{r.number||'—'} <Urg u={r.urgency} /></td>
+              <td className="px-3 py-2">{nameOf(r.requested_by)}</td>
+              <td className="px-3 py-2 text-xs text-slate-500 max-w-[18rem] truncate">{projectOf(r)||'—'}{r.justification?<span className="block text-slate-400 truncate">{r.justification}</span>:null}</td>
+              <td className="px-3 py-2 text-right">{(r.lines||[]).length}</td>
+              <td className="px-3 py-2 text-right">{num(totalQty(r))}</td>
+              <td className="px-3 py-2 text-right font-semibold">{estTotal(r)>0?peso(estTotal(r)):'—'}</td>
+              <td className="px-3 py-2 text-xs">{r.created_at?fmtDate(String(r.created_at).slice(0,10)):'—'}</td>
+              {tab==='processed'&&<td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${sm.color}`}>{sm.label}</span></td>}
+              <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{ e.stopPropagation(); setReview(r); }} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">{tab==='pending'?'Review →':'View'}</button></td>
+            </tr>
+          ); })}</tbody>
+        </table></div></div>
+      )}
+
+      {review && <AdminPRReviewModal pr={review} items={items} nameOf={nameOf} lineName={lineName} projectOf={projectOf} estTotal={estTotal} totalQty={totalQty} canAct={review.status==='department_request'} onApprove={approve} onReject={reject} onClose={()=>setReview(null)} />}
+    </div>
+  );
+}
+function AdminPRReviewModal({ pr, items, nameOf, lineName, projectOf, estTotal, totalQty, canAct, onApprove, onReject, onClose }){
+  const [note,setNote]=useState('');
+  const [busy,setBusy]=useState(false);
+  const num=(n)=>Number(n||0).toLocaleString();
+  const lines=pr.lines||[];
+  return (
+    <Modal title={`📝 ${pr.number||'Purchase Request'}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div><div className="uppercase text-slate-400 font-semibold">Requested by</div><div className="font-medium">{nameOf(pr.requested_by)}</div></div>
+          <div><div className="uppercase text-slate-400 font-semibold">For</div><div className="font-medium">{projectOf(pr)||'—'}</div></div>
+          <div><div className="uppercase text-slate-400 font-semibold">Urgency</div><div className="font-medium capitalize">{pr.urgency||'normal'}</div></div>
+          <div><div className="uppercase text-slate-400 font-semibold">Est. cost</div><div className="font-medium">{estTotal(pr)>0?peso(estTotal(pr)):'—'}</div></div>
+        </div>
+        {pr.justification && <div className="text-xs bg-slate-50 border rounded p-2"><span className="uppercase text-slate-400 font-semibold">Justification · </span>{pr.justification}</div>}
+        <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Item / material</th><th className="text-right px-3 py-1.5">Qty</th><th className="text-right px-3 py-1.5">Est. unit</th><th className="text-right px-3 py-1.5">Est. total</th></tr></thead>
+          <tbody>
+            {lines.length===0 && <tr><td colSpan="4" className="text-center text-slate-400 py-6">No line items.</td></tr>}
+            {lines.map((l,i)=>{ const unit=Number(l.unit_cost)||Number(l.price)||0; const lt=Number(l.est_cost)|| (Number(l.qty)||0)*unit; return (
+              <tr key={i} className="border-t"><td className="px-3 py-1.5">{lineName(l)}{l.note?<span className="block text-[11px] text-slate-400">{l.note}</span>:null}</td><td className="px-3 py-1.5 text-right">{num(l.qty)}</td><td className="px-3 py-1.5 text-right text-slate-500">{unit?peso(unit):'—'}</td><td className="px-3 py-1.5 text-right font-semibold">{lt?peso(lt):'—'}</td></tr>
+            ); })}
+          </tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5">Total</td><td className="px-3 py-1.5 text-right">{num(totalQty(pr))}</td><td></td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(estTotal(pr))}</td></tr></tfoot>
+        </table></div>
+        {pr.office_note && !canAct && <div className="text-xs bg-amber-50 border border-amber-200 rounded p-2"><span className="font-semibold">Admin Office note: </span>{pr.office_note}</div>}
+        {canAct ? (<>
+          <div><label className="text-[10px] uppercase text-slate-500 font-semibold">Note (optional on approve, required on return)</label><textarea value={note} onChange={e=>setNote(e.target.value)} rows={2} className="input mt-0.5 text-sm" placeholder="e.g. approved; or what the department needs to fix" /></div>
+          <div className="flex gap-2 pt-2 border-t">
+            <button disabled={busy} onClick={async()=>{ setBusy(true); await onApprove(pr, note); setBusy(false); }} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✓ Approve — send to Purchasing</button>
+            <button disabled={busy} onClick={async()=>{ setBusy(true); await onReject(pr, note); setBusy(false); }} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">↩ Return</button>
+          </div>
+        </>) : (
+          <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">This request has already been processed. Status: <b>{prMeta(pr.status).label}</b>.</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // The Assistant General Manager is the first approver for: department purchase
 // requests (before Purchasing), HR/Admin Requests for Payment (before Admin →
 // Finance), and the liquidations of petty cash, cash advances and budget
@@ -52554,7 +52680,7 @@ function App(){
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll',
-        'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
+        'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
       // Sales assistant now also has access to Sales Orders (filtered to their
@@ -52656,14 +52782,14 @@ function App(){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
       allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
-        'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-requests','admin-permits','admin-maintenance']);
+        'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
       // Still part of HR (full HR module) PLUS the Admin Office module.
       allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','budgets','rfps','profile','trip-tickets',
-        'admin-home','admin-directory','assets','admin-office','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
+        'admin-home','admin-directory','assets','admin-office','admin-pr','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
       // Logistics Team — Daily Schedule + their Trip Tickets.
@@ -53278,6 +53404,7 @@ function App(){
     ['admin-directory','Directory','📇'],
     ['assets','Asset Register','🏷'],
     ['admin-office','Office Inventory','📦'],
+    ['admin-pr','Purchase Requests','📝'],
     ['admin-rfp','Request for Payment','🧾'],
     ['admin-requests','Admin Requests','📋'],
     ['admin-permits','Permits & Licenses','📜'],
@@ -53837,6 +53964,7 @@ function App(){
         {view==='admin-home' && <AdminHomeView profile={profile} adminContacts={adminContacts} officeItems={officeItems} adminRequests={adminRequests} adminPermits={adminPermits} adminMaintenance={adminMaintenance} navTo={navTo} />}
         {view==='admin-directory' && <AdminDirectoryView profile={profile} adminContacts={adminContacts} reload={loadAll} />}
         {view==='admin-office' && <OfficeInventoryView profile={profile} officeItems={officeItems} officeItemLog={officeItemLog} profiles={profiles} reload={loadAll} />}
+        {view==='admin-pr' && <AdminPurchaseRequestsView profile={profile} requests={requests} items={items} profiles={profiles} departments={departments} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='admin-requests' && <AdminRequestsView profile={profile} adminRequests={adminRequests} profiles={profiles} reload={loadAll} />}
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
