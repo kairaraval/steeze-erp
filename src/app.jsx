@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 896 · Toolbox Meetings are now scoped per person: admins/AGM see all, but everyone else only sees a meeting if they facilitated it, created it, own one of its action items, are listed in its attendees, or were tagged in its discussion. Not involved = it won't show on their list.";
+const BUILD = "Live build 897 · Clicking a Toolbox meeting mention now opens that exact meeting (the record you were tagged in) instead of dropping you on the full meetings list.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7048,7 +7048,7 @@ const INIT_CATEGORIES = ['Administration & Facilities','Machine Maintenance & As
 function initStatusMeta(k){ return INIT_STATUSES.find(s=>s[0]===k)||INIT_STATUSES[0]; }
 function initDeliv(i){ const d=Array.isArray(i.deliverables)?i.deliverables:[]; const done=d.filter(x=>x.done).length; return { done, total:d.length, pct: d.length? Math.round(done/d.length*100):0 }; }
 
-function ToolboxView({ profile, profiles, employees, initialTab, onConsumeTab }){
+function ToolboxView({ profile, profiles, employees, initialTab, initialMeetingId, onConsumeTab, onConsumeMeeting }){
   const [tab,setTab]=useState(initialTab||'initiatives');
   useEffect(()=>{ if(initialTab){ setTab(initialTab); onConsumeTab&&onConsumeTab(); } },[initialTab]);
   return (
@@ -7057,7 +7057,7 @@ function ToolboxView({ profile, profiles, employees, initialTab, onConsumeTab })
         <button onClick={()=>setTab('initiatives')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='initiatives'?'bg-indigo-600 text-white':'text-slate-600'}`}>🎯 Initiatives</button>
         <button onClick={()=>setTab('meetings')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='meetings'?'bg-indigo-600 text-white':'text-slate-600'}`}>🧰 Meetings</button>
       </div>
-      {tab==='initiatives' ? <ToolboxInitiativesView profile={profile} profiles={profiles} /> : <div className="-mx-6 -mb-6"><ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} /></div>}
+      {tab==='initiatives' ? <ToolboxInitiativesView profile={profile} profiles={profiles} /> : <div className="-mx-6 -mb-6"><ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} initialMeetingId={initialMeetingId} onConsumeMeeting={onConsumeMeeting} /></div>}
     </div>
   );
 }
@@ -7290,7 +7290,7 @@ function InitiativeWeeklyReport({ rows, profiles, onClose }){
   );
 }
 
-function ToolboxMeetingsView({ profile, profiles, employees }){
+function ToolboxMeetingsView({ profile, profiles, employees, initialMeetingId, onConsumeMeeting }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [open,setOpen]=useState(null);       // meeting object (edit) or 'new'
@@ -7316,6 +7316,13 @@ function ToolboxMeetingsView({ profile, profiles, employees }){
     setLoading(false);
   }
   useEffect(()=>{ load(); },[]);
+  // Deep-link from a notification: once the meeting is loaded, open it straight away.
+  useEffect(()=>{
+    if(!initialMeetingId || loading) return;
+    const m=rows.find(x=>x.id===initialMeetingId);
+    if(m){ setOpen(m); onConsumeMeeting&&onConsumeMeeting(); }
+    else if(rows.length){ onConsumeMeeting&&onConsumeMeeting(); } // not found / not visible — clear the pending link
+  },[initialMeetingId,loading,rows]);
   const today=todayManila();
   // Who may see a given meeting: managers see all; everyone else only meetings they're part of or tagged in.
   const myName=String(profile.name||'').trim().toLowerCase();
@@ -51844,6 +51851,7 @@ function App(){
   const [inboxPRId,setInboxPRId]=useState(null);
   const [inboxRfpId,setInboxRfpId]=useState(null);
   const [inboxToolboxTab,setInboxToolboxTab]=useState(null); // open Toolbox on a specific tab from a notification
+  const [inboxToolboxMeetingId,setInboxToolboxMeetingId]=useState(null); // deep-link straight into a specific meeting
   const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
@@ -52790,7 +52798,8 @@ function App(){
       if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
-      if(m.ref_type==='toolbox_meeting' || m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_meeting'){ setInboxToolboxMeetingId(m.ref_id||null); setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
@@ -52841,7 +52850,8 @@ function App(){
       if(m.ref_type==='react_pr' || m.ref_type==='purchase_request'){ setView('requests'); setInboxPRId(m.ref_id||null); return; }
       if(m.ref_type==='rfp' && m.ref_id){ setView('rfps'); setInboxRfpId(m.ref_id); return; }
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
-      if(m.ref_type==='toolbox_meeting' || m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_meeting'){ setInboxToolboxMeetingId(m.ref_id||null); setInboxToolboxTab('meetings'); setView('toolbox'); return; }
+      if(m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
@@ -53528,7 +53538,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
-        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} initialTab={inboxToolboxTab} onConsumeTab={()=>setInboxToolboxTab(null)} />}
+        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} initialTab={inboxToolboxTab} initialMeetingId={inboxToolboxMeetingId} onConsumeTab={()=>setInboxToolboxTab(null)} onConsumeMeeting={()=>setInboxToolboxMeetingId(null)} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
