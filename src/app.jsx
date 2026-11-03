@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 899 · PO line 'For:' tag now shows the project's actual ORDER quantity in pieces (e.g. 'order: 1,200 pcs') instead of repeating the fabric/material quantity from the Qty column. Backfilled all existing POs so the real order qty appears everywhere.";
+const BUILD = "Live build 900 · Subcon Cutting no longer refreshes the whole screen while you type — the board's Sent out / Returned boxes now save when you click away (not on every digit), and payroll qty/rate edits update in place. Payroll tab restyled to match Subcon Sewing (For payroll now shows Project, Item and Return date columns).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -11698,7 +11698,11 @@ function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, cl
   useEffect(()=>{ load(); },[stage]);
   const subconName=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'';
   const projLabel=(t)=>{ const l=(leads||[]).find(x=>x.id===t.lead_id); const c=l?((clients||[]).find(cc=>cc.id===l.client_id)?.name):''; return [c||t.client_name, l?.title||t.item].filter(Boolean).join(' · ')||'Project'; };
-  async function upd(t, patch){ try{ await sb.from('subcon_tasks').update(patch).eq('id',t.id); }catch(e){ alert(e.message||e); } load(); reload&&reload(); }
+  // Optimistic: patch the local row and persist in the background. We deliberately
+  // do NOT call the board's own load() here — that flips the table to "Loading…"
+  // and refetches on every keystroke, which felt like the screen refreshing as you
+  // typed. Parent reload() still runs so payroll totals stay in sync.
+  async function upd(t, patch){ setTasks(prev=>prev.map(x=>x.id===t.id?{...x,...patch}:x)); try{ const { error }=await sb.from('subcon_tasks').update(patch).eq('id',t.id); if(error) throw error; }catch(e){ alert(e.message||e); load(); return; } reload&&reload(); }
   async function del(t){ if(!confirm(`Remove this subcon ${stageWord} task?`)) return; await sb.from('subcon_tasks').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',t.id); load(); reload&&reload(); }
   async function addFromJob(){ const j=(prodJobs||[]).find(x=>x.id===addJob); if(!j) return;
     try{ const { data:ex }=await sb.from('subcon_tasks').select('id').eq('stage',stage).eq('source_job_id',j.id).is('deleted_at',null).limit(1); if(ex&&ex.length){ alert(`That project already has a subcon ${stageWord} task.`); return; }
@@ -11731,8 +11735,8 @@ function SubconLiteTracker({ stage='cutting', title, profile, subcons, leads, cl
               <td className="px-3 py-2 font-medium">{projLabel(t)}{(()=>{ const ms=projectMaterialsStatus(t.lead_id, requests, orders); if(ms.state==='none') return null; const [lbl,cls]=MAT_META[ms.state]; return <div className={`inline-block mt-0.5 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`} title={`Purchasing: ${ms.ready}/${ms.total} material line${ms.total===1?'':'s'} in`}>{lbl}</div>; })()}</td>
               <td className="px-3 py-2">{canEdit ? <select className="input !py-1 text-xs" value={t.subcon_id||''} onChange={e=>upd(t,{ subcon_id:e.target.value||null })}><option value="">— pick subcon —</option>{(subcons||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select> : (subconName(t.subcon_id)||'—')}</td>
               <td className="px-3 py-2 text-right text-slate-500">{Number(t.qty||0).toLocaleString()}</td>
-              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" value={t.qty_out||''} onChange={e=>upd(t,{ qty_out:Number(e.target.value)||0 })} /> : Number(t.qty_out||0).toLocaleString()}</td>
-              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" value={t.qty_returned||''} onChange={e=>upd(t,{ qty_returned:Number(e.target.value)||0 })} /> : Number(t.qty_returned||0).toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" defaultValue={t.qty_out||''} key={`out-${t.id}`} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==(Number(t.qty_out)||0)) upd(t,{ qty_out:v }); }} /> : Number(t.qty_out||0).toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{canEdit ? <input type="number" className="input !py-1 text-xs text-right w-20" defaultValue={t.qty_returned||''} key={`ret-${t.id}`} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==(Number(t.qty_returned)||0)) upd(t,{ qty_returned:v }); }} /> : Number(t.qty_returned||0).toLocaleString()}</td>
               <td className={`px-3 py-2 text-right font-bold ${bal>0?'text-rose-700':'text-emerald-700'}`}>{bal.toLocaleString()}</td>
               <td className="px-3 py-2">{canEdit ? <input type="date" className="input !py-1 text-xs" value={t.due_date||''} onChange={e=>upd(t,{ due_date:e.target.value||null })} /> : (t.due_date?fmtDate(t.due_date):'—')}{overdue && <div className="text-[10px] text-rose-600 font-semibold">overdue</div>}</td>
               <td className="px-3 py-2 text-center">{canEdit ? <input type="checkbox" checked={!!t.done} onChange={e=>upd(t,{ done:e.target.checked })} className="accent-emerald-600" /> : (t.done?'✓':'')}</td>
@@ -11779,6 +11783,8 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
   useEffect(()=>{ load(); },[]);
   const subconNm=(id)=>(subcons||[]).find(s=>s.id===id)?.name||'Subcon';
   const projNm=(t)=>{ const l=(leads||[]).find(x=>x.id===t.lead_id); const c=l&&l.client_id?((clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return [c||t.client_name, l&&l.title||t.item].filter(Boolean).join(' · ')||t.item||'Project'; };
+  // Project label for a payroll-queue row (by lead_id, with client_name/item_label fallback).
+  const qProj=(q)=>{ const l=(leads||[]).find(x=>x.id===q.lead_id); const c=l&&l.client_id?((clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return [c||q.client_name, (l&&l.title)||q.item_label].filter(Boolean).join(' · ')||q.item_label||'Project'; };
   // Payable per cutting task: good returns not yet staged to payroll.
   const taskRows=(tasks||[]).filter(t=>t.subcon_id).map(t=>{
     const qRows=(queue||[]).filter(q=>!q.deleted_at && q.source_task_id===t.id);
@@ -11788,12 +11794,17 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
   });
   async function addToPayroll(task, qty, rate){
     const q=Number(qty)||0; if(q<=0){ alert('Enter a quantity.'); return; }
-    await sb.from('subcon_cut_payroll_queue').insert({ subcon_id:task.subcon_id, lead_id:task.lead_id||null, source_task_id:task.id, item_label:task.item||null, garment:task.item||null, client_name:task.client_name||null, qty:q, rate:(rate===''||rate==null)?null:Number(rate), return_date:todayManila(), status:'staged', added_by:profile.id });
-    setAddFor(null); load(true);
+    const { data, error }=await sb.from('subcon_cut_payroll_queue').insert({ subcon_id:task.subcon_id, lead_id:task.lead_id||null, source_task_id:task.id, item_label:task.item||null, garment:task.item||null, client_name:task.client_name||null, qty:q, rate:(rate===''||rate==null)?null:Number(rate), return_date:todayManila(), status:'staged', added_by:profile.id }).select().single();
+    if(error){ alert('Failed: '+error.message); return; }
+    setAddFor(null);
+    if(data) setQueue(prev=>[data,...prev]); // optimistic — no full reload, so the page doesn't jump
   }
-  async function updateQueueRow(id, patch){ await sb.from('subcon_cut_payroll_queue').update(patch).eq('id',id); load(true); }
-  async function removeQueueRow(q){ if(!confirm('Remove from the For-payroll list?')) return; await sb.from('subcon_cut_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',q.id); load(true); }
-  async function confirmQueue(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.qty)>0)); if(bad.length){ alert('Set a rate and qty first for: '+bad.map(r=>subconNm(r.subcon_id)).join(', ')); return; } await sb.from('subcon_cut_payroll_queue').update({ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id }).in('id',ids); load(true); }
+  // Optimistic updates: patch the local row and persist in the background so
+  // typing a qty/rate doesn't trigger a full refetch + re-render (which felt
+  // like the whole screen refreshing on every input).
+  async function updateQueueRow(id, patch){ setQueue(prev=>prev.map(q=>q.id===id?{...q,...patch}:q)); const { error }=await sb.from('subcon_cut_payroll_queue').update(patch).eq('id',id); if(error){ alert('Save failed: '+error.message); load(true); } }
+  async function removeQueueRow(q){ if(!confirm('Remove from the For-payroll list?')) return; setQueue(prev=>prev.filter(x=>x.id!==q.id)); const { error }=await sb.from('subcon_cut_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',q.id); if(error){ alert('Remove failed: '+error.message); load(true); } }
+  async function confirmQueue(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.qty)>0)); if(bad.length){ alert('Set a rate and qty first for: '+bad.map(r=>subconNm(r.subcon_id)).join(', ')); return; } const stamp={ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id }; setQueue(prev=>prev.map(q=>ids.includes(q.id)?{...q,...stamp}:q)); const { error }=await sb.from('subcon_cut_payroll_queue').update(stamp).in('id',ids); if(error){ alert('Failed: '+error.message); load(true); } }
 
   const staged=(queue||[]).filter(q=>!q.deleted_at && q.status==='staged');
   const sent=(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id);
@@ -11830,46 +11841,65 @@ function SubconCuttingView({ profile, profiles, subcons, leads, clients, prodJob
           </div>
 
           {payrollSub==='staged' && (<div className="space-y-3">
-            {forPay.length>0 && <div className="bg-white border rounded-xl overflow-x-auto">
-              <div className="px-3 py-2 border-b text-sm font-bold bg-slate-50">Returned, ready to add</div>
-              <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Project</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Already added</th><th className="text-right px-3 py-2">Payable</th>{canSign&&<th></th>}</tr></thead>
-              <tbody>{forPay.map(r=>(<tr key={r.t.id} className="border-t">
+            {forPay.length>0 && <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto">
+              <div className="px-3 py-2 border-b text-sm font-semibold bg-slate-50">Returned, ready to add</div>
+              <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Project</th><th className="text-right px-3 py-2">Returned</th><th className="text-right px-3 py-2">Already added</th><th className="text-right px-3 py-2">Payable</th>{canSign&&<th></th>}</tr></thead>
+              <tbody>{forPay.map(r=>(<tr key={r.t.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-medium">{r.subcon}</td><td className="px-3 py-2 text-xs text-slate-500">{r.project}</td>
                 <td className="px-3 py-2 text-right">{num(r.returned)}</td><td className="px-3 py-2 text-right text-slate-400">{num(r.staged)}</td>
                 <td className="px-3 py-2 text-right font-semibold text-amber-700">{num(r.payable)}</td>
                 {canSign&&<td className="px-3 py-2 text-right"><button onClick={()=>setAddFor(r)} className="text-xs text-violet-700 hover:underline font-semibold">💰 Add to payroll</button></td>}
               </tr>))}</tbody></table>
-            </div>}
-            <div className="bg-white border rounded-xl overflow-x-auto">
-              <div className="px-3 py-2 border-b text-sm font-bold bg-slate-50">Staged for payroll</div>
-              {staged.length===0 ? <div className="p-8 text-center text-slate-400 text-sm">Nothing staged yet. Add returned pieces above.</div> :
-              <table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Subcon</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>{canSign&&<th></th>}</tr></thead>
-              <tbody>{staged.map(q=>(<tr key={q.id} className="border-t">
-                <td className="px-3 py-2 font-medium">{subconNm(q.subcon_id)}</td>
-                <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" defaultValue={q.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(q.qty)) updateQueueRow(q.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:num(q.qty)}</td>
-                <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" step="0.01" defaultValue={q.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==q.rate) updateQueueRow(q.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:peso(q.rate)}</td>
-                <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(q))}</td>
-                {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>confirmQueue([q])} className="text-xs text-violet-700 hover:underline font-semibold mr-2">✓ Confirm</button><button onClick={()=>removeQueueRow(q)} className="text-xs text-rose-500 hover:underline">Remove</button></td>}
-              </tr>))}</tbody></table>}
-            </div>
+            </div></div>}
+            <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto">
+              <div className="px-3 py-2 border-b text-sm font-semibold bg-slate-50">For payroll</div>
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
+                  <th className="text-left px-3 py-2">Subcon</th><th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Item</th>
+                  <th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Amount</th>
+                  <th className="text-left px-3 py-2">Return date</th>{canSign&&<th></th>}
+                </tr></thead>
+                <tbody>
+                  {staged.length===0 && <tr><td colSpan={canSign?8:7} className="text-center text-slate-400 py-8">Nothing staged yet. Add returned pieces from the table above.</td></tr>}
+                  {staged.map(q=>(<tr key={q.id} className="border-t hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{subconNm(q.subcon_id)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{qProj(q)}</td>
+                    <td className="px-3 py-2 text-xs">{q.item_label||q.garment||'—'}</td>
+                    <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" defaultValue={q.qty} onBlur={e=>{ const v=Number(e.target.value)||0; if(v!==Number(q.qty)) updateQueueRow(q.id,{qty:v}); }} className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:num(q.qty)}</td>
+                    <td className="px-3 py-2 text-right">{canSign?<input type="number" min="0" step="0.01" defaultValue={q.rate??''} onBlur={e=>{ const v=e.target.value===''?null:Number(e.target.value); if(v!==q.rate) updateQueueRow(q.id,{rate:v}); }} placeholder="rate" className="w-20 text-right border rounded px-1.5 py-0.5 text-xs" />:peso(q.rate)}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(q))}</td>
+                    <td className="px-3 py-2 text-xs">{q.return_date?fmtDate(q.return_date):'—'}</td>
+                    {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>removeQueueRow(q)} className="text-xs text-rose-500 hover:underline mr-2">Remove</button><button onClick={()=>confirmQueue([q])} className="text-xs text-violet-700 hover:underline font-semibold">✓ Confirm</button></td>}
+                  </tr>))}
+                </tbody>
+              </table>
+            </div></div>
           </div>)}
 
-          {payrollSub==='ready' && (sent.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing in payroll. Confirm items from For payroll first.</div> :
+          {payrollSub==='ready' && (sent.length===0 ? <div className="bg-white border rounded-xl p-8 text-center text-slate-400 text-sm">Nothing in payroll. Confirm items from the <b>For payroll</b> tab first.</div> :
             <div className="space-y-2">
-              <div className="text-xs text-slate-500">{bySub.length} subcon(s) · {num(sentPcs)} pcs · <b>{peso(sentAmt)}</b></div>
-              {bySub.map((g,i)=>(<div key={i} className="bg-white rounded-xl border overflow-hidden">
-                <div className="px-4 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">🧵 {g.subcon}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b>{peso(g.amt)}</b></span></div>
-                <table className="w-full text-sm"><tbody>{g.rows.map(q=>(<tr key={q.id} className="border-t"><td className="px-3 py-1.5 text-xs text-slate-500">{q.item_label||'Cutting'}</td><td className="px-3 py-1.5 text-right">{num(q.qty)}</td><td className="px-3 py-1.5 text-right">{peso(q.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}</tbody></table>
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1"><span>{bySub.length} subcon(s) · {num(sentPcs)} pcs</span><span>Run total: <b className="text-slate-800 text-sm">{peso(sentAmt)}</b></span></div>
+              {bySub.map((g,i)=>(<div key={i} className="bg-white border rounded-xl overflow-hidden">
+                <div className="px-3 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">{g.subcon}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b className="text-slate-700">{peso(g.amt)}</b></span></div>
+                <table className="w-full text-sm"><tbody>{g.rows.map(q=>(<tr key={q.id} className="border-t">
+                  <td className="px-3 py-1.5 text-xs text-slate-500">{qProj(q)}</td>
+                  <td className="px-3 py-1.5 text-xs">{q.item_label||q.garment||'Cutting'}</td>
+                  <td className="px-3 py-1.5 text-right text-xs">{num(q.qty)} × {peso(q.rate)}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(q))}</td>
+                  <td className="px-3 py-1.5 text-right">{canSign && <button onClick={()=>{ if(confirm('Send this item back to “For payroll” to re-check?')) updateQueueRow(q.id,{status:'staged'}); }} className="text-[11px] text-slate-400 hover:text-rose-600" title="Send back to For payroll">↩</button>}</td>
+                </tr>))}</tbody></table>
               </div>))}
             </div>)}
 
-          {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
-            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th></th></tr></thead>
-              <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
-                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td><td className="px-3 py-2 text-right"><button onClick={()=>setViewRun(b)} className="text-xs text-indigo-600 hover:underline font-semibold">📄 Payroll sheet</button></td></tr>
+          {payrollSub==='runs' && (
+            <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Run #</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-center px-3 py-2">Status</th><th></th></tr></thead>
+              <tbody>
+                {runs.length===0 && <tr><td colSpan="6" className="text-center text-slate-400 py-8">No signed runs yet. Sign one from the In payroll tab.</td></tr>}
+                {runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
+                <tr key={b.id} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td><td className="px-3 py-2 text-right"><button onClick={()=>setViewRun(b)} className="text-xs text-indigo-600 hover:underline font-semibold">📄 Payroll sheet</button></td></tr>
               ); })}</tbody>
-            </table></div>)}
+            </table></div></div>)}
         </div>
       )}
 
