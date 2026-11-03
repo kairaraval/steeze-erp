@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 906 · Payroll approval simplified: draft → reviewed (Accounting) → AGM approved (final). The AGM approves the payroll and the CEO just views the final run — no CEO approval step. Loan balances post on AGM approval; no funds move from the OS. (Engine unchanged: gross-to-net from approved DTRs, statutory + loans, payslip + register.)";
+const BUILD = "Live build 907 · Payroll reports (Phase 5): from a run, print Remittance summaries (SSS / PhilHealth / Pag-IBIG with employee + employer share and ID numbers, plus BIR withholding by TIN) and a Bank payout list (net pay, bank & account per employee, total to transfer). New 13th-month helper totals each employee's basic earned for the year ÷ 12 across approved runs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41398,6 +41398,11 @@ function sssEE(basic, d){ if(!d) return 0; const step=d.msc_step||500, min=d.msc
 function philhealthEE(basic, d){ if(!d) return 0; const b=Math.max(d.floor||0, Math.min(d.ceiling||1e12, Number(basic)||0)); return pRound(b*(d.rate||0)*(d.ee_share||0.5)); }
 function pagibigEE(basic, d){ if(!d) return 0; const b=Number(basic)||0; if(b<=0) return 0; const rate=b<=(d.threshold||0)?(d.low_rate||0):(d.high_rate||0); const comp=Math.min(b, d.max_comp||1e12); return pRound(comp*rate); }
 function birTax(taxable, brackets){ if(!brackets||!brackets.length) return 0; const t=Number(taxable)||0; let chosen=brackets[0]; for(const b of brackets){ if(t>Number(b.over)) chosen=b; } return pRound(Number(chosen.base||0)+(t-Number(chosen.over||0))*Number(chosen.rate||0)); }
+// Employer shares (for remittance summaries).
+function sssER(basic, d){ if(!d) return 0; const step=d.msc_step||500, min=d.msc_min||0, max=d.msc_max||1e12; const b=Number(basic)||0; if(b<=0) return 0; let msc=Math.round(b/step)*step; msc=Math.max(min,Math.min(max,msc)); return pRound(msc*(d.er_rate||0)); }
+function philhealthER(basic, d){ if(!d) return 0; const b=Math.max(d.floor||0, Math.min(d.ceiling||1e12, Number(basic)||0)); return pRound(b*(d.rate||0)*(1-(d.ee_share||0.5))); }
+function pagibigER(basic, d){ if(!d) return 0; const b=Number(basic)||0; if(b<=0) return 0; const comp=Math.min(b, d.max_comp||1e12); return pRound(comp*(d.er_rate||0)); }
+function empMonthlyBasic(e){ return Number(e?.basic_salary)|| (e?.current_rate?Number(e.current_rate)*26:0); }
 function periodFraction(cycle){ return cycle==='monthly'?1 : cycle==='weekly'?(12/52) : 0.5; }
 function cycleFreq(cycle){ return cycle==='monthly'?'monthly' : cycle==='weekly'?'weekly' : 'semi_monthly'; }
 
@@ -41685,6 +41690,7 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
   const [runs,setRuns]=useState([]);
   const [openRun,setOpenRun]=useState(null);
   const [creating,setCreating]=useState(false);
+  const [thirteenth,setThirteenth]=useState(false);
   const [loading,setLoading]=useState(true);
   // reference data for compute
   const [refs,setRefs]=useState({ schedules:[], holidays:[], tax:[], config:{}, govLoans:[], coLoans:[] });
@@ -41707,7 +41713,10 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-start justify-between flex-wrap gap-3">
           <div><h1 className="text-2xl font-bold">💵 Payroll Runs</h1><p className="text-slate-500 text-sm">Gross-to-net from approved DTRs. Draft → reviewed → approved. Loan balances post only on approval; the CEO releases funds in the bank.</p></div>
-          {canPrepare && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New payroll run</button>}
+          <div className="flex gap-2">
+            <button onClick={()=>setThirteenth(true)} className="px-3 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">📅 13th-month</button>
+            {canPrepare && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New payroll run</button>}
+          </div>
         </div>
       </div>
       {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : runs.length===0 ? (
@@ -41730,6 +41739,7 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
         </table></div>
       )}
       {creating && <NewPayrollRunModal profile={profile} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setCreating(false)} onCreated={(run)=>{ setCreating(false); loadRuns(); setOpenRun(run); }} />}
+      {thirteenth && <ThirteenthMonthModal profile={profile} employees={employees} onClose={()=>setThirteenth(false)} />}
       {openRun && <PayrollRunDetail run={openRun} profile={profile} employees={employees} profiles={profiles} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApprove={canApprove} onClose={()=>{ setOpenRun(null); loadRuns(); }} onChanged={loadRuns} />}
     </div>
   );
@@ -41853,6 +41863,8 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
   const [busy,setBusy]=useState('');
   const [slip,setSlip]=useState(null);
   const [printReg,setPrintReg]=useState(false);
+  const [printRemit,setPrintRemit]=useState(false);
+  const [printPayout,setPrintPayout]=useState(false);
   const [st,setSt]=useState(run.status);
   const locked = st==='approved';
   const empById=(id)=>(employees||[]).find(e=>e.id===id);
@@ -41902,6 +41914,8 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
           <div className="flex items-center gap-2 text-xs"><span className={`px-2 py-0.5 rounded font-semibold ${(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[1]}`}>{(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[0]}</span><span className="text-slate-500 capitalize">{(run.cycle||'').replace('_','-')} · ×{run.contrib_factor} contributions{run.pay_date?` · pay ${fmtDate(run.pay_date)}`:''}</span></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setPrintReg(true)} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50">🖨 Register</button>
+            <button onClick={()=>setPrintRemit(true)} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50">🏛 Remittances</button>
+            <button onClick={()=>setPrintPayout(true)} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50">🏦 Bank payout</button>
             {!locked && canPrepare && <button onClick={recompute} disabled={busy==='recompute'} className="text-xs px-2.5 py-1.5 rounded-lg border font-semibold hover:bg-slate-50 disabled:opacity-50">{busy==='recompute'?'…':'↻ Recompute'}</button>}
             {st==='draft' && canReview && <button onClick={()=>setStatus('reviewed')} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500 text-white font-semibold">✓ Mark reviewed</button>}
             {st==='reviewed' && canApprove && <button onClick={()=>{ if(confirm('AGM approve this payroll run? Loan balances will be posted. (No funds move from the OS — the CEO just views the final payroll.)')) setStatus('approved'); }} disabled={!!busy} className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold">✓ AGM approve</button>}
@@ -41935,6 +41949,8 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
       </div>
       {slip && <PayslipModal item={slip} run={run} emp={empById(slip.employee_id)} onClose={()=>setSlip(null)} />}
       {printReg && <PayrollRegisterModal run={run} items={items} empName={empName} onClose={()=>setPrintReg(false)} />}
+      {printRemit && <PayrollRemittanceModal run={run} items={items} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setPrintRemit(false)} />}
+      {printPayout && <PayrollPayoutModal run={run} items={items} employees={employees} onClose={()=>setPrintPayout(false)} />}
     </Modal>
   );
 }
@@ -41967,6 +41983,115 @@ function PayrollRegisterModal({ run, items, empName, onClose }){
         <tbody>{items.slice().sort((a,b)=>empName(a.employee_id).localeCompare(empName(b.employee_id))).map(i=>(<tr key={i.id} className="border-t"><td className="px-2 py-1">{empName(i.employee_id)}</td><td className="px-2 py-1 text-right">{num(i.gross)}</td><td className="px-2 py-1 text-right">{num(i.sss_ee)}</td><td className="px-2 py-1 text-right">{num(i.philhealth_ee)}</td><td className="px-2 py-1 text-right">{num(i.pagibig_ee)}</td><td className="px-2 py-1 text-right">{num(i.tax)}</td><td className="px-2 py-1 text-right">{num(Number(i.gov_loan_ded||0)+Number(i.company_loan_ded||0))}</td><td className="px-2 py-1 text-right text-rose-600">{num(i.total_deductions)}</td><td className="px-2 py-1 text-right font-bold text-emerald-700">{num(i.net_pay)}</td></tr>))}</tbody>
         <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1">Total</td><td className="px-2 py-1 text-right">{num(t('gross'))}</td><td className="px-2 py-1 text-right">{num(t('sss_ee'))}</td><td className="px-2 py-1 text-right">{num(t('philhealth_ee'))}</td><td className="px-2 py-1 text-right">{num(t('pagibig_ee'))}</td><td className="px-2 py-1 text-right">{num(t('tax'))}</td><td className="px-2 py-1 text-right">{num(t('gov_loan_ded')+t('company_loan_ded'))}</td><td className="px-2 py-1 text-right">{num(t('total_deductions'))}</td><td className="px-2 py-1 text-right text-emerald-700">{num(t('net_pay'))}</td></tr></tfoot>
       </table></div>
+      <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
+    </div>
+  </Modal>);
+}
+// Remittance summaries — EE + ER + total per contribution (SSS / PhilHealth / Pag-IBIG) plus BIR tax.
+function PayrollRemittanceModal({ run, items, employees, refs, latestTax, onClose }){
+  const cf=Number(run.contrib_factor)||0.5;
+  const sss=latestTax('sss'), ph=latestTax('philhealth'), pi=latestTax('pagibig');
+  const empById=(id)=>(employees||[]).find(e=>e.id===id);
+  const nm=(id)=>{ const e=empById(id); return e?[e.last_name,e.first_name].filter(Boolean).join(', ')||e.nickname||'—':'—'; };
+  const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const [tab,setTab]=useState('sss');
+  const rows=items.slice().sort((a,b)=>nm(a.employee_id).localeCompare(nm(b.employee_id))).map(it=>{ const e=empById(it.employee_id); const mb=empMonthlyBasic(e);
+    return { id:it.employee_id, name:nm(it.employee_id),
+      sss_no:e?.sss||'', ph_no:e?.philhealth||'', pi_no:e?.pagibig||'', tin:e?.tin||'',
+      sss_ee:Number(it.sss_ee||0), sss_er:pRound(sssER(mb,sss)*cf),
+      ph_ee:Number(it.philhealth_ee||0), ph_er:pRound(philhealthER(mb,ph)*cf),
+      pi_ee:Number(it.pagibig_ee||0), pi_er:pRound(pagibigER(mb,pi)*cf),
+      tax:Number(it.tax||0) };
+  });
+  const T=(k)=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+  const TABS=[['sss','SSS'],['ph','PhilHealth'],['pi','Pag-IBIG'],['bir','BIR Tax']];
+  const CFG={ sss:{no:'sss_no',ee:'sss_ee',er:'sss_er'}, ph:{no:'ph_no',ee:'ph_ee',er:'ph_er'}, pi:{no:'pi_no',ee:'pi_ee',er:'pi_er'} };
+  return (<Modal title={`Remittance summary · ${run.number}`} onClose={onClose} xwide>
+    <div className="space-y-3">
+      <div className="text-center"><div className="font-extrabold tracking-wide">STEEZE CORPORATION — REMITTANCE SUMMARY</div><div className="text-[11px] text-slate-500">{fmtDate(run.period_start)}–{fmtDate(run.period_end)} · contributions ×{cf} this cutoff</div></div>
+      <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs no-print">{TABS.map(([k,l])=>(<button key={k} onClick={()=>setTab(k)} className={`px-3 py-1 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>))}</div>
+      {tab!=='bir' ? (()=>{ const c=CFG[tab]; return (
+        <div className="overflow-x-auto border rounded"><table className="w-full text-xs whitespace-nowrap">
+          <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-left px-2 py-1">{TABS.find(t=>t[0]===tab)[1]} No.</th><th className="text-right px-2 py-1">EE</th><th className="text-right px-2 py-1">ER</th><th className="text-right px-2 py-1">Total</th></tr></thead>
+          <tbody>{rows.map(r=>(<tr key={r.id} className="border-t"><td className="px-2 py-1">{r.name}</td><td className="px-2 py-1 font-mono text-[10px]">{r[c.no]||'—'}</td><td className="px-2 py-1 text-right">{num(r[c.ee])}</td><td className="px-2 py-1 text-right">{num(r[c.er])}</td><td className="px-2 py-1 text-right font-semibold">{num(Number(r[c.ee])+Number(r[c.er]))}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1" colSpan="2">Total</td><td className="px-2 py-1 text-right">{num(T(c.ee))}</td><td className="px-2 py-1 text-right">{num(T(c.er))}</td><td className="px-2 py-1 text-right text-emerald-700">{num(T(c.ee)+T(c.er))}</td></tr></tfoot>
+        </table></div>
+      ); })() : (
+        <div className="overflow-x-auto border rounded"><table className="w-full text-xs whitespace-nowrap">
+          <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-left px-2 py-1">TIN</th><th className="text-right px-2 py-1">Withholding tax</th></tr></thead>
+          <tbody>{rows.map(r=>(<tr key={r.id} className="border-t"><td className="px-2 py-1">{r.name}</td><td className="px-2 py-1 font-mono text-[10px]">{r.tin||'—'}</td><td className="px-2 py-1 text-right">{num(r.tax)}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1" colSpan="2">Total</td><td className="px-2 py-1 text-right text-emerald-700">{num(T('tax'))}</td></tr></tfoot>
+        </table></div>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">SSS total</div><div className="font-bold">{num(T('sss_ee')+T('sss_er'))}</div></div>
+        <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">PhilHealth total</div><div className="font-bold">{num(T('ph_ee')+T('ph_er'))}</div></div>
+        <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">Pag-IBIG total</div><div className="font-bold">{num(T('pi_ee')+T('pi_er'))}</div></div>
+        <div className="border rounded-lg p-2"><div className="text-[9px] uppercase text-slate-400">BIR tax total</div><div className="font-bold">{num(T('tax'))}</div></div>
+      </div>
+      <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
+    </div>
+  </Modal>);
+}
+// Bank payout list — net pay per employee with bank + account, for the CEO's transfer.
+function PayrollPayoutModal({ run, items, employees, onClose }){
+  const empById=(id)=>(employees||[]).find(e=>e.id===id);
+  const nm=(id)=>{ const e=empById(id); return e?[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—':'—'; };
+  const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const rows=items.map(it=>{ const e=empById(it.employee_id); return { id:it.employee_id, name:nm(it.employee_id), bank:e?.bank_name||'', acct_name:e?.bank_account_name||'', acct:e?.bank_account_number||'', net:Number(it.net_pay||0) }; })
+    .sort((a,b)=>(a.bank||'').localeCompare(b.bank||'')||a.name.localeCompare(b.name));
+  const total=rows.reduce((a,r)=>a+r.net,0);
+  const noBank=rows.filter(r=>!r.bank||!r.acct).length;
+  return (<Modal title={`Bank payout list · ${run.number}`} onClose={onClose} xwide>
+    <div className="space-y-3">
+      <div className="text-center"><div className="font-extrabold tracking-wide">STEEZE CORPORATION — BANK PAYOUT LIST</div><div className="text-[11px] text-slate-500">{fmtDate(run.period_start)}–{fmtDate(run.period_end)}{run.pay_date?` · pay date ${fmtDate(run.pay_date)}`:''} · {rows.length} employees</div></div>
+      {noBank>0 && <div className="text-xs bg-amber-50 border border-amber-200 rounded p-2 text-amber-800 no-print">{noBank} employee{noBank===1?'':'s'} missing bank/account details — fill those in on their employee record.</div>}
+      <div className="overflow-x-auto border rounded"><table className="w-full text-xs whitespace-nowrap">
+        <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-left px-2 py-1">Bank</th><th className="text-left px-2 py-1">Account name</th><th className="text-left px-2 py-1">Account no.</th><th className="text-right px-2 py-1">Net pay</th></tr></thead>
+        <tbody>{rows.map(r=>(<tr key={r.id} className="border-t"><td className="px-2 py-1 font-medium">{r.name}</td><td className="px-2 py-1">{r.bank||<span className="text-rose-400">—</span>}</td><td className="px-2 py-1">{r.acct_name||'—'}</td><td className="px-2 py-1 font-mono text-[10px]">{r.acct||<span className="text-rose-400">—</span>}</td><td className="px-2 py-1 text-right font-semibold">{num(r.net)}</td></tr>))}</tbody>
+        <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1" colSpan="4">Total to transfer</td><td className="px-2 py-1 text-right text-emerald-700">{num(total)}</td></tr></tfoot>
+      </table></div>
+      <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
+    </div>
+  </Modal>);
+}
+// 13th-month helper — total basic earned in the year ÷ 12, per employee.
+function ThirteenthMonthModal({ profile, employees, onClose }){
+  const now=new Date();
+  const [year,setYear]=useState(now.getFullYear());
+  const [rows,setRows]=useState(null); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const empById=(id)=>(employees||[]).find(e=>e.id===id);
+  const nm=(id)=>{ const e=empById(id); return e?[e.last_name,e.first_name].filter(Boolean).join(', ')||e.nickname||'—':'—'; };
+  const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  async function build(){
+    setBusy(true); setMsg('');
+    try{
+      const { data:runs }=await sb.from('payroll_runs').select('id').is('deleted_at',null).eq('status','approved').gte('period_start',`${year}-01-01`).lte('period_end',`${year}-12-31`);
+      const ids=(runs||[]).map(r=>r.id);
+      if(!ids.length){ setRows([]); setMsg('No approved payroll runs found for '+year+'.'); setBusy(false); return; }
+      const { data:its }=await sb.from('payroll_items').select('employee_id,basic_pay').in('run_id',ids);
+      const m={}; (its||[]).forEach(i=>{ m[i.employee_id]=(m[i.employee_id]||0)+Number(i.basic_pay||0); });
+      const list=Object.entries(m).map(([id,basic])=>({ id, name:nm(id), basic, thirteenth:pRound(basic/12) })).sort((a,b)=>a.name.localeCompare(b.name));
+      setRows(list); setBusy(false);
+    }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
+  }
+  useEffect(()=>{ build(); },[year]);
+  const total=(rows||[]).reduce((a,r)=>a+r.thirteenth,0);
+  return (<Modal title="13th-month pay helper" onClose={onClose} xwide>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap no-print">
+        <div className="text-xs text-slate-500">Total basic earned in the year ÷ 12 per employee, from <b>approved</b> payroll runs. Pro-rated by what was actually earned.</div>
+        <div className="flex items-center gap-2"><label className="text-xs">Year</label><input type="number" className="input !py-1 w-24 text-sm" value={year} onChange={e=>setYear(+e.target.value)} /></div>
+      </div>
+      <div className="text-center"><div className="font-extrabold tracking-wide">STEEZE CORPORATION — 13TH-MONTH PAY · {year}</div></div>
+      {msg && <div className="text-xs text-amber-700">{msg}</div>}
+      {busy ? <div className="text-center text-slate-400 py-6 text-sm">Computing…</div> : rows && rows.length>0 && (
+        <div className="overflow-x-auto border rounded"><table className="w-full text-xs">
+          <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-right px-2 py-1">Total basic earned ({year})</th><th className="text-right px-2 py-1">13th-month (÷12)</th></tr></thead>
+          <tbody>{rows.map(r=>(<tr key={r.id} className="border-t"><td className="px-2 py-1">{r.name}</td><td className="px-2 py-1 text-right">{num(r.basic)}</td><td className="px-2 py-1 text-right font-semibold text-emerald-700">{num(r.thirteenth)}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1">Total ({rows.length})</td><td></td><td className="px-2 py-1 text-right text-emerald-700">{num(total)}</td></tr></tfoot>
+        </table></div>
+      )}
       <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
     </div>
   </Modal>);
