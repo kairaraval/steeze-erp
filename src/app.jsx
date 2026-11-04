@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 917 · Tapping a Toolbox 'initiative ready for your approval' notification now opens that exact initiative instead of the Toolbox landing page (mirrors the meeting-notification deep link).";
+const BUILD = "Live build 918 · Toolbox initiatives the AGM submits for CEO approval now appear in your For-Approval page (with a badge), alongside RFPs and the rest. Open one to read the AGM's progress report + deliverables + attachments and Accept — so initiative sign-offs land in the same queue you already check.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42435,6 +42435,12 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   const [openVoucher,setOpenVoucher]=useState(null);
   const [openMemo,setOpenMemo]=useState(null);
   const [openMov,setOpenMov]=useState(null);
+  // Toolbox initiatives the AGM submitted for CEO approval (admin only).
+  const [tbInits,setTbInits]=useState([]);
+  const [openInit,setOpenInit]=useState(null);
+  async function loadTbInits(){ if(profile.role!=='admin'){ setTbInits([]); return; } try{ const { data }=await sb.from('toolbox_initiatives').select('*').is('deleted_at',null).eq('status','for_ceo_approval').order('updated_at',{ascending:false}); setTbInits(data||[]); }catch(_){ setTbInits([]); } }
+  useEffect(()=>{ loadTbInits(); },[profile.role]);
+  const initWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   // NPAs (employee movements) HR sent for Admin approval + signature.
   const pendingMovements = profile.role==='admin' ? (hrMovements||[]).filter(m=> m.status==='for_approval' && !m.deleted_at) : [];
   const movEmpName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'—'; };
@@ -42539,7 +42545,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
     reload && reload();
   }
   async function returnCALiq(c){ const note=prompt('Return the liquidation. Why?'); if(note===null) return; const { error }=await sb.from('cash_advances').update({ liq_approval:null, liq_note:(note||'').trim()||null }).eq('id', c.id); if(error){ alert(error.message); return; } reload && reload(); }
-  const total = pendingRfps.length + agmRfpsForAdmin.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length + liqBudgets.length + liqCAs.length;
+  const total = pendingRfps.length + agmRfpsForAdmin.length + pendingBudgets.length + pendingVouchers.length + pendingPayments.length + pendingMemos.length + pendingLoans.length + pendingMovements.length + liqBudgets.length + liqCAs.length + tbInits.length;
   // One-click FULL admin approval + signature. This advances the money-approval
   // (approval_status → 'approved'), posts the bank transaction for officer drafts
   // that haven't posted yet, and stamps the admin signature — so an approved
@@ -42582,6 +42588,29 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
           {total===0 && <div className="text-emerald-700 text-sm font-semibold">✨ All caught up — nothing waiting on you.</div>}
         </div>
       </div>
+
+      {/* Toolbox initiatives the AGM submitted for your (CEO) approval */}
+      {tbInits.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+            <div className="font-semibold text-amber-900">🎯 Toolbox initiatives <span className="text-amber-600 font-normal text-xs ml-1">· {tbInits.length} ready for your approval</span></div>
+            <div className="text-xs text-amber-600">Open to read the report + deliverables, then accept.</div>
+          </div>
+          <div className="divide-y">
+            {tbInits.map(i=>{ const pm=INIT_PRIORITY[i.priority]||INIT_PRIORITY.medium; const d=initDeliv(i); return (
+              <div key={i.id} className="px-4 py-2.5 flex items-center gap-3 flex-wrap hover:bg-amber-50/40 cursor-pointer" onClick={()=>setOpenInit(i)}>
+                {i.code && <span className="font-mono text-[11px] text-slate-400">{i.code}</span>}
+                <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${pm[1]}`}>{pm[0]}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{i.title}</div>
+                  <div className="text-[11px] text-slate-500">{i.category||''} · assigned to {initWho(i.assigned_to)} · {d.done}/{d.total} deliverables</div>
+                </div>
+                <button onClick={(e)=>{ e.stopPropagation(); setOpenInit(i); }} className="text-xs px-2.5 py-1 rounded bg-amber-600 text-white font-semibold hover:bg-amber-700 shrink-0">📄 Review &amp; approve →</button>
+              </div>
+            ); })}
+          </div>
+        </div>
+      )}
 
       {/* HR Memos awaiting sign-off — HR prepares, Management signs before posting */}
       {pendingMemos.length>0 && (
@@ -42971,6 +43000,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       {openVoucher && <VoucherViewModal voucher={openVoucher} bankAccounts={bankAccounts} suppliers={suppliers} profiles={profiles} costCenters={costCenters} profile={profile} onClose={()=>setOpenVoucher(null)} onSaved={()=>{ setOpenVoucher(null); reload(); }} />}
       {openMemo && <MemoViewModal memo={openMemo} profiles={profiles} onClose={()=>setOpenMemo(null)} />}
       {openMov && <NPAPrintView movement={openMov} employees={employees} profiles={profiles} profile={profile} onClose={()=>setOpenMov(null)} />}
+      {openInit && <InitiativeModal initiative={openInit} profile={profile} profiles={profiles} onClose={()=>setOpenInit(null)} onSaved={()=>{ setOpenInit(null); loadTbInits(); reload&&reload(); }} />}
       {/* Payment verify modal — flips Pending → Verified, posts to bank, handles bank charges. */}
       {verifyingPayment && <SalesOrderVerifyPaymentModal payment={verifyingPayment.payment} so={verifyingPayment.so} profile={profile} bankAccounts={bankAccounts} onClose={()=>setVerifyingPayment(null)} onSaved={()=>{ setVerifyingPayment(null); reload(); }} />}
     </div>
@@ -53329,6 +53359,9 @@ function App(){
   const [inboxToolboxTab,setInboxToolboxTab]=useState(null); // open Toolbox on a specific tab from a notification
   const [inboxToolboxMeetingId,setInboxToolboxMeetingId]=useState(null); // deep-link straight into a specific meeting
   const [inboxToolboxInitiativeId,setInboxToolboxInitiativeId]=useState(null); // deep-link straight into a specific initiative
+  // Count of Toolbox initiatives the AGM submitted for CEO approval — feeds the For-Approval badge.
+  const [tbInitApprovals,setTbInitApprovals]=useState(0);
+  useEffect(()=>{ if(profile?.role!=='admin'){ setTbInitApprovals(0); return; } let on=true; (async()=>{ try{ const r=await sb.from('toolbox_initiatives').select('id',{count:'exact',head:true}).is('deleted_at',null).eq('status','for_ceo_approval'); if(on) setTbInitApprovals(r.count||0); }catch(_){ } })(); return ()=>{on=false;}; },[profile&&profile.role, view]);
   const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
@@ -54261,7 +54294,8 @@ function App(){
     + (profile?.role==='admin' ? (hrMovements||[]).filter(m => m.status==='for_approval' && !m.deleted_at).length : 0)
     + (profile?.role==='admin' ? (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length : 0)
     + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_admin').length
-    + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_admin').length;
+    + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_admin').length
+    + tbInitApprovals;
   // AGM first-level approval queue badge.
   const agmApprovalsPending = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request').length
     + (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length
