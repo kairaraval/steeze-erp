@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 924 · Asset Register: new '📉 Post this month's depreciation' button (Finance/Admin) creates one posted journal entry for the current month — straight-line per asset, grouped into the right Depreciation Expense / Accumulated Depreciation accounts by category. Guards against double-posting the same month.";
+const BUILD = "Live build 925 · Cash Advances: clicking a Liquidated cash advance now opens its liquidation view so you can see the exact expenses/receipts it covered (instead of the edit form). (Asset depreciation one-click post + AP/Budget/GL/CA finance fixes from builds 920–924.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -45609,7 +45609,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
           const custodian = profiles.find(p=>p.id===c.custodian_id);
           const linkedSpent = isPetty ? spentOn(c) : Number(c.amount_liquidated||0);
           const outstanding = onHandOf(c);
-          const onRowClick = () => isPetty ? setDetail(c) : setEditing(c);
+          const onRowClick = () => isPetty ? setDetail(c) : (c.status==='liquidated' ? setLiquidating(c) : setEditing(c));
           return (
             <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={onRowClick}>
               <td className="px-3 py-2.5 text-xs whitespace-nowrap">{fmtDate(c.date)}</td>
