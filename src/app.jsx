@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 922 · General Ledger: clicking a posting in an account's ledger now opens the full transaction inline — the complete double-entry plus the source record's details (voucher, expense, cash advance, bank txn, collection or journal) — so you don't have to hunt for which tab it came from.";
+const BUILD = "Live build 923 · Purchasing's DV-day cash advance request now takes 'transfer to' bank/account details, and Finance sees them on the Release screen so they know where to send the money.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -44945,7 +44945,7 @@ async function nextPcaNumber(){
   return `PCA-${monthKey}-${String(mx+1).padStart(3,'0')}`;
 }
 function PCARequestModal({ profile, onClose, onSaved }){
-  const [f,setF]=useState({ amount:'', purpose:'', date:todayManila() });
+  const [f,setF]=useState({ amount:'', purpose:'', date:todayManila(), payout_bank_name:'', payout_account_name:'', payout_account_number:'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   async function save(){
     if(!(Number(f.amount)>0)){ setMsg('Enter the amount needed.'); return; }
@@ -44953,7 +44953,7 @@ function PCARequestModal({ profile, onClose, onSaved }){
     setBusy(true); setMsg('');
     try{
       const number=await nextPcaNumber();
-      const { data:ca, error }=await sb.from('cash_advances').insert({ number, date:f.date||todayManila(), kind:'cash_advance', source:'purchasing', status:'requested', custodian_id:profile.id, custodian_name:profile.name||profile.email, purpose:f.purpose.trim(), amount:Number(f.amount), receipts:[], created_by:profile.id }).select('id,number').single();
+      const { data:ca, error }=await sb.from('cash_advances').insert({ number, date:f.date||todayManila(), kind:'cash_advance', source:'purchasing', status:'requested', custodian_id:profile.id, custodian_name:profile.name||profile.email, purpose:f.purpose.trim(), amount:Number(f.amount), payout_bank_name:f.payout_bank_name.trim()||null, payout_account_name:f.payout_account_name.trim()||null, payout_account_number:f.payout_account_number.trim()||null, receipts:[], created_by:profile.id }).select('id,number').single();
       if(error) throw error;
       try{ const { data:fin }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(fin||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💵 Purchasing requested DV-day funds — ${peso(Number(f.amount))} (${ca.number}) · ${f.purpose.trim().slice(0,40)}`, link_view:'pur-cash-advance', ref_type:'cash_advance', ref_id:ca.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
       setBusy(false); onSaved();
@@ -44968,6 +44968,14 @@ function PCARequestModal({ profile, onClose, onSaved }){
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>setF(p=>({...p,date:e.target.value}))} /></TpLbl>
         </div>
         <TpLbl t="Purpose *"><textarea className="input min-h-[52px]" value={f.purpose} onChange={e=>setF(p=>({...p,purpose:e.target.value}))} placeholder="e.g. DV-day buying 24 Oct — fabrics, trims, threads from Divisoria" /></TpLbl>
+        <div className="border rounded-lg p-3 bg-sky-50/50 border-sky-200">
+          <div className="text-[10px] uppercase font-bold text-sky-800 mb-1.5">Transfer to — bank / account details (optional)</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <TpLbl t="Bank"><input className="input" value={f.payout_bank_name} onChange={e=>setF(p=>({...p,payout_bank_name:e.target.value}))} placeholder="e.g. BDO / GCash" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.payout_account_name} onChange={e=>setF(p=>({...p,payout_account_name:e.target.value}))} /></TpLbl>
+            <TpLbl t="Account no."><input className="input" value={f.payout_account_number} onChange={e=>setF(p=>({...p,payout_account_number:e.target.value}))} /></TpLbl>
+          </div>
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Sending…':'💵 Send request to Finance'}</button>
       </div>
@@ -44977,6 +44985,7 @@ function PCARequestModal({ profile, onClose, onSaved }){
 function PCAReleaseModal({ ca, profile, bankAccounts, onClose, onSaved }){
   const [bankId,setBankId]=useState(bankAccounts?.[0]?.id||'');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const hasPayout = ca.payout_bank_name || ca.payout_account_number;
   async function release(){
     if(!bankId){ setMsg('Pick the bank to release the cash from.'); return; }
     setBusy(true); setMsg('');
@@ -44994,6 +45003,7 @@ function PCAReleaseModal({ ca, profile, bankAccounts, onClose, onSaved }){
     <Modal title={`Release funds · ${ca.number||''}`} onClose={onClose}>
       <div className="space-y-3">
         <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs"><b>{ca.custodian_name||''}</b> requested <b>{peso(ca.amount)}</b> · {ca.purpose||''}</div>
+        {hasPayout && <div className="bg-sky-50 border border-sky-200 rounded p-2 text-xs text-sky-800">🏦 Transfer to: <b>{ca.payout_bank_name||''}</b>{ca.payout_account_name?` · ${ca.payout_account_name}`:''}{ca.payout_account_number?` · ${ca.payout_account_number}`:''}</div>}
         <TpLbl t="Release from bank *"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— pick bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
         <div className="text-[11px] text-slate-400">Records a cash-out of {peso(ca.amount)} from the chosen bank. The custodian then liquidates it.</div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
