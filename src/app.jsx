@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 920 · Finance: New A/P Voucher now takes bank/payout details + a billing-proof attachment. New Budget Request now takes bank/payout details + quotation/supporting attachments. Both show on the voucher/request so approvers see where to pay and the proof.";
+const BUILD = "Live build 921 · When an RFP is rejected, the A/P Voucher it came from is now bounced back to its owner: marked Returned (with the reason), editable, and shown in a new Returned tab on the A/P Vouchers page. Edit it and press 'Re-send for RFP' to resubmit. The person who recorded it gets a notification.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39212,6 +39212,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
     setBusy(true);
     const { error } = await sb.from('rfps').update({ status:'rejected', rejected_by:profile.id, rejected_at:new Date().toISOString(), rejected_reason:notes }).eq('id', rfp.id);
     setBusy(false); if(error){ setMsg(error.message); return; }
+    // If this RFP came from an A/P Voucher, bounce the APV back to its owner:
+    // mark it Returned (editable), drop the RFP link so it can be resubmitted,
+    // and record the reason + notify whoever recorded it.
+    try{
+      const { data:apv }=await sb.from('ap_vouchers').select('id,created_by,number').eq('rfp_id', rfp.id).is('deleted_at',null);
+      if(apv && apv.length){
+        await sb.from('ap_vouchers').update({ status:'returned', rfp_id:null, return_note:notes, returned_at:new Date().toISOString() }).in('id', apv.map(a=>a.id));
+        const notif=apv.filter(a=>a.created_by && a.created_by!==profile.id).map(a=>({ recipient_id:a.created_by, actor_id:profile.id, type:'system', text:`↩ A/P Voucher ${a.number} returned — edit and resend for payment. Reason: ${String(notes).slice(0,80)}`, link_view:'ap-vouchers', ref_type:'ap_voucher', ref_id:a.id }));
+        if(notif.length) await sb.from('notifications').insert(notif);
+      }
+    }catch(_){}
     // Notify whoever requested this RFP (e.g. HR for a leave cash-out) + the
     // Purchasing team, so the rejection + reason reaches them. Previously this
     // sent no notification, so the requester never learned it was rejected.
@@ -40603,6 +40614,7 @@ function amountInWords(n){
 const AP_STATUSES = [
   { key:'recorded',    label:'Recorded (unpaid)', color:'bg-slate-100 text-slate-700' },
   { key:'for_payment', label:'For Payment', color:'bg-amber-100 text-amber-700' },
+  { key:'returned',    label:'Returned',    color:'bg-purple-100 text-purple-700' },
   { key:'paid',        label:'Paid',        color:'bg-emerald-100 text-emerald-700' },
   { key:'void',        label:'Void',        color:'bg-rose-100 text-rose-700' },
 ];
@@ -40610,11 +40622,12 @@ const apMeta = (k)=> AP_STATUSES.find(s=>s.key===k) || AP_STATUSES[0];
 
 // Manually record a payable (expense not yet paid) with a due date. Finance can
 // later "Send for RFP" to push it into the payment approval queue.
-function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
-  const [f,setF]=useState({ supplier_name:'', amount:'', particulars:'', due_date:'', payment_method:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'' });
-  const [atts,setAtts]=useState([]);
+function APVoucherCreateModal({ profile, suppliers, existing, onClose, onSaved }){
+  const isEdit=!!existing;
+  const [f,setF]=useState({ supplier_name:existing?.supplier_name||'', amount:existing?.amount!=null?String(existing.amount):'', particulars:existing?.particulars||'', due_date:existing?.due_date||'', payment_method:existing?.payment_method||'', notes:existing?.notes||'', bank_name:existing?.bank_name||'', bank_account_name:existing?.bank_account_name||'', bank_account_number:existing?.bank_account_number||'' });
+  const [atts,setAtts]=useState(Array.isArray(existing?.attachments)?existing.attachments:[]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const scopeRef=useRef('apv/new-'+Date.now()+'-'+Math.random().toString(36).slice(2,7));
+  const scopeRef=useRef(existing?.id ? ('apv/'+existing.id) : ('apv/new-'+Date.now()+'-'+Math.random().toString(36).slice(2,7)));
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
   const supNames=Array.from(new Set((suppliers||[]).map(s=>s.company||s.name).filter(Boolean))).sort();
   async function save(){
@@ -40622,17 +40635,22 @@ function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
     if(!(Number(f.amount)>0)){ setMsg('Enter an amount greater than 0.'); return; }
     setBusy(true); setMsg('');
     try{
-      const monthKey=todayManila().slice(0,7);
-      const { data:apRows }=await sb.from('ap_vouchers').select('number').like('number',`APV-${monthKey}-%`);
-      let max=0;(apRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>max)max=n;}});
-      const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
-      const { error }=await sb.from('ap_vouchers').insert({ number, supplier_name:f.supplier_name.trim(), amount:Number(f.amount), particulars:f.particulars.trim()||null, due_date:f.due_date||null, payment_method:f.payment_method||null, notes:f.notes||null, bank_name:f.bank_name.trim()||null, bank_account_name:f.bank_account_name.trim()||null, bank_account_number:f.bank_account_number.trim()||null, attachments:atts, status:'recorded', created_by:profile.id });
+      const fields={ supplier_name:f.supplier_name.trim(), amount:Number(f.amount), particulars:f.particulars.trim()||null, due_date:f.due_date||null, payment_method:f.payment_method||null, notes:f.notes||null, bank_name:f.bank_name.trim()||null, bank_account_name:f.bank_account_name.trim()||null, bank_account_number:f.bank_account_number.trim()||null, attachments:atts };
+      let error;
+      if(isEdit){ ({ error }=await sb.from('ap_vouchers').update(fields).eq('id', existing.id)); }
+      else {
+        const monthKey=todayManila().slice(0,7);
+        const { data:apRows }=await sb.from('ap_vouchers').select('number').like('number',`APV-${monthKey}-%`);
+        let max=0;(apRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>max)max=n;}});
+        const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+        ({ error }=await sb.from('ap_vouchers').insert({ number, ...fields, status:'recorded', created_by:profile.id }));
+      }
       if(error) throw error;
       setBusy(false); onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title="➕ New A/P Voucher" onClose={onClose} wide>
+    <Modal title={isEdit?`✏ Edit A/P Voucher · ${existing.number||''}`:'➕ New A/P Voucher'} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Record a payable you owe but haven't paid yet. Set the due date so it shows on the payment calendar. When it's ready to pay, open it and press <strong>Send for RFP</strong>.</div>
         <TpLbl t="Supplier / payee *">
@@ -40662,7 +40680,7 @@ function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
-          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'Record payable'}</button>
+          <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Record payable'}</button>
           <button onClick={onClose} className="py-2 px-4 rounded-lg border text-slate-700 font-semibold hover:bg-slate-50">Cancel</button>
         </div>
       </div>
@@ -40675,7 +40693,9 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
   const [search,setSearch]=useState('');
   const [viewing,setViewing]=useState(null);
   const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
   const canManage = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
+  const returnedCount=(apVouchers||[]).filter(a=>a.status==='returned').length;
   async function sendApvForRfp(a){
     if(a.rfp_id){ alert('This AP Voucher already has a payment request — check the RFP queue.'); return; }
     if(!confirm(`Send AP Voucher ${a.number} to the payment queue?\n\n${a.supplier_name||''} — ${peso(a.amount)}\n\nThis creates a Request for Payment that goes to Finance → Admin for approval, then payment.`)) return;
@@ -40686,7 +40706,7 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
       const rfpNumber=`RFP-${monthKey}-${String(maxSeq+1).padStart(3,'0')}`;
       const { data:rfpIns, error }=await sb.from('rfps').insert({ number:rfpNumber, date:today, supplier_name:a.supplier_name||null, amount:Number(a.amount||0), particulars:a.particulars||`Payment for ${a.supplier_name||''}`, payment_method:a.payment_method||null, due_date:a.due_date||null, status:'pending_finance', requested_by:profile.id }).select().single();
       if(error) throw error;
-      await sb.from('ap_vouchers').update({ rfp_id:rfpIns.id, status:'for_payment' }).eq('id', a.id);
+      await sb.from('ap_vouchers').update({ rfp_id:rfpIns.id, status:'for_payment', return_note:null, returned_at:null }).eq('id', a.id);
       try{ const { data:accts }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(accts||[]).filter(x=>x.id!==profile.id).map(x=>({ recipient_id:x.id, actor_id:profile.id, type:'system', text:`📄 AP Voucher ${a.number} sent for payment (${rfpNumber}) — ${a.supplier_name||''} ${peso(a.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfpIns.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
       reload && reload();
     }catch(e){ alert(e.message||String(e)); }
@@ -40714,7 +40734,7 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm">
-            {[['recorded','Recorded'],['for_payment','For Payment'],['paid','Paid'],['void','Void'],['all','All']].map(([k,l])=>(
+            {[['recorded','Recorded'],['for_payment','For Payment'],['returned',`Returned${returnedCount?` (${returnedCount})`:''}`],['paid','Paid'],['void','Void'],['all','All']].map(([k,l])=>(
               <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-md ${tab===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>
             ))}
           </div>
@@ -40734,14 +40754,15 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
               <tr key={a.id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(a)}>
                 <td className="px-3 py-2 font-mono text-xs font-semibold">{a.number}</td>
                 <td className="px-3 py-2">{a.supplier_name||'—'}</td>
-                <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[240px]">{a.particulars||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[240px]">{a.particulars||'—'}{a.status==='returned'&&a.return_note && <div className="text-[11px] text-purple-700 mt-0.5 whitespace-normal">↩ {a.return_note}</div>}</td>
                 <td className="px-3 py-2 text-right font-semibold">{a.status==='for_payment' ? peso(apBalance(a)) : peso(a.amount)}{Number(a.amount_paid||0)>0 && a.status==='for_payment' && <div className="text-[10px] font-normal text-slate-400">of {peso(a.amount)}</div>}</td>
                 <td className="px-3 py-2 text-xs">{a.due_date?fmtDate(a.due_date):'—'}</td>
                 <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
-                  {canManage && a.status==='recorded' && !a.rfp_id && <button onClick={(e)=>{e.stopPropagation(); sendApvForRfp(a);}} className="text-xs text-blue-600 font-semibold hover:underline mr-2" title="Create a Request for Payment and send to Finance">📤 Send for RFP</button>}
+                  {canManage && (a.status==='recorded'||a.status==='returned') && !a.rfp_id && <button onClick={(e)=>{e.stopPropagation(); sendApvForRfp(a);}} className="text-xs text-blue-600 font-semibold hover:underline mr-2" title="Create a Request for Payment and send to Finance">📤 {a.status==='returned'?'Re-send for RFP':'Send for RFP'}</button>}
+                  {canManage && (a.status==='returned'||a.status==='recorded') && <button onClick={(e)=>{e.stopPropagation(); setEditing(a);}} className="text-xs text-amber-600 hover:underline mr-2">✏ Edit</button>}
                   <button onClick={(e)=>{e.stopPropagation(); setViewing(a);}} className="text-xs text-indigo-600 hover:underline mr-2">View</button>
-                  {canManage && (a.status==='for_payment'||a.status==='recorded') && <button onClick={(e)=>{e.stopPropagation(); voidAp(a);}} className="text-xs text-rose-500 hover:underline">Void</button>}
+                  {canManage && (a.status==='for_payment'||a.status==='recorded'||a.status==='returned') && <button onClick={(e)=>{e.stopPropagation(); voidAp(a);}} className="text-xs text-rose-500 hover:underline">Void</button>}
                 </td>
               </tr>
             ); })}
@@ -40750,6 +40771,7 @@ function APVouchersView({ profile, profiles, apVouchers, rfps, orders, suppliers
       </div>
       {viewing && <APVoucherModal ap={viewing} profile={profile} profiles={profiles} rfps={rfps} orders={orders} suppliers={suppliers} vouchers={vouchers} chartAccounts={chartAccounts} onClose={()=>setViewing(null)} />}
       {creating && <APVoucherCreateModal profile={profile} suppliers={suppliers} onClose={()=>setCreating(false)} onSaved={()=>{ setCreating(false); reload && reload(); }} />}
+      {editing && <APVoucherCreateModal profile={profile} suppliers={suppliers} existing={editing} onClose={()=>setEditing(null)} onSaved={()=>{ setEditing(null); reload && reload(); }} />}
     </div>
   );
 }
@@ -42300,7 +42322,9 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
       reload&&reload(); return;
     }
     const { error }=await sb.from('rfps').update({ status:'pending_admin', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `🧾 RFP ${r.number||''} approved by AGM — awaiting your approval · ${r.supplier_name||''} ${peso(r.amount)}`, 'approvals','rfp',r.id); reload&&reload(); }
-  async function returnRFP(r, note){ note = note===undefined ? prompt('Reason for returning / rejecting this RFP?') : note; if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:nn(note), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; } reload&&reload(); }
+  async function returnRFP(r, note){ note = note===undefined ? prompt('Reason for returning / rejecting this RFP?') : note; if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:nn(note), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; }
+    try{ const { data:apv }=await sb.from('ap_vouchers').select('id,created_by,number').eq('rfp_id', r.id).is('deleted_at',null); if(apv&&apv.length){ await sb.from('ap_vouchers').update({ status:'returned', rfp_id:null, return_note:nn(note), returned_at:stamp() }).in('id', apv.map(a=>a.id)); const notif=apv.filter(a=>a.created_by&&a.created_by!==profile.id).map(a=>({ recipient_id:a.created_by, actor_id:profile.id, type:'system', text:`↩ A/P Voucher ${a.number} returned — edit and resend for payment.${note?` Reason: ${String(note).slice(0,70)}`:''}`, link_view:'ap-vouchers', ref_type:'ap_voucher', ref_id:a.id })); if(notif.length) await sb.from('notifications').insert(notif); } }catch(_){}
+    reload&&reload(); }
   // Budget liquidation
   async function approveBudget(b, note){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
   async function returnBudget(b, note){ note = note===undefined ? prompt('Return the liquidation to the requester. Why?') : note; if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
