@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 918 · Toolbox initiatives the AGM submits for CEO approval now appear in your For-Approval page (with a badge), alongside RFPs and the rest. Open one to read the AGM's progress report + deliverables + attachments and Accept — so initiative sign-offs land in the same queue you already check.";
+const BUILD = "Live build 919 · Purchasing personnel label updated from Jay-Ann to Chelle on the Purchase Requests board (For Materials Queue lane + the 'Approve → ' handoff button).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33803,13 +33803,13 @@ function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 //   Manual Request (manual PRs) → To Review (sampling + closed-won auto PRs) →
 //   For Materials Queue (approved) → Ordered (POed in Materials Queue) →
 //   Fulfilled (PO received or issued from stock).
-// Minda (Purchasing) works the first two lanes; Jay-Ann / purchasing personnel
+// Minda (Purchasing) works the first two lanes; Chelle / purchasing personnel
 // take over at "For Materials Queue".
 const PR_LANES=[
   { key:'manual',  title:'Sales Manual Requests', who:'Minda · Purchasing',       statuses:['manual_request'], color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'dept',    title:'Department Requests',  who:'Other departments',         statuses:['department_request'], color:'bg-cyan-100 text-cyan-700' },
   { key:'review',  title:'To Review',            who:'Minda · Purchasing',        statuses:['submitted'],      color:'bg-amber-100 text-amber-700' },
-  { key:'queue',   title:'For Materials Queue',  who:'Jay-Ann · Purchasing',      statuses:['approved'],       color:'bg-emerald-100 text-emerald-700' },
+  { key:'queue',   title:'For Materials Queue',  who:'Chelle · Purchasing',      statuses:['approved'],       color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered', title:'Ordered',              who:'',                          statuses:['ordered'],        color:'bg-indigo-100 text-indigo-700' },
   { key:'done',    title:'Fulfilled',            who:'',                          statuses:['fulfilled_stock'],color:'bg-teal-100 text-teal-700' },
 ];
@@ -34064,7 +34064,7 @@ function PurchaseRequestsView({ profile, requests, items, suppliers, departments
                     </button>
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t flex-wrap">
                       {PR_AWAITING.includes(r.status) && <>
-                        <button onClick={()=>approveAndHandoff(r)} className="text-[11px] text-emerald-600 hover:underline font-medium" title="Approve and hand off to Jay-Ann for PO processing">✔ Approve → Jay-Ann</button>
+                        <button onClick={()=>approveAndHandoff(r)} className="text-[11px] text-emerald-600 hover:underline font-medium" title="Approve and hand off to Chelle for PO processing">✔ Approve → Chelle</button>
                         <button onClick={()=>setPRStatus(r,'rejected')} className="text-[11px] text-rose-500 hover:underline">✕ Reject</button>
                       </>}
                       {r.status==='approved' && prFullyCovered(r, items, prReservations) && <button onClick={()=>fulfillFromStock(r)} className="text-[11px] text-teal-600 hover:underline font-medium" title="No PO needed — draw from stock">📦 From stock</button>}
