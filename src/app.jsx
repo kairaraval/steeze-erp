@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 923 · Purchasing's DV-day cash advance request now takes 'transfer to' bank/account details, and Finance sees them on the Release screen so they know where to send the money.";
+const BUILD = "Live build 924 · Asset Register: new '📉 Post this month's depreciation' button (Finance/Admin) creates one posted journal entry for the current month — straight-line per asset, grouped into the right Depreciation Expense / Accumulated Depreciation accounts by category. Guards against double-posting the same month.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -45997,13 +45997,61 @@ function assetDep(a){
   const bookValue = cost - accumulated;
   return { depreciable, annual, monthly, months, accumulated, bookValue };
 }
+// Straight-line depreciation GL accounts per asset category.
+function depCodesForCategory(cat){
+  const c=(cat||'').toLowerCase();
+  if(/software|licen/.test(c)) return { exp:'401019', acc:'101022', label:'Software Licenses' };
+  if(/vehicle|motor|truck|van/.test(c)) return { exp:'401018', acc:'101021', label:'Motor Vehicle' };
+  if(/machin|production/.test(c)) return { exp:'401017', acc:'101024', label:'Production Equipment' };
+  return { exp:'401016', acc:'101023', label:'Office & Plant Furniture/Equipment' };
+}
+// This month's depreciation for an asset, in the target month (0-based month index).
+function assetMonthDep(a, year, month){
+  const cost=Number(a.cost||0), salvage=Number(a.salvage_value||0), life=Number(a.useful_life_years||0);
+  const depreciable=Math.max(0, cost-salvage); if(depreciable<=0||life<=0) return 0;
+  if(a.status==='disposed'||a.deleted_at||!a.purchase_date) return 0;
+  const monthly=depreciable/(life*12);
+  const pd=new Date(a.purchase_date+'T00:00:00'); const end=new Date(year, month+1, 0);
+  if(pd>end) return 0;
+  const idx=(end.getFullYear()-pd.getFullYear())*12 + (end.getMonth()-pd.getMonth()) + 1; // 1-based month of depreciation
+  const totalMonths=Math.round(life*12);
+  if(idx<1 || idx>totalMonths) return 0;
+  const remaining=Math.max(0, depreciable - monthly*(idx-1));
+  return Math.round(Math.min(monthly, remaining)*100)/100;
+}
 function AssetsView({ profile, assets, profiles, reload }){
   const [search,setSearch]=useState('');
   const [catFilter,setCatFilter]=useState('');
   const [editing,setEditing]=useState(null);   // asset row or {} for new
   const [tagAsset,setTagAsset]=useState(null);
+  const [depBusy,setDepBusy]=useState(false);
   const canEdit = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer' || profile.role==='hr_admin';
+  const canPostDep = profile.role==='admin' || profile.role==='accounting' || profile.role==='accounting_officer';
   const live = (assets||[]).filter(a=>!a.deleted_at);
+  async function postMonthlyDepreciation(){
+    const now=new Date(); const year=now.getFullYear(); const month=now.getMonth();
+    const monthKey=`${year}-${String(month+1).padStart(2,'0')}`;
+    const monthName=now.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    // Tally per-category depreciation for the current month.
+    const byCat={}; let total=0;
+    live.forEach(a=>{ const amt=assetMonthDep(a,year,month); if(amt<=0) return; const codes=depCodesForCategory(a.category); const k=codes.exp+'|'+codes.acc+'|'+codes.label; byCat[k]=(byCat[k]||0)+amt; total+=amt; });
+    total=Math.round(total*100)/100;
+    if(total<=0){ alert('No depreciation to post this month — assets may be fully depreciated or not yet started.'); return; }
+    // Prevent double posting.
+    const { data:exist }=await sb.from('journal_entries').select('number').like('number', `DEP-${monthKey}-%`).is('deleted_at',null);
+    if(exist && exist.length){ alert(`Depreciation for ${monthName} looks already posted (${exist[0].number}). Delete that journal entry first if you need to re-post.`); return; }
+    if(!confirm(`Post monthly depreciation for ${monthName}?\n\nTotal: ${peso(total)} across ${Object.keys(byCat).length} account group(s).\n\nThis creates one posted journal entry (Dr Depreciation Expense, Cr Accumulated Depreciation).`)) return;
+    setDepBusy(true);
+    try{
+      const lines=[];
+      Object.entries(byCat).forEach(([k,amt])=>{ const [exp,acc,label]=k.split('|'); const a=Math.round(amt*100)/100; lines.push({ account_code:exp, description:`Depreciation — ${label} · ${monthName}`, debit:a, credit:0, cost_center_id:null }); lines.push({ account_code:acc, description:`Accum. depreciation — ${label} · ${monthName}`, debit:0, credit:a, cost_center_id:null }); });
+      const number=`DEP-${monthKey}-001`;
+      const payload={ number, date:new Date(year,month+1,0).toISOString().slice(0,10), reference:'AUTO-DEP', memo:`Monthly depreciation — ${monthName}`, bank_id:null, cost_center_id:null, lines, total_debit:total, total_credit:total, status:'posted', created_by:profile.id };
+      const { error }=await sb.from('journal_entries').insert(payload);
+      if(error) throw error;
+      setDepBusy(false); alert(`Depreciation for ${monthName} posted ✓ (${number}, ${peso(total)}).`); reload&&reload();
+    }catch(e){ setDepBusy(false); alert('Failed to post: '+(e.message||e)); }
+  }
   const rows = live
     .filter(a=> !catFilter || a.category===catFilter)
     .filter(a=> !search || `${a.asset_code||''} ${a.name||''} ${a.assigned_to_name||''} ${a.department||''} ${a.serial_number||''}`.toLowerCase().includes(search.toLowerCase()));
@@ -46019,7 +46067,10 @@ function AssetsView({ profile, assets, profiles, reload }){
             <h1 className="text-2xl font-bold">🏷 Asset Register</h1>
             <p className="text-slate-500 text-sm">{live.length} assets · Cost <strong>{peso(totalCost)}</strong> · Accum. dep. <strong className="text-amber-700">{peso(totalAccum)}</strong> · Net book value <strong className="text-emerald-700">{peso(totalBook)}</strong></p>
           </div>
-          {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add asset</button>}
+          <div className="flex gap-2">
+            {canPostDep && <button onClick={postMonthlyDepreciation} disabled={depBusy} className="px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-700 text-sm font-semibold hover:bg-amber-50 disabled:opacity-50" title="Create this month's depreciation journal entry">{depBusy?'Posting…':'📉 Post this month’s depreciation'}</button>}
+            {canEdit && <button onClick={()=>setEditing({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ Add asset</button>}
+          </div>
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} className="text-sm px-2 py-1.5 rounded-lg border border-slate-200">
