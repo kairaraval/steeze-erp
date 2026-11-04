@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 921 · When an RFP is rejected, the A/P Voucher it came from is now bounced back to its owner: marked Returned (with the reason), editable, and shown in a new Returned tab on the A/P Vouchers page. Edit it and press 'Re-send for RFP' to resubmit. The person who recorded it gets a notification.";
+const BUILD = "Live build 922 · General Ledger: clicking a posting in an account's ledger now opens the full transaction inline — the complete double-entry plus the source record's details (voucher, expense, cash advance, bank txn, collection or journal) — so you don't have to hunt for which tab it came from.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46872,7 +46872,11 @@ function buildGLPostings(data){
   const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[] } = data;
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
-  const push=(date,code,debit,credit,source,ref,memo,cc)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null }); };
+  let __seq=0;
+  const push=(date,code,debit,credit,source,ref,memo,cc,srcKind,srcId)=>{ const d=Number(debit)||0, c=Number(credit)||0; if(!d && !c) return; P.push({ date:(date||'').slice(0,10), account_code:code, account_name:nameOf(code), debit:d, credit:c, source, ref:ref||'', memo:memo||'', cost_center_id:cc||null, src_kind:srcKind||null, src_id:srcId||null }); };
+  // Each transaction's postings share a txn_key so the GL can group them into the
+  // full double-entry when you click a line. Built from source + ref + id.
+  const txnKey=(srcKind,srcId,source,ref,date)=> srcId ? `${srcKind}:${srcId}` : `${source}:${ref}:${date}`;
   const CASH_HAND='101001';
   // Map a bank_account (by id) to its Chart-of-Accounts "Cash in Bank - X" code.
   // Match on BOTH the short code AND the full legal name — accounts are stored
@@ -46895,13 +46899,13 @@ function buildGLPostings(data){
   }
   // A. Posted journal entries — already double-entry.
   journalEntries.filter(j=>!j.deleted_at && j.status!=='cancelled' && j.status!=='draft').forEach(j=>{
-    (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo, l.cost_center_id||j.cost_center_id));
+    (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo, l.cost_center_id||j.cost_center_id, 'journal', j.id));
   });
   // B. Sales collections (verified SO payments) — Dr Cash/Bank, Cr Sales Revenue.
   soPayments.filter(p=>!p.deleted_at && (p.status==='verified'||p.status==='paid'||p.status==='confirmed')).forEach(p=>{
     const amt=Number(p.amount)||0; if(!amt) return;
     const cc=cashCodeFor(p.bank_id); const dt=p.date||p.paid_at||p.created_at;
-    push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection'); push(dt, '501001', 0, amt, 'AR', p.reference||'', 'Sales collection');
+    push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection', null, 'so_payment', p.id); push(dt, '501001', 0, amt, 'AR', p.reference||'', 'Sales collection', null, 'so_payment', p.id);
   });
   // C. Bank transactions (skip sales collections handled above to avoid double count).
   const vById=new Map(vouchers.map(v=>[v.id,v]));
@@ -46913,15 +46917,15 @@ function buildGLPostings(data){
       const v=b.ref_type==='voucher'?vById.get(b.ref_id):null;
       const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
       if(v && Array.isArray(v.split_lines) && v.split_lines.length){
-        v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, l.cost_center_id||v.cost_center_id));
-      } else if(v){ push(b.date, v.gl_account_code||categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed'); }
-      else if(e){ push(b.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed'); }
-      else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued'); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, ''); }
-      else { push(b.date, '401020', amt, 0, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, ''); }
+        v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, l.cost_center_id||v.cost_center_id, 'voucher', v.id));
+      } else if(v){ push(b.date, v.gl_account_code||categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id, 'voucher', v.id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed', null, 'voucher', v.id); }
+      else if(e){ push(b.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id, 'expense', e.id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed', null, 'expense', e.id); }
+      else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued', null, 'bank_txn', b.id); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, '', null, 'bank_txn', b.id); }
+      else { push(b.date, '401020', amt, 0, 'BANK', b.reference_number, b.description, null, 'bank_txn', b.id); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, '', null, 'bank_txn', b.id); }
     } else {
       if(b.ref_type==='so_payment'||b.ref_type==='sales'||b.ref_type==='sales_order') return; // handled in B
-      if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, 0, amt, 'PC', b.reference_number, 'Return from petty cash'); push(b.date, CASH_BANK, amt, 0, 'PC', b.reference_number, ''); }
-      else { push(b.date, '501003', 0, amt, 'BANK', b.reference_number, b.description); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, ''); }
+      if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, 0, amt, 'PC', b.reference_number, 'Return from petty cash', null, 'bank_txn', b.id); push(b.date, CASH_BANK, amt, 0, 'PC', b.reference_number, '', null, 'bank_txn', b.id); }
+      else { push(b.date, '501003', 0, amt, 'BANK', b.reference_number, b.description, null, 'bank_txn', b.id); push(b.date, CASH_BANK, amt, 0, 'BANK', b.reference_number, '', null, 'bank_txn', b.id); }
     }
   });
   // C2. Cash-advance liquidations — reclassify the SPENT portion out of Cash on
@@ -46932,17 +46936,17 @@ function buildGLPostings(data){
   (cashAdvances||[]).filter(c=>!c.deleted_at && c.kind==='cash_advance' && c.status==='liquidated').forEach(c=>{
     const recs = Array.isArray(c.receipts) ? c.receipts : [];
     let spent=0;
-    recs.forEach(r=>{ const amt=Number(r.amount)||0; if(amt<=0) return; spent+=amt; const code=r.gl_account_code || categoryToAccountCode(r.category||''); push(c.liquidated_at||c.date, code, amt, 0, 'CA', c.number, r.description||'Cash advance expense', r.cost_center_id); });
-    if(spent>0) push(c.liquidated_at||c.date, CASH_HAND, 0, spent, 'CA', c.number, 'Liquidated from cash advance');
+    recs.forEach(r=>{ const amt=Number(r.amount)||0; if(amt<=0) return; spent+=amt; const code=r.gl_account_code || categoryToAccountCode(r.category||''); push(c.liquidated_at||c.date, code, amt, 0, 'CA', c.number, r.description||'Cash advance expense', r.cost_center_id, 'cash_advance', c.id); });
+    if(spent>0) push(c.liquidated_at||c.date, CASH_HAND, 0, spent, 'CA', c.number, 'Liquidated from cash advance', null, 'cash_advance', c.id);
   });
   // D. Petty-cash expenses (paid from the float) — Dr expense (net) + Dr Input VAT,
   // Cr Cash on Hand (total). Replenishment tops Cash on Hand back from the bank.
   expenses.filter(e=>!e.deleted_at && e.paid_via==='petty_cash').forEach(e=>{
     const amt=Number(e.amount)||0; if(!amt) return;
     const vat=Math.max(0, Number(e.input_vat)||0); const net=amt-vat;
-    push(e.date, e.gl_account_code||categoryToAccountCode(e.category), net, 0, 'PC', '', e.description||e.vendor, e.cost_center_id);
-    if(vat>0) push(e.date, '101011', vat, 0, 'PC', '', 'Input VAT', e.cost_center_id);
-    push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash');
+    push(e.date, e.gl_account_code||categoryToAccountCode(e.category), net, 0, 'PC', '', e.description||e.vendor, e.cost_center_id, 'expense', e.id);
+    if(vat>0) push(e.date, '101011', vat, 0, 'PC', '', 'Input VAT', e.cost_center_id, 'expense', e.id);
+    push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash', null, 'expense', e.id);
   });
   return P;
 }
@@ -46970,6 +46974,8 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
+  const [txn,setTxn]=useState(null); // clicked posting → view the whole transaction inline
+  const txnKeyOf=(p)=> p.src_id ? `${p.src_kind}:${p.src_id}` : `${p.source}:${p.ref}:${p.date}`;
   const inYear=(p)=> year==='all' || (p.date||'').slice(0,4)===year;
   const shown = postings.filter(inYear);
   const balances = glAccountBalances(shown, chartAccounts);
@@ -47008,14 +47014,54 @@ function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTr
             <div className="max-h-[60vh] overflow-y-auto"><table className="w-full text-sm">
               <thead className="bg-white text-[10px] uppercase text-slate-400 sticky top-0"><tr><th className="text-left px-2 py-1.5">Date</th><th className="text-left px-2 py-1.5">Src</th><th className="text-left px-2 py-1.5">Memo</th><th className="text-right px-2 py-1.5">Debit</th><th className="text-right px-2 py-1.5">Credit</th><th className="text-right px-2 py-1.5">Balance</th></tr></thead>
               <tbody>{selPostings.map((p,i)=>{ run += normalDebit ? (p.debit-p.credit) : (p.credit-p.debit); return (
-                <tr key={i} className="border-t"><td className="px-2 py-1 text-xs whitespace-nowrap">{fmtDate(p.date)}</td><td className="px-2 py-1 text-[10px] text-slate-400">{p.source}{p.ref?` ${p.ref}`:''}</td><td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[180px]">{p.memo||'—'}</td><td className="px-2 py-1 text-right">{p.debit?peso(p.debit):''}</td><td className="px-2 py-1 text-right">{p.credit?peso(p.credit):''}</td><td className="px-2 py-1 text-right font-medium">{peso(run)}</td></tr>
+                <tr key={i} className="border-t hover:bg-indigo-50/50 cursor-pointer" onClick={()=>setTxn(p)} title="Open the full transaction"><td className="px-2 py-1 text-xs whitespace-nowrap">{fmtDate(p.date)}</td><td className="px-2 py-1 text-[10px] text-slate-400">{p.source}{p.ref?` ${p.ref}`:''}</td><td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[180px]">{p.memo||'—'}</td><td className="px-2 py-1 text-right">{p.debit?peso(p.debit):''}</td><td className="px-2 py-1 text-right">{p.credit?peso(p.credit):''}</td><td className="px-2 py-1 text-right font-medium">{peso(run)}</td></tr>
               ); })}{selPostings.length===0 && <tr><td colSpan="6" className="px-2 py-6 text-center text-slate-400 text-xs">No postings in this period.</td></tr>}</tbody>
             </table></div>
           </>)}
         </div>
       </div>
+      {txn && <GLTxnModal clicked={txn} lines={shown.filter(x=>txnKeyOf(x)===txnKeyOf(txn))} vouchers={vouchers} expenses={expenses} cashAdvances={cashAdvances} bankTransactions={bankTransactions} soPayments={soPayments} journalEntries={journalEntries} suppliers={null} onClose={()=>setTxn(null)} />}
     </div>
   );
+}
+// Inline transaction viewer for the General Ledger — click a posting to see the
+// whole double-entry + the source record's details, without leaving the GL.
+function GLTxnModal({ clicked, lines, vouchers, expenses, cashAdvances, bankTransactions, soPayments, journalEntries, onClose }){
+  const kind=clicked.src_kind, id=clicked.src_id;
+  const src = kind==='voucher'? (vouchers||[]).find(v=>v.id===id)
+    : kind==='expense'? (expenses||[]).find(e=>e.id===id)
+    : kind==='cash_advance'? (cashAdvances||[]).find(c=>c.id===id)
+    : kind==='bank_txn'? (bankTransactions||[]).find(b=>b.id===id)
+    : kind==='so_payment'? (soPayments||[]).find(p=>p.id===id)
+    : kind==='journal'? (journalEntries||[]).find(j=>j.id===id) : null;
+  const srcLabel = { voucher:'Disbursement Voucher', expense:'Expense', cash_advance:'Cash Advance', bank_txn:'Bank Transaction', so_payment:'Sales Collection', journal:'Journal Entry' }[kind] || clicked.source;
+  const totD=lines.reduce((s,l)=>s+Number(l.debit||0),0), totC=lines.reduce((s,l)=>s+Number(l.credit||0),0);
+  const Row=({k,v})=> v ? <div className="flex gap-2 text-xs"><span className="text-slate-400 w-28 shrink-0">{k}</span><span className="font-medium">{v}</span></div> : null;
+  const detail=()=>{
+    if(!src) return <div className="text-xs text-slate-400">Source record not in the current view.</div>;
+    if(kind==='voucher') return <div className="space-y-0.5"><Row k="Voucher #" v={src.number} /><Row k="Payee" v={src.payee||src.supplier_name} /><Row k="Particulars" v={src.particulars} /><Row k="Amount" v={peso(src.amount)} /><Row k="Method" v={src.type||src.payment_method} /><Row k="Check/Ref #" v={src.check_number} /></div>;
+    if(kind==='expense') return <div className="space-y-0.5"><Row k="Vendor" v={src.vendor} /><Row k="Description" v={src.description} /><Row k="Category" v={src.category} /><Row k="Amount" v={peso(src.amount)} /><Row k="Paid via" v={src.paid_via} /></div>;
+    if(kind==='cash_advance') return <div className="space-y-0.5"><Row k="CA #" v={src.number} /><Row k="Custodian" v={src.custodian_name} /><Row k="Amount" v={peso(src.amount)} /><Row k="Liquidated" v={src.amount_liquidated!=null?peso(src.amount_liquidated):null} /><Row k="Status" v={src.status} /></div>;
+    if(kind==='bank_txn') return <div className="space-y-0.5"><Row k="Description" v={src.description} /><Row k="Direction" v={src.direction} /><Row k="Amount" v={peso(src.amount)} /><Row k="Reference" v={src.reference_number} /></div>;
+    if(kind==='so_payment') return <div className="space-y-0.5"><Row k="Reference" v={src.reference} /><Row k="Amount" v={peso(src.amount)} /><Row k="Method" v={src.method} /><Row k="Status" v={src.status} /></div>;
+    if(kind==='journal') return <div className="space-y-0.5"><Row k="JE #" v={src.number} /><Row k="Memo" v={src.memo} /><Row k="Date" v={src.date?fmtDate(src.date):null} /><Row k="Status" v={src.status} /></div>;
+    return null;
+  };
+  return (<Modal title={`${srcLabel}${clicked.ref?` · ${clicked.ref}`:''}`} onClose={onClose} wide>
+    <div className="space-y-3">
+      <div className="text-xs text-slate-500">{fmtDate(clicked.date)} · source: {clicked.source}</div>
+      <div className="bg-slate-50 border rounded-lg p-3">{detail()}</div>
+      <div>
+        <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">Accounting entry (double-entry)</div>
+        <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Account</th><th className="text-left px-3 py-1.5">Memo</th><th className="text-right px-3 py-1.5">Debit</th><th className="text-right px-3 py-1.5">Credit</th></tr></thead>
+          <tbody>{lines.map((l,i)=>(<tr key={i} className="border-t"><td className="px-3 py-1.5"><span className="font-mono text-[11px] text-slate-400 mr-1">{l.account_code}</span>{l.account_name}</td><td className="px-3 py-1.5 text-xs text-slate-500">{l.memo||'—'}</td><td className="px-3 py-1.5 text-right">{l.debit?peso(l.debit):''}</td><td className="px-3 py-1.5 text-right">{l.credit?peso(l.credit):''}</td></tr>))}</tbody>
+          <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5" colSpan="2">Total</td><td className="px-3 py-1.5 text-right">{peso(totD)}</td><td className="px-3 py-1.5 text-right">{peso(totC)}</td></tr></tfoot>
+        </table></div>
+      </div>
+      <div className="flex justify-end pt-1 border-t"><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Close</button></div>
+    </div>
+  </Modal>);
 }
 
 // Month-End Close — live data checks + manual attestations + 3-step sign-off
