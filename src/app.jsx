@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 919 · Purchasing personnel label updated from Jay-Ann to Chelle on the Purchase Requests board (For Materials Queue lane + the 'Approve → ' handoff button).";
+const BUILD = "Live build 920 · Finance: New A/P Voucher now takes bank/payout details + a billing-proof attachment. New Budget Request now takes bank/payout details + quotation/supporting attachments. Both show on the voucher/request so approvers see where to pay and the proof.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -40611,8 +40611,10 @@ const apMeta = (k)=> AP_STATUSES.find(s=>s.key===k) || AP_STATUSES[0];
 // Manually record a payable (expense not yet paid) with a due date. Finance can
 // later "Send for RFP" to push it into the payment approval queue.
 function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
-  const [f,setF]=useState({ supplier_name:'', amount:'', particulars:'', due_date:'', payment_method:'', notes:'' });
+  const [f,setF]=useState({ supplier_name:'', amount:'', particulars:'', due_date:'', payment_method:'', notes:'', bank_name:'', bank_account_name:'', bank_account_number:'' });
+  const [atts,setAtts]=useState([]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const scopeRef=useRef('apv/new-'+Date.now()+'-'+Math.random().toString(36).slice(2,7));
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
   const supNames=Array.from(new Set((suppliers||[]).map(s=>s.company||s.name).filter(Boolean))).sort();
   async function save(){
@@ -40624,13 +40626,13 @@ function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
       const { data:apRows }=await sb.from('ap_vouchers').select('number').like('number',`APV-${monthKey}-%`);
       let max=0;(apRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>max)max=n;}});
       const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
-      const { error }=await sb.from('ap_vouchers').insert({ number, supplier_name:f.supplier_name.trim(), amount:Number(f.amount), particulars:f.particulars.trim()||null, due_date:f.due_date||null, payment_method:f.payment_method||null, notes:f.notes||null, status:'recorded', created_by:profile.id });
+      const { error }=await sb.from('ap_vouchers').insert({ number, supplier_name:f.supplier_name.trim(), amount:Number(f.amount), particulars:f.particulars.trim()||null, due_date:f.due_date||null, payment_method:f.payment_method||null, notes:f.notes||null, bank_name:f.bank_name.trim()||null, bank_account_name:f.bank_account_name.trim()||null, bank_account_number:f.bank_account_number.trim()||null, attachments:atts, status:'recorded', created_by:profile.id });
       if(error) throw error;
       setBusy(false); onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
   return (
-    <Modal title="➕ New A/P Voucher" onClose={onClose}>
+    <Modal title="➕ New A/P Voucher" onClose={onClose} wide>
       <div className="space-y-3">
         <div className="bg-slate-50 border rounded-lg p-3 text-xs text-slate-600">Record a payable you owe but haven't paid yet. Set the due date so it shows on the payment calendar. When it's ready to pay, open it and press <strong>Send for RFP</strong>.</div>
         <TpLbl t="Supplier / payee *">
@@ -40644,8 +40646,20 @@ function APVoucherCreateModal({ profile, suppliers, onClose, onSaved }){
         <TpLbl t="Payment method">
           <select className="input" value={f.payment_method} onChange={e=>up('payment_method',e.target.value)}>{PO_PAYMENT_METHODS.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}</select>
         </TpLbl>
+        <div className="border rounded-lg p-3 bg-sky-50/50 border-sky-200">
+          <div className="text-[10px] uppercase font-bold text-sky-800 mb-1.5">Bank / payout details — where to pay</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <TpLbl t="Bank"><input className="input" value={f.bank_name} onChange={e=>up('bank_name',e.target.value)} placeholder="e.g. BDO" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.bank_account_name} onChange={e=>up('bank_account_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Account no."><input className="input" value={f.bank_account_number} onChange={e=>up('bank_account_number',e.target.value)} /></TpLbl>
+          </div>
+        </div>
         <TpLbl t="Particulars"><textarea className="input min-h-[46px]" value={f.particulars} onChange={e=>up('particulars',e.target.value)} placeholder="What this payable is for (e.g. October rent, SSS Sep 2026)" /></TpLbl>
         <TpLbl t="Notes (optional)"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        <div className="border rounded-lg p-3 bg-slate-50/60">
+          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1.5">📎 Billing proof / supporting documents</div>
+          <AttachmentsEditor value={atts} onChange={setAtts} scope={scopeRef.current} inline />
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t">
           <button onClick={save} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{busy?'Saving…':'Record payable'}</button>
@@ -44138,7 +44152,13 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     date_needed: existing?.date_needed || '',
     notes: existing?.notes || '',
     attachment_url: existing?.attachment_url || '',
+    bank_name: existing?.bank_name || '',
+    bank_account_name: existing?.bank_account_name || '',
+    bank_account_number: existing?.bank_account_number || '',
   });
+  const [reqAtts,setReqAtts]=useState(Array.isArray(existing?.request_attachments)?existing.request_attachments:[]);
+  const reqScopeRef=useRef(existing?.id ? ('budget/'+existing.id) : ('budget/new-'+Date.now()+'-'+Math.random().toString(36).slice(2,6)));
+  async function saveReqAtts(next){ setReqAtts(next); if(isEdit){ try{ await sb.from('budget_requests').update({ request_attachments: next }).eq('id', existing.id); }catch(_){} } }
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [uploading,setUploading]=useState(false);
   const status = existing?.status || 'pending';
@@ -44227,6 +44247,8 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
     const payload = {
       department:f.department, purpose:f.purpose, amount:amt, date_needed:f.date_needed||null,
       notes:f.notes||null, attachment_url:f.attachment_url||null,
+      bank_name:f.bank_name.trim()||null, bank_account_name:f.bank_account_name.trim()||null, bank_account_number:f.bank_account_number.trim()||null,
+      request_attachments:reqAtts,
     };
     if(!isEdit){ payload.requested_by = profile.id; payload.status = 'pending'; }
     const { error } = isEdit
@@ -44287,13 +44309,18 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
         <TpLbl t="Purpose *"><input className="input" placeholder="e.g. Monthly birthday lunch · Quarterly team outing · Office plants" value={f.purpose} onChange={e=>up('purpose',e.target.value)} /></TpLbl>
         <TpLbl t="Date needed"><input type="date" className="input" value={f.date_needed} onChange={e=>up('date_needed',e.target.value)} /></TpLbl>
         <TpLbl t="Notes"><textarea className="input min-h-[60px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="Quote, breakdown, justification…" /></TpLbl>
-        <TpLbl t="Attachment (quote, photo)">
-          <div className="flex items-center gap-2">
-            <input type="file" onChange={e=>handleAttachment(e.target.files?.[0])} className="text-xs flex-1" />
-            {uploading && <span className="text-xs text-slate-500">Uploading…</span>}
-            {f.attachment_url && <button type="button" onClick={()=>openReceipt(f.attachment_url)} className="text-xs text-indigo-600 hover:underline">View</button>}
+        <div className="border rounded-lg p-3 bg-sky-50/50 border-sky-200">
+          <div className="text-[10px] uppercase font-bold text-sky-800 mb-1.5">Bank / payout details — where to transfer</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <TpLbl t="Bank"><input className="input" value={f.bank_name} onChange={e=>up('bank_name',e.target.value)} placeholder="e.g. BDO" /></TpLbl>
+            <TpLbl t="Account name"><input className="input" value={f.bank_account_name} onChange={e=>up('bank_account_name',e.target.value)} /></TpLbl>
+            <TpLbl t="Account no."><input className="input" value={f.bank_account_number} onChange={e=>up('bank_account_number',e.target.value)} /></TpLbl>
           </div>
-        </TpLbl>
+        </div>
+        <div className="border rounded-lg p-3 bg-slate-50/60">
+          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1.5">📎 Quotation / supporting documents</div>
+          <AttachmentsEditor value={reqAtts} onChange={saveReqAtts} scope={reqScopeRef.current} inline />
+        </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         {(!isEdit || status==='pending') && <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Submit request'}</button>}
         {isEdit && status==='pending' && canApprove && (
