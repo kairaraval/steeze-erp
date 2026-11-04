@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 925 · Cash Advances: clicking a Liquidated cash advance now opens its liquidation view so you can see the exact expenses/receipts it covered (instead of the edit form). (Asset depreciation one-click post + AP/Budget/GL/CA finance fixes from builds 920–924.)";
+const BUILD = "Live build 926 · Fix: a liquidated Budget Request now records its ACTUAL liquidated total in the Expense Log (and monthly money-out), not the approved/requested amount — so a ₱10,000 budget liquidated at ₱7,900 shows ₱7,900, with the ₱2,100 balance treated as returned, not spent.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -24177,7 +24177,7 @@ function ReportsView({ profile, profiles, leads, clients, prodJobs, orders, supp
         const moneyOut = [];
         (vouchers||[]).forEach(v=>{ if(v.deleted_at||v.document_only||!isApprovedFin(v)) return; moneyOut.push({ date:v.date, amount:Number(v.amount||0) }); });
         (expenses||[]).forEach(e=>{ if(e.deleted_at||e.petty_cash_id||!isApprovedFin(e)) return; moneyOut.push({ date:e.date, amount:Number(e.amount||0) }); });
-        (budgetRequests||[]).filter(b=>b.status==='spent'&&!b.deleted_at).forEach(b=>{ moneyOut.push({ date: b.spent_at||b.date_needed||(b.approved_at||'').slice(0,10)||b.date||(b.created_at||'').slice(0,10), amount:Number(b.amount||0) }); });
+        (budgetRequests||[]).filter(b=>b.status==='spent'&&!b.deleted_at).forEach(b=>{ moneyOut.push({ date: b.spent_at||b.date_needed||(b.approved_at||'').slice(0,10)||b.date||(b.created_at||'').slice(0,10), amount:Number(b.amount_liquidated!=null && Number(b.amount_liquidated)>0 ? b.amount_liquidated : b.amount)||0 }); });
         (cashAdvances||[]).forEach(c=>{ if(c.deleted_at||c.status!=='liquidated') return; const spent = c.kind==='petty_cash' ? (expenses||[]).filter(e=>e.petty_cash_id===c.id).reduce((s,e)=>s+Number(e.amount||0),0) : Number(c.amount_liquidated||0); if(spent>0) moneyOut.push({ date:c.liquidated_at||c.date, amount:spent }); });
         const expMonth = moneyOut.filter(x=>(x.date||'').startsWith(mKey)).reduce((s,x)=>s+x.amount,0);
         const expYear  = moneyOut.filter(x=>(x.date||'').startsWith(yKey)).reduce((s,x)=>s+x.amount,0);
@@ -48796,7 +48796,9 @@ function ExpenseLogView({ profile, vouchers, expenses, budgetRequests, cashAdvan
             || (b.approved_at||'').slice(0,10)
             || b.date
             || (b.created_at||'').slice(0,10),
-      source:'budget', amount: Number(b.amount||0),
+      // Record the ACTUAL spend (liquidated total), not the approved/requested
+      // amount — the unspent balance was returned, not disbursed.
+      source:'budget', amount: Number(b.amount_liquidated!=null && Number(b.amount_liquidated)>0 ? b.amount_liquidated : b.amount)||0,
       label: `${b.department||''} · ${b.purpose||'(budget)'}`,
       category: 'Budget Request', ref: b.id?.slice(0,6) || '', raw:b,
     }));
