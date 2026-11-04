@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 915 · Fix: a refresh on the Sales Pipeline bounced sales/managers to their Workbench (the one-time 'open into Workbench' landing was overriding the remembered page). Now the remembered page wins on refresh; the Workbench landing only applies on a fresh login.";
+const BUILD = "Live build 916 · Department purchase requests no longer notify the admins — the alert now goes to Purchasing and the AGM (who approves them). Sales manual requests are unchanged.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -33836,7 +33836,12 @@ function RequestForPurchasingModal({ profile, items, onClose, onSaved }){
       const payload={ number:'PR-'+Date.now().toString().slice(-5), date:todayManila(), requested_by:profile.id, dept_id:null, urgency:'normal', status:dest, justification:(justification.trim()|| `Request for purchasing by ${profile.name||profile.email}`), lines, linked_lead_id:null };
       const { data, error }=await sb.from('purchase_requests').insert(payload).select().single();
       if(error) throw error;
-      try{ const { data:pur }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel','admin']); const notes=(pur||[]).filter(p=>p.id!==profile.id).map(p=>({ recipient_id:p.id, actor_id:profile.id, type:'system', text:`🛒 New ${dest==='department_request'?'department':'sales'} purchase request from ${profile.name||profile.email}${lines[0]?` — ${lines[0].description}`:''}`, link_view:'requests', ref_type:'purchase_request', ref_id:data.id })); if(notes.length) await sb.from('notifications').insert(notes); }catch(_){}
+      // Department requests go to Purchasing + the AGM (who approves them) — not the admins.
+      // Sales manual requests keep notifying Purchasing + admin as before.
+      const notifyRoles = dest==='department_request'
+        ? ['purchasing','purchasing_admin','purchasing_personnel','agm']
+        : ['purchasing','purchasing_admin','purchasing_personnel','admin'];
+      try{ const { data:pur }=await sb.from('profiles').select('id').in('role',notifyRoles); const notes=(pur||[]).filter(p=>p.id!==profile.id).map(p=>({ recipient_id:p.id, actor_id:profile.id, type:'system', text:`🛒 New ${dest==='department_request'?'department':'sales'} purchase request from ${profile.name||profile.email}${lines[0]?` — ${lines[0].description}`:''}`, link_view:'requests', ref_type:'purchase_request', ref_id:data.id })); if(notes.length) await sb.from('notifications').insert(notes); }catch(_){}
       setBusy(false); onSaved && onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
