@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 916 · Department purchase requests no longer notify the admins — the alert now goes to Purchasing and the AGM (who approves them). Sales manual requests are unchanged.";
+const BUILD = "Live build 917 · Tapping a Toolbox 'initiative ready for your approval' notification now opens that exact initiative instead of the Toolbox landing page (mirrors the meeting-notification deep link).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -7066,7 +7066,7 @@ const INIT_CATEGORIES = ['Administration & Facilities','Machine Maintenance & As
 function initStatusMeta(k){ return INIT_STATUSES.find(s=>s[0]===k)||INIT_STATUSES[0]; }
 function initDeliv(i){ const d=Array.isArray(i.deliverables)?i.deliverables:[]; const done=d.filter(x=>x.done).length; return { done, total:d.length, pct: d.length? Math.round(done/d.length*100):0 }; }
 
-function ToolboxView({ profile, profiles, employees, initialTab, initialMeetingId, onConsumeTab, onConsumeMeeting }){
+function ToolboxView({ profile, profiles, employees, initialTab, initialMeetingId, initialInitiativeId, onConsumeTab, onConsumeMeeting, onConsumeInitiative }){
   const [tab,setTab]=useState(initialTab||'initiatives');
   useEffect(()=>{ if(initialTab){ setTab(initialTab); onConsumeTab&&onConsumeTab(); } },[initialTab]);
   return (
@@ -7075,12 +7075,12 @@ function ToolboxView({ profile, profiles, employees, initialTab, initialMeetingI
         <button onClick={()=>setTab('initiatives')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='initiatives'?'bg-indigo-600 text-white':'text-slate-600'}`}>🎯 Initiatives</button>
         <button onClick={()=>setTab('meetings')} className={`px-3.5 py-1.5 rounded-md font-semibold ${tab==='meetings'?'bg-indigo-600 text-white':'text-slate-600'}`}>🧰 Meetings</button>
       </div>
-      {tab==='initiatives' ? <ToolboxInitiativesView profile={profile} profiles={profiles} /> : <div className="-mx-6 -mb-6"><ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} initialMeetingId={initialMeetingId} onConsumeMeeting={onConsumeMeeting} /></div>}
+      {tab==='initiatives' ? <ToolboxInitiativesView profile={profile} profiles={profiles} initialInitiativeId={initialInitiativeId} onConsumeInitiative={onConsumeInitiative} /> : <div className="-mx-6 -mb-6"><ToolboxMeetingsView profile={profile} profiles={profiles} employees={employees} initialMeetingId={initialMeetingId} onConsumeMeeting={onConsumeMeeting} /></div>}
     </div>
   );
 }
 
-function ToolboxInitiativesView({ profile, profiles }){
+function ToolboxInitiativesView({ profile, profiles, initialInitiativeId, onConsumeInitiative }){
   const [rows,setRows]=useState([]);
   const [loading,setLoading]=useState(true);
   const [open,setOpen]=useState(null); // initiative or 'new'
@@ -7093,6 +7093,13 @@ function ToolboxInitiativesView({ profile, profiles }){
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   async function load(){ setLoading(true); const { data }=await sb.from('toolbox_initiatives').select('*').is('deleted_at',null).order('sort_order',{ascending:true,nullsFirst:false}).order('created_at',{ascending:true}); setRows(data||[]); setLoading(false); }
   useEffect(()=>{ load(); },[]);
+  // Deep-link from a notification: once loaded, open that initiative directly.
+  useEffect(()=>{
+    if(!initialInitiativeId || loading) return;
+    const i=rows.find(x=>x.id===initialInitiativeId);
+    if(i){ setOpen(i); onConsumeInitiative&&onConsumeInitiative(); }
+    else if(rows.length){ onConsumeInitiative&&onConsumeInitiative(); }
+  },[initialInitiativeId, loading, rows]);
   const today=todayManila();
   const qq=q.trim().toLowerCase();
   const live=rows.filter(i=>!i.deleted_at);
@@ -53321,6 +53328,7 @@ function App(){
   const [inboxRfpId,setInboxRfpId]=useState(null);
   const [inboxToolboxTab,setInboxToolboxTab]=useState(null); // open Toolbox on a specific tab from a notification
   const [inboxToolboxMeetingId,setInboxToolboxMeetingId]=useState(null); // deep-link straight into a specific meeting
+  const [inboxToolboxInitiativeId,setInboxToolboxInitiativeId]=useState(null); // deep-link straight into a specific initiative
   const [inboxMarketingId,setInboxMarketingId]=useState(null);
   // Set by the Dashboard "Payments to verify" card → tells Sales Orders to open
   // straight on the Payments subtab.
@@ -54272,7 +54280,7 @@ function App(){
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.ref_type==='toolbox_meeting'){ setInboxToolboxMeetingId(m.ref_id||null); setInboxToolboxTab('meetings'); setView('toolbox'); return; }
       if(m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
-      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxInitiativeId(m.ref_id||null); setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
@@ -54324,7 +54332,7 @@ function App(){
       if(m.ref_type==='hr_escalation'){ setView('hr-relations'); setInboxEscalationId(m.ref_id||'__any__'); return; }
       if(m.ref_type==='toolbox_meeting'){ setInboxToolboxMeetingId(m.ref_id||null); setInboxToolboxTab('meetings'); setView('toolbox'); return; }
       if(m.link_view==='toolbox'){ setInboxToolboxTab('meetings'); setView('toolbox'); return; }
-      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
+      if(m.ref_type==='toolbox_initiative'){ setInboxToolboxInitiativeId(m.ref_id||null); setInboxToolboxTab('initiatives'); setView('toolbox'); return; }
       if(m.ref_type==='toolbox'){ setView('toolbox'); return; }
       if(m.link_view) setView(m.link_view); return;
     }
@@ -55011,7 +55019,7 @@ function App(){
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
         {view==='ops-command' && <OpsCommandView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} salesOrders={salesOrders} requests={requests} orders={orders} items={items} hrCases={hrCases} hrLeaves={hrLeaves} employees={employees} hrReviews={hrReviews} rfps={rfps} budgetRequests={budgetRequests} dailyCheckins={dailyCheckins} navTo={navTo} />}
         {view==='checkin' && <DailyCheckinView profile={profile} profiles={profiles} reload={loadAll} />}
-        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} initialTab={inboxToolboxTab} initialMeetingId={inboxToolboxMeetingId} onConsumeTab={()=>setInboxToolboxTab(null)} onConsumeMeeting={()=>setInboxToolboxMeetingId(null)} />}
+        {view==='toolbox' && <ToolboxView profile={profile} profiles={profiles} employees={employees} initialTab={inboxToolboxTab} initialMeetingId={inboxToolboxMeetingId} initialInitiativeId={inboxToolboxInitiativeId} onConsumeTab={()=>setInboxToolboxTab(null)} onConsumeMeeting={()=>setInboxToolboxMeetingId(null)} onConsumeInitiative={()=>setInboxToolboxInitiativeId(null)} />}
         {view==='scorecard' && <KpiScorecardView profile={profile} salesOrders={salesOrders} soPayments={soPayments} deliveryReceipts={deliveryReceipts} prodJobs={prodJobs} navTo={navTo} />}
         {view==='rep-home' && <SalesRepHomeView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} onOpenTechpack={openTechpackEdit} onOpenLead={setDetailLead} onOpenSO={(so)=>{ setView('sales-orders'); setInboxOpenSO(so); }} navTo={navTo} />}
         {view==='banks' && <BankAccountsView profile={profile} profiles={profiles} bankAccounts={bankAccounts} bankTransactions={bankTransactions} vouchers={vouchers} reload={loadAll} />}
