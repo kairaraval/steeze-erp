@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 927 · Request for Payment approvals: tick the checkboxes on several RFPs and 'Approve selected (N)' to sign them all off at once (Admin) — each gets its A/P Voucher raised and the requester notified, same as approving one by one. Select-all checkbox in the header too.";
+const BUILD = "Live build 928 · Batch approvals extended on the For-Approval page: Vouchers ('Approve & sign selected'), Budget Requests ('Approve selected'), and For Bank Payment (tick rows, pick the bank, 'Mark N paid') all have checkboxes + select-all now — same as the Request-for-Payment batch.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42646,6 +42646,41 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       reload && reload();
     } catch(err){ alert(err.message||String(err)); }
   }
+  // ── Batch selection for vouchers / budgets / bank payments ──
+  const [selVoucher,setSelVoucher]=useState(()=>new Set());
+  const [selBudget,setSelBudget]=useState(()=>new Set());
+  const [selBank,setSelBank]=useState(()=>new Set());
+  const [bankPayBank,setBankPayBank]=useState('');
+  const isAdminU = profile.role==='admin';
+  const toggleSet=(setter)=>(id)=>setter(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const toggleVoucher=toggleSet(setSelVoucher), toggleBudget=toggleSet(setSelBudget), toggleBank=toggleSet(setSelBank);
+  const allSel=(list,sel)=> list.length>0 && list.every(x=>sel.has(x.id));
+  async function approveSelectedVouchers(){
+    const list=pendingVouchers.filter(v=>selVoucher.has(v.id)); if(!list.length) return;
+    if(!confirm(`Approve & sign ${list.length} voucher${list.length===1?'':'s'} (${peso(list.reduce((s,v)=>s+Number(v.amount||0),0))})?`)) return;
+    setBatchBusy(true); const now=new Date().toISOString();
+    for(const v of list){ try{
+      const patch={ approved_by:profile.id, approved_at:now, signed_at:now, admin_approved_by:profile.id, admin_approved_at:now, approval_status:'approved' };
+      if(v.bank_id && !v.bank_transaction_id && !v.void_at){ const { data:btx, error:btErr }=await insertBankTxnOnce({ bank_id:v.bank_id, date:v.date, direction:'out', amount:Number(v.amount||0), description:`${v.number} — ${v.payee} — ${v.particulars||v.expense_category||''}`.slice(0,200), ref_type:'voucher', ref_id:v.id, reference_number:v.check_number||v.number, created_by:profile.id }); if(btErr) throw btErr; patch.bank_transaction_id=btx.id; patch.released_at=now; }
+      const { error }=await sb.from('vouchers').update(patch).eq('id',v.id); if(error) throw error;
+    }catch(e){ alert(`Voucher ${v.number}: ${e.message||e}`); } }
+    setBatchBusy(false); setSelVoucher(new Set()); reload&&reload();
+  }
+  async function approveSelectedBudgets(){
+    const list=pendingBudgets.filter(b=>selBudget.has(b.id)); if(!list.length) return;
+    if(!confirm(`Approve ${list.length} budget request${list.length===1?'':'s'} (${peso(list.reduce((s,b)=>s+Number(b.amount||0),0))})?`)) return;
+    setBatchBusy(true); const now=new Date().toISOString();
+    for(const b of list){ const { error }=await sb.from('budget_requests').update({ status:'approved', approved_by:profile.id, approved_at:now }).eq('id',b.id); if(error){ alert(`Budget ${(b.purpose||'').slice(0,30)}: ${error.message}`); continue; } try{ if(b.requested_by&&b.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:b.requested_by, actor_id:profile.id, type:'system', text:`✅ Your budget request "${(b.purpose||'').slice(0,40)}" (${peso(b.amount||0)}) was approved.`, link_view:'budgets', ref_type:'budget_request', ref_id:b.id }); }catch(_){} }
+    setBatchBusy(false); setSelBudget(new Set()); reload&&reload();
+  }
+  async function markSelectedBankPaid(){
+    const list=forBankPayment.filter(r=>selBank.has(r.id)); if(!list.length) return;
+    if(!bankPayBank){ alert('Pick the bank the payments were released from first.'); return; }
+    if(!confirm(`Mark ${list.length} payment${list.length===1?'':'s'} as paid (${peso(list.reduce((s,r)=>s+Number(r.amount||0),0))})?`)) return;
+    setBatchBusy(true); const now=new Date().toISOString();
+    for(const r of list){ await sb.from('rfps').update({ bank_paid_at:now, bank_paid_by:profile.id, bank_paid_bank_id:bankPayBank||null }).eq('id',r.id); }
+    setBatchBusy(false); setSelBank(new Set()); setBankPayBank(''); reload&&reload();
+  }
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -42833,13 +42868,19 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       <div className="bg-white border rounded-xl overflow-hidden mb-4">
         <div className="px-4 py-3 bg-teal-50 border-b border-teal-200 flex items-center justify-between flex-wrap gap-1">
           <div className="font-semibold text-teal-900">🏦 For Bank Payment <span className="text-teal-600 font-normal text-xs ml-1">· {forBankPayment.length} to pay</span></div>
-          <div className="text-xs text-teal-700">You approved these — process the payment in your bank, then click Done.</div>
+          {selBank.size>0 ? (
+            <div className="flex items-center gap-2">
+              <select value={bankPayBank} onChange={e=>setBankPayBank(e.target.value)} className="text-xs border rounded-lg px-2 py-1.5"><option value="">Paid from bank…</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
+              <button onClick={markSelectedBankPaid} disabled={batchBusy} className="text-xs px-3 py-1.5 rounded-lg bg-teal-600 text-white font-semibold hover:bg-teal-700 disabled:opacity-50">{batchBusy?'Marking…':`✓ Mark ${selBank.size} paid`}</button>
+            </div>
+          ) : <div className="text-xs text-teal-700">You approved these — process the payment in your bank, then click Done.</div>}
         </div>
         {forBankPayment.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to pay. Approved RFPs that still need a bank payment show up here.</div>
         ) : (<>
           <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              <th className="px-3 py-2 w-8"><input type="checkbox" checked={allSel(forBankPayment,selBank)} onChange={()=>setSelBank(()=> allSel(forBankPayment,selBank)?new Set():new Set(forBankPayment.map(r=>r.id)))} className="accent-teal-600" title="Select all" /></th>
               <th className="text-left px-3 py-2">RFP#</th>
               <th className="text-left px-3 py-2">Approved</th>
               <th className="text-left px-3 py-2">Supplier</th>
@@ -42853,6 +42894,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
               const bankLine = [r.bank_name, r.bank_account_number].filter(Boolean).join(' · ');
               return (
                 <tr key={r.id} className="border-t hover:bg-teal-50/40">
+                  <td className="px-3 py-2"><input type="checkbox" checked={selBank.has(r.id)} onChange={()=>toggleBank(r.id)} className="accent-teal-600" /></td>
                   <td className="px-3 py-2 font-mono text-xs cursor-pointer" onClick={()=>setOpenRfp(r)}>{r.number}{r.status==='partial' && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">partial</span>}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(r.admin_approved_at)} <span className={`ml-1 ${waited>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>· {waited===0?'today':waited+'d ago'}</span></td>
                   <td className="px-3 py-2">{r.supplier_name||'—'}</td>
@@ -42905,13 +42947,17 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       <div className="bg-white border rounded-xl overflow-hidden">
         <div className="px-4 py-3 bg-purple-50 border-b border-purple-200 flex items-center justify-between">
           <div className="font-semibold text-purple-900">💰 Budget Requests <span className="text-purple-600 font-normal text-xs ml-1">· {pendingBudgets.length} pending</span></div>
-          <div className="text-xs text-purple-600">Department budget requests (HR, Production, etc.)</div>
+          <div className="flex items-center gap-3">
+            {isAdminU && selBudget.size>0 && <button onClick={approveSelectedBudgets} disabled={batchBusy} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{batchBusy?'Approving…':`✓ Approve selected (${selBudget.size})`}</button>}
+            <div className="text-xs text-purple-600">Department budget requests (HR, Production, etc.)</div>
+          </div>
         </div>
         {pendingBudgets.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No budget requests waiting. Sprint 2 adds the submission UI for departments.</div>
         ) : (
           <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              {isAdminU && <th className="px-3 py-2 w-8"><input type="checkbox" checked={allSel(pendingBudgets,selBudget)} onChange={()=>setSelBudget(()=> allSel(pendingBudgets,selBudget)?new Set():new Set(pendingBudgets.map(b=>b.id)))} className="accent-emerald-600" title="Select all" /></th>}
               <th className="text-left px-3 py-2">Date</th>
               <th className="text-left px-3 py-2">Department</th>
               <th className="text-left px-3 py-2">Purpose</th>
@@ -42921,6 +42967,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
             </tr></thead>
             <tbody>{pendingBudgets.map(b=>(
               <tr key={b.id} className="border-t hover:bg-purple-50/40 cursor-pointer" onClick={()=>setOpenBudget(b)}>
+                {isAdminU && <td className="px-3 py-2" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selBudget.has(b.id)} onChange={()=>toggleBudget(b.id)} className="accent-emerald-600" /></td>}
                 <td className="px-3 py-2 text-xs">{fmtDate(b.date)}</td>
                 <td className="px-3 py-2 font-semibold">{b.department||'—'}</td>
                 <td className="px-3 py-2">{b.purpose||'—'}</td>
@@ -42946,13 +42993,17 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       <div className="bg-white border rounded-xl overflow-hidden mt-4">
         <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
           <div className="font-semibold text-amber-900">💳 Vouchers for Approval <span className="text-amber-600 font-normal text-xs ml-1">· {pendingVouchers.length} pending</span></div>
-          <div className="text-xs text-amber-600">Every new Check / Cash / Bank-Transfer voucher routes here for your sign-off.</div>
+          <div className="flex items-center gap-3">
+            {isAdminU && selVoucher.size>0 && <button onClick={approveSelectedVouchers} disabled={batchBusy} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{batchBusy?'Signing…':`✍ Approve & sign selected (${selVoucher.size})`}</button>}
+            <div className="text-xs text-amber-600">Every new Check / Cash / Bank-Transfer voucher routes here for your sign-off.</div>
+          </div>
         </div>
         {pendingVouchers.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No vouchers waiting on your approval.</div>
         ) : (
           <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              {isAdminU && <th className="px-3 py-2 w-8"><input type="checkbox" checked={allSel(pendingVouchers,selVoucher)} onChange={()=>setSelVoucher(()=> allSel(pendingVouchers,selVoucher)?new Set():new Set(pendingVouchers.map(v=>v.id)))} className="accent-emerald-600" title="Select all" /></th>}
               <th className="text-left px-3 py-2">Voucher#</th>
               <th className="text-left px-3 py-2">Date</th>
               <th className="text-left px-3 py-2">Type</th>
@@ -42968,6 +43019,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
               const days = v.date ? Math.floor((Date.now() - new Date(v.date).getTime())/86400000) : 0;
               return (
                 <tr key={v.id} className="border-t hover:bg-amber-50/40">
+                  {isAdminU && <td className="px-3 py-2"><input type="checkbox" checked={selVoucher.has(v.id)} onChange={()=>toggleVoucher(v.id)} className="accent-emerald-600" /></td>}
                   <td className="px-3 py-2 font-mono text-xs">{v.number}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(v.date)} <span className={`ml-1 ${days>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>· {days===0?'today':days+'d ago'}</span></td>
                   <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${v.type==='check'?'bg-blue-100 text-blue-700':v.type==='bank_transfer'?'bg-violet-100 text-violet-700':'bg-amber-100 text-amber-700'}`}>{v.type==='check'?'CV':v.type==='bank_transfer'?'BT':'Cash'}</span></td>
