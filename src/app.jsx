@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 926 · Fix: a liquidated Budget Request now records its ACTUAL liquidated total in the Expense Log (and monthly money-out), not the approved/requested amount — so a ₱10,000 budget liquidated at ₱7,900 shows ₱7,900, with the ₱2,100 balance treated as returned, not spent.";
+const BUILD = "Live build 927 · Request for Payment approvals: tick the checkboxes on several RFPs and 'Approve selected (N)' to sign them all off at once (Admin) — each gets its A/P Voucher raised and the requester notified, same as approving one by one. Select-all checkbox in the header too.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42524,6 +42524,37 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   }
   const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
+  // Batch admin sign-off: tick several RFPs and approve them all at once.
+  const [selRfp,setSelRfp]=useState(()=>new Set());
+  const [batchBusy,setBatchBusy]=useState(false);
+  const allPendingSelected = pendingRfps.length>0 && pendingRfps.every(r=>selRfp.has(r.id));
+  function toggleRfpSel(id){ setSelRfp(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; }); }
+  function toggleAllRfpSel(){ setSelRfp(()=> allPendingSelected ? new Set() : new Set(pendingRfps.map(r=>r.id))); }
+  async function approveSelectedRfps(){
+    if(profile.role!=='admin'){ alert('Only Admin can approve at this step.'); return; }
+    const list=pendingRfps.filter(r=>selRfp.has(r.id));
+    if(!list.length){ alert('Tick at least one request first.'); return; }
+    const total=list.reduce((s,r)=>s+Number(r.amount||0),0);
+    if(!confirm(`Approve ${list.length} payment request${list.length===1?'':'s'} (${peso(total)})?\n\nYour sign-off releases them to Finance to pay. An A/P Voucher is raised for each.`)) return;
+    setBatchBusy(true);
+    const adminAt=new Date().toISOString();
+    for(const rfp of list){
+      const { error }=await sb.from('rfps').update({ status:'approved', admin_approved_by:profile.id, admin_approved_at:adminAt }).eq('id', rfp.id);
+      if(error){ alert(`Failed on ${rfp.number}: ${error.message}`); continue; }
+      try{
+        const { data:ex }=await sb.from('ap_vouchers').select('id').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1);
+        if(!ex||!ex[0]){
+          const monthKey=adminAt.slice(0,7);
+          const { data:apRows }=await sb.from('ap_vouchers').select('number').like('number',`APV-${monthKey}-%`);
+          let max=0;(apRows||[]).forEach(r=>{const m=String(r.number||'').match(/-(\d+)$/);if(m){const n=parseInt(m[1],10);if(n>max)max=n;}});
+          const number=`APV-${monthKey}-${String(max+1).padStart(3,'0')}`;
+          await sb.from('ap_vouchers').insert({ number, rfp_id:rfp.id, po_id:rfp.po_id||null, supplier_name:rfp.supplier_name||null, amount:Number(rfp.amount||0), particulars:rfp.particulars||null, payment_method:rfp.payment_method||null, payment_method_detail:rfp.payment_method_detail||null, due_date:rfp.due_date||null, bank_name:rfp.bank_name||null, bank_account_name:rfp.bank_account_name||null, bank_account_number:rfp.bank_account_number||null, finance_approved_by:rfp.finance_approved_by||null, finance_approved_at:rfp.finance_approved_at||null, admin_approved_by:profile.id, admin_approved_at:adminAt, status:'for_payment', created_by:profile.id });
+        }
+      }catch(_){}
+      try{ if(rfp.requested_by && rfp.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:rfp.requested_by, actor_id:profile.id, type:'system', text:`✅ RFP ${rfp.number||''} approved — queued for payment · ${peso(rfp.amount)}`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id }); }catch(_){}
+    }
+    setBatchBusy(false); setSelRfp(new Set()); reload && reload();
+  }
   // RFPs still awaiting the AGM. Shown to Admin so you can approve directly when
   // the AGM is unavailable (e.g. on leave).
   const agmRfpsForAdmin = profile.role==='admin' ? (rfps||[]).filter(r => !r.deleted_at && r.status==='pending_agm') : [];
@@ -42746,13 +42777,17 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
       <div className="bg-white border rounded-xl overflow-hidden mb-4">
         <div className="px-4 py-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
           <div className="font-semibold text-blue-900">📝 Request for Payment <span className="text-blue-600 font-normal text-xs ml-1">· {pendingRfps.length} pending</span></div>
-          <div className="text-xs text-blue-600">Finance has approved these — your sign-off releases payment.</div>
+          <div className="flex items-center gap-3">
+            {profile.role==='admin' && selRfp.size>0 && <button onClick={approveSelectedRfps} disabled={batchBusy} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50">{batchBusy?'Approving…':`✓ Approve selected (${selRfp.size})`}</button>}
+            <div className="text-xs text-blue-600">Finance has approved these — your sign-off releases payment.</div>
+          </div>
         </div>
         {pendingRfps.length===0 ? (
           <div className="px-4 py-6 text-center text-slate-400 text-sm">No RFPs waiting on your approval.</div>
         ) : (
           <table className="hidden md:table w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+              {profile.role==='admin' && <th className="px-3 py-2 w-8"><input type="checkbox" checked={allPendingSelected} onChange={toggleAllRfpSel} className="accent-emerald-600" title="Select all" /></th>}
               <th className="text-left px-3 py-2">RFP#</th>
               <th className="text-left px-3 py-2">Submitted</th>
               <th className="text-left px-3 py-2">Supplier</th>
@@ -42767,6 +42802,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
               const waitingDays = r.finance_approved_at ? Math.floor((Date.now() - new Date(r.finance_approved_at).getTime())/86400000) : 0;
               return (
                 <tr key={r.id} className="border-t hover:bg-blue-50/40 cursor-pointer" onClick={()=>setOpenRfp(r)}>
+                  {profile.role==='admin' && <td className="px-3 py-2" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selRfp.has(r.id)} onChange={()=>toggleRfpSel(r.id)} className="accent-emerald-600" /></td>}
                   <td className="px-3 py-2 font-mono text-xs">{r.number}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
                   <td className="px-3 py-2">{r.supplier_name||'—'}</td>
