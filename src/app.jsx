@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 929 · Added two new Performance Review templates — Graphic Artist and Accounting Officer — with their full KPI + Competency scorecards (weighted to 100%, 1-5 scale, two raters). They appear in Performance Reviews > Templates, and seed buttons were added alongside Seed Sales Associate.";
+const BUILD = "Live build 930 · AGM can now edit and receive on the Subli Cutting board — assign/edit cutters, log received pieces, and manage the cutter roster. Payroll signing stays with Production.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30758,7 +30758,7 @@ function StockAdjustModal({ profile, items, onClose, onSaved }){
    per-piece payroll that the supervisor signs → one RFP → AGM → Finance. */
 const SUBLI_CUT_REASONS=['defect','short cut','lost','other'];
 function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, reload }){
-  const canEdit = ['admin','production_supervisor','subli_pressing_head'].includes(profile?.role);
+  const canEdit = ['admin','agm','production_supervisor','subli_pressing_head'].includes(profile?.role);
   const canSign = ['admin','production_supervisor','subli_pressing_head'].includes(profile?.role);
   const [tab,setTab]=useState('board');            // 'board' | 'payroll' | 'cutters'
   const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'ready' | 'runs'
