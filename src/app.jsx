@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 928 · Batch approvals extended on the For-Approval page: Vouchers ('Approve & sign selected'), Budget Requests ('Approve selected'), and For Bank Payment (tick rows, pick the bank, 'Mark N paid') all have checkboxes + select-all now — same as the Request-for-Payment batch.";
+const BUILD = "Live build 929 · Added two new Performance Review templates — Graphic Artist and Accounting Officer — with their full KPI + Competency scorecards (weighted to 100%, 1-5 scale, two raters). They appear in Performance Reviews > Templates, and seed buttons were added alongside Seed Sales Associate.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19095,6 +19095,100 @@ const SALES_ASSOCIATE_STRUCTURE = {
     ]},
   ],
 };
+const GRAPHIC_DESIGNER_STRUCTURE = {
+  scale: DEFAULT_EVAL_SCALE, bands: DEFAULT_EVAL_BANDS,
+  categories: [
+    { key:'kpi', name:'I. KPI Performance', weight:0.60, groups:[
+      { name:'A. Design Output & Quality (25%)', weight:0.25, criteria:[
+        { id:'c1', name:'Design Accuracy & Compliance', description:'All designs are aligned with client requirements, approved mockups, and production specifications. Artwork is accurate in terms of size, color, placement, and format (print-ready). Minimal revisions due to errors or misinterpretation of requirements.', weight:0.10 },
+        { id:'c2', name:'Creativity & Visual Impact', description:'Delivers creative, visually appealing, and market-relevant designs that meet brand standards and customer expectations. Able to translate concepts into strong visual outputs suitable for garments.', weight:0.10 },
+        { id:'c3', name:'Error-Free Artwork Preparation', description:'Ensures all design files are free from technical errors such as incorrect color modes, low resolution, missing fonts, or improper alignment before submission to production.', weight:0.05 },
+      ]},
+      { name:'B. Timeliness & Work Delivery (15%)', weight:0.15, criteria:[
+        { id:'c4', name:'On-Time Design Submission', description:'Completes and submits design tasks within agreed deadlines. Able to manage workload efficiently even during peak or rush orders.', weight:0.10 },
+        { id:'c5', name:'Revision Turnaround Time', description:'Implements revisions quickly and accurately based on feedback from clients, Sales, or Management without compromising quality.', weight:0.05 },
+      ]},
+      { name:'C. Production Support & Coordination (10%)', weight:0.10, criteria:[
+        { id:'c6', name:'Coordination with Production Team', description:'Works closely with Production, Printing, and Sublimation teams to ensure designs are feasible and aligned with machine and material limitations.', weight:0.05 },
+        { id:'c7', name:'Print File Preparation & Support', description:'Prepares correct file formats (AI, PSD, PDF, etc.) and ensures designs are optimized for printing processes such as sublimation, silk screen, or heat press. Provides clarification when needed.', weight:0.05 },
+      ]},
+      { name:'D. File Management & Documentation (10%)', weight:0.10, criteria:[
+        { id:'c8', name:'File Organization & Version Control', description:'Maintains organized and properly labeled design files. Ensures correct versions are used and archived for easy retrieval and traceability.', weight:0.05 },
+        { id:'c9', name:'Documentation Accuracy', description:'Ensures all design-related details (file names, revisions, approvals) are properly documented to avoid confusion or production errors.', weight:0.05 },
+      ]},
+    ]},
+    { key:'competency', name:'II. Competency & Technical Skills', weight:0.40, groups:[
+      { name:'A. Technical Competency (20%)', weight:0.20, criteria:[
+        { id:'c10', name:'Graphic Design Software Proficiency', description:'Highly skilled in design tools such as Adobe Illustrator, Photoshop, CorelDRAW, or similar software used in garment design and printing.', weight:0.05 },
+        { id:'c11', name:'Knowledge of Printing Processes', description:'Understands different garment printing methods (sublimation, silkscreen, heat press) and prepares designs accordingly to ensure quality output.', weight:0.05 },
+        { id:'c12', name:'Attention to Detail', description:'Carefully checks all design elements including alignment, colors, spacing, and resolution to ensure high-quality output.', weight:0.05 },
+        { id:'c13', name:'Problem Awareness & Initiative', description:'Quickly identifies design or production-related issues and takes initiative to correct them. Suggests improvements in design workflow and processes.', weight:0.05 },
+      ]},
+      { name:'B. Work Behavior & Professionalism (20%)', weight:0.20, criteria:[
+        { id:'c14', name:'Work Efficiency & Time Management', description:'Effectively manages multiple design tasks and deadlines. Maintains productivity without compromising quality.', weight:0.05 },
+        { id:'c15', name:'Teamwork & Communication', description:'Communicates clearly with Sales, Production, and Management. Open to feedback and ensures alignment on design requirements.', weight:0.05 },
+        { id:'c16', name:'Attendance, Punctuality & Reliability', description:'Consistently present and on time. Reliable in handling urgent design requirements and peak production schedules.', weight:0.05 },
+        { id:'c17', name:'Work Attitude, Adaptability, Continuous Improvement & SOP Compliance', description:'Shows a positive work attitude, is adaptable, and willing to learn new skills. Continuously improves performance and follows company SOP in documentation, reporting, and approval processes.', weight:0.05 },
+      ]},
+    ]},
+  ],
+};
+const ACCOUNTING_OFFICER_STRUCTURE = {
+  scale: DEFAULT_EVAL_SCALE, bands: DEFAULT_EVAL_BANDS,
+  categories: [
+    { key:'kpi', name:'I. KPI Performance', weight:0.60, groups:[
+      { name:'A. Accounts Payable (AP) Management (10%)', weight:0.10, criteria:[
+        { id:'c1', name:'AP Recording Accuracy', description:'All supplier invoices and bills are accurately and promptly recorded, with correct amounts, classifications, and supplier details.', weight:0.03 },
+        { id:'c2', name:'Payment Due Date Monitoring', description:'Supplier due dates and payment schedules are updated and monitored to prevent missed deadlines and penalties.', weight:0.03 },
+        { id:'c3', name:'Invoice Verification & Discrepancy Detection', description:'Supplier invoices are matched against approved POs, DRs, billing statements, and supporting documents. Discrepancies are identified and escalated before payment processing.', weight:0.02 },
+        { id:'c4', name:'Supplier Records Management', description:'Supplier records and statements of account are complete, updated, organized, and readily retrievable.', weight:0.02 },
+      ]},
+      { name:'B. Expense Recording & Monitoring in Steeze OS (15%)', weight:0.15, criteria:[
+        { id:'c5', name:'Timely Expense Recording in Steeze OS', description:'All operating and production-related expenses are recorded promptly in Steeze OS, preferably on the same working day, with complete transaction details and supporting documents.', weight:0.04 },
+        { id:'c6', name:'Accuracy of Expense Entries', description:'Expense amounts, transaction dates, payees, and other required details are accurately entered and consistent with supporting documents.', weight:0.03 },
+        { id:'c7', name:'Correct Expense Classification', description:'Expenses are properly classified as Cost of Goods Sold (COGS) or Operating Expenses (OPEX), as applicable.', weight:0.02 },
+        { id:'c8', name:'Supporting Documents & Uploading', description:'Official receipts, supplier invoices, payment confirmations, and other required documents are scanned, uploaded, and properly filed in designated company records.', weight:0.02 },
+        { id:'c9', name:'Expense Reconciliation & Monitoring', description:'Expense entries in Steeze OS are reconciled against actual transactions, payment records, and supporting documents.', weight:0.02 },
+        { id:'c10', name:'Compliance & Exception Reporting', description:'Missing documents, duplicate entries, unrecorded expenses, incorrect classifications, and unusual transactions are promptly corrected or reported to the Accounting Supervisor.', weight:0.02 },
+      ]},
+      { name:'C. Payroll Processing & Management (10%)', weight:0.10, criteria:[
+        { id:'c11', name:'Payroll Computation Accuracy', description:'Weekly and monthly payroll, including salaries, overtime, holiday pay, night differential, and other applicable earnings and adjustments, are accurately computed.', weight:0.03 },
+        { id:'c12', name:'Attendance & Payroll Adjustment Verification', description:'Attendance records, leaves, absences, tardiness, undertime, overtime, salary rates, and other adjustments are verified with HR and concerned department heads.', weight:0.02 },
+        { id:'c13', name:'Payroll Processing Timeliness', description:'Weekly and monthly payroll are prepared and submitted within the approved payroll calendar and established deadlines.', weight:0.02 },
+        { id:'c14', name:'Payroll Summary Report, Documentation & Confidentiality', description:'The Payroll Summary Report is submitted on or before the 5th day of each month, covering the required payroll periods. Payroll registers, summaries, adjustments, and supporting documents are complete, organized, properly maintained, and kept confidential.', weight:0.03 },
+      ]},
+      { name:'D. Disbursement Documentation & Payment Processing (5%)', weight:0.05, criteria:[
+        { id:'c15', name:'Payment Documentation Completeness', description:'Payment requests are supported by complete invoices, POs, DRs, vouchers, payroll registers, and other applicable documents.', weight:0.02 },
+        { id:'c16', name:'Payment Processing, Authorization & Records Management', description:'Checks, cash vouchers, and bank transfer instructions are accurately prepared for review and approval. No payment is released without the required authorization. Payment status is updated, and receipts, invoices, and supporting documents are scanned and uploaded to designated Google Drive folders.', weight:0.03 },
+      ]},
+      { name:'E. Month-End Closing & Financial Reporting Support (5%)', weight:0.05, criteria:[
+        { id:'c17', name:'Month-End Recording & Cut-Off', description:'Expenses, payables, and payroll transactions are recorded in the correct accounting period in accordance with established cut-off procedures.', weight:0.02 },
+        { id:'c18', name:'Reconciliation, Financial Schedules & Reporting Timeliness', description:'AP balances, payroll accounts, and expense schedules are reconciled and prepared for monthly financial reporting. Assigned month-end reports and supporting schedules are submitted within the deadlines set by the Accounting Supervisor.', weight:0.03 },
+      ]},
+      { name:'F. Cash Control & Bank Reconciliation (15%)', weight:0.15, criteria:[
+        { id:'c19', name:'Cash & Petty Cash Monitoring', description:'Tracks and reconciles cash disbursements and petty cash with approved vouchers and supporting documents.', weight:0.03 },
+        { id:'c20', name:'Bank Reconciliation Accuracy', description:'Reconciles bank statements with cashbook and accounting records; identifies and investigates discrepancies.', weight:0.04 },
+        { id:'c21', name:'Timeliness of Reconciliation', description:'Completes bank reconciliations and supporting schedules within established deadlines.', weight:0.02 },
+        { id:'c22', name:'Payment & Bank Transaction Monitoring', description:'Monitors AP balances, scheduled payments, outstanding checks, pending deposits, and unreconciled transactions.', weight:0.03 },
+        { id:'c23', name:'Documentation & Reporting', description:'Maintains complete bank and cash records and promptly reports unusual transactions, unsupported expenses, and discrepancies to the Accounting Supervisor.', weight:0.03 },
+      ]},
+    ]},
+    { key:'competency', name:'II. Competency & Technical Skills', weight:0.40, groups:[
+      { name:'A. Technical Competency (20%)', weight:0.20, criteria:[
+        { id:'c24', name:'Accounting Knowledge & Application', description:'Demonstrates sufficient knowledge of accounts payable, expense recording, payroll processing, cash management, bank reconciliation, and financial reporting procedures.', weight:0.05 },
+        { id:'c25', name:'Accuracy & Attention to Detail', description:'Carefully reviews accounting entries, invoices, payroll computations, payment documents, and bank transactions to minimize errors and discrepancies.', weight:0.05 },
+        { id:'c26', name:'Accounting System & Documentation Skills', description:'Efficiently uses accounting software, spreadsheets, Steeze OS, Google Drive, and company systems to maintain accurate records and generate reports.', weight:0.05 },
+        { id:'c27', name:'Problem Identification & Initiative', description:'Identifies discrepancies, missing documents, unusual transactions, and potential control issues, and takes appropriate action to resolve or escalate them.', weight:0.05 },
+      ]},
+      { name:'B. Work Behavior & Professionalism (20%)', weight:0.20, criteria:[
+        { id:'c28', name:'Work Efficiency & Timeliness', description:'Completes assigned accounting tasks, payroll, reconciliations, and reports within established deadlines without compromising accuracy.', weight:0.05 },
+        { id:'c29', name:'Teamwork & Communication', description:'Coordinates effectively with Purchasing, Production, HR, Administration, and the Accounting Supervisor to obtain information and resolve discrepancies.', weight:0.05 },
+        { id:'c30', name:'Attendance, Punctuality & Reliability', description:'Maintains regular attendance, punctuality, and reliability, particularly during payroll processing, month-end closing, and reporting deadlines.', weight:0.05 },
+        { id:'c31', name:'Work Attitude, Accountability & Confidentiality', description:'Demonstrates professionalism, accepts feedback, takes responsibility for assigned tasks, follows internal controls, and safeguards confidential financial and payroll information.', weight:0.05 },
+      ]},
+    ]},
+  ],
+};
 function evalFlatCriteria(tpl){
   const out=[]; ((tpl?.structure?.categories)||[]).forEach(cat=> (cat.groups||[]).forEach(g=> (g.criteria||[]).forEach(c=> out.push({ ...c, weight:Number(c.weight)||0, catKey:cat.key||cat.name, catName:cat.name, catWeight:Number(cat.weight)||0, groupName:g.name, groupWeight:Number(g.weight)||0 }))));
   return out;
@@ -19124,6 +19218,20 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
     const { error }=await sb.from('eval_templates').insert({ name:'Sales Associate', position:'Sales Associate', description:'Performance Evaluation & KPI for Sales Associate', structure:SALES_ASSOCIATE_STRUCTURE, two_raters:true, created_by:profile.id });
     if(error){ alert(error.message); return; } reload();
   }
+  async function seedGraphicDesigner(){
+    if((evalTemplates||[]).some(t=>(t.position||'').toLowerCase().includes('graphic') || (t.name||'').toLowerCase().includes('graphic'))){
+      if(!confirm('A Graphic Artist template already exists. Add another copy?')) return;
+    }
+    const { error }=await sb.from('eval_templates').insert({ name:'Graphic Artist', position:'Graphic Artist', description:'Performance Evaluation & KPI for Graphic Artist', structure:GRAPHIC_DESIGNER_STRUCTURE, two_raters:true, created_by:profile.id });
+    if(error){ alert(error.message); return; } reload();
+  }
+  async function seedAccountingOfficer(){
+    if((evalTemplates||[]).some(t=>(t.position||'').toLowerCase().includes('accounting') || (t.name||'').toLowerCase().includes('accounting'))){
+      if(!confirm('An Accounting Officer template already exists. Add another copy?')) return;
+    }
+    const { error }=await sb.from('eval_templates').insert({ name:'Accounting Officer', position:'Accounting Officer', description:'Performance Evaluation & KPI for Accounting Officer', structure:ACCOUNTING_OFFICER_STRUCTURE, two_raters:true, created_by:profile.id });
+    if(error){ alert(error.message); return; } reload();
+  }
   async function delTpl(t){ if(!confirm(`Delete template "${t.name}"? Existing evaluations already made keep their own copy.`)) return; const { error }=await sb.from('eval_templates').delete().eq('id',t.id); if(error){ alert(error.message); return; } reload(); }
   async function delRev(r){ if(!confirm('Delete this evaluation?')) return; const { error }=await sb.from('eval_reviews').delete().eq('id',r.id); if(error){ alert(error.message); return; } reload(); }
 
@@ -19136,6 +19244,8 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
             {sub==='evals' && canManage && <button onClick={()=>setStarting(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New evaluation</button>}
             {sub==='templates' && canManage && <>
               <button onClick={seedSalesAssociate} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⬇ Seed Sales Associate</button>
+              <button onClick={seedGraphicDesigner} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⬇ Seed Graphic Artist</button>
+              <button onClick={seedAccountingOfficer} className="px-3 py-2 rounded-lg border bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50">⬇ Seed Accounting Officer</button>
               <button onClick={()=>setEditTpl({})} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New template</button>
             </>}
           </div>
