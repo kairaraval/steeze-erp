@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 934 · Subli Cutting: in-house cutting (the 'In house' cutter) is no longer paid through the subli cutting payroll. It's flagged 'in-house · monitor' on the board (no Add-to-payroll) and collected in a new 🏠 In-house tab where received pieces are logged for monitoring only.";
+const BUILD = "Live build 935 · Month-End Close review step fixed: the REVIEW (supervisor) sign-off is now the Accounting Supervisor (role 'accounting', e.g. Rose) or admin — the Accounting Officer who prepares (role 'accounting_officer', e.g. Rachelle) can no longer review their own close. Added a guard so whoever prepared a close can't also review it.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47394,7 +47394,10 @@ function GLTxnModal({ clicked, lines, vouchers, expenses, cashAdvances, bankTran
 function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenters, auto, reload }){
   const role=profile.role;
   const canPrepare=['accounting','accounting_officer','admin'].includes(role);
-  const canReview=['accounting_officer','admin'].includes(role);
+  // Review is the SUPERVISOR step: only the Accounting Supervisor (role 'accounting',
+  // e.g. Rose) or an admin may review — the Accounting Officer who prepares (role
+  // 'accounting_officer', e.g. Rachelle) can't review their own close.
+  const canReview=['accounting','admin'].includes(role);
   const canApprove=role==='admin';
   const nameOf=(id)=> id ? ((profiles||[]).find(p=>p.id===id)?.name || 'someone') : '';
   const whenOf=(t)=> t ? new Date(t).toLocaleString('en-PH',{ month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
@@ -47449,7 +47452,7 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
   function toggle(key){ if(!editable) return; const next=items.map(it=> it.key===key?{ ...it, checked:!it.checked, by: !it.checked?profile.id:null, at: !it.checked?new Date().toISOString():null }:it); setItems(next); persist({ items:next }); }
   function setNote(key,v){ setItems(items.map(it=> it.key===key?{ ...it, note:v }:it)); }
   async function markPrepared(){ if(!canPrepare) return; if(autoFails.length && !confirm('Some live checks are still failing:\n\n• '+autoFails.join('\n• ')+'\n\nMark as Prepared anyway?')) return; await persist({ status:'prepared', prepared_by:profile.id, prepared_at:new Date().toISOString() }); }
-  async function markReviewed(){ if(!canReview) return; await persist({ status:'reviewed', reviewed_by:profile.id, reviewed_at:new Date().toISOString() }); }
+  async function markReviewed(){ if(!canReview) return; if(role!=='admin' && row?.prepared_by===profile.id){ alert('Whoever prepared this close can’t also review it — the Accounting Supervisor must review.'); return; } await persist({ status:'reviewed', reviewed_by:profile.id, reviewed_at:new Date().toISOString() }); }
   async function approveClose(){ if(!canApprove) return; if(!confirm(`Approve and LOCK ${monLabelOf(month)}? The checklist becomes read-only.`)) return; await persist({ status:'closed', approved_by:profile.id, approved_at:new Date().toISOString() }); }
   async function reopen(){ if(!canApprove) return; const reason=(prompt('Reopen this month for edits — reason:')||'').trim(); if(!reason) return; await persist({ status:'open', reopened_by:profile.id, reopened_at:new Date().toISOString(), reopen_reason:reason, prepared_by:null, prepared_at:null, reviewed_by:null, reviewed_at:null, approved_by:null, approved_at:null }); }
   const status=row?.status||'open';
@@ -47531,7 +47534,8 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 flex-wrap pt-1">
           {status==='open' && canPrepare && <button disabled={busy} onClick={markPrepared} className="py-2 px-3 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 disabled:opacity-50">Mark Prepared →</button>}
-          {status==='prepared' && canReview && <button disabled={busy} onClick={markReviewed} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">Mark Reviewed →</button>}
+          {status==='prepared' && canReview && (role==='admin'||row?.prepared_by!==profile.id) && <button disabled={busy} onClick={markReviewed} className="py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">Mark Reviewed →</button>}
+          {status==='prepared' && canReview && role!=='admin' && row?.prepared_by===profile.id && <span className="text-xs text-slate-400 self-center">You prepared this — the Accounting Supervisor must review.</span>}
           {status==='reviewed' && canApprove && <button disabled={busy} onClick={approveClose} className="py-2 px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50">✓ Approve & Lock</button>}
           {status!=='open' && canApprove && <button disabled={busy} onClick={reopen} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold hover:bg-rose-50 disabled:opacity-50">↩ Reopen</button>}
           {status==='prepared' && !canReview && <span className="text-xs text-slate-400 self-center">Waiting for the accounting supervisor to review.</span>}
