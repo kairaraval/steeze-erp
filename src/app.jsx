@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 933 · AGM can now edit & set up the whole Payroll module: statutory tax tables + pay config, work schedules, holidays, per-employee pay setup, attendance/DTR, and preparing payroll runs (she was already the final approver).";
+const BUILD = "Live build 934 · Subli Cutting: in-house cutting (the 'In house' cutter) is no longer paid through the subli cutting payroll. It's flagged 'in-house · monitor' on the board (no Add-to-payroll) and collected in a new 🏠 In-house tab where received pieces are logged for monitoring only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30834,11 +30834,15 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
       });
       const rows=Array.from(rowsByCutter.values()).map(r=>{
         r.cutter=cutterName(r.cutter_id);
+        // In-house cutting (the "In house" cutter) is NOT paid through this subcon-style
+        // payroll — it's done by staff. We still track out/received/balance for monitoring,
+        // but it never enters the For-payroll pipeline; it lives on the In-house tab.
+        r.inhouse=/in[-\s]?house/i.test(r.cutter||'');
         r.balance=Math.max(0, r.out - r.received - r.variance);
         r.itemList=Array.from(r.items).filter(Boolean).join(', ');
         const qRows=(queue||[]).filter(q=>!q.deleted_at && q.cutter_id===r.cutter_id && q.lead_id===j.lead_id);
         r.staged=qRows.reduce((t,q)=>t+Number(q.qty||0),0);
-        r.payable=Math.max(0, r.received - r.staged);
+        r.payable=r.inhouse?0:Math.max(0, r.received - r.staged);
         r.overdue=!!(r.due && r.due<todayISO && r.balance>0);
         return r;
       }).sort((a,b)=>a.cutter.localeCompare(b.cutter));
@@ -30887,6 +30891,7 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
         <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs mt-3">
           <button onClick={()=>setTab('board')} className={`px-3 py-1.5 rounded-md ${tab==='board'?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>🏭 Cutting board</button>
           <button onClick={()=>setTab('payroll')} className={`px-3 py-1.5 rounded-md ${tab==='payroll'?'bg-violet-600 text-white font-semibold':'text-slate-600'}`}>💰 Payroll{(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length>0?` (${(queue||[]).filter(q=>!q.deleted_at&&(q.status==='staged'||q.status==='sent')).length})`:''}</button>
+          <button onClick={()=>setTab('inhouse')} className={`px-3 py-1.5 rounded-md ${tab==='inhouse'?'bg-sky-600 text-white font-semibold':'text-slate-600'}`}>🏠 In-house</button>
           <button onClick={()=>setTab('cutters')} className={`px-3 py-1.5 rounded-md ${tab==='cutters'?'bg-slate-800 text-white font-semibold':'text-slate-600'}`}>✂ Cutters</button>
         </div>
       </div>
@@ -30924,8 +30929,9 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
                 <tbody>{p.rows.map((r,i)=>(
                   <tr key={i} className={`border-t ${r.overdue?'bg-rose-50/50':''}`}>
                     <td className="px-3 py-2 font-medium">{r.cutter}
-                      {r.out>0 && r.balance<=0 && r.payable>0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">for payment</span>}
-                      {r.staged>0 && r.payable<=0 && r.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">on payroll</span>}
+                      {r.inhouse && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="In-house cutting — monitoring only, not paid through subli cutting payroll.">in-house · monitor</span>}
+                      {!r.inhouse && r.out>0 && r.balance<=0 && r.payable>0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">for payment</span>}
+                      {!r.inhouse && r.staged>0 && r.payable<=0 && r.balance<=0 && <span className="ml-2 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">on payroll</span>}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500">{r.itemList||'—'}</td>
                     <td className="px-3 py-2 text-right">{num(r.out)}</td>
@@ -30997,6 +31003,48 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
                 <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
               ); })}</tbody>
             </table></div>)}
+        </div>
+        );
+      })()}
+
+      {tab==='inhouse' && (()=>{
+        // Every in-house cutting row across all projects — monitoring only, never paid.
+        const rows=[];
+        (projects||[]).forEach(p=>(p.rows||[]).filter(r=>r.inhouse).forEach(r=>rows.push({ p, r })));
+        const qq=search.trim().toLowerCase();
+        const shown=rows.filter(({p})=> !qq || `${p.label} ${p.number}`.toLowerCase().includes(qq));
+        const totOut=shown.reduce((t,{r})=>t+Number(r.out||0),0);
+        const totRec=shown.reduce((t,{r})=>t+Number(r.received||0),0);
+        const totBal=shown.reduce((t,{r})=>t+Number(r.balance||0),0);
+        return (
+        <div className="space-y-3">
+          <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-xs text-sky-800">🏠 <b>In-house cutting</b> — done by staff, so it is <b>not paid</b> through the subli cutting payroll. Log received pieces here for monitoring only; nothing from this tab goes to For-payroll.</div>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs text-slate-500">{shown.length} in-house assignment{shown.length===1?'':'s'} · {num(totOut)} out · {num(totRec)} received · <b className={totBal>0?'text-amber-700':'text-emerald-700'}>{num(totBal)} to receive</b></div>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search project…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-72" />
+          </div>
+          {shown.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No in-house cutting yet. Assign the <b>In house</b> cutter to a project on the Cutting board and it shows here.</div> :
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr>
+                <th className="text-left px-3 py-2">Project</th><th className="text-left px-3 py-2">Item</th>
+                <th className="text-right px-3 py-2">Out</th><th className="text-right px-3 py-2">Received</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Due</th>{canEdit&&<th></th>}
+              </tr></thead>
+              <tbody>{shown.map(({p,r},i)=>(
+                <tr key={i} className={`border-t ${r.overdue?'bg-rose-50/50':''}`}>
+                  <td className="px-3 py-2"><div className="font-medium truncate">{p.label}</div>{p.number&&<div className="text-[10px] text-slate-400 font-mono">{p.number}</div>}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500">{r.itemList||'—'}</td>
+                  <td className="px-3 py-2 text-right">{num(r.out)}</td>
+                  <td className="px-3 py-2 text-right text-emerald-700">{num(r.received)}{r.variance>0&&<span className="text-[10px] text-rose-500 ml-1" title="variance">+{num(r.variance)}v</span>}</td>
+                  <td className="px-3 py-2 text-right font-semibold"><span className={r.balance>0?'text-amber-700':'text-emerald-700'}>{num(r.balance)}</span></td>
+                  <td className="px-3 py-2 text-xs">{r.due?<span className={r.overdue?'text-rose-700 font-semibold':''}>{fmtDate(r.due)}{r.overdue?' ⚠':''}</span>:'—'}</td>
+                  {canEdit && <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button onClick={()=>setReceiving({p,row:r})} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">↩ Receive</button>
+                    <button onClick={()=>setEditing(r.assignment)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
+                    {r.assignment && <button onClick={()=>delAssign(r.assignment)} className="text-xs text-rose-500 hover:underline">Remove</button>}
+                  </td>}
+                </tr>
+              ))}</tbody>
+            </table></div>}
         </div>
         );
       })()}
