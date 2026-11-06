@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 930 · AGM can now edit and receive on the Subli Cutting board — assign/edit cutters, log received pieces, and manage the cutter roster. Payroll signing stays with Production.";
+const BUILD = "Live build 931 · Subcon legacy-paid fix: when a chain was bulk-tagged as paid via the old manual payroll (qty blank), only pieces RETURNED BEFORE the tag day are treated as already paid. Returns logged on/after the tag (e.g. Ruben Borje's Oct 26 Winston Blue + Boxy Tee pieces) now show as payable in the new subcon payroll instead of being excluded.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10761,7 +10761,21 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
         s.legacyPaid = !!lp;
         s.legacyPaidRec = lp||null;
         if(s.legacyPaid){
-          const covered = (lp.qty==null||lp.qty==='') ? (Number(s.returned||0)) : Number(lp.qty||0);
+          let covered;
+          if(lp.qty!=null && lp.qty!==''){
+            covered = Number(lp.qty||0);
+          } else {
+            // qty null = the tag covered whatever had already come back when it was
+            // applied. The old manual payroll only paid for pieces RETURNED BEFORE the
+            // tag day; anything returned on/after it is new work still owed in the new
+            // payroll. So cover everything except good returns dated on/after the tag.
+            const markDay = lp.marked_at ? new Date(new Date(lp.marked_at).getTime()+8*3600*1000).toISOString().slice(0,10) : '';
+            const laterGood = (s.returnLog||[]).reduce((t,r)=>{
+              const d = r.date || (r.at ? new Date(new Date(r.at).getTime()+8*3600*1000).toISOString().slice(0,10) : '');
+              return (markDay && d && d>=markDay) ? t+Number(r.good||0) : t;
+            },0);
+            covered = Math.max(0, Number(s.returned||0) - laterGood);
+          }
           s.legacyCovered = covered;
           s.payable = Math.max(0, Number(s.returned||0) - s.staged - covered);
           if(s.payable<=0) s.unpaid=0;
