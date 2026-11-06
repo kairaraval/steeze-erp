@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 932 · Subcon Sewing board now also shows IN-HOUSE sewing from sorting as monitoring-only rows (sky 'in-house · monitor' badge, no payroll). Before, only trad sorting projects sent to the 'IN-HOUSE' subcon appeared; subli sorting's in-house releases (destination_type='inhouse') were invisible here. Now both reflect so the whole order can be watched in one place.";
+const BUILD = "Live build 933 · AGM can now edit & set up the whole Payroll module: statutory tax tables + pay config, work schedules, holidays, per-employee pay setup, attendance/DTR, and preparing payroll runs (she was already the final approver).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41313,8 +41313,8 @@ const PAY_CYCLES=[['semi_monthly','Semi-monthly (1–15 / 16–end)'],['weekly',
 const PAY_BASES=[['monthly','Monthly salary'],['daily','Daily rate']];
 const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function PayrollSetupView({ profile, employees, profiles, reload }){
-  const canTables = ['admin','accounting','accounting_officer'].includes(profile.role);
-  const canHR = ['admin','hr','hr_admin'].includes(profile.role);
+  const canTables = ['admin','agm','accounting','accounting_officer'].includes(profile.role);
+  const canHR = ['admin','agm','hr','hr_admin'].includes(profile.role);
   const [tab,setTab]=useState('tables');
   const [schedules,setSchedules]=useState([]);
   const [holidays,setHolidays]=useState([]);
@@ -41631,7 +41631,7 @@ function computeDtrDay(punches, sched, dateStr, holiday, isRest){
 function parseCsvText(text){ const lines=String(text).replace(/\r/g,'').split('\n').filter(l=>l.trim()); return lines.map(l=>{ const out=[]; let cur='',q=false; for(let i=0;i<l.length;i++){ const c=l[i]; if(c==='"'){ if(q&&l[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(c===','&&!q){ out.push(cur); cur=''; } else cur+=c; } out.push(cur); return out.map(s=>s.trim()); }); }
 
 function AttendanceDtrView({ profile, employees, reload }){
-  const canManage = ['admin','hr','hr_admin'].includes(profile.role);
+  const canManage = ['admin','agm','hr','hr_admin'].includes(profile.role);
   const now=new Date();
   const [cycle,setCycle]=useState('semi_monthly');
   const [year,setYear]=useState(now.getFullYear());
@@ -41878,7 +41878,7 @@ function BiometricDevicesModal({ profile, devices, onClose, onChanged }){
 }
 
 function PayrollEngineView({ profile, employees, profiles, reload }){
-  const canPrepare = ['admin','hr','hr_admin'].includes(profile.role);
+  const canPrepare = ['admin','agm','hr','hr_admin'].includes(profile.role);
   const canReview = ['admin','accounting','accounting_officer'].includes(profile.role);
   const canApprove = ['admin','agm'].includes(profile.role); // AGM is the final approver; admin (CEO) can also act but isn't required
   const [runs,setRuns]=useState([]);
