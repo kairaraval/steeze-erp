@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 931 · Subcon legacy-paid fix: when a chain was bulk-tagged as paid via the old manual payroll (qty blank), only pieces RETURNED BEFORE the tag day are treated as already paid. Returns logged on/after the tag (e.g. Ruben Borje's Oct 26 Winston Blue + Boxy Tee pieces) now show as payable in the new subcon payroll instead of being excluded.";
+const BUILD = "Live build 932 · Subcon Sewing board now also shows IN-HOUSE sewing from sorting as monitoring-only rows (sky 'in-house · monitor' badge, no payroll). Before, only trad sorting projects sent to the 'IN-HOUSE' subcon appeared; subli sorting's in-house releases (destination_type='inhouse') were invisible here. Now both reflect so the whole order can be watched in one place.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10699,7 +10699,11 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const SUBCON_IDX=prodStatusIdx(SUBCON_SEW_STATUS);
 
   async function load(){ setBusy(true);
-    try{ const { data }=await sb.from('sorting_batches').select('*').eq('destination_type','subcon').is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
+    // Pull both subcon-destined batches (the payable ones) AND in-house-destined
+    // batches. In-house ones show here as monitoring-only rows (no payroll) so the
+    // whole order can be watched in one place — matches how trad sorting projects
+    // sent to the "IN-HOUSE" subcon already appeared, now also for subli sorting.
+    try{ const { data }=await sb.from('sorting_batches').select('*').in('destination_type',['subcon','inhouse']).is('deleted_at',null); setBatches(data||[]); }catch(_){ setBatches([]); }
     try{ const { data }=await sb.from('subcon_assignments').select('*').is('deleted_at',null); setAssigns(data||[]); }catch(_){ setAssigns([]); }
     try{ const { data }=await sb.from('subcon_payroll_queue').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setQueue(data||[]); }catch(_){ setQueue([]); }
     try{ const { data }=await sb.from('subcon_legacy_paid').select('*').is('deleted_at',null); setLegacyPaid(data||[]); }catch(_){ setLegacyPaid([]); }
