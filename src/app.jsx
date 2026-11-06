@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 935 · Month-End Close review step fixed: the REVIEW (supervisor) sign-off is now the Accounting Supervisor (role 'accounting', e.g. Rose) or admin — the Accounting Officer who prepares (role 'accounting_officer', e.g. Rachelle) can no longer review their own close. Added a guard so whoever prepared a close can't also review it.";
+const BUILD = "Live build 936 · Sales > Transmittals: added a per-manager filter dropdown, and the search box now also matches items inside each transmittal (description, type, notes) — not just number/client/purpose.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -51016,6 +51016,11 @@ function TransmittalsView({ profile, profiles, clients, salesOrders, transmittal
   const [tab,setTab]=useState('outstanding');
   const [search,setSearch]=useState('');
   const [statusFilter,setStatusFilter]=useState('');
+  const [managerFilter,setManagerFilter]=useState('');
+  // Managers that actually appear on transmittals, for the filter dropdown.
+  const managerOpts = [...new Set((transmittals||[]).map(t=>t.sales_manager_id).filter(Boolean))]
+    .map(id=>({ id, name:(profiles||[]).find(p=>p.id===id)?.name || '—' }))
+    .sort((a,b)=> a.name.localeCompare(b.name));
   const rows = (transmittals||[])
     .filter(t=> {
       if(tab === 'outstanding'){
@@ -51025,11 +51030,15 @@ function TransmittalsView({ profile, profiles, clients, salesOrders, transmittal
       return true;
     })
     .filter(t=> !statusFilter || t.status === statusFilter)
+    .filter(t=> !managerFilter || t.sales_manager_id === managerFilter)
     .filter(t=> {
       if(!search) return true;
       const q = search.toLowerCase();
       const client = (clients||[]).find(c=> c.id===t.client_id);
-      return `${t.number||''} ${client?.company||''} ${t.purpose||''}`.toLowerCase().includes(q);
+      // Also search the items inside each transmittal (description / type / notes).
+      const its = (transmittalItems||[]).filter(it=> it.transmittal_id===t.id);
+      const itemsText = its.map(it=> `${it.description||''} ${it.item_type||''} ${it.notes||''}`).join(' ');
+      return `${t.number||''} ${client?.company||''} ${t.purpose||''} ${itemsText}`.toLowerCase().includes(q);
     })
     .sort((a,b)=> {
       if(tab==='outstanding'){
@@ -51079,7 +51088,13 @@ function TransmittalsView({ profile, profiles, clients, salesOrders, transmittal
             <button onClick={()=>setTab('outstanding')} className={`px-3 py-1.5 rounded-md ${tab==='outstanding'?'bg-emerald-600 text-white font-semibold':'text-slate-600'}`}>Outstanding {outstandingCount>0 && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-white/20">{outstandingCount}</span>}</button>
             <button onClick={()=>setTab('all')} className={`px-3 py-1.5 rounded-md ${tab==='all'?'bg-slate-700 text-white font-semibold':'text-slate-600'}`}>All</button>
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search number, client, purpose…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search number, client, purpose, or item…" className="border rounded px-3 py-1.5 text-sm flex-1 min-w-[200px]" />
+          {managerOpts.length>0 && (
+            <select value={managerFilter} onChange={e=>setManagerFilter(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
+              <option value="">All managers</option>
+              {managerOpts.map(m=> <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
           {tab==='all' && (
             <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
               <option value="">All statuses</option>
