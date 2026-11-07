@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 936 · Sales > Transmittals: added a per-manager filter dropdown, and the search box now also matches items inside each transmittal (description, type, notes) — not just number/client/purpose.";
+const BUILD = "Live build 937 · Subli Cutting payroll reworked: 3-step sign-off — Joana PREPARES → production supervisor (Anjelica) VERIFIES → AGM (Lalyn) APPROVES, which raises one Request for Payment to Accounting. Added a printable Subli Cutting Payroll sheet (all cutters + items), viewable from the Runs tab and from the RFP in Accounting (like the subcon payroll sheet). Payment method is no longer forced to cash — Finance chooses the mode of payment.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -30777,7 +30777,13 @@ function StockAdjustModal({ profile, items, onClose, onSaved }){
 const SUBLI_CUT_REASONS=['defect','short cut','lost','other'];
 function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, reload }){
   const canEdit = ['admin','agm','production_supervisor','subli_pressing_head'].includes(profile?.role);
-  const canSign = ['admin','production_supervisor','subli_pressing_head'].includes(profile?.role);
+  // Payroll approval chain: Joana (subli_pressing_head) PREPARES → Anjelica
+  // (production_supervisor) VERIFIES → Lalyn (agm) APPROVES → then the RFP goes to
+  // Finance. canSign = who can stage/confirm + prepare the run.
+  const canSign = ['admin','subli_pressing_head','production_supervisor'].includes(profile?.role);
+  const canPrepare = ['admin','subli_pressing_head'].includes(profile?.role);
+  const canVerify  = ['admin','production_supervisor'].includes(profile?.role);
+  const canApprove = ['admin','agm'].includes(profile?.role);
   const [tab,setTab]=useState('board');            // 'board' | 'payroll' | 'cutters'
   const [payrollSub,setPayrollSub]=useState('staged'); // 'staged' | 'ready' | 'runs'
   const [cutters,setCutters]=useState([]);
@@ -30793,6 +30799,8 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
   const [receiving,setReceiving]=useState(null);    // { p, row } log received
   const [addPayroll,setAddPayroll]=useState(null);  // { p, row }
   const [signing,setSigning]=useState(false);
+  const [viewRun,setViewRun]=useState(null);        // payroll sheet doc { batch }
+  const [runBusy,setRunBusy]=useState(false);
   const num=(n)=>Number(n||0).toLocaleString();
   const todayISO=todayManila();
 
@@ -30877,6 +30885,41 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
   async function updateQueueRow(id, patch){ try{ await sb.from('subli_cut_payroll_queue').update(patch).eq('id',id); load(); }catch(e){ alert(e.message||e); } }
   async function removeQueueRow(qr){ if(!confirm('Remove this item from the For-payroll list?')) return; await sb.from('subli_cut_payroll_queue').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',qr.id); load(); }
   async function confirmQueue(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.qty)>0)); if(bad.length){ alert('Set a rate and qty first for: '+bad.map(r=>cutterName(r.cutter_id)).join(', ')); return; } await sb.from('subli_cut_payroll_queue').update({ status:'sent', sent_at:new Date().toISOString(), sent_by:profile.id }).in('id',ids); load(); }
+  // Verify a prepared run (production supervisor / Anjelica).
+  async function verifyRun(b){
+    if(!canVerify) return;
+    if(b.signed_by===profile.id && profile.role!=='admin'){ alert('The person who prepared this run can’t also verify it — the production supervisor verifies.'); return; }
+    if(!confirm(`Verify payroll run ${b.number} (${peso(b.total_amount)})? It then goes to the AGM to approve.`)) return;
+    setRunBusy(true);
+    try{
+      await sb.from('subli_cut_payroll_batches').update({ status:'verified', verified_by:profile.id, verified_at:new Date().toISOString() }).eq('id',b.id);
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔪 Subli cutting payroll ${b.number} verified — ${peso(b.total_amount)} · for your approval`, link_view:'subli-cutting', ref_type:'subli_cut_batch', ref_id:b.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+    }catch(e){ alert('Failed: '+(e.message||e)); }
+    setRunBusy(false); load(); reload&&reload();
+  }
+  // Approve a verified run (AGM / Lalyn) → raises one Request for Payment to Finance.
+  async function approveRun(b){
+    if(!canApprove) return;
+    if(!confirm(`Approve payroll run ${b.number} (${peso(b.total_amount)})? This raises one Request for Payment to Finance.`)) return;
+    setRunBusy(true);
+    try{
+      const cutterCount=new Set((queue||[]).filter(q=>q.batch_id===b.id).map(q=>q.cutter_id)).size;
+      const rfpNo=await nextRfpNumber();
+      const particulars=`[Subli Cutting Payroll] ${b.number} — ${cutterCount} cutter${cutterCount===1?'':'s'}, ${num(b.total_pcs)} pcs. Prepared by ${b.prepared_sig||'—'}.`;
+      const nowISO=new Date().toISOString();
+      // AGM (Lalyn) is the final approver — this is a skip-admin origin, so the RFP is
+      // created already APPROVED and its payable voucher is raised for Accounting. We
+      // leave payment_method blank so Finance chooses it (bank transfer / check / cash).
+      const { data:rfp, error:re }=await sb.from('rfps').insert({ number:rfpNo, date:todayManila(), status:'approved', origin:'subli_cutting', supplier_name:'Subli Cutting Payroll', amount:Number(b.total_amount||0), particulars, payment_method:null, requested_by:profile.id, requested_at:nowISO, agm_approved_by:profile.id, agm_approved_at:nowISO, admin_approved_by:profile.id, admin_approved_at:nowISO, admin_notes:'Auto — AGM-final (Admin step skipped)' }).select('id,number').single();
+      if(re) throw re;
+      await sb.from('subli_cut_payroll_batches').update({ status:'requested', approved_by:profile.id, approved_at:nowISO, rfp_id:rfp.id }).eq('id',b.id);
+      await sb.from('subli_cut_payroll_queue').update({ status:'requested' }).eq('batch_id',b.id).is('deleted_at',null);
+      await createApVoucherForRfp(rfp, profile.id);
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔪 Subli cutting payroll ${b.number} approved by AGM — ${peso(b.total_amount)} · RFP ${rfp.number} ready to pay`, link_view:'rfps', ref_type:'rfp', ref_id:rfp.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+      alert(`Approved. Request for Payment ${rfp.number} raised — Accounting can now pay it.`);
+    }catch(e){ alert('Failed: '+(e.message||e)); }
+    setRunBusy(false); load(); reload&&reload();
+  }
 
   const cutterNm=cutterName;
   return (
@@ -30966,12 +31009,12 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
         const SUB=(k,l)=>(<button onClick={()=>setPayrollSub(k)} className={`px-3 py-1 rounded-md ${payrollSub===k?'bg-white shadow-sm font-semibold':'text-slate-600'}`}>{l}</button>);
         return (
         <div className="space-y-3">
-          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: check each cutter's qty &amp; rate, then <b>Confirm</b> → moves to <b>In payroll</b>. There the supervisor <b>signs</b> the run, which raises <b>one Request for Payment</b> → AGM → Finance.</div>
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800"><b>For payroll</b>: check each cutter's qty &amp; rate, then <b>Confirm</b> → moves to <b>In payroll</b>. There it's <b>prepared</b> (Joana) → <b>verified</b> (production supervisor) → <b>approved</b> (AGM), which raises <b>one Request for Payment</b> → Finance.</div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-xs">{SUB('staged','For payroll')}{SUB('ready','In payroll')}{SUB('runs','Signed runs')}</div>
             {payrollSub==='staged' && <div className="text-xs text-slate-500">{num(staged.reduce((t,q)=>t+Number(q.qty||0),0))} pcs · <b className="text-slate-700">{peso(stAmt)}</b></div>}
             {payrollSub==='staged' && canSign && staged.length>0 && <button onClick={()=>confirmQueue(staged)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✓ Confirm all for payroll ({staged.length})</button>}
-            {payrollSub==='ready' && canSign && sent.length>0 && <button onClick={()=>setSigning(true)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✍ Sign &amp; request payment</button>}
+            {payrollSub==='ready' && canPrepare && sent.length>0 && <button onClick={()=>setSigning(true)} className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">✍ Prepare &amp; sign run</button>}
           </div>
 
           {payrollSub==='staged' && (staged.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">Nothing staged. On the Cutting board, log received then click “💰 Add to payroll”.</div> :
@@ -30996,11 +31039,26 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
               </div>))}
             </div>)}
 
-          {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
+          {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No runs yet. Prepare one from <b>In payroll</b>.</div> :
             <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
-              <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
-                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Prepared by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-right px-3 py-2">Actions</th></tr></thead>
+              <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid';
+                const st=b.status;
+                const lbl = paid ? 'Paid' : r ? ('RFP '+(r.number||'')+' · '+r.status.replace('_',' ')) : st==='prepared' ? 'Prepared · to verify' : st==='verified' ? 'Verified · to approve' : st;
+                const cls = paid ? 'bg-emerald-100 text-emerald-700' : st==='prepared' ? 'bg-amber-100 text-amber-700' : st==='verified' ? 'bg-cyan-100 text-cyan-700' : 'bg-sky-100 text-sky-700';
+                return (
+                <tr key={b.id} className="border-t">
+                  <td className="px-3 py-2 font-mono text-xs">{b.number}</td>
+                  <td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td>
+                  <td className="px-3 py-2 text-right">{num(b.total_pcs)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td>
+                  <td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cls}`}>{lbl}</span></td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button onClick={()=>setViewRun(b)} className="text-xs text-slate-600 hover:underline font-semibold mr-2">📄 View</button>
+                    {st==='prepared' && canVerify && <button disabled={runBusy} onClick={()=>verifyRun(b)} className="text-xs text-cyan-700 hover:underline font-semibold mr-2 disabled:opacity-50">✓ Verify</button>}
+                    {st==='verified' && canApprove && <button disabled={runBusy} onClick={()=>approveRun(b)} className="text-xs text-violet-700 hover:underline font-semibold disabled:opacity-50">✓ Approve → Finance</button>}
+                  </td>
+                </tr>
               ); })}</tbody>
             </table></div>)}
         </div>
@@ -31074,6 +31132,7 @@ function SubliCuttingView({ profile, profiles, leads, clients, prodJobs, rfps, r
       {receiving && <SubliCutReceiveModal row={receiving.row} onClose={()=>setReceiving(null)} onSave={(vals)=>saveReceived(receiving.p, receiving.row, vals)} />}
       {addPayroll && <SubliCutAddPayrollModal row={addPayroll.row} cutters={cutters} onClose={()=>setAddPayroll(null)} onSave={(vals)=>addToPayroll(addPayroll.p, addPayroll.row, vals)} />}
       {signing && <SubliCutSignModal rows={(queue||[]).filter(q=>!q.deleted_at && q.status==='sent' && !q.batch_id)} cutters={cutters} leads={leads} clients={clients} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
+      {viewRun && <SubliCutPayrollDoc batch={viewRun} rfp={viewRun.rfp_id?(rfps||[]).find(r=>r.id===viewRun.rfp_id):null} profiles={profiles} onClose={()=>setViewRun(null)} />}
     </div>
   );
 }
@@ -31206,32 +31265,97 @@ function SubliCutSignModal({ rows, cutters, leads, clients, profile, onClose, on
       const { data:bRows }=await sb.from('subli_cut_payroll_batches').select('number').like('number',`SCP-${monthKey}-%`);
       let max=0; (bRows||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
       const number=`SCP-${monthKey}-${String(max+1).padStart(3,'0')}`;
-      const { data:batch, error:be }=await sb.from('subli_cut_payroll_batches').insert({ number, status:'signed', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, created_by:profile.id }).select('id,number').single();
+      const { data:batch, error:be }=await sb.from('subli_cut_payroll_batches').insert({ number, status:'prepared', signed_by:profile.id, signed_at:new Date().toISOString(), prepared_sig:sig.trim(), total_pcs:pcs, total_amount:amount, created_by:profile.id }).select('id,number').single();
       if(be) throw be;
       await sb.from('subli_cut_payroll_queue').update({ status:'batched', batch_id:batch.id }).in('id', rows.map(r=>r.id));
-      // Raise the RFP → AGM first, then Finance (origin routes it past Admin).
-      const rfpNo=await nextRfpNumber();
-      const particulars=`[Subli Cutting Payroll] ${batch.number} — ${cutterCount} cutter${cutterCount===1?'':'s'}, ${num(pcs)} pcs. Signed by ${sig.trim()}.`;
-      const { data:rfp, error:re }=await sb.from('rfps').insert({ number:rfpNo, date:todayManila(), status:'pending_agm', origin:'subli_cutting', supplier_name:'Subli Cutting Payroll', amount, particulars, payment_method:'cash', requested_by:profile.id, requested_at:new Date().toISOString() }).select('id,number').single();
-      if(re) throw re;
-      await sb.from('subli_cut_payroll_batches').update({ status:'requested', rfp_id:rfp.id }).eq('id',batch.id);
-      await sb.from('subli_cut_payroll_queue').update({ status:'requested' }).eq('batch_id',batch.id).is('deleted_at',null);
-      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔪 Subli cutting payroll ${batch.number} signed — ${peso(amount)} · awaiting AGM approval`, link_view:'agm-approvals', ref_type:'rfp', ref_id:rfp.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
-      setBusy(false); alert(`Request for Payment ${rfp.number} raised. It goes to the AGM, then Finance.`); onSaved&&onSaved();
+      // No RFP yet — the run now goes PREPARED → (production supervisor) VERIFIES →
+      // (AGM) APPROVES, and only then is the Request for Payment raised to Finance.
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['production_supervisor','admin']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔪 Subli cutting payroll ${batch.number} prepared — ${peso(amount)} · for your verification`, link_view:'subli-cutting', ref_type:'subli_cut_batch', ref_id:batch.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+      setBusy(false); alert(`Payroll run ${batch.number} prepared. It now goes to the production supervisor to verify, then the AGM to approve.`); onSaved&&onSaved();
     }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
   }
   return (
-    <Modal title="✍ Sign cutting payroll & request payment" onClose={onClose} wide>
+    <Modal title="✍ Prepare & sign cutting payroll" onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="text-xs text-slate-600 bg-violet-50 border border-violet-200 rounded p-2">You're confirming you checked every cutter's qty &amp; rate. Signing raises <b>one Request for Payment</b> → AGM → Finance.</div>
+        <div className="text-xs text-slate-600 bg-violet-50 border border-violet-200 rounded p-2">You're confirming you checked every cutter's qty &amp; rate. Preparing creates the run, which then goes to the <b>production supervisor to verify</b> and the <b>AGM to approve</b> before the Request for Payment is raised to Finance.</div>
         <div className="border rounded-lg overflow-hidden max-h-72 overflow-y-auto"><table className="w-full text-xs">
           <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Cutter</th><th className="text-right px-3 py-1.5">Pcs</th><th className="text-right px-3 py-1.5">Rate</th><th className="text-right px-3 py-1.5">Amount</th></tr></thead>
           <tbody>{rows.map(qr=>(<tr key={qr.id} className="border-t"><td className="px-3 py-1.5">{cutterNm(qr.cutter_id)}</td><td className="px-3 py-1.5 text-right">{num(qr.qty)}</td><td className="px-3 py-1.5 text-right">{peso(qr.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(qr))}</td></tr>))}</tbody>
           <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-1.5">Total</td><td className="px-3 py-1.5 text-right">{num(pcs)}</td><td></td><td className="px-3 py-1.5 text-right text-emerald-700">{peso(amount)}</td></tr></tfoot>
         </table></div>
-        <div><label className="text-[10px] uppercase text-slate-500">Sign — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. Joan …" /></div>
+        <div><label className="text-[10px] uppercase text-slate-500">Prepared & signed by — type your full name</label><input className="input mt-0.5 text-sm" value={sig} onChange={e=>setSig(e.target.value)} placeholder="e.g. Joana Araza" /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Sign & request payment'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-violet-600 text-white font-semibold disabled:opacity-50">{busy?'Working…':'✍ Prepare & sign run'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// The full Subli Cutting payroll sheet — every cutter + their items — shown both
+// from the Subli Cutting runs tab and from the linked RFP in Accounting (so finance
+// sees it as one payroll, like the subcon sewing payroll sheet). Sign-off trail:
+// Prepared (Joana) → Verified (production supervisor) → Approved (AGM).
+function SubliCutPayrollDoc({ batch, rfp, profiles, onClose }){
+  const [st,setSt]=useState(null);
+  useEffect(()=>{ let on=true; (async()=>{
+    let b=batch||null, rows=[];
+    try{
+      if(!b && rfp){ const r=await sb.from('subli_cut_payroll_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1); b=(r.data&&r.data[0])||null; }
+      if(b){ const r2=await sb.from('subli_cut_payroll_queue').select('*').eq('batch_id',b.id).is('deleted_at',null); rows=r2.data||[]; }
+    }catch(e){ if(on) setSt({ b:null, err:e.message||String(e) }); return; }
+    if(!b){ if(on) setSt({ b:null }); return; }
+    let cutters=[], leads=[], clients=[];
+    try{ const r=await sb.from('cutting_people').select('id,name'); cutters=r.data||[]; }catch(_){}
+    try{ const leadIds=[...new Set(rows.map(r=>r.lead_id).filter(Boolean))]; if(leadIds.length){ const r=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); leads=r.data||[]; const cIds=[...new Set(leads.map(l=>l.client_id).filter(Boolean))]; if(cIds.length){ const rc=await sb.from('clients').select('id,company').in('id',cIds); clients=rc.data||[]; } } }catch(_){}
+    if(on) setSt({ b, rows, cutters, leads, clients });
+  })(); return ()=>{ on=false; }; },[batch?.id, rfp?.id]);
+  if(!st) return <Modal title="Subli Cutting Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">Loading payroll sheet…</div></Modal>;
+  if(!st.b) return <Modal title="Subli Cutting Payroll sheet" onClose={onClose}><div className="py-10 text-center text-slate-400 text-sm">No payroll sheet is linked.{st.err?` (${st.err})`:''}</div></Modal>;
+  const b=st.b; const rows=st.rows||[];
+  const cutterNm=(id)=>(st.cutters||[]).find(s=>s.id===id)?.name||'Cutter';
+  const clientOf=(q)=>{ const l=(st.leads||[]).find(x=>x.id===q.lead_id); const c=l&&l.client_id?((st.clients||[]).find(cc=>cc.id===l.client_id)?.company):''; return q.client_name || c || '—'; };
+  const projTitle=(q)=>{ const l=(st.leads||[]).find(x=>x.id===q.lead_id); return (l&&l.title)||q.item_label||q.garment||'Project'; };
+  const amtOf=(q)=>Number(q.qty||0)*Number(q.rate||0);
+  const byCut=(()=>{ const m=new Map(); rows.forEach(q=>{ const k=q.cutter_id; if(!m.has(k)) m.set(k,{ cutter:cutterNm(q.cutter_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push(q); g.pcs+=Number(q.qty||0); g.amt+=amtOf(q); }); return Array.from(m.values()).sort((a,b)=>a.cutter.localeCompare(b.cutter)); })();
+  const totalPcs=rows.reduce((t,q)=>t+Number(q.qty||0),0), totalAmt=rows.reduce((t,q)=>t+amtOf(q),0);
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const ver=b.verified_by?pById(b.verified_by):null;
+  const app=b.approved_by?pById(b.approved_by):null;
+  const SigBox=({name,sigData,when,role,fallback})=>(
+    <div className="text-center">
+      <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{sigData && <img src={sigData} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+      <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">{role}</div>
+      <div className="text-[11px] text-slate-700">{name||fallback||'—'}{when?` · ${fmtDate(String(when).slice(0,10))}`:''}</div>
+    </div>
+  );
+  return (
+    <Modal title={`Subli Cutting Payroll · ${b.number}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end gap-2">
+          <button onClick={()=>{ const n=document.getElementById('scp-sheet'); if(n) saveNodeAsPdf(n, `Subli Cutting Payroll - ${b.number}`); }} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📄 Save PDF</button>
+          <button onClick={()=>printAs(`Subli Cutting Payroll - ${b.number}`)} className="hidden sm:inline-flex px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+        </div>
+        <style>{`@media print{ body *{visibility:hidden !important;} #scp-sheet,#scp-sheet *{visibility:visible !important;} #scp-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+        <div id="scp-sheet" className="bg-white p-2" style={{color:'#222'}}>
+          <div className="flex items-center justify-between border-b pb-2 mb-3">
+            <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Subli Cutting Payroll</div></div>
+            <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{b.number}</div><div>{fmtDate(String(b.signed_at||b.created_at||'').slice(0,10))}</div>{rfp&&<div className="font-mono">{rfp.number}</div>}</div>
+          </div>
+          {byCut.map((g,gi)=>(
+            <div key={gi} className="mb-3">
+              <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">{g.cutter}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
+              <table className="w-full text-xs"><thead><tr className="text-[9px] uppercase text-slate-400"><th className="text-left px-2 py-0.5">Client</th><th className="text-left px-2 py-0.5">Project</th><th className="text-right px-2 py-0.5">Qty × rate</th><th className="text-right px-2 py-0.5">Amount</th></tr></thead><tbody>
+                {g.rows.map(q=>(<tr key={q.id} className="border-b"><td className="px-2 py-1 font-medium">{clientOf(q)}</td><td className="px-2 py-1 text-slate-500">{projTitle(q)}</td><td className="px-2 py-1 text-right">{Number(q.qty||0).toLocaleString()} × {peso(q.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(amtOf(q))}</td></tr>))}
+              </tbody></table>
+            </div>
+          ))}
+          <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {byCut.length} cutter(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
+          <div className="grid grid-cols-3 gap-6 mt-10">
+            <SigBox name={b.prepared_sig||(pById(b.signed_by)?.name)} sigData={pById(b.signed_by)?.signature_data} when={b.signed_at} role="Prepared & signed by" />
+            <SigBox name={ver?(ver.name||ver.email):null} sigData={ver?.signature_data} when={b.verified_at} role="Verified — Supervisor" fallback="Pending verification" />
+            <SigBox name={app?(app.name||app.email):null} sigData={app?.signature_data} when={b.approved_at} role="Approved — AGM" fallback="Pending AGM" />
+          </div>
+        </div>
       </div>
     </Modal>
   );
@@ -39253,6 +39377,8 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
 function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAccounts, leaveCashouts, employees, leaveBalances, onClose, onSaved, onPay, onEditPO }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
+  const [payMethod,setPayMethod]=useState(rfp.payment_method||'');
+  async function savePayMethod(v){ setPayMethod(v); try{ await sb.from('rfps').update({ payment_method:v||null }).eq('id', rfp.id); }catch(e){ setMsg(e.message||String(e)); } }
   const [showPO,setShowPO]=useState(false);
   const [poPrint,setPoPrint]=useState(false);
   const [cashoutPrint,setCashoutPrint]=useState(false);
@@ -39487,10 +39613,10 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
 
         {/* Subcon Sewing payroll — the signed supporting document (supervisor + AGM + Admin). */}
-        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting') && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase text-violet-700">{rfp.origin==='subcon_cutting'?'🔪 Subcon Cutting Payroll Sheet':'🧵 Subcon Payroll Sheet'}</div>
+              <div className="text-xs font-semibold uppercase text-violet-700">{rfp.origin==='subli_cutting'?'🔪 Subli Cutting Payroll Sheet':rfp.origin==='subcon_cutting'?'🔪 Subcon Cutting Payroll Sheet':'🧵 Subcon Payroll Sheet'}</div>
               <div className="text-[12px] text-slate-600 truncate">The signed per-subcon payroll breakdown — the supporting document for this payment. Open it to review &amp; print before approving.</div>
             </div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
@@ -39645,6 +39771,17 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <TpLbl t="Notes / Question (required if rejecting or returning)"><textarea className="input min-h-[60px]" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. Why is the amount ₱157,559? Please attach the breakdown." /></TpLbl>
         )}
 
+        {(isAccounting||isAdmin) && !['paid','cancelled','rejected'].includes(status) && (
+          <TpLbl t="Payment method — Finance chooses how this is paid">
+            <select className="input" value={payMethod} onChange={e=>savePayMethod(e.target.value)}>
+              <option value="">— choose —</option>
+              <option value="bank_transfer">Bank transfer</option>
+              <option value="check">Check</option>
+              <option value="cash">Cash</option>
+            </select>
+          </TpLbl>
+        )}
+
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
 
         {/* Action buttons depend on status + role */}
@@ -39688,7 +39825,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       </div>
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
-      {showPayrollDoc && (rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -39842,9 +39979,9 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
           {Number(rfp.amount_paid||0)>0 && <div className="mb-1">Already paid <strong>{peso(rfp.amount_paid)}</strong> of {peso(rfp.amount)} · Balance <strong>{peso(rfpBalance(rfp))}</strong>.</div>}
           Paying <strong>{peso(f.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. You can change the amount below to pay partially — the RFP stays “Partially Paid” with the balance shown until it's fully settled.
         </div>
-        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting') && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-2.5 flex items-center justify-between gap-3">
-            <div className="text-xs text-violet-800">{rfp.origin==='subcon_cutting'?<>🔪 This is a <b>subcon cutting payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>:<>🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>}</div>
+            <div className="text-xs text-violet-800">{rfp.origin==='subli_cutting'?<>🔪 This is a <b>subli cutting payroll</b> — open the signed payroll sheet to check the per-cutter breakdown before paying.</>:rfp.origin==='subcon_cutting'?<>🔪 This is a <b>subcon cutting payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>:<>🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>}</div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
           </div>
         )}
@@ -39934,7 +40071,7 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
       </div>
-      {showPayrollDoc && (rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -41332,7 +41469,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
 
         {/* ── Controls (not printed) ── */}
         <div className="no-print space-y-3">
-          {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
+          {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting'||data.origin==='subli_cutting') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='subli_cutting'?'🔪 View & check the Subli Cutting Payroll Sheet':data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
           {nAtt>0 && <div className="border rounded-lg p-3 bg-slate-50">
             <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} receipt{nAtt===1?'':'s'} / supporting document{nAtt===1?'':'s'} — tap to view before approving</div>
             <AttachmentList attachments={allAtts} inline />
@@ -41346,7 +41483,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
           </div>
         </div>
       </div>
-      {showPayrollDoc && (data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (data.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }

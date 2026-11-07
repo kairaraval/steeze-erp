@@ -11,7 +11,7 @@
 // The OneSignalSDKWorker.js file must be uploaded to the web root.
 try { importScripts('/OneSignalSDKWorker.js'); } catch(e) { console.error('OneSignal SW import failed:', e); }
 
-const CACHE_NAME = 'steeze-os-v829';
+const CACHE_NAME = 'steeze-os-v830';
 
 // Allow the page to ask us to activate a freshly installed version immediately
 // (paired with controllerchange + reload in index.html for auto-update).
