@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 941 · Finance Phase 1 (Sales Order revenue + CWT): revenue, AR and Output VAT are now recognized in the GL at Closed Won (DR 101008 / CR 501001 / CR 201001), not at collection. Customer payments just settle the receivable (DR Cash / CR AR). BIR 2307 payments are flagged 'CWT' and post to Creditable Withholding Tax 101012 — never to Sales Revenue. VAT is extracted (12/112) when a sale is ticked VAT-inclusive. Added SO tickboxes (VAT-inc / client withholds CWT) and a CWT toggle on the payment form.";
+const BUILD = "Live build 942 · Finance Phase 1b: the VAT-inclusive / client-withholds-CWT tickboxes now live on the sales manager's Lead edit in the pipeline and carry over to the Sales Order (with any VAT) automatically at Closed Won. They remain visible/adjustable on the SO for Accounting.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1439,6 +1439,8 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   // Closed Won so Accounting knows the expected payment timing without
   // having to re-enter it.
   const [paymentTerms,setPaymentTerms]=useState(existing?.payment_terms||'');
+  const [needsBirInvoice,setNeedsBirInvoice]=useState(!!existing?.needs_bir_invoice);
+  const [clientWithholdsCwt,setClientWithholdsCwt]=useState(!!existing?.client_withholds_cwt);
   const [creationDate,setCreationDate]=useState(existing?.created_at ? String(existing.created_at).slice(0,10) : todayManila());
   const [poNumber,setPoNumber]=useState(existing?.po_number||''); const [techpackNumber,setTechpackNumber]=useState(existing?.techpack_number||'');
   const [leadSource,setLeadSource]=useState(existing?.lead_source||'');
@@ -1597,7 +1599,7 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
       // so it surfaces in the Marketing & Internal Expenses report.
       const hasCompanion = !nonSale && !!cMeta && compAmt>0;
       const saleValueOut = nonSale ? 0 : billableTotal;
-      const payload={ client_id:finalClientId||null, title:title.trim(), value: saleValueOut, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : (companionCost>0?companionCost:null), commission_base: (hasCompanion && cMeta.billable) ? commissionBase : null, companion_kind: hasCompanion ? companionKind : null, companion_amount: hasCompanion ? compAmt : null, companion_label: hasCompanion ? (companionLabel.trim()||null) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || todayManila()) : (existing?.won_at||null) };
+      const payload={ client_id:finalClientId||null, title:title.trim(), value: saleValueOut, subtotal_amount: nonSale?0:(hasItems?subtotal:value), vat_amount: nonSale?0:(hasItems?vat:0), lead_type:leadType||'sale', expense_cost: nonSale ? (expenseCost===''?null:Number(expenseCost)) : (companionCost>0?companionCost:null), commission_base: (hasCompanion && cMeta.billable) ? commissionBase : null, companion_kind: hasCompanion ? companionKind : null, companion_amount: hasCompanion ? compAmt : null, companion_label: hasCompanion ? (companionLabel.trim()||null) : null, stage, expected_close:expectedClose||null, delivery_date:deliveryDate||null, forecast_close_date:forecastClose||null, payment_terms: paymentTerms||null, needs_bir_invoice: needsBirInvoice, client_withholds_cwt: clientWithholdsCwt, po_number:poNumber.trim(), techpack_number:techpackNumber.trim(), items:finalItems, attachments, lead_source:leadSource||'', notes:notes||'', manager_id: managerId||null, contact_person: contactPerson.trim()||null, contact_phone: contactPhone.trim()||null, delivery_address: address.trim()||null, created_at: creationDate ? new Date(creationDate+'T00:00:00').toISOString() : new Date().toISOString(), won_at: SOLD_STAGES.includes(stage) ? (existing?.won_at || todayManila()) : (existing?.won_at||null) };
       // Stamp stage_changed_at when the stage actually changes here (or on
       // create), so the lead lands at the top of its column.
       if(!isEdit || existing?.stage !== stage){ payload.stage_changed_at = new Date().toISOString(); }
@@ -1794,6 +1796,11 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
               {PAYMENT_TERMS_OPTIONS.map(t=><option key={t} value={t}>{t}</option>)}
               {paymentTerms && !PAYMENT_TERMS_OPTIONS.includes(paymentTerms) && <option value={paymentTerms}>{paymentTerms} (legacy)</option>}
             </select>
+          </div>
+          <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-1.5">
+            <div className="text-[10px] uppercase text-slate-500 font-semibold">Tax &amp; invoicing <span className="normal-case font-normal text-slate-400">· carries to the Sales Order at Closed Won</span></div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={needsBirInvoice} onChange={e=>setNeedsBirInvoice(e.target.checked)} className="w-4 h-4 accent-indigo-600" /> VAT-inclusive — <strong>issue a BIR sales invoice</strong></label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={clientWithholdsCwt} onChange={e=>setClientWithholdsCwt(e.target.checked)} className="w-4 h-4 accent-teal-600" /> Client <strong>withholds tax (CWT)</strong> — expect a BIR 2307</label>
           </div>
           <div><label className="text-[10px] text-slate-500 uppercase">Creation Date</label><input type="date" className="input mt-0.5" value={creationDate||''} onChange={e=>setCreationDate(e.target.value)} /></div>
           <div><label className="text-[10px] text-slate-500 uppercase">PO Number</label><input className="input mt-0.5" value={poNumber} onChange={e=>setPoNumber(e.target.value)} placeholder="Client's PO #" /></div>
@@ -33666,6 +33673,11 @@ async function maybeAutoCreateSalesOrderForLead(profile, lead, clients){
       // Payment terms set on the lead carry over so Accounting + Sales both
       // see the expected payment timing without re-entering it on the SO.
       payment_terms: lead.payment_terms || null,
+      // Carry the sales manager's tax/invoicing flags + any VAT the lead computed
+      // so revenue + Output VAT recognize correctly at Closed Won.
+      needs_bir_invoice: !!lead.needs_bir_invoice,
+      client_withholds_cwt: !!lead.client_withholds_cwt,
+      vat_amount: Number(lead.vat_amount)||0,
       techpack_number: lead.techpack_number||null,
       created_by: profile.id,
     };
