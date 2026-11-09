@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 937 · Subli Cutting payroll reworked: 3-step sign-off — Joana PREPARES → production supervisor (Anjelica) VERIFIES → AGM (Lalyn) APPROVES, which raises one Request for Payment to Accounting. Added a printable Subli Cutting Payroll sheet (all cutters + items), viewable from the Runs tab and from the RFP in Accounting (like the subcon payroll sheet). Payment method is no longer forced to cash — Finance chooses the mode of payment.";
+const BUILD = "Live build 938 · Subcon Sewing floor tracking now shows a 'Released' date column (when pcs were sent to each subcon). It's editable on the Assign-subcon modal (defaults to today for new assignments); existing rows fall back to when they were assigned/batched.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10731,11 +10731,11 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   const projects = React.useMemo(()=>{
     const idByName={}; (subcons||[]).forEach(s=>{ idByName[(s.name||'').toLowerCase()]=s.id; });
     const map=new Map();
-    const blankSub=(sk)=>({ subcon_id: sk==='?'?null:sk, items:new Set(), outBatch:0, returnedBatch:0, qty:0, dueDates:[], assignment:null, done:false, batchCount:0, subconNameRaw:'', assignOut:null, returnsGood:0, variance:0, returnLog:[] });
+    const blankSub=(sk)=>({ subcon_id: sk==='?'?null:sk, items:new Set(), outBatch:0, returnedBatch:0, qty:0, dueDates:[], assignment:null, done:false, batchCount:0, subconNameRaw:'', assignOut:null, returnsGood:0, variance:0, returnLog:[], released:null });
     const ensure=(leadId, jobHint)=>{ const k=leadId||(jobHint?('job:'+jobHint.id):null); if(!k) return null; if(map.has(k)){ const p=map.get(k); if(!p.job&&jobHint) p.job=jobHint; return p; } const job=jobHint||(prodJobs||[]).find(j=>j.lead_id===leadId&&!j.deleted_at); const p={ key:k, lead_id:leadId||null, job:job||null, subs:new Map(), client:job?.client_name||'', item:job?.item||'', plannedQty:Number(job?.quantity)||0, projDue:job?.due_date||null, number:job?.number||'' }; map.set(k,p); return p; };
     (prodJobs||[]).filter(j=>j.status===SUBCON_SEW_STATUS && !j.deleted_at).forEach(j=>ensure(j.lead_id,j));
-    (assigns||[]).forEach(a=>{ const p=ensure(a.lead_id); if(!p) return; const sk=a.subcon_id||'?'; const s=p.subs.get(sk)||blankSub(sk); s.assignment=a; if(a.item_label) s.items.add(a.item_label); if(a.qty!=null&&a.qty!=='') s.qty=Number(a.qty)||0; if(a.out_qty!=null&&a.out_qty!=='') s.assignOut=Number(a.out_qty)||0; (Array.isArray(a.returns)?a.returns:[]).forEach(r=>{ s.returnsGood+=Number(r.good||0); s.variance+=Number(r.variance||0); s.returnLog.push(r); if(r.date) s.dueDates.push(r.date); }); if(a.target_return_date) s.dueDates.push(a.target_return_date); if(a.done) s.done=true; p.subs.set(sk,s); });
-    (batches||[]).forEach(b=>{ const p=ensure(b.lead_id); if(!p) return; const sub=b.subcon_id||idByName[(b.subcon_name||'').toLowerCase()]||'?'; const s=p.subs.get(sub)||blankSub(sub); const g=batchGarmentTotal(b); s.outBatch+=g; if(b.status==='returned') s.returnedBatch+=g; if(b.item_label) s.items.add(b.item_label); else if(b.item) s.items.add(b.item); if(!s.subconNameRaw&&b.subcon_name) s.subconNameRaw=b.subcon_name; if(b.expected_due_date&&b.status!=='returned') s.dueDates.push(b.expected_due_date); s.batchCount++; if(!p.client&&b.client_name)p.client=b.client_name; if(!p.item&&b.item)p.item=b.item; p.subs.set(sub,s); });
+    (assigns||[]).forEach(a=>{ const p=ensure(a.lead_id); if(!p) return; const sk=a.subcon_id||'?'; const s=p.subs.get(sk)||blankSub(sk); s.assignment=a; if(a.item_label) s.items.add(a.item_label); if(a.qty!=null&&a.qty!=='') s.qty=Number(a.qty)||0; if(a.out_qty!=null&&a.out_qty!=='') s.assignOut=Number(a.out_qty)||0; (Array.isArray(a.returns)?a.returns:[]).forEach(r=>{ s.returnsGood+=Number(r.good||0); s.variance+=Number(r.variance||0); s.returnLog.push(r); if(r.date) s.dueDates.push(r.date); }); if(a.target_return_date) s.dueDates.push(a.target_return_date); if(!s.released) s.released = a.released_date || (a.created_at?String(a.created_at).slice(0,10):null); if(a.done) s.done=true; p.subs.set(sk,s); });
+    (batches||[]).forEach(b=>{ const p=ensure(b.lead_id); if(!p) return; const sub=b.subcon_id||idByName[(b.subcon_name||'').toLowerCase()]||'?'; const s=p.subs.get(sub)||blankSub(sub); const g=batchGarmentTotal(b); s.outBatch+=g; if(b.status==='returned') s.returnedBatch+=g; if(b.item_label) s.items.add(b.item_label); else if(b.item) s.items.add(b.item); if(!s.subconNameRaw&&b.subcon_name) s.subconNameRaw=b.subcon_name; if(b.expected_due_date&&b.status!=='returned') s.dueDates.push(b.expected_due_date); if(!s.released && (b.released_at||b.created_at)) s.released=String(b.released_at||b.created_at).slice(0,10); s.batchCount++; if(!p.client&&b.client_name)p.client=b.client_name; if(!p.item&&b.item)p.item=b.item; p.subs.set(sub,s); });
     return Array.from(map.values()).map(p=>{
       p.label=projLabel(p.lead_id, p.client, p.item);
       const ji=p.job?prodStatusIdx(p.job.status):-1;
@@ -10996,6 +10996,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       <td className="px-3 py-2 text-right">{s.out?num(s.out):'—'}</td>
       <td className="px-3 py-2 text-right text-emerald-700">{s.returned?num(s.returned):'—'}{s.variance>0 && <span className="text-[10px] text-rose-500 ml-1" title="variance (defect/lost)">+{num(s.variance)}v</span>}</td>
       <td className="px-3 py-2 text-right font-semibold">{s.out?<span className={s.balance>0?'text-amber-700':'text-emerald-700'}>{num(s.balance)}</span>:'—'}</td>
+      <td className="px-3 py-2 text-xs text-slate-500">{s.released ? fmtDate(s.released) : '—'}</td>
       <td className="px-3 py-2 text-xs">{s.due ? <span className={s.overdue?'text-rose-700 font-semibold':''}>{fmtDate(s.due)}{s.overdue?' ⚠':''}</span> : '—'}</td>
       <ActionCell p={p} s={s} />
     </tr>
@@ -11008,6 +11009,7 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
       <th className="text-right px-3 py-2">Out</th>
       <th className="text-right px-3 py-2">Returned</th>
       <th className="text-right px-3 py-2">Balance</th>
+      <th className="text-left px-3 py-2">Released</th>
       <th className="text-left px-3 py-2">Due</th>
       {canEdit && <th></th>}
     </tr></thead>
@@ -11684,7 +11686,7 @@ function SubconAddToPayrollModal({ p, s, subcons, onSave, onClose }){
 }
 function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose, onSaved }){
   const isEdit=!!(existing&&existing.id);
-  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', qty: (existing?.qty!=null?existing.qty:''), out_qty: (existing?.out_qty!=null?existing.out_qty:''), target_return_date: existing?.target_return_date||'', done: !!existing?.done, notes: existing?.notes||'' });
+  const [f,setF]=useState({ lead_id: existing?.lead_id||'', subcon_id: existing?.subcon_id||'', item_label: existing?.item_label||'', qty: (existing?.qty!=null?existing.qty:''), out_qty: (existing?.out_qty!=null?existing.out_qty:''), released_date: existing?.released_date || (existing?.id?'':todayManila()), target_return_date: existing?.target_return_date||'', done: !!existing?.done, notes: existing?.notes||'' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.name||'';
   const leadOpts=(leads||[]).map(l=>({ id:l.id, label:`${clientName(l.client_id)||'—'}${l.title?(' · '+l.title):''}` })).sort((a,b)=>a.label.localeCompare(b.label));
@@ -11695,7 +11697,7 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
     if(!f.subcon_id){ setMsg('Pick a subcon.'); return; }
     setBusy(true); setMsg('');
     const now=new Date().toISOString();
-    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, qty: (f.qty===''||f.qty==null)?null:Number(f.qty), out_qty: (f.out_qty===''||f.out_qty==null)?null:Number(f.out_qty), target_return_date:f.target_return_date||null, done:!!f.done, done_at: f.done?(existing?.done_at||now):null, done_by: f.done?(existing?.done_by||profile.id):null, notes:f.notes||null, updated_at:now };
+    const payload={ lead_id:f.lead_id, subcon_id:f.subcon_id, item_label:f.item_label||null, qty: (f.qty===''||f.qty==null)?null:Number(f.qty), out_qty: (f.out_qty===''||f.out_qty==null)?null:Number(f.out_qty), released_date:f.released_date||null, target_return_date:f.target_return_date||null, done:!!f.done, done_at: f.done?(existing?.done_at||now):null, done_by: f.done?(existing?.done_by||profile.id):null, notes:f.notes||null, updated_at:now };
     let error;
     if(isEdit){ ({ error }=await sb.from('subcon_assignments').update(payload).eq('id',existing.id)); }
     else { ({ error }=await sb.from('subcon_assignments').insert({ ...payload, created_by:profile.id })); }
@@ -11714,7 +11716,10 @@ function SubconAssignModal({ profile, subcons, leads, clients, existing, onClose
           <div><label className="text-[10px] uppercase font-semibold text-slate-400">Qty assigned</label><input type="number" className="input mt-0.5" value={f.qty} onChange={e=>up('qty',e.target.value)} placeholder="e.g. 300" /></div>
         </div>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Pieces sent out (OUT)</label><input type="number" className="input mt-0.5" value={f.out_qty} onChange={e=>up('out_qty',e.target.value)} placeholder="How many pcs you actually sent to this subcon" /><div className="text-[10px] text-slate-400 mt-0.5">Leave blank to use the batch-out total. Set it to track OUT manually.</div></div>
-        <div><label className="text-[10px] uppercase font-semibold text-slate-400">Target return date</label><input type="date" className="input mt-0.5" value={f.target_return_date||''} onChange={e=>up('target_return_date',e.target.value)} /></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Date released</label><input type="date" className="input mt-0.5" value={f.released_date||''} onChange={e=>up('released_date',e.target.value)} /><div className="text-[10px] text-slate-400 mt-0.5">When pcs were sent to this subcon.</div></div>
+          <div><label className="text-[10px] uppercase font-semibold text-slate-400">Target return date</label><input type="date" className="input mt-0.5" value={f.target_return_date||''} onChange={e=>up('target_return_date',e.target.value)} /></div>
+        </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.done} onChange={e=>up('done',e.target.checked)} className="w-4 h-4" /> Mark this subcon's portion done</label>
         <div><label className="text-[10px] uppercase font-semibold text-slate-400">Notes</label><textarea className="input mt-0.5 min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} placeholder="e.g. Handling only the tops; JR Sewing on the shorts." /></div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
