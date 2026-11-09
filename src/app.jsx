@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 940 · In-House Sewing Payroll: (1) assign a pcs target per sewer on each operation, so logging shows how many they have left; (2) log-done now has a 'Done during overtime (OT)' checkbox, flagged on the floor + payroll lists; (3) For-payroll has a per-sewer filter so Maricel can double-check one sewer before confirming; (4) AGM (Lalyn) and the production supervisor (Anjelica) now have full access to view garments/operations and run payroll.";
+const BUILD = "Live build 941 · Finance Phase 1 (Sales Order revenue + CWT): revenue, AR and Output VAT are now recognized in the GL at Closed Won (DR 101008 / CR 501001 / CR 201001), not at collection. Customer payments just settle the receivable (DR Cash / CR AR). BIR 2307 payments are flagged 'CWT' and post to Creditable Withholding Tax 101012 — never to Sales Revenue. VAT is extracted (12/112) when a sale is ticked VAT-inclusive. Added SO tickboxes (VAT-inc / client withholds CWT) and a CWT toggle on the payment form.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36837,6 +36837,8 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
   const [tab,setTab]=useState('details');
   const [f,setF]=useState({
     total: so.total!=null ? String(so.total) : '',
+    needs_bir_invoice: !!so.needs_bir_invoice,
+    client_withholds_cwt: !!so.client_withholds_cwt,
     expected_delivery: so.expected_delivery||'',
     delivered_at: so.delivered_at||'',
     delivery_address: so.delivery_address||'',
@@ -37069,6 +37071,12 @@ function SalesOrderEditModal({ so, profile, profiles, payments, invoices, bankAc
           </TpLbl>
         </div>
         <TpLbl t="Delivery address"><textarea className="input min-h-[50px]" value={f.delivery_address} onChange={e=>up('delivery_address',e.target.value)} placeholder="If different from billing address" /></TpLbl>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-1.5">
+          <div className="text-[10px] uppercase text-slate-500 font-semibold">Tax &amp; invoicing (sales to tick before Closed Won)</div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={!!f.needs_bir_invoice} onChange={e=>up('needs_bir_invoice',e.target.checked)} className="w-4 h-4 accent-indigo-600" /> VAT-inclusive — <strong>issue a BIR sales invoice</strong> for this order</label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={!!f.client_withholds_cwt} onChange={e=>up('client_withholds_cwt',e.target.checked)} className="w-4 h-4 accent-teal-600" /> Client <strong>withholds tax (CWT)</strong> — expect a BIR 2307</label>
+          <div className="text-[10px] text-slate-400">Revenue + Output VAT are recognized automatically at Closed Won. The CWT is captured when the 2307 is recorded on the payment.</div>
+        </div>
 
 
 
@@ -37215,6 +37223,7 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
     bank_id: '',
     reference: '',
     notes: '',
+    is_cwt: false,
   });
   const [proofs,setProofs]=useState([]);   // [{ file, preview }]
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
@@ -37263,8 +37272,9 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
       // Insert as PENDING. No bank txn, no SO total change — accounting handles that on verify.
       const { error } = await sb.from('sales_order_payments').insert({
         sales_order_id: so.id, date: f.date, amount: amt,
-        method: f.method, reference: f.reference||null, notes: f.notes||null,
-        bank_id: f.method==='bank_transfer' ? (f.bank_id||null) : null,
+        method: f.is_cwt ? 'others' : f.method, reference: f.reference||null, notes: f.notes||null,
+        bank_id: (!f.is_cwt && f.method==='bank_transfer') ? (f.bank_id||null) : null,
+        is_cwt: !!f.is_cwt,
         attachment_url, attachment_path, attachments: atts,
         status: 'pending', received_by: profile.id,
       });
@@ -37292,6 +37302,11 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
         <div className="bg-indigo-50 border border-indigo-200 rounded p-2 text-[11px] text-indigo-700">
           📩 This will go to Accounting as <strong>PENDING</strong>. The SO balance updates once they verify it landed in the bank.
         </div>
+        <label className={`flex items-center gap-2 text-sm rounded-lg border p-2 cursor-pointer ${f.is_cwt?'bg-teal-50 border-teal-300 text-teal-800':'bg-white border-slate-200 text-slate-600'}`}>
+          <input type="checkbox" checked={f.is_cwt} onChange={e=>up('is_cwt',e.target.checked)} className="w-4 h-4 accent-teal-600" />
+          <span><strong>This is a CWT / BIR&nbsp;2307</strong> (creditable withholding tax), not a cash collection</span>
+        </label>
+        {f.is_cwt && <div className="bg-teal-50 border border-teal-200 rounded p-2 text-[11px] text-teal-700">Posts to <strong>Creditable Withholding Tax (101012)</strong> and settles the receivable — it is <strong>not</strong> recognized as Sales Revenue. Attach the BIR 2307 as proof below.</div>}
         {/* Stack to single column on mobile (sm: switches to 2 cols ≥ 640px).
             Without the breakpoint the date + amount inputs squeezed into too
             little width and the labels overlapped on phones. */}
@@ -37473,12 +37488,13 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
   async function verify(){
     const amt = Number(verifyAmount)||0;
     if(amt<=0){ setMsg('Verified amount must be > 0. To reject this payment, use Void instead.'); return; }
-    if(method !== 'cash' && !bankId){ setMsg('Pick which bank/wallet received it.'); return; }
+    if(!payment.is_cwt && method !== 'cash' && !bankId){ setMsg('Pick which bank/wallet received it.'); return; }
     setBusy(true); setMsg('');
     try {
-      // 1) Create bank transaction (for non-cash). Cash deposits won't create a bank txn here.
+      // 1) Create bank transaction (for non-cash). Cash deposits + CWT (BIR 2307,
+      //    non-cash settlement) don't create a bank txn here.
       let bankTxId = null;
-      if(method !== 'cash' && bankId){
+      if(!payment.is_cwt && method !== 'cash' && bankId){
         const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id: bankId, date: payDate, direction: 'in', amount: amt,
           description: `Payment from ${so.client_name||''} for ${so.number}`,
@@ -37508,7 +37524,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
       const { error: pErr } = await sb.from('sales_order_payments').update({
         amount: amt,
         method, reference: reference||null, date: payDate,
-        bank_id: method==='cash' ? null : bankId,
+        bank_id: (payment.is_cwt || method==='cash') ? null : bankId,
         bank_transaction_id: bankTxId,
         bank_charge_amount: diff > 0 ? diff : 0,
         status: 'verified',
@@ -47375,7 +47391,7 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[] } = data;
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
   let __seq=0;
@@ -47407,11 +47423,37 @@ function buildGLPostings(data){
   journalEntries.filter(j=>!j.deleted_at && j.status!=='cancelled' && j.status!=='draft').forEach(j=>{
     (j.lines||[]).forEach(l=> push(j.date, l.account_code, l.debit, l.credit, 'JE', j.number, l.description||j.memo, l.cost_center_id||j.cost_center_id, 'journal', j.id));
   });
-  // B. Sales collections (verified SO payments) — Dr Cash/Bank, Cr Sales Revenue.
+  // B0. Revenue recognition at Closed Won (accrual). Each non-voided Sales Order
+  // recognizes the sale when it's won — not when it's collected:
+  //   Dr Accounts Receivable – Sales (101008)  = total (incl VAT)
+  //   Cr Sales Revenue (501001)                = net (total − VAT)
+  //   Cr Output Tax Payable – Goods (201001)   = VAT amount
+  salesOrders.filter(so=>!so.deleted_at && !so.voided_at).forEach(so=>{
+    const total=Number(so.total)||0; if(total<=0) return;
+    // VAT: use the stored vat_amount if present; otherwise, when the sale is flagged
+    // VAT-inclusive (needs a BIR invoice), extract 12/112 from the total. Non-VAT
+    // sales recognize the whole total as revenue.
+    let vat=Number(so.vat_amount)||0;
+    if(!vat && so.needs_bir_invoice){ vat = Math.round((total - total/(1+INV_VAT_RATE))*100)/100; }
+    const net=total-vat;
+    const dt=so.date||so.created_at;
+    push(dt, '101008', total, 0, 'SO', so.number||'', 'Sale recognized (Closed Won)', null, 'sales_order', so.id);
+    if(net>0) push(dt, '501001', 0, net, 'SO', so.number||'', 'Sales revenue', null, 'sales_order', so.id);
+    if(vat>0) push(dt, '201001', 0, vat, 'SO', so.number||'', 'Output VAT on sale', null, 'sales_order', so.id);
+  });
+  // B. SO payments SETTLE the receivable (revenue was already recognized at B0):
+  //   • Cash collection → Dr Cash/Bank, Cr Accounts Receivable – Sales (101008)
+  //   • CWT / BIR 2307  → Dr Creditable Withholding Tax (101012), Cr A/R – Sales
   soPayments.filter(p=>!p.deleted_at && (p.status==='verified'||p.status==='paid'||p.status==='confirmed')).forEach(p=>{
     const amt=Number(p.amount)||0; if(!amt) return;
-    const cc=cashCodeFor(p.bank_id); const dt=p.date||p.paid_at||p.created_at;
-    push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection', null, 'so_payment', p.id); push(dt, '501001', 0, amt, 'AR', p.reference||'', 'Sales collection', null, 'so_payment', p.id);
+    const dt=p.date||p.paid_at||p.created_at;
+    if(p.is_cwt){
+      push(dt, '101012', amt, 0, 'CWT', p.reference||'', 'Creditable withholding tax (BIR 2307)', null, 'so_payment', p.id);
+    } else {
+      const cc=cashCodeFor(p.bank_id);
+      push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection', null, 'so_payment', p.id);
+    }
+    push(dt, '101008', 0, amt, 'AR', p.reference||'', p.is_cwt?'CWT applied vs receivable':'Applied vs receivable', null, 'so_payment', p.id);
   });
   // C. Bank transactions (skip sales collections handled above to avoid double count).
   const vById=new Map(vouchers.map(v=>[v.id,v]));
@@ -47475,8 +47517,8 @@ function finReportYears(postings){
   const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
 }
 
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances]);
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -47730,7 +47772,7 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
 }
 function monLabelOf(m){ try{ const [y,mo]=String(m).split('-'); return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('en-PH',{month:'long',year:'numeric'}); }catch(_){ return m; } }
 function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, reload }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances]);
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -55722,7 +55764,7 @@ function App(){
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
