@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 938 · Subcon Sewing floor tracking now shows a 'Released' date column (when pcs were sent to each subcon). It's editable on the Assign-subcon modal (defaults to today for new assignments); existing rows fall back to when they were assigned/batched.";
+const BUILD = "Live build 939 · Inventory: tag each fabric/trim/item with the clients that use it. Add client chips on the item form (linked to real client records), filter the Inventory list by client, and search now also matches tagged client names — so you can pull up everything a client uses in one click.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31937,7 +31937,7 @@ function InhouseSewSignModal({ rows, sewers, jobs, profile, onClose, onSaved }){
   );
 }
 
-function InventoryView({ profile, suppliers, items, departments, requests, reload }){
+function InventoryView({ profile, suppliers, items, departments, requests, clients, reload }){
   // Stock reservations — Layer 2. Only approved PRs not yet ordered count.
   const reservations = useMemo(()=>computeStockReservations(requests||[]), [requests]);
   const [tab,setTab]=useState(()=>{ try{ return localStorage.getItem('steeze.inv.tab')||'fabrics'; }catch(_){ return 'fabrics'; } });
@@ -31946,7 +31946,10 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
   const [editing,setEditing]=useState(null);
   const [creating,setCreating]=useState(false);
   const [filterCat,setFilterCat]=useState('');
+  const [filterClient,setFilterClient]=useState('');
   const [showLow,setShowLow]=useState(false);
+  const clientName=(id)=>(clients||[]).find(c=>c.id===id)?.company||'';
+  const itemClientNames=(i)=>(Array.isArray(i.client_ids)?i.client_ids:[]).map(clientName).filter(Boolean).join(' ');
   const [importing,setImporting]=useState(false);
   const [stockingIn,setStockingIn]=useState(false);
   const [adjusting,setAdjusting]=useState(false);
@@ -31973,10 +31976,13 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
   const tabItems = (items||[]).filter(i => bucketOf(i) === tab);
   const subCats = Array.from(new Set(tabItems.map(i=>i.category).filter(Boolean))).sort();
   const rows = tabItems.filter(i=>
-    (!search || `${i.sku} ${i.name} ${i.brand} ${i.model}`.toLowerCase().includes(search.toLowerCase()))
+    (!search || `${i.sku} ${i.name} ${i.brand} ${i.model} ${itemClientNames(i)}`.toLowerCase().includes(search.toLowerCase()))
     && (!filterCat || i.category === filterCat)
+    && (!filterClient || (Array.isArray(i.client_ids) && i.client_ids.includes(filterClient)))
     && (!showLow || (Number(i.qty||0)<=Number(i.reorder||0) && Number(i.reorder||0)>0))
   );
+  // Clients that actually appear on items in this tab, for the filter dropdown.
+  const clientFilterOpts = (()=>{ const ids=new Set(); tabItems.forEach(i=>(Array.isArray(i.client_ids)?i.client_ids:[]).forEach(id=>ids.add(id))); return Array.from(ids).map(id=>({ id, name:clientName(id) })).filter(o=>o.name).sort((a,b)=>a.name.localeCompare(b.name)); })();
   async function del(id){ if(!confirm('Delete this item?')) return; const {error}=await sb.from('items').delete().eq('id',id); if(error){ alert(error.message); return; } reload(); }
   const suppName=(id)=>suppliers.find(s=>s.id===id)?.company||'—';
   const tabMeta = INV_BUCKETS.find(b=>b.key===tab) || INV_BUCKETS[0];
@@ -32043,8 +32049,9 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`Search ${tabMeta.label}…`} className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`Search ${tabMeta.label} or client…`} className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-72" />
         {subCats.length>0 && <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All sub-categories</option>{subCats.map(c=><option key={c} value={c}>{c}</option>)}</select>}
+        {clientFilterOpts.length>0 && <select value={filterClient} onChange={e=>setFilterClient(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300"><option value="">All clients</option>{clientFilterOpts.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select>}
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
@@ -32114,7 +32121,8 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
                 <tr key={i.id} className={`border-t hover:bg-slate-50 ${low?'bg-rose-50/40':''}`}>
                   <td className="px-2 py-1.5"><Thumb it={i} /></td>
                   <td className="px-3 py-2 font-mono text-xs pl-6">{i.sku||'—'}</td>
-                  <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div></td>
+                  <td className="px-3 py-2 pl-6"><span className="text-slate-500 text-xs">↳</span> <span className="font-medium">{i.color||'(no color)'}</span><div className="text-[10px] text-slate-400">{[i.brand,i.model,i.size].filter(Boolean).join(' · ')}</div>
+                    {Array.isArray(i.client_ids)&&i.client_ids.length>0 && <div className="flex flex-wrap gap-1 mt-1">{i.client_ids.map(cid=>{ const nm=clientName(cid); return nm?<button key={cid} onClick={()=>setFilterClient(cid)} title="Filter by this client" className="text-[9px] bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full px-1.5 py-0.5 hover:bg-indigo-100">{nm}</button>:null; })}</div>}</td>
                   <td className="px-3 py-2 text-xs">{i.category||'—'}</td>
                   <td className="px-3 py-2 text-xs">{suppName(i.supplier_id)}</td>
                   <td className={`px-3 py-2 text-right ${low?'text-rose-600 font-bold':''}`}>{i.qty||0} {i.unit||''}{low && <div className="text-[10px]">low · reorder at {i.reorder}</div>}</td>
@@ -32130,7 +32138,7 @@ function InventoryView({ profile, suppliers, items, departments, requests, reloa
         })}{groups.length===0 && <tr><td colSpan="11" className="text-center text-slate-400 py-8">No {tabMeta.label.toLowerCase()} yet{showLow?' below the reorder threshold':''}. Click "+ New item" or "+ Multi-color" to add.</td></tr>}</tbody>
       </table></div></div>
 
-      {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
+      {(creating||editing) && <ItemForm existing={editing} defaultBucket={tab} suppliers={suppliers} departments={departments} clients={clients} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={(saved)=>{ setCreating(false); setEditing(null); if(saved && saved.bucket && saved.bucket !== tab) pickTab(saved.bucket); reload(); }} />}
       {bulkAdding && <BulkColorItemForm defaultBucket={tab} suppliers={suppliers} departments={departments} onClose={()=>setBulkAdding(false)} onSaved={()=>{ setBulkAdding(false); reload(); }} />}
       {importing && <ItemImportModal suppliers={suppliers} departments={departments} onClose={()=>setImporting(false)} onDone={()=>{ setImporting(false); reload(); }} />}
       {stockingIn && <StockInModal profile={profile} items={items} onClose={()=>setStockingIn(false)} onSaved={()=>{ setStockingIn(false); reload(); }} />}
@@ -32440,8 +32448,8 @@ function SupplierQuickAdd({ defaultName, onClose, onSaved }){
   );
 }
 
-function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, onSaved }){
-  const [f,setF]=useState(existing||{ sku:'', name:'', bucket:(defaultBucket && defaultBucket!=='other')?defaultBucket:'fabrics', category:'', brand:'', model:'', color:'', size:'', unit:'pc', qty:0, cost:0, price:0, reorder:0, dept_id:null, supplier_id:null, location:'', notes:'' });
+function ItemForm({ existing, defaultBucket, suppliers, departments, clients, onClose, onSaved }){
+  const [f,setF]=useState(existing ? { ...existing, client_ids: Array.isArray(existing.client_ids)?existing.client_ids:[] } : { sku:'', name:'', bucket:(defaultBucket && defaultBucket!=='other')?defaultBucket:'fabrics', category:'', brand:'', model:'', color:'', size:'', unit:'pc', qty:0, cost:0, price:0, reorder:0, dept_id:null, supplier_id:null, location:'', notes:'', client_ids:[] });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   // Locally-added suppliers (just-created via quick-add) so the dropdown shows
   // them immediately, before the parent component reloads its list.
@@ -32463,7 +32471,7 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
     // On-hand qty is NEVER written directly — it is owned by the stock_movements
     // ledger + trigger. A new item's opening qty and any change to the qty field
     // are posted as movements so the ledger and on-hand can never disagree.
-    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null };
+    const payload={ sku:f.sku||'', name:f.name.trim(), bucket:f.bucket||'other', category:f.category||'', brand:f.brand||'', model:f.model||'', color:f.color||'', size:f.size||'', unit:f.unit||'pc', cost:Number(f.cost)||0, price:Number(f.price)||0, reorder:Number(f.reorder)||0, dept_id:f.dept_id||null, supplier_id:f.supplier_id||null, location:f.location||'', notes:f.notes||'', image_path:f.image_path||null, client_ids:Array.isArray(f.client_ids)?f.client_ids:[] };
     const today=todayManila();
     try{
       let data;
@@ -32530,6 +32538,17 @@ function ItemForm({ existing, defaultBucket, suppliers, departments, onClose, on
               setAddingSupplier(false);
             }}
           />
+        )}
+        {Array.isArray(clients) && (
+          <TpLbl t="Used by clients — tag which clients use this material (so you can find it by client later)">
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              {(f.client_ids||[]).map(cid=>{ const c=(clients||[]).find(x=>x.id===cid); return (
+                <span key={cid} className="inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full px-2 py-0.5">{c?.company||'—'}<button type="button" onClick={()=>up('client_ids',(f.client_ids||[]).filter(x=>x!==cid))} className="text-indigo-400 hover:text-rose-500">✕</button></span>
+              ); })}
+              {(f.client_ids||[]).length===0 && <span className="text-xs text-slate-400">No clients tagged yet.</span>}
+            </div>
+            <SearchSelect value="" onChange={(v)=>{ if(v && !(f.client_ids||[]).includes(v)) up('client_ids',[...(f.client_ids||[]),v]); }} options={(clients||[]).filter(c=>!(f.client_ids||[]).includes(c.id)).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(c=>({value:c.id,label:c.company||'—'}))} placeholder="＋ Add a client…" />
+          </TpLbl>
         )}
         <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -55616,7 +55635,7 @@ function App(){
         {view==='sewing' && <SewingBoard profile={profile} profiles={profiles} employees={employees} jobs={sewingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='packing' && <PackingBoard profile={profile} profiles={profiles} employees={employees} jobs={packingJobs} leads={leads} reload={loadAll} openTechpack={openTechpackView} openLead={openLeadFromDept} />}
         {view==='techpacks' && <TechpacksList profile={profile} profiles={profiles} leads={leads} clients={clients} onOpen={setTechpackLead} />}
-        {view==='inventory' && <InventoryView profile={profile} suppliers={suppliers} items={items} departments={departments} requests={requests} reload={loadAll} />}
+        {view==='inventory' && <InventoryView profile={profile} suppliers={suppliers} items={items} departments={departments} requests={requests} clients={clients} reload={loadAll} />}
         {view==='suppliers' && (selectedSupplier
           ? <SupplierDetail supplier={suppliers.find(s=>s.id===selectedSupplier.id)||selectedSupplier} orders={orders} items={items} profile={profile} bankAccounts={bankAccounts} reload={loadAll} onBack={()=>setSelectedSupplier(null)} />
           : <SuppliersView profile={profile} suppliers={suppliers} orders={orders} bankAccounts={bankAccounts} onOpen={setSelectedSupplier} reload={loadAll} />)}
