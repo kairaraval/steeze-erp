@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 944 · Finance Phase 3 (Purchasing Input VAT + EWT): the VAT/withholding Purchasing already sets on a PO is now recognized in the GL at payment. New PO Requests for Payment snapshot the Input VAT + EWT; when paid, the voucher posts Dr Expense (ex-VAT) + Dr Input VAT (101011) · Cr EWT payable (201011) + Cr Cash (net of EWT) instead of lumping it all into the expense. The RFP detail shows the tax split for Finance to verify. Applies to new PO payments going forward.";
+const BUILD = "Live build 945 · Payroll Phase 1 (Leave Management): all leave types with per-employee credit buckets — VL/EL (10), SL (5), Paternity (7), Solo Parent (7), Maternity (per law). HR assigns eligibility & credits per employee (entitled 0 = not eligible); a paid leave is blocked when there are no/insufficient credits; Paid vs Unpaid is explicit (unpaid never uses credits). Leaves now go Pending → Approve (credits deducted on approval) / Reject / Undo (restored). Balances monitor shows remaining/entitled across every bucket.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -20495,16 +20495,30 @@ function MemoForm({ memo, profile, onClose, onSaved }){
 }
 
 /* ─────────── HR — Leave tracker (log + who's out) ─────────── */
+// Leave types with their credit bucket. `bucket` = which entitlement it draws from
+// (null = no credit, treated as unpaid unless HR marks it paid·other). `creditable`
+// = requires + deducts credits when filed as PAID. Entitlements (VL/EL 10, SL 5,
+// Paternity 7, Solo Parent 7, Maternity per law) are assigned per employee by HR.
 const LEAVE_TYPES = [
-  { key:'vacation',    label:'Vacation',            color:'bg-emerald-100 text-emerald-700' },
-  { key:'sick',        label:'Sick',                color:'bg-rose-100 text-rose-700' },
-  { key:'emergency',   label:'Emergency',           color:'bg-amber-100 text-amber-700' },
-  { key:'unpaid',      label:'Unpaid',              color:'bg-slate-200 text-slate-700' },
-  { key:'maternity',   label:'Maternity/Paternity', color:'bg-pink-100 text-pink-700' },
-  { key:'bereavement', label:'Bereavement',         color:'bg-indigo-100 text-indigo-700' },
-  { key:'other',       label:'Other',               color:'bg-slate-100 text-slate-600' },
+  { key:'vacation',    label:'Vacation / Emergency (VL/EL)', bucket:'vl',          creditable:true,  color:'bg-emerald-100 text-emerald-700' },
+  { key:'sick',        label:'Sick (SL)',                    bucket:'sl',          creditable:true,  color:'bg-rose-100 text-rose-700' },
+  { key:'paternity',   label:'Paternity',                    bucket:'paternity',   creditable:true,  color:'bg-sky-100 text-sky-700' },
+  { key:'solo_parent', label:'Solo Parent',                  bucket:'solo_parent', creditable:true,  color:'bg-violet-100 text-violet-700' },
+  { key:'maternity',   label:'Maternity',                    bucket:'maternity',   creditable:true,  color:'bg-pink-100 text-pink-700' },
+  { key:'emergency',   label:'Emergency (VL/EL)',            bucket:'vl',          creditable:true,  color:'bg-amber-100 text-amber-700' },
+  { key:'unpaid',      label:'Unpaid',                       bucket:null,          creditable:false, color:'bg-slate-200 text-slate-700' },
+  { key:'bereavement', label:'Bereavement',                  bucket:null,          creditable:false, color:'bg-indigo-100 text-indigo-700' },
+  { key:'other',       label:'Other',                        bucket:null,          creditable:false, color:'bg-slate-100 text-slate-600' },
 ];
 function leaveTypeMeta(k){ return LEAVE_TYPES.find(t=>t.key===k) || LEAVE_TYPES[LEAVE_TYPES.length-1]; }
+// Credit buckets shown in the balance monitor / setup, in order.
+const LEAVE_BUCKETS = [
+  { key:'vl',          label:'VL / EL',      defEntitled:10 },
+  { key:'sl',          label:'SL',           defEntitled:5 },
+  { key:'paternity',   label:'Paternity',    defEntitled:7 },
+  { key:'solo_parent', label:'Solo Parent',  defEntitled:7 },
+  { key:'maternity',   label:'Maternity',    defEntitled:0 },
+];
 // ── Leave credits (VL/SL) ──
 // Working days in an inclusive range, counting Mon–Sat (Sundays excluded).
 function leaveWorkingDays(startISO, endISO){
@@ -20515,16 +20529,18 @@ function leaveWorkingDays(startISO, endISO){
   while(d<=b){ if(d.getDay()!==0) n++; d.setDate(d.getDate()+1); }  // 0 = Sunday
   return n;
 }
-// Which credit bucket a leave type draws from: Vacation & Emergency → VL, Sick → SL.
-const LEAVE_VL_TYPES=['vacation','emergency'];
-const LEAVE_SL_TYPES=['sick'];
-function leaveBucketOf(type){ if(LEAVE_VL_TYPES.includes(type)) return 'vl'; if(LEAVE_SL_TYPES.includes(type)) return 'sl'; return null; }
+// Which credit bucket a leave type draws from (from the type meta).
+function leaveBucketOf(type){ return leaveTypeMeta(type)?.bucket || null; }
 const balanceOfEmp=(balances, empId)=> (balances||[]).find(b=>b.employee_id===empId) || null;
-// Apply a signed change to an employee's remaining credits (deltaDays < 0 deducts,
-// > 0 restores). Creates a default 10/5 row if none exists yet.
+const leaveEntitled=(bal, bucket)=> bal ? (Number(bal[`${bucket}_entitled`])||0) : 0;
+const leaveRemaining=(bal, bucket)=> bal ? (Number(bal[`${bucket}_remaining`])||0) : 0;
+// Eligible for a PAID leave of this bucket only if HR has assigned entitlement (>0).
+const leaveEligible=(bal, bucket)=> !!bucket && leaveEntitled(bal, bucket) > 0;
+// Apply a signed change to an employee's remaining credits for ANY bucket
+// (deltaDays < 0 deducts, > 0 restores). Creates a default row if none exists.
 async function applyLeaveBalanceDelta(employeeId, bucket, deltaDays, actorId){
   if(!employeeId || !bucket || !deltaDays) return;
-  const col = bucket==='vl' ? 'vl_remaining' : 'sl_remaining';
+  const col = `${bucket}_remaining`;
   try{
     const { data } = await sb.from('leave_balances').select('id,'+col).eq('employee_id',employeeId).limit(1);
     if(data && data.length){
@@ -20532,7 +20548,7 @@ async function applyLeaveBalanceDelta(employeeId, bucket, deltaDays, actorId){
       await sb.from('leave_balances').update({ [col]: Math.round((cur+deltaDays)*100)/100, updated_at:new Date().toISOString(), updated_by:actorId }).eq('id', data[0].id);
     } else {
       const base={ employee_id:employeeId, vl_entitled:10, sl_entitled:5, vl_remaining:10, sl_remaining:5, updated_by:actorId };
-      base[col]=(bucket==='vl'?10:5)+deltaDays;
+      base[col]=(Number(base[`${bucket}_entitled`])||0)+deltaDays;
       await sb.from('leave_balances').insert(base);
     }
   }catch(e){ console.warn('leave balance delta failed', e); }
@@ -20553,9 +20569,27 @@ function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, le
   const upcoming=leaves.filter(l=> l.start_date>todayISO && l.start_date<=in28).sort((a,b)=>String(a.start_date).localeCompare(b.start_date));
   const sortedAll=[...leaves].sort((a,b)=>String(b.start_date).localeCompare(a.start_date));
   async function del(l){ if(!confirm('Delete this leave record?')) return; const { error }=await sb.from('hr_leaves').delete().eq('id',l.id); if(error){ alert(error.message); return; }
-    try{ const b=leaveBucketOf(l.leave_type), d=leaveWorkingDays(l.start_date,l.end_date); if(b&&d) await applyLeaveBalanceDelta(l.employee_id, b, +d, profile.id); }catch(_){}
+    // Restore credits only if they were actually deducted (approved + paid + creditable).
+    try{ if(l.status==='approved' && l.paid!==false){ const b=leaveBucketOf(l.leave_type), d=Number(l.days)||leaveWorkingDays(l.start_date,l.end_date); if(b&&d) await applyLeaveBalanceDelta(l.employee_id, b, +d, profile.id); } }catch(_){}
     reload(); }
-  const chip=(l)=>{ const m=leaveTypeMeta(l.leave_type); return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span>; };
+  // Approve a leave → deduct credits (if paid + creditable). Reject/undo restores.
+  async function setLeaveStatus(l, status){
+    if(!canEdit) return;
+    const was=l.status; if(was===status) return;
+    try{
+      const patch={ status, approved_by: status==='approved'?profile.id:null, approved_at: status==='approved'?new Date().toISOString():null };
+      const { error }=await sb.from('hr_leaves').update(patch).eq('id', l.id); if(error){ alert(error.message); return; }
+      const b=leaveBucketOf(l.leave_type), d=Number(l.days)||leaveWorkingDays(l.start_date,l.end_date);
+      const creditable = l.paid!==false && !!b && !!leaveTypeMeta(l.leave_type).creditable && d>0;
+      if(creditable){
+        if(status==='approved' && was!=='approved') await applyLeaveBalanceDelta(l.employee_id, b, -d, profile.id);     // deduct
+        if(was==='approved' && status!=='approved') await applyLeaveBalanceDelta(l.employee_id, b, +d, profile.id);     // restore
+      }
+      reload();
+    }catch(e){ alert(e.message||String(e)); }
+  }
+  const chip=(l)=>{ const m=leaveTypeMeta(l.leave_type); return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${m.color}`}>{m.label}{l.paid===false?' · unpaid':''}</span>; };
+  const stChip=(l)=>{ const s=l.status||'pending'; const cls=s==='approved'?'bg-emerald-100 text-emerald-700':s==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s}</span>; };
   return (
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
@@ -20620,17 +20654,22 @@ function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, le
                 <th className="text-left px-3 py-2">To</th>
                 <th className="text-center px-3 py-2">Days</th>
                 <th className="text-left px-3 py-2">Reason</th>
+                <th className="text-center px-3 py-2">Status</th>
                 <th></th>
               </tr></thead>
-              <tbody>{sortedAll.map(l=>{ const ongoing=l.start_date<=todayISO&&l.end_date>=todayISO; return (
+              <tbody>{sortedAll.map(l=>{ const ongoing=l.start_date<=todayISO&&l.end_date>=todayISO; const st=l.status||'pending'; return (
                 <tr key={l.id} className={`border-t hover:bg-slate-50 ${ongoing?'bg-rose-50/40':''}`}>
                   <td className="px-3 py-2 font-medium">{empName(l.employee_id)}</td>
                   <td className="px-3 py-2">{chip(l)}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(l.start_date)}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(l.end_date)}</td>
                   <td className="px-3 py-2 text-center text-xs font-semibold">{dayCount(l.start_date,l.end_date)}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[220px]" title={l.reason||''}>{l.reason||'—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]" title={l.reason||''}>{l.reason||'—'}</td>
+                  <td className="px-3 py-2 text-center">{stChip(l)}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {canEdit && st!=='approved' && <button onClick={()=>setLeaveStatus(l,'approved')} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">Approve</button>}
+                    {canEdit && st!=='rejected' && st!=='approved' && <button onClick={()=>setLeaveStatus(l,'rejected')} className="text-xs text-rose-600 hover:underline mr-2">Reject</button>}
+                    {canEdit && st==='approved' && <button onClick={()=>setLeaveStatus(l,'pending')} className="text-xs text-amber-600 hover:underline mr-2" title="Undo approval and restore credits">Undo</button>}
                     <button onClick={()=>setEditing(l)} className="text-xs text-indigo-600 hover:underline mr-2">Edit</button>
                     <button onClick={()=>del(l)} className="text-xs text-rose-500 hover:underline">Delete</button>
                   </td>
@@ -20648,55 +20687,75 @@ function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, le
   );
 }
 
-// Live VL/SL credit balances for every employee, editable by HR.
+// Live leave-credit balances for every employee across all buckets, editable by HR.
+// Entitlement > 0 = eligible to file that paid leave; blank/0 = not eligible.
 function LeaveBalancesPanel({ profile, employees, leaveBalances, canEdit, reload }){
   const [q,setQ]=useState('');
-  const [edit,setEdit]=useState(null);   // {employee_id, vl, sl}
-  const [busy,setBusy]=useState(false);
+  const [edit,setEdit]=useState(null);   // employee being edited
   const emps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   const ql=q.trim().toLowerCase();
   const rows=emps.filter(e=>!ql || fullName(e).toLowerCase().includes(ql) || (e.department||'').toLowerCase().includes(ql));
-  async function save(e){
-    setBusy(true);
-    const vl=Number(edit.vl)||0, sl=Number(edit.sl)||0;
-    const existing=balanceOfEmp(leaveBalances, e.id);
-    try{
-      if(existing){ await sb.from('leave_balances').update({ vl_remaining:vl, sl_remaining:sl, updated_at:new Date().toISOString(), updated_by:profile.id }).eq('id',existing.id); }
-      else { await sb.from('leave_balances').insert({ employee_id:e.id, vl_entitled:10, sl_entitled:5, vl_remaining:vl, sl_remaining:sl, updated_by:profile.id }); }
-    }catch(err){ alert(err.message||err); }
-    setBusy(false); setEdit(null); reload&&reload();
-  }
   return (
     <div>
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-        <div className="text-xs text-slate-500">Regular staff start each cycle with <b>10 VL</b> + <b>5 SL</b>. Logging a Vacation/Emergency leave deducts VL; Sick deducts SL (Mon–Sat working days). {canEdit?'Click a balance to set it manually.':''}</div>
+        <div className="text-xs text-slate-500">Each bucket shows <b>remaining / entitled</b>. Only employees with an entitlement (&gt;0) can file that paid leave. {canEdit?'Click Assign to set a person’s eligibility and credits.':''}</div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search employee / dept…" className="border rounded-lg px-3 py-1.5 text-sm w-full sm:w-64" />
       </div>
       <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
           <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th>
-          <th className="text-right px-3 py-2">VL remaining</th><th className="text-right px-3 py-2">SL remaining</th>
-          <th className="text-left px-3 py-2">Cycle</th>{canEdit && <th></th>}
+          {LEAVE_BUCKETS.map(bk=><th key={bk.key} className="text-right px-3 py-2">{bk.label}</th>)}
+          {canEdit && <th></th>}
         </tr></thead>
-        <tbody>{rows.map(e=>{ const b=balanceOfEmp(leaveBalances,e.id); const isE=edit&&edit.employee_id===e.id; return (
+        <tbody>{rows.map(e=>{ const b=balanceOfEmp(leaveBalances,e.id); return (
           <tr key={e.id} className="border-t hover:bg-slate-50">
             <td className="px-3 py-2 font-medium">{fullName(e)}</td>
             <td className="px-3 py-2 text-xs text-slate-500">{e.department||'—'}</td>
-            {isE ? <>
-              <td className="px-3 py-2 text-right"><input type="number" step="0.5" value={edit.vl} onChange={ev=>setEdit(s=>({...s,vl:ev.target.value}))} className="border rounded px-2 py-1 w-20 text-right" /></td>
-              <td className="px-3 py-2 text-right"><input type="number" step="0.5" value={edit.sl} onChange={ev=>setEdit(s=>({...s,sl:ev.target.value}))} className="border rounded px-2 py-1 w-20 text-right" /></td>
-              <td className="px-3 py-2 text-xs text-slate-400">{b?.cycle_start?`${fmtDate(b.cycle_start)}→${fmtDate(b.cycle_end)}`:'—'}</td>
-              <td className="px-3 py-2 text-right whitespace-nowrap"><button disabled={busy} onClick={()=>save(e)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold mr-1">Save</button><button onClick={()=>setEdit(null)} className="text-xs text-slate-400">Cancel</button></td>
-            </> : <>
-              <td className="px-3 py-2 text-right font-semibold"><span className={b && Number(b.vl_remaining)<0?'text-rose-600':(b?'text-slate-800':'text-slate-300')}>{b?Number(b.vl_remaining):'—'}</span></td>
-              <td className="px-3 py-2 text-right font-semibold"><span className={b && Number(b.sl_remaining)<0?'text-rose-600':(b?'text-slate-800':'text-slate-300')}>{b?Number(b.sl_remaining):'—'}</span></td>
-              <td className="px-3 py-2 text-xs text-slate-400">{b?.cycle_start?`${fmtDate(b.cycle_start)}→${fmtDate(b.cycle_end)}`:'—'}</td>
-              {canEdit && <td className="px-3 py-2 text-right"><button onClick={()=>setEdit({ employee_id:e.id, vl: b?Number(b.vl_remaining):10, sl: b?Number(b.sl_remaining):5 })} className="text-xs text-indigo-600 hover:underline">Edit</button></td>}
-            </>}
+            {LEAVE_BUCKETS.map(bk=>{ const ent=leaveEntitled(b,bk.key), rem=leaveRemaining(b,bk.key); const elig=ent>0; return (
+              <td key={bk.key} className="px-3 py-2 text-right">{elig ? <span className={`font-semibold ${rem<0?'text-rose-600':'text-slate-800'}`}>{rem}<span className="text-slate-400 font-normal"> / {ent}</span></span> : <span className="text-slate-300" title="Not eligible — no credits assigned">—</span>}</td>
+            ); })}
+            {canEdit && <td className="px-3 py-2 text-right"><button onClick={()=>setEdit(e)} className="text-xs text-indigo-600 hover:underline">Assign</button></td>}
           </tr>
         ); })}</tbody>
       </table></div></div>
+      {edit && <LeaveEntitlementModal employee={edit} balance={balanceOfEmp(leaveBalances, edit.id)} profile={profile} onClose={()=>setEdit(null)} onSaved={()=>{ setEdit(null); reload&&reload(); }} />}
     </div>
+  );
+}
+
+// Per-employee leave eligibility + credits across all buckets.
+function LeaveEntitlementModal({ employee, balance, profile, onClose, onSaved }){
+  const seed={}; LEAVE_BUCKETS.forEach(bk=>{ seed[bk.key+'_e']=String(balance?balance[`${bk.key}_entitled`]??0:0); seed[bk.key+'_r']=String(balance?balance[`${bk.key}_remaining`]??0:0); });
+  const [f,setF]=useState(seed); const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  function setEntitled(bk,v){ up(bk+'_e',v); if(!balance) up(bk+'_r',v); }  // new row: remaining defaults to entitled
+  async function save(){
+    setBusy(true); setMsg('');
+    const patch={ updated_at:new Date().toISOString(), updated_by:profile.id };
+    LEAVE_BUCKETS.forEach(bk=>{ patch[`${bk.key}_entitled`]=Number(f[bk.key+'_e'])||0; patch[`${bk.key}_remaining`]=Number(f[bk.key+'_r'])||0; });
+    try{
+      if(balance){ const { error }=await sb.from('leave_balances').update(patch).eq('id', balance.id); if(error) throw error; }
+      else { const { error }=await sb.from('leave_balances').insert({ employee_id:employee.id, ...patch }); if(error) throw error; }
+      onSaved&&onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`Leave credits — ${fullName(employee)}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-slate-500">Set each leave's <b>entitlement</b> (set 0 if not eligible) and current <b>remaining</b>. Standard: VL/EL 10, SL 5, Paternity 7, Solo Parent 7, Maternity per law.</div>
+        <div className="border rounded-lg overflow-hidden"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-1.5">Leave</th><th className="text-right px-3 py-1.5">Entitled</th><th className="text-right px-3 py-1.5">Remaining</th></tr></thead>
+          <tbody>{LEAVE_BUCKETS.map(bk=>(
+            <tr key={bk.key} className="border-t"><td className="px-3 py-1.5 font-medium">{bk.label}</td>
+              <td className="px-3 py-1.5 text-right"><input type="number" step="0.5" min="0" value={f[bk.key+'_e']} onChange={e=>setEntitled(bk.key,e.target.value)} className="border rounded px-2 py-1 w-20 text-right" /></td>
+              <td className="px-3 py-1.5 text-right"><input type="number" step="0.5" value={f[bk.key+'_r']} onChange={e=>up(bk.key+'_r',e.target.value)} className="border rounded px-2 py-1 w-20 text-right" /></td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save credits'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
   );
 }
 
@@ -20949,34 +21008,41 @@ function LeaveCashoutPrintView({ row, preparer, onClose }){
 
 function LeaveForm({ leave, employees, profile, leaveBalances, onClose, onSaved }){
   const isEdit=!!leave;
-  const [f,setF]=useState(leave || { employee_id:'', leave_type:'vacation', start_date:'', end_date:'', reason:'' });
+  const [f,setF]=useState(leave ? { ...leave, paid: leave.paid!==false } : { employee_id:'', leave_type:'vacation', start_date:'', end_date:'', reason:'', paid:true });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const meta=leaveTypeMeta(f.leave_type);
+  const bal=balanceOfEmp(leaveBalances, f.employee_id);
+  const days=leaveWorkingDays(f.start_date, f.end_date);
+  // A paid, creditable leave requires HR-assigned entitlement and enough remaining.
+  const paidCreditable = !!f.paid && !!meta.creditable;
+  const eligible = meta.creditable ? leaveEligible(bal, meta.bucket) : true;
+  const remaining = meta.bucket ? leaveRemaining(bal, meta.bucket) : 0;
+  const shortCredits = paidCreditable && (!eligible || remaining < days);
   async function save(){
     if(!f.employee_id){ setMsg('Pick an employee.'); return; }
     if(!f.start_date || !f.end_date){ setMsg('Set the from and to dates.'); return; }
     if(f.end_date<f.start_date){ setMsg('End date can\'t be before start date.'); return; }
+    if(paidCreditable && !eligible){ setMsg(`This employee has no ${LEAVE_BUCKETS.find(x=>x.key===meta.bucket)?.label||'leave'} credits assigned — they can't file this as a PAID leave. Assign credits first, or file it as Unpaid.`); return; }
+    if(paidCreditable && remaining < days){ setMsg(`Not enough credits: ${remaining} ${meta.bucket.toUpperCase()} remaining but this is ${days} day(s). File the excess as Unpaid or shorten the leave.`); return; }
     setBusy(true); setMsg('');
-    const payload={ employee_id:f.employee_id, leave_type:f.leave_type, start_date:f.start_date, end_date:f.end_date, reason:f.reason||null };
-    if(!isEdit) payload.created_by=profile.id;
+    const payload={ employee_id:f.employee_id, leave_type:f.leave_type, start_date:f.start_date, end_date:f.end_date, reason:f.reason||null, paid:!!f.paid, days };
+    if(!isEdit){ payload.created_by=profile.id; payload.status='pending'; }
     const { error } = isEdit ? await sb.from('hr_leaves').update(payload).eq('id',leave.id) : await sb.from('hr_leaves').insert(payload);
     if(error){ setBusy(false); setMsg(error.message); return; }
-    // Auto-adjust the employee's VL/SL credits.
+    // Credits are deducted on APPROVAL (not here). If editing an already-approved
+    // leave, re-balance: restore the old deduction and apply the new one.
     try{
-      if(isEdit){
-        // restore the old deduction, then apply the new one (handles type / date / employee changes)
-        const oldB=leaveBucketOf(leave.leave_type), oldD=leaveWorkingDays(leave.start_date, leave.end_date);
-        if(oldB && oldD) await applyLeaveBalanceDelta(leave.employee_id, oldB, +oldD, profile.id);
+      if(isEdit && leave.status==='approved'){
+        if(leave.paid!==false){ const ob=leaveBucketOf(leave.leave_type), od=leaveWorkingDays(leave.start_date,leave.end_date); if(ob&&od) await applyLeaveBalanceDelta(leave.employee_id, ob, +od, profile.id); }
+        if(paidCreditable && days) await applyLeaveBalanceDelta(f.employee_id, meta.bucket, -days, profile.id);
       }
-      const newB=leaveBucketOf(f.leave_type), newD=leaveWorkingDays(f.start_date, f.end_date);
-      if(newB && newD) await applyLeaveBalanceDelta(f.employee_id, newB, -newD, profile.id);
     }catch(_){}
-    setBusy(false);
-    onSaved();
+    setBusy(false); onSaved();
   }
   return (
-    <Modal title={isEdit?'Edit leave':'Log leave'} onClose={onClose}>
+    <Modal title={isEdit?'Edit leave':'File leave'} onClose={onClose}>
       <div className="space-y-3">
         <TpLbl t="Employee *">
           <select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}>
@@ -20984,22 +21050,32 @@ function LeaveForm({ leave, employees, profile, leaveBalances, onClose, onSaved 
             {activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}
           </select>
         </TpLbl>
-        <TpLbl t="Leave type">
-          <select className="input" value={f.leave_type} onChange={e=>up('leave_type',e.target.value)}>{LEAVE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
-        </TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Leave type">
+            <select className="input" value={f.leave_type} onChange={e=>up('leave_type',e.target.value)}>{LEAVE_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+          </TpLbl>
+          <TpLbl t="Pay">
+            <select className="input" value={f.paid?'paid':'unpaid'} onChange={e=>up('paid', e.target.value==='paid')}><option value="paid">Paid (uses credits)</option><option value="unpaid">Unpaid</option></select>
+          </TpLbl>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <TpLbl t="From *"><input type="date" className="input" value={f.start_date||''} onChange={e=>up('start_date',e.target.value)} /></TpLbl>
           <TpLbl t="To *"><input type="date" className="input" value={f.end_date||''} onChange={e=>up('end_date',e.target.value)} /></TpLbl>
         </div>
-        <TpLbl t="Reason / notes"><textarea className="input min-h-[70px]" value={f.reason||''} onChange={e=>up('reason',e.target.value)} placeholder="Optional" /></TpLbl>
-        {f.employee_id && (()=>{ const b=balanceOfEmp(leaveBalances, f.employee_id); const bucket=leaveBucketOf(f.leave_type); const days=leaveWorkingDays(f.start_date,f.end_date); return (
-          <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">
-            {b ? <>Credits — VL <b>{Number(b.vl_remaining)}</b> · SL <b>{Number(b.sl_remaining)}</b>. </> : <>No credit record yet (defaults to 10 VL / 5 SL). </>}
-            {bucket && days>0 ? <>Deducts <b>{days}</b> working day{days===1?'':'s'} from <b>{bucket==='vl'?'VL':'SL'}</b>{b?<> → new balance <b className={((bucket==='vl'?Number(b.vl_remaining):Number(b.sl_remaining))-days)<0?'text-rose-600':''}>{(bucket==='vl'?Number(b.vl_remaining):Number(b.sl_remaining))-days}</b></>:''}.</> : <span className="text-slate-400">This leave type doesn’t deduct VL/SL.</span>}
+        <TpLbl t="Reason / notes"><textarea className="input min-h-[60px]" value={f.reason||''} onChange={e=>up('reason',e.target.value)} placeholder="Optional" /></TpLbl>
+        {f.employee_id && (
+          <div className={`text-xs rounded-lg px-3 py-2 ${shortCredits?'bg-rose-50 border border-rose-200 text-rose-700':'bg-slate-50 border text-slate-600'}`}>
+            {meta.bucket
+              ? <>{LEAVE_BUCKETS.find(x=>x.key===meta.bucket)?.label} credits — entitled <b>{leaveEntitled(bal,meta.bucket)}</b> · remaining <b>{remaining}</b>. {days>0 && <>This leave = <b>{days}</b> day(s). </>}
+                 {!f.paid ? <span className="text-slate-400">Unpaid — no credits used.</span>
+                   : !eligible ? <b className="text-rose-700">No credits assigned — file as Unpaid or have HR assign credits.</b>
+                   : remaining<days ? <b className="text-rose-700">Short by {days-remaining} day(s).</b>
+                   : <>Will deduct <b>{days}</b> on approval → remaining <b>{remaining-days}</b>.</>}</>
+              : <span className="text-slate-400">{f.paid?'Paid special leave (no credit bucket).':'Unpaid — no credits used.'}</span>}
           </div>
-        ); })()}
+        )}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
-        <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'Log leave')}</button>
+        <button disabled={busy||shortCredits} onClick={save} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':(isEdit?'Save':'File leave')}</button>
       </div>
     </Modal>
   );
