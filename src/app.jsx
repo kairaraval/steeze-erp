@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 959 · In-House Sewing Payroll — fix prices before signing: items already in the In payroll tab now have a ↩ Fix button that sends them back to For payroll. There you can correct the price per piece inline (the Rate cell is now editable), then Confirm them back into the run. Lets you fix a wrong rate for a sewer without deleting and re-logging — as long as the run hasn't been signed yet.";
+const BUILD = "Live build 960 · Removed the unused “My Tasks” item from every sidebar.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -56404,7 +56404,7 @@ function App(){
     // Finance *visibility*; full use of the HR module she oversees. No banking /
     // fund release and no monetary approval authority (those stay with the CEO).
     NAV = [
-      { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
@@ -56426,7 +56426,7 @@ function App(){
     // Pattern Maker — Pattern board + Fabric Calculator, plus Inbox, My Tasks,
     // Daily Check-in, Profile, and read-only Production & Sampling boards.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Pattern', items:[ ['pattern','Pattern','✂'], ['fabric-calc','Fabric Calculator','📐'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
@@ -56435,7 +56435,7 @@ function App(){
     // Cutting Department — In House Cutting + Fabric Calculator, plus Inbox,
     // My Tasks, Daily Check-in and their Profile.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Cutting', items:[ ['cutting','In House Cutting','🔪'], ['fabric-calc','Fabric Calculator','📐'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
@@ -56443,7 +56443,7 @@ function App(){
   } else if(isQc){
     // Quality Control team — QC List + techpacks + read-only Production & Sampling boards.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
@@ -56451,7 +56451,7 @@ function App(){
   } else if(isQcLeader){
     // QC Team Leader — Quality Control + the Production board.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Quality Control', items:[ ['qc','QC List','🔍'], ['techpacks','Techpacks','📋'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       PERSONAL_GROUP,
@@ -56490,7 +56490,7 @@ function App(){
     // HR Department — own inbox + HR dashboard + the whole HR module + Sewing
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
-      { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
@@ -56502,7 +56502,7 @@ function App(){
     // HR Admin (Admin Office) — the new admin personnel. Lands on Admin Home;
     // owns the whole Admin Office module + her own Request for Payment to Finance.
     NAV = [
-      { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll','✂'] ] },
@@ -56513,7 +56513,7 @@ function App(){
     // Production Supervisor — Home dashboard + all production boards + Sales Techpacks + Logistics + Payroll.
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
-      { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
@@ -56524,7 +56524,7 @@ function App(){
   } else if(isProdAssistant){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       PERSONAL_GROUP,
     ];
@@ -56541,7 +56541,7 @@ function App(){
     // Graphic Design / Printing — Production & Sampling boards + the four
     // process boards, plus Budget Requests. No logistics.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
@@ -56550,7 +56550,7 @@ function App(){
     // Purchasing Admin — same nav as the Purchasing team, PLUS Subcon Payroll
     // from the Production module.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
@@ -56561,7 +56561,7 @@ function App(){
   } else if(isPurchasingPersonnel){
     // Purchasing Personnel — same nav as Purchasing Admin but WITHOUT Subcon Payroll.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
@@ -56573,7 +56573,7 @@ function App(){
     // Purchasing team — Operations + Purchasing + Logistics + RFP visibility + inbox.
     // Production + Sampling boards for material-planning visibility.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
@@ -56586,7 +56586,7 @@ function App(){
     // Accounting Officer shares the exact same nav as the Supervisor; the
     // difference is purely edit/delete/approval rights, gated inside each view.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       FINANCE_FULL,
       { group:'Payees', items:[ ['suppliers','Expense Payees','🧾'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'] ] },
@@ -56600,7 +56600,7 @@ function App(){
     // plus read access to Production + Sampling boards so they can see what's
     // coming down to the floor.
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['subcon-sewing','Subcon Sewing','🧷'] ] },
       { group:'Payroll', items:[ ['payroll','Sewing Payroll (old)','✂'] ] },
       FINANCE_DEPT_ONLY,
@@ -56611,7 +56611,7 @@ function App(){
     // Production + Sampling boards for context. Plus inbox + their profile
     // (for setting up their signature on techpack rows and other docs).
     NAV = [
-      { items:[ ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       PERSONAL_GROUP,
@@ -56619,7 +56619,7 @@ function App(){
   } else if(isAssistant){
     // Sales Assistants / Representatives — Sales + Production + Logistics + Budget Requests.
     NAV = [
-      { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
@@ -56636,7 +56636,7 @@ function App(){
   } else if(isManager){
     // Sales Manager — Sales + Production + Team Overview + Logistics + Sales/Ledger visibility.
     NAV = [
-      { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
@@ -56649,7 +56649,7 @@ function App(){
     // For Approval sits right under Dashboard with an amber badge showing
     // pending RFPs + budget requests awaiting Kaira's sign-off.
     NAV = [
-      { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
+      { items:[ ['dashboard','Dashboard','📊'], ['ops-command','Command Center','🧭'], ['rep-home','My Workbench','🏠'], ['approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
