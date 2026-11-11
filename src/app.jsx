@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 947 · Payroll Phase 3 (Overtime engine): Overtime is now an approval-gated filing (normal / early-in / Saturday incl. the 12NN–1PM special case). Credited OT follows the rule — first full hour required, then 30-min increments — and tardiness that day forfeits the OT. On approval the credited OT is written to the DTR day. Added an Early-in start time to work schedules.";
+const BUILD = "Live build 948 · Payroll Phase 4 (Half-day & late computation): Tardiness/undertime now auto-flags a half-day when it reaches 2 h (cut-off 2PM Mon–Thu, 12NN Fri). Regular staff get a per-minute late deduction (Daily rate ÷ 8 ÷ 60); Supervisory & Managerial are exempt from per-minute late but still take the half-day cut. Added a Classification selector on Payroll Setup → Employee pay setup, a ½ badge + estimated deduction on the DTR grid, and a manual half-day override on the DTR day modal.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41886,7 +41886,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
         <div className="space-y-3">
           <div className="text-xs text-slate-500">Assign each employee a schedule, pay cycle, pay basis and biometric enrollment ID. {emps.length} active employee{emps.length===1?'':'s'}.</div>
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Biometric ID</th></tr></thead>
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Classification</th><th className="text-left px-3 py-2">Biometric ID</th></tr></thead>
             <tbody>{emps.slice().sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`)).map(e=>(
               <tr key={e.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-medium">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—'}{e.employee_number?<span className="text-[10px] text-slate-400 ml-1 font-mono">{e.employee_number}</span>:null}</td>
@@ -41894,6 +41894,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
                 <td className="px-3 py-2">{canHR?<select value={e.schedule_id||''} onChange={ev=>saveEmp(e,{schedule_id:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{schedules.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>:schedName(e.schedule_id)}</td>
                 <td className="px-3 py-2">{canHR?<select value={e.pay_cycle||''} onChange={ev=>saveEmp(e,{pay_cycle:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{PAY_CYCLES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(e.pay_cycle||'—')}</td>
                 <td className="px-3 py-2">{canHR?<select value={e.pay_basis||''} onChange={ev=>saveEmp(e,{pay_basis:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{PAY_BASES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(e.pay_basis||'—')}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.pay_classification||'regular'} onChange={ev=>saveEmp(e,{pay_classification:ev.target.value})} className="input !py-1 text-xs" title="Supervisory & Managerial are exempt from per-minute late deductions; only half-day (≥2h tardy) applies.">{PAY_CLASSES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(PAY_CLASSES.find(c=>c[0]===(e.pay_classification||'regular'))?.[1]||'Regular')}</td>
                 <td className="px-3 py-2">{canHR?<input defaultValue={e.biometric_enroll_id||''} onBlur={ev=>{ const v=ev.target.value.trim()||null; if(v!==(e.biometric_enroll_id||null)) saveEmp(e,{biometric_enroll_id:v}); }} placeholder="e.g. 1024" className="input !py-1 text-xs w-24" />:(e.biometric_enroll_id||'—')}</td>
               </tr>
             ))}</tbody>
@@ -42063,6 +42064,30 @@ function computeDtrDay(punches, sched, dateStr, holiday, isRest){
   return { status: holiday?'holiday':(isRest?'rest':'present'), holiday_type:holiday?holiday.type:null, time_in:inP.punch_ts, time_out:outP.punch_ts, hours_worked:Math.round(worked/6)/10, late_min:late, undertime_min:ut, ot_hours:Math.round((ot/60)*100)/100 };
 }
 function parseCsvText(text){ const lines=String(text).replace(/\r/g,'').split('\n').filter(l=>l.trim()); return lines.map(l=>{ const out=[]; let cur='',q=false; for(let i=0;i<l.length;i++){ const c=l[i]; if(c==='"'){ if(q&&l[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(c===','&&!q){ out.push(cur); cur=''; } else cur+=c; } out.push(cur); return out.map(s=>s.trim()); }); }
+
+// ── Half-day + late-deduction policy (Phase 4) ──
+// Half-day cut-off by weekday: Mon–Thu until 2:00 PM, Fri until 12:00 NN.
+function halfDayCutoffMin(dow){ return dow===5 ? 12*60 : 14*60; }
+const PAY_CLASSES=[['regular','Regular'],['supervisory','Supervisory'],['managerial','Managerial']];
+// A day is half-day when tardiness ≥ 2h (any class) or undertime ≥ 2h (Regular only).
+function dayIsHalfDay(day, emp){
+  const cls=emp?.pay_classification||'regular';
+  const late=Number(day?.late_min||0), ut=Number(day?.undertime_min||0);
+  return cls==='regular' ? (late>=120 || ut>=120) : (late>=120);
+}
+// Daily rate used by the per-minute late formula (Daily Rate ÷ 8 ÷ 60 per minute).
+function empDailyRate(emp){ const cur=Number(emp?.current_rate)||0; if(cur>0) return cur; const basic=Number(emp?.basic_salary)||0; return emp?.pay_basis==='daily'?basic:(basic/26); }
+// Deduction for a DTR day given the employee's classification:
+//  • Half-day → ½ × daily rate (supersedes per-minute).
+//  • Regular → (daily rate ÷ 8 ÷ 60) × late minutes.
+//  • Supervisory / Managerial → no per-minute deduction (half-day only, past 2h tardy).
+function lateDeductionFor(day, emp){
+  const rate=empDailyRate(emp); const half=!!day?.half_day || dayIsHalfDay(day, emp);
+  if(!(rate>0)) return { amount:0, half_day:half, kind: half?'half_day':'none' };
+  if(half) return { amount: Math.round(rate/2*100)/100, half_day:true, kind:'half_day' };
+  if((emp?.pay_classification||'regular')!=='regular') return { amount:0, half_day:false, kind:'exempt' };
+  return { amount: Math.round((rate/8/60)*Number(day?.late_min||0)*100)/100, half_day:false, kind:'late' };
+}
 
 /* ─────────── ATTENDANCE FILINGS (OB · COA · Schedule Adjustment) ───────────
    HR/supervisor files on an employee's behalf; the approver validates. On
@@ -42321,7 +42346,8 @@ function AttendanceDtrView({ profile, employees, reload }){
         // unless an existing row is present.
         if(!existing && dayPunches.length===0 && !sched) continue;
         const c=computeDtrDay(dayPunches, sched, ds, hol, restSet.has(dow));
-        rows.push({ employee_id:e.id, work_date:ds, cutoff_key:cutoffKey, time_in:c.time_in, time_out:c.time_out, hours_worked:c.hours_worked, late_min:c.late_min, undertime_min:c.undertime_min, ot_hours:c.ot_hours, status:c.status, holiday_type:c.holiday_type, source:'computed', updated_at:new Date().toISOString() });
+        const halfDay=dayIsHalfDay(c, e);
+        rows.push({ employee_id:e.id, work_date:ds, cutoff_key:cutoffKey, time_in:c.time_in, time_out:c.time_out, hours_worked:c.hours_worked, late_min:c.late_min, undertime_min:c.undertime_min, ot_hours:c.ot_hours, status:c.status, holiday_type:c.holiday_type, half_day:halfDay, source:'computed', updated_at:new Date().toISOString() });
       }
     }
     if(rows.length){ const { error }=await sb.from('dtr_days').upsert(rows, { onConflict:'employee_id,work_date' }); if(error){ alert('Build failed: '+error.message); } }
@@ -42374,7 +42400,7 @@ function AttendanceDtrView({ profile, employees, reload }){
               <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-medium whitespace-nowrap">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname}{!e.schedule_id && <span className="ml-1 text-[9px] text-rose-400" title="No schedule assigned">⚠</span>}</td>
               {dates.map(ds=>{ const r=dtrIndex[e.id]?.[ds]; const meta=r?DTR_STATUS_META[r.status]:null; const dow=new Date(ds+'T00:00:00').getDay(); const sched=schedOf(e); const isRest=((sched?.rest_days)||[0]).includes(dow); return (
                 <td key={ds} onClick={()=>canManage&&setEditCell({ emp:e, date:ds, row:r })} className={`px-1 py-1 text-center ${canManage?'cursor-pointer hover:bg-indigo-50':''} ${holByDate[ds]?'bg-amber-50/40':isRest&&!r?'bg-slate-50':''}`}>
-                  {r ? <span title={`${r.status}${r.late_min?` · late ${r.late_min}m`:''}${r.ot_hours?` · OT ${r.ot_hours}h`:''}`}><span className={`inline-block w-5 rounded text-[9px] font-bold ${meta?meta[1]:''}`}>{meta?meta[0]:'?'}</span>{r.approved && <span className="text-emerald-500 text-[8px] align-top">✓</span>}</span> : <span className="text-slate-200">·</span>}
+                  {r ? (()=>{ const ded=lateDeductionFor(r,e); return <span title={`${r.status}${r.late_min?` · late ${r.late_min}m`:''}${r.undertime_min?` · UT ${r.undertime_min}m`:''}${r.ot_hours?` · OT ${r.ot_hours}h`:''}${r.half_day?' · HALF-DAY':''}${ded.amount>0?` · deduction ${peso(ded.amount)} (${ded.kind})`:''}`}><span className={`inline-block w-5 rounded text-[9px] font-bold ${meta?meta[1]:''}`}>{meta?meta[0]:'?'}</span>{r.half_day && <span className="text-rose-600 text-[8px] font-bold align-top" title="Half-day">½</span>}{r.approved && <span className="text-emerald-500 text-[8px] align-top">✓</span>}</span>; })() : <span className="text-slate-200">·</span>}
                 </td>
               ); })}
               <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="text-emerald-700 font-semibold">{sum.present}</span>/<span className="text-rose-600">{sum.absent}</span></td>
@@ -42396,14 +42422,16 @@ function AttendanceDtrView({ profile, employees, reload }){
 }
 function DtrCellModal({ cell, profile, cutoffKey, onClose, onSaved }){
   const { emp, date, row }=cell;
-  const [f,setF]=useState({ status:row?.status||'present', time_in:row?.time_in?manilaParts(row.time_in).ymd===date?minToHHMM(manilaParts(row.time_in).min):'':'', time_out:row?.time_out?minToHHMM(manilaParts(row.time_out).min):'', late_min:row?.late_min??0, undertime_min:row?.undertime_min??0, ot_hours:row?.ot_hours??0, leave_paid:row?.leave_paid??true, notes:row?.notes||'' });
+  const [f,setF]=useState({ status:row?.status||'present', time_in:row?.time_in?manilaParts(row.time_in).ymd===date?minToHHMM(manilaParts(row.time_in).min):'':'', time_out:row?.time_out?minToHHMM(manilaParts(row.time_out).min):'', late_min:row?.late_min??0, undertime_min:row?.undertime_min??0, ot_hours:row?.ot_hours??0, half_day:row?.half_day??false, leave_paid:row?.leave_paid??true, notes:row?.notes||'' });
   const [busy,setBusy]=useState(false);
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  const ded=lateDeductionFor({ late_min:Number(f.late_min)||0, undertime_min:Number(f.undertime_min)||0, half_day: !!f.half_day || dayIsHalfDay({late_min:Number(f.late_min)||0, undertime_min:Number(f.undertime_min)||0}, emp) }, emp);
   async function save(){
     setBusy(true);
     const toTs=(hhmm)=> hhmm? `${date}T${hhmm}:00+08:00` : null;
     const payload={ employee_id:emp.id, work_date:date, cutoff_key:cutoffKey, status:f.status,
       time_in:toTs(f.time_in), time_out:toTs(f.time_out), late_min:Number(f.late_min)||0, undertime_min:Number(f.undertime_min)||0, ot_hours:Number(f.ot_hours)||0,
+      half_day: !!f.half_day || dayIsHalfDay({late_min:Number(f.late_min)||0, undertime_min:Number(f.undertime_min)||0}, emp),
       leave_paid: f.status==='leave'?!!f.leave_paid:null, notes:f.notes||null, source:'manual', edited_by:profile.id, updated_at:new Date().toISOString() };
     const { error }=await sb.from('dtr_days').upsert(payload, { onConflict:'employee_id,work_date' });
     setBusy(false); if(error){ alert(error.message); return; } onSaved();
@@ -42422,7 +42450,8 @@ function DtrCellModal({ cell, profile, cutoffKey, onClose, onSaved }){
         <TpLbl t="Undertime (min)"><input type="number" className="input text-right" value={f.undertime_min} onChange={e=>up('undertime_min',e.target.value)} /></TpLbl>
         <TpLbl t="OT (hrs)"><input type="number" step="0.25" className="input text-right" value={f.ot_hours} onChange={e=>up('ot_hours',e.target.value)} /></TpLbl>
       </div>
-      <TpLbl t="Notes"><input className="input" value={f.notes} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.half_day} onChange={e=>up('half_day',e.target.checked)} className="accent-rose-600" /> Half-day <span className="text-[11px] text-slate-400">(auto when tardiness{(emp?.pay_classification||'regular')==='regular'?' or undertime':''} ≥ 2 h · cut-off {new Date(date+'T00:00:00').getDay()===5?'12:00 NN (Fri)':'2:00 PM'})</span></label>
+      <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">Classification: <b>{(PAY_CLASSES.find(x=>x[0]===(emp?.pay_classification||'regular'))||['','Regular'])[1]}</b> · daily rate <b>{peso(empDailyRate(emp))}</b> → est. deduction <b className={ded.amount>0?'text-rose-600':''}>{peso(ded.amount)}</b> <span className="text-slate-400">({ded.kind==='half_day'?'half-day':ded.kind==='exempt'?'exempt (sup/mgr)':ded.kind==='late'?'per-minute late':'none'})</span></div>
       {row?.approved && <div className="text-xs text-amber-600">This day is already approved — saving will keep it approved.</div>}
       <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>{row?.id&&<button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold">Clear</button>}<button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
     </div>
