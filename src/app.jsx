@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 949 · Payroll Phase 5 (Holiday & rest-day premiums + OT multipliers): Added the §9 pay-multiplier table (Ordinary / Rest day / Special / Legal / Double holiday, incl. rest-day variants, with Basic / OT / ND / NDOT factors). The DTR now shows each day's holiday/rest-day premium and OT pay (★ badge + tooltip on the grid, a premium line on the day modal). Honours the rules: no premium on a special holiday or rest day if the employee doesn't actually work (incl. VL-only days), while a regular/legal holiday still pays 100% when not worked. Added a 'Double holiday' type, a §8 holiday-on-Saturday compressed-week advisory banner (1h early-out Mon–Fri, no pay deduction), and a reference multiplier table on Payroll Setup → Rules & multipliers.";
+const BUILD = "Live build 950 · Payroll Phase 6 (Fixed gov contributions + flexible offsetting): SSS / PhilHealth / Pag-IBIG are now fixed to each employee's registered contribution salary (or a pinned exact monthly amount) and no longer shrink for absences or undertime (Sprout §2) — set per person on Payroll Setup → Employee pay setup → Gov contributions. Added a flexible Offset filing (half-day 4h / whole-day 8h) that credits the day by actual hours rendered regardless of start time (Sprout §3); on approval it writes an approved DTR day.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41756,6 +41756,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
   const [loading,setLoading]=useState(true);
   const [editSched,setEditSched]=useState(null); // schedule row or 'new'
   const [editHol,setEditHol]=useState(null);
+  const [govEmp,setGovEmp]=useState(null);
   const [emps,setEmps]=useState([]);
   async function load(){
     setLoading(true);
@@ -41895,7 +41896,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
         <div className="space-y-3">
           <div className="text-xs text-slate-500">Assign each employee a schedule, pay cycle, pay basis and biometric enrollment ID. {emps.length} active employee{emps.length===1?'':'s'}.</div>
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Classification</th><th className="text-left px-3 py-2">Biometric ID</th></tr></thead>
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Classification</th><th className="text-left px-3 py-2">Biometric ID</th><th className="text-left px-3 py-2">Gov contributions</th></tr></thead>
             <tbody>{emps.slice().sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`)).map(e=>(
               <tr key={e.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-medium">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—'}{e.employee_number?<span className="text-[10px] text-slate-400 ml-1 font-mono">{e.employee_number}</span>:null}</td>
@@ -41905,6 +41906,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
                 <td className="px-3 py-2">{canHR?<select value={e.pay_basis||''} onChange={ev=>saveEmp(e,{pay_basis:ev.target.value||null})} className="input !py-1 text-xs"><option value="">—</option>{PAY_BASES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(e.pay_basis||'—')}</td>
                 <td className="px-3 py-2">{canHR?<select value={e.pay_classification||'regular'} onChange={ev=>saveEmp(e,{pay_classification:ev.target.value})} className="input !py-1 text-xs" title="Supervisory & Managerial are exempt from per-minute late deductions; only half-day (≥2h tardy) applies.">{PAY_CLASSES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>:(PAY_CLASSES.find(c=>c[0]===(e.pay_classification||'regular'))?.[1]||'Regular')}</td>
                 <td className="px-3 py-2">{canHR?<input defaultValue={e.biometric_enroll_id||''} onBlur={ev=>{ const v=ev.target.value.trim()||null; if(v!==(e.biometric_enroll_id||null)) saveEmp(e,{biometric_enroll_id:v}); }} placeholder="e.g. 1024" className="input !py-1 text-xs w-24" />:(e.biometric_enroll_id||'—')}</td>
+                <td className="px-3 py-2 text-xs">{(()=>{ const hasFixed=[e.fixed_sss_ee,e.fixed_philhealth_ee,e.fixed_pagibig_ee].some(v=>v!=null&&v!==''); const cs=Number(e.contribution_salary)>0; return <button onClick={()=>setGovEmp(e)} className="px-2 py-1 rounded border text-xs font-semibold hover:bg-slate-50">{hasFixed?'🔒 Fixed':cs?`Reg. ${peso(e.contribution_salary)}`:'Set'}</button>; })()}</td>
               </tr>
             ))}</tbody>
           </table></div></div>
@@ -41914,8 +41916,40 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
       </>}
       {editSched && <ScheduleModal sched={editSched==='new'?null:editSched} profile={profile} onClose={()=>setEditSched(null)} onSaved={()=>{ setEditSched(null); load(); }} />}
       {editHol && <HolidayModal hol={editHol==='new'?null:editHol} profile={profile} onClose={()=>setEditHol(null)} onSaved={()=>{ setEditHol(null); load(); }} />}
+      {govEmp && <GovContribModal emp={govEmp} latestTax={latest} onClose={()=>setGovEmp(null)} onSaved={(patch)=>{ saveEmp(govEmp,patch); setGovEmp(null); }} />}
     </div>
   );
+}
+// Sprout §2 — per-employee government-contribution setup. Fix the registered salary the
+// contribution brackets read, and/or pin exact monthly EE amounts that never fluctuate.
+function GovContribModal({ emp, latestTax, onClose, onSaved }){
+  const [f,setF]=useState({ contribution_salary: emp.contribution_salary??'', fixed_sss_ee: emp.fixed_sss_ee??'', fixed_philhealth_ee: emp.fixed_philhealth_ee??'', fixed_pagibig_ee: emp.fixed_pagibig_ee??'' });
+  const up=(k,v)=>setF(x=>({...x,[k]:v}));
+  const sss=latestTax('sss'), ph=latestTax('philhealth'), pi=latestTax('pagibig');
+  const base=Number(f.contribution_salary)>0?Number(f.contribution_salary):empMonthlyBasic(emp);
+  const calc={ sss:sssEE(base,sss), ph:philhealthEE(base,ph), pi:pagibigEE(base,pi) };
+  function save(){
+    const num=(v)=>v===''||v==null?null:Number(v);
+    onSaved({ contribution_salary:num(f.contribution_salary), fixed_sss_ee:num(f.fixed_sss_ee), fixed_philhealth_ee:num(f.fixed_philhealth_ee), fixed_pagibig_ee:num(f.fixed_pagibig_ee) });
+  }
+  const Row=({agency,fixKey,calcVal})=>(<div className="grid grid-cols-3 gap-2 items-center text-sm">
+    <div className="font-medium">{agency}</div>
+    <div className="text-xs text-slate-500">Table: <b>{peso(calcVal)}</b>/mo</div>
+    <input type="number" step="0.01" className="input !py-1 text-right text-xs" placeholder="fixed (optional)" value={f[fixKey]} onChange={e=>up(fixKey,e.target.value)} />
+  </div>);
+  return (<Modal title={`Government contributions · ${fullName(emp)}`} onClose={onClose}>
+    <div className="space-y-3">
+      <div className="text-xs text-slate-500">Contributions are fixed to a registered monthly salary and do not shrink for absences or undertime (Sprout §2). Leave a fixed amount blank to compute it from the statutory table; enter an amount to pin the exact monthly employee share. Each cutoff takes the configured fraction (usually half).</div>
+      <TpLbl t="Registered monthly salary (contribution base)"><input type="number" step="0.01" className="input" placeholder={`defaults to basic ${peso(empMonthlyBasic(emp))}`} value={f.contribution_salary} onChange={e=>up('contribution_salary',e.target.value)} /></TpLbl>
+      <div className="bg-slate-50 border rounded-lg p-3 space-y-2">
+        <div className="grid grid-cols-3 gap-2 text-[10px] uppercase text-slate-400 font-semibold"><div>Agency</div><div>Computed from base</div><div>Fixed override /mo</div></div>
+        <Row agency="SSS" fixKey="fixed_sss_ee" calcVal={calc.sss} />
+        <Row agency="PhilHealth" fixKey="fixed_philhealth_ee" calcVal={calc.ph} />
+        <Row agency="Pag-IBIG" fixKey="fixed_pagibig_ee" calcVal={calc.pi} />
+      </div>
+      <div className="flex gap-2 pt-2 border-t"><button onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
+    </div>
+  </Modal>);
 }
 function StatCard({ title, row, fields, canEdit, onSave, onNewVersion }){
   const [d,setD]=useState(row?.data||{});
@@ -42041,6 +42075,14 @@ function sssER(basic, d){ if(!d) return 0; const step=d.msc_step||500, min=d.msc
 function philhealthER(basic, d){ if(!d) return 0; const b=Math.max(d.floor||0, Math.min(d.ceiling||1e12, Number(basic)||0)); return pRound(b*(d.rate||0)*(1-(d.ee_share||0.5))); }
 function pagibigER(basic, d){ if(!d) return 0; const b=Number(basic)||0; if(b<=0) return 0; const comp=Math.min(b, d.max_comp||1e12); return pRound(comp*(d.er_rate||0)); }
 function empMonthlyBasic(e){ return Number(e?.basic_salary)|| (e?.current_rate?Number(e.current_rate)*26:0); }
+// Sprout §2 — the REGISTERED monthly salary that government contributions are fixed to.
+// Uses the employee's declared contribution_salary when set, else their monthly basic.
+// This base never shrinks for absences / undertime, so the monthly contribution is stable.
+function contribBase(e){ const cs=Number(e?.contribution_salary); return cs>0?cs:empMonthlyBasic(e); }
+// Fixed MONTHLY employee-share contribution for one agency, honouring a pinned override.
+// override: the employee's fixed_* field (exact monthly peso amount accounting declared).
+// Returns the full monthly amount; the run multiplies by the cutoff factor (cf).
+function fixedContribMonthly(override, tableVal){ const o=Number(override); return o>=0 && override!=null && override!=='' ? pRound(o) : pRound(tableVal); }
 function periodFraction(cycle){ return cycle==='monthly'?1 : cycle==='weekly'?(12/52) : 0.5; }
 function cycleFreq(cycle){ return cycle==='monthly'?'monthly' : cycle==='weekly'?'weekly' : 'semi_monthly'; }
 
@@ -42162,8 +42204,10 @@ const FILING_KINDS=[
   { key:'coa',             label:'Certificate of Attendance', icon:'📝', hint:'When an employee forgot to log in/out on the biometric. Needs a written explanation.' },
   { key:'schedule_adjust', label:'Schedule Adjustment',     icon:'🗓️', hint:'Reporting on a rest day or working an adjusted schedule.' },
   { key:'overtime',        label:'Overtime (OT)',           icon:'⏱️', hint:'Approved OT only. First full hour is required, then 30-min increments. Tardiness that day forfeits OT.' },
+  { key:'offset',          label:'Offset',                  icon:'🔁', hint:'Credit offsetting hours already rendered — half-day (4h) or whole-day (8h) — recognised by actual hours regardless of start time (Sprout §3).' },
 ];
 const OT_TYPES=[['normal','Normal OT (beyond shift)'],['early_in','Early-in OT'],['saturday','Saturday OT (production)']];
+const OFFSET_HOURS=[['4','Half-day offset (4 hours)'],['8','Whole-day offset (8 hours)']];
 const filingKindMeta=(k)=>FILING_KINDS.find(x=>x.key===k)||FILING_KINDS[0];
 function cutoffKeyForDate(ds){ const [y,m,d]=ds.split('-').map(Number); return `${y}-${String(m).padStart(2,'0')}-H${d<=15?1:2}`; }
 function hmToTs(ds, hm){ return hm? `${ds}T${hm}:00+08:00` : null; }
@@ -42206,6 +42250,11 @@ function AttendanceFilingsView({ profile, employees, reload }){
       const daily=Number(sched?.daily_hours||8)*60;
       const ot = Math.max(0, workedMin - daily);
       row={ ...base, status:'present', time_in:hmToTs(ds,String(f.time_in).slice(0,5)), time_out:hmToTs(ds,String(f.time_out).slice(0,5)), hours_worked:Math.round(Math.min(workedMin,daily)/6)/10, ot_hours:Math.round((ot/60)*100)/100, notes:`${f.rest_day?'Rest-day work · ':''}Sched adj${f.with_break?' (w/ break)':' (no break)'}: ${f.reason||''}`.trim() };
+    } else if(f.kind==='offset'){ // Sprout §3 — credit rendered offset hours (4h/8h) regardless of start time
+      const oh=Number(f.offset_hours)|| (Number(sched?.daily_hours||8));
+      const daily=Number(sched?.daily_hours||8);
+      const isHalf=oh>0 && oh<=daily/2+0.01 && oh<daily;
+      row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Math.round(oh*10)/10, ot_hours:0, half_day:isHalf, notes:`Offset ${oh}h (${isHalf?'half-day':'whole-day'}): ${f.reason||''}`.trim() };
     } else { // overtime — credit per the rule; tardiness that day forfeits OT (normal/sat)
       let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).is('deleted_at',null).limit(1); ex=r.data&&r.data[0]; }catch(_){}
       const isEarly=f.ot_type==='early_in';
@@ -42259,7 +42308,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
             <td className="px-3 py-2 font-medium">{empName(f.employee_id)}</td>
             <td className="px-3 py-2 text-xs">{m.icon} {m.label.split(' (')[0]}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(f.filing_date)}</td>
-            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:f.kind==='overtime'?`${(OT_TYPES.find(x=>x[0]===f.ot_type)?.[1]||'OT')} · ${f.ot_hours||0}h → credited ${f.ot_type==='early_in'?Number(f.ot_hours||0):creditOtHours(f.ot_hours)}h${f.special_case?' · special 12-1':''}`:'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:f.kind==='overtime'?`${(OT_TYPES.find(x=>x[0]===f.ot_type)?.[1]||'OT')} · ${f.ot_hours||0}h → credited ${f.ot_type==='early_in'?Number(f.ot_hours||0):creditOtHours(f.ot_hours)}h${f.special_case?' · special 12-1':''}`:f.kind==='offset'?`${Number(f.offset_hours)===4?'Half-day':'Whole-day'} offset · ${f.offset_hours||0}h`:'—'}</td>
             <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]" title={f.reason||''}>{f.reason||'—'}</td>
             <td className="px-3 py-2 text-center">{stChip(st)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -42277,7 +42326,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
 
 function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
   const m=filingKindMeta(kind);
-  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false });
+  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false, offset_hours:'8' });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(s=>({...s,[k]:v}));
   const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
@@ -42287,6 +42336,7 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
     if(kind==='schedule_adjust' && (!f.time_in || !f.time_out)){ setMsg('Set the adjusted time in and out.'); return; }
     if(kind==='coa' && !(f.reason||'').trim()){ setMsg('A written explanation is required for a COA.'); return; }
     if(kind==='overtime' && !(Number(f.ot_hours)>0)){ setMsg('Enter the actual OT hours rendered.'); return; }
+    if(kind==='offset' && !(Number(f.offset_hours)>0)){ setMsg('Pick the offset amount.'); return; }
     setBusy(true); setMsg('');
     const payload={ employee_id:f.employee_id, kind, filing_date:f.filing_date, reason:f.reason||null, status:'pending', created_by:profile.id,
       time_in: (kind==='coa'||kind==='schedule_adjust') && f.time_in ? f.time_in : null,
@@ -42296,7 +42346,8 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
       coa_missing: kind==='coa' ? f.coa_missing : null,
       ot_type: kind==='overtime' ? f.ot_type : null,
       ot_hours: kind==='overtime' ? (Number(f.ot_hours)||0) : null,
-      special_case: kind==='overtime' ? !!f.special_case : false };
+      special_case: kind==='overtime' ? !!f.special_case : false,
+      offset_hours: kind==='offset' ? (Number(f.offset_hours)||0) : null };
     const { error }=await sb.from('attendance_filings').insert(payload);
     if(error){ setBusy(false); setMsg(error.message); return; }
     setBusy(false); onSaved&&onSaved();
@@ -42334,7 +42385,11 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
               : <>Credited OT: <b>{creditOtHours(f.ot_hours)}</b> hr (first full hour required, then 30-min steps). <b className="text-rose-600">If the employee is tardy that day, OT is forfeited.</b></>}
           </div>
         </>)}
-        <TpLbl t={kind==='coa'?'Written explanation *':'Reason'}><textarea className="input min-h-[60px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder={kind==='ob'?'e.g. Client visit — JT International, whole day':kind==='coa'?'Explain why the punch is missing':'e.g. Asked to report on rest day for rush order'} /></TpLbl>
+        {kind==='offset' && (<>
+          <TpLbl t="Offset amount"><select className="input" value={f.offset_hours} onChange={e=>up('offset_hours',e.target.value)}>{OFFSET_HOURS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></TpLbl>
+          <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">The offset is recognised by the <b>actual hours rendered</b> — {Number(f.offset_hours)===4?'half-day (4h)':'whole-day (8h)'} — regardless of what time it started (Sprout §3). On approval the chosen date is credited as {Number(f.offset_hours)===4?'a half-day':'a full day'} present.</div>
+        </>)}
+        <TpLbl t={kind==='coa'?'Written explanation *':'Reason'}><textarea className="input min-h-[60px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder={kind==='ob'?'e.g. Client visit — JT International, whole day':kind==='coa'?'Explain why the punch is missing':kind==='offset'?'e.g. Offsetting hours rendered last Saturday':'e.g. Asked to report on rest day for rush order'} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Filing…':'Submit filing'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
       </div>
@@ -42695,7 +42750,12 @@ function computePayrollItems(run, emps, dtrByEmp, refs, latestTax){
     holiday=pRound(holiday);
     const allowances=pRound((Number(e.allowances)||0)*pf);
     const gross=pRound(basic+ot+holiday+allowances);
-    const sssEe=pRound(sssEE(monthlyBasic,sss)*cf), phEe=pRound(philhealthEE(monthlyBasic,ph)*cf), piEe=pRound(pagibigEE(monthlyBasic,pi)*cf);
+    // Sprout §2 — contributions are fixed to the registered contribution salary (or a
+    // pinned fixed amount), not to actual earnings. cf splits the monthly amount per cutoff.
+    const cBase=contribBase(e);
+    const sssEe=pRound(fixedContribMonthly(e.fixed_sss_ee, sssEE(cBase,sss))*cf);
+    const phEe=pRound(fixedContribMonthly(e.fixed_philhealth_ee, philhealthEE(cBase,ph))*cf);
+    const piEe=pRound(fixedContribMonthly(e.fixed_pagibig_ee, pagibigEE(cBase,pi))*cf);
     const taxable=Math.max(0, gross-lateUt-sssEe-phEe-piEe);
     const tax=birTax(taxable, bir?.brackets);
     // loans
