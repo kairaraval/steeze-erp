@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 958 · HR Approvals (unified): the HR menu now has one ✅ Approvals page showing every employee request awaiting action — leaves, overtime, official business, attendance corrections and document/other requests — in a single queue with per-type counts, status/type filters and employee search. Approve or reject inline: leaves deduct credits and filings write the DTR through the exact same shared logic as the dedicated screens, so nothing can drift. (Employees still file from their Home dashboard; this is where HR acts on it all.)";
+const BUILD = "Live build 959 · In-House Sewing Payroll — fix prices before signing: items already in the In payroll tab now have a ↩ Fix button that sends them back to For payroll. There you can correct the price per piece inline (the Rate cell is now editable), then Confirm them back into the run. Lets you fix a wrong rate for a sewer without deleting and re-logging — as long as the run hasn't been signed yet.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31946,6 +31946,11 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
   }
   async function removeLog(l){ if(l.status!=='staged'){ alert('Only items still in “For payroll” can be removed.'); return; } if(!confirm('Remove this logged pcs?')) return; setLogs(prev=>prev.filter(x=>x.id!==l.id)); await sb.from('inhouse_sew_logs').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',l.id); load(true); }
   async function confirmLogs(rows){ const ids=rows.map(r=>r.id); if(!ids.length) return; const bad=rows.filter(r=>!(Number(r.rate)>0)||!(Number(r.pcs)>0)); if(bad.length){ alert('Set a rate on the operation and pcs first.'); return; } setLogs(prev=>prev.map(x=>ids.includes(x.id)?{...x,status:'sent'}:x)); await sb.from('inhouse_sew_logs').update({ status:'sent' }).in('id',ids); load(true); }
+  // Pull an item that is already "In payroll" back to "For payroll" so a wrong
+  // pcs/rate can be fixed. Only works before the run is signed (status 'sent').
+  async function sendLogBack(l){ if(l.status!=='sent'){ alert('Only items in “In payroll” (not yet signed) can be sent back.'); return; } if(!confirm(`Send ${l.sewer_name||''}'s “${l.op_name||'item'}” back to For payroll so you can fix the pcs/rate?`)) return; setLogs(prev=>prev.map(x=>x.id===l.id?{...x,status:'staged'}:x)); const { error }=await sb.from('inhouse_sew_logs').update({ status:'staged' }).eq('id',l.id); if(error){ alert(error.message); } load(true); }
+  // Fix the per-piece rate on a logged item (only while still in For payroll).
+  async function updateLogRate(l, rate){ const r=Number(rate); if(!(r>=0)) return; if(r===Number(l.rate)) return; setLogs(prev=>prev.map(x=>x.id===l.id?{...x,rate:r}:x)); const { error }=await sb.from('inhouse_sew_logs').update({ rate:r }).eq('id',l.id); if(error){ alert(error.message); load(true); } }
 
   // ── Garment-template management (shared payroll_garments) ──
   async function addGarment(name){ if(!name.trim()){ alert('Enter a garment name.'); return; } const { data, error }=await sb.from('payroll_garments').insert({ name:name.trim(), operations:[] }).select().single(); if(error){ alert(error.message); return; } setGarments(prev=>[...prev,data].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))); }
@@ -32113,7 +32118,8 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
                 <td className="px-3 py-2 font-medium">{l.sewer_name||sewerNm(l.sewer_id)}{l.overtime&&<span className="ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-700" title="Done during overtime">OT</span>}</td>
                 <td className="px-3 py-2 text-xs font-medium text-slate-700">{clientNm(l.job_id,l.lead_id)||'—'}</td>
                 <td className="px-3 py-2 text-xs text-slate-500">{projTitle(l.lead_id,l.job_id)} · {l.op_name}</td>
-                <td className="px-3 py-2 text-right">{num(l.pcs)}</td><td className="px-3 py-2 text-right">{peso(l.rate)}</td>
+                <td className="px-3 py-2 text-right">{num(l.pcs)}</td>
+                <td className="px-3 py-2 text-right">{canSign?<input type="number" step="0.01" defaultValue={l.rate??''} onBlur={e=>updateLogRate(l, e.target.value)} className="w-20 text-right text-xs px-2 py-1 rounded border border-slate-200 focus:border-violet-400" title="Fix the price per piece" />:peso(l.rate)}</td>
                 <td className="px-3 py-2 text-right font-semibold">{peso(amtOf(l))}</td>
                 {canSign&&<td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>confirmLogs([l])} className="text-xs text-violet-700 hover:underline font-semibold mr-2">✓ Confirm</button><button onClick={()=>removeLog(l)} className="text-xs text-rose-500 hover:underline">Remove</button></td>}
               </tr>))}</tbody>
@@ -32124,7 +32130,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
               <div className="text-xs text-slate-500">{bySewer.length} sewer(s) · {num(sentPcs)} pcs · <b className="text-slate-700">{peso(sentAmt)}</b></div>
               {bySewer.map((g,i)=>(<div key={i} className="bg-white rounded-xl border overflow-hidden">
                 <div className="px-4 py-2 bg-slate-50 border-b flex items-center justify-between"><span className="font-semibold text-sm">🧵 {g.name}</span><span className="text-xs text-slate-500">{num(g.pcs)} pcs · <b>{peso(g.amt)}</b></span></div>
-                <table className="w-full text-sm"><tbody>{g.rows.map(l=>(<tr key={l.id} className="border-t"><td className="px-3 py-1.5 text-xs text-slate-500">{projNm(l.lead_id,l.job_id)} · {l.op_name}</td><td className="px-3 py-1.5 text-right">{num(l.pcs)}</td><td className="px-3 py-1.5 text-right">{peso(l.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(l))}</td></tr>))}</tbody></table>
+                <table className="w-full text-sm"><tbody>{g.rows.map(l=>(<tr key={l.id} className="border-t"><td className="px-3 py-1.5 text-xs text-slate-500">{projNm(l.lead_id,l.job_id)} · {l.op_name}</td><td className="px-3 py-1.5 text-right">{num(l.pcs)}</td><td className="px-3 py-1.5 text-right">{peso(l.rate)}</td><td className="px-3 py-1.5 text-right font-semibold">{peso(amtOf(l))}</td>{canSign&&<td className="px-3 py-1.5 text-right"><button onClick={()=>sendLogBack(l)} className="text-[11px] text-slate-400 hover:text-rose-600 font-semibold" title="Send back to For payroll to fix pcs / rate">↩ Fix</button></td>}</tr>))}</tbody></table>
               </div>))}
             </div>)}
 
