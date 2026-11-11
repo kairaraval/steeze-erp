@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 957 · Employee Home dashboard + self-service requests: the Profile now opens on a 🏠 Home tab — greeting cards (attendance today, next payday, leave balances), a 'What would you like to do?' panel, recent attendance & requests, latest payslip, and company announcements (from the HR Memo Board). Any linked employee can now file their OWN Leave, Overtime, Attendance Correction, Official Business, Document request or Other HR request — each submitted as pending and shown in My Requests. HR reviews Document/Other requests under a new Employee Requests screen (Leave/OT/OB/COA still flow to Leave Tracker & Attendance Filings).";
+const BUILD = "Live build 958 · HR Approvals (unified): the HR menu now has one ✅ Approvals page showing every employee request awaiting action — leaves, overtime, official business, attendance corrections and document/other requests — in a single queue with per-type counts, status/type filters and employee search. Approve or reject inline: leaves deduct credits and filings write the DTR through the exact same shared logic as the dedicated screens, so nothing can drift. (Employees still file from their Home dashboard; this is where HR acts on it all.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26047,42 +26047,80 @@ function EmployeePortal({ profile, tab }){
   }
   return null;
 }
-// HR review of employee-filed Document / Other requests (hr_requests table).
-// Leave, OT, OB & COA requests flow to their existing screens (Leave Tracker /
-// Attendance Filings); this view handles the generic ones.
-function HRRequestsView({ profile, employees }){
-  const canAct=['admin','hr','hr_admin','agm'].includes(profile.role);
-  const [rows,setRows]=useState([]); const [loading,setLoading]=useState(true);
-  const [statusFilter,setStatusFilter]=useState('pending'); const [resolve,setResolve]=useState(null);
+// Unified HR Approvals — one queue of everything awaiting action: leaves,
+// attendance filings (OB/COA/OT/schedule/offset) and generic Document/Other
+// requests. Approving runs the SAME shared logic as the dedicated screens
+// (leave credits via setLeaveStatusShared, DTR writes via applyFilingToDtr).
+function HRApprovalsView({ profile, employees }){
+  const canAct=['admin','hr','hr_admin','agm','production_supervisor'].includes(profile.role);
+  const [leaves,setLeaves]=useState([]); const [filings,setFilings]=useState([]); const [reqs,setReqs]=useState([]); const [scheds,setScheds]=useState([]);
+  const [loading,setLoading]=useState(true); const [busy,setBusy]=useState('');
+  const [statusFilter,setStatusFilter]=useState('pending'); const [typeFilter,setTypeFilter]=useState('all'); const [search,setSearch]=useState(''); const [resolve,setResolve]=useState(null);
   const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
-  async function load(){ setLoading(true); try{ const { data }=await sb.from('hr_requests').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setRows(data||[]); }catch(_){ setRows([]); } setLoading(false); }
+  const schedOf=(empId)=>{ const e=(employees||[]).find(x=>x.id===empId); return scheds.find(s=>s.id===e?.schedule_id)||null; };
+  async function load(){ setLoading(true);
+    try{ const { data }=await sb.from('hr_leaves').select('*').order('start_date',{ascending:false}); setLeaves(data||[]); }catch(_){ setLeaves([]); }
+    try{ const { data }=await sb.from('attendance_filings').select('*').is('deleted_at',null).order('filing_date',{ascending:false}); setFilings(data||[]); }catch(_){ setFilings([]); }
+    try{ const { data }=await sb.from('hr_requests').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setReqs(data||[]); }catch(_){ setReqs([]); }
+    try{ const { data }=await sb.from('work_schedules').select('*').is('deleted_at',null); setScheds(data||[]); }catch(_){ setScheds([]); }
+    setLoading(false);
+  }
   useEffect(()=>{ load(); },[]);
-  async function act(r, status, resolution){ if(!canAct) return; try{ await sb.from('hr_requests').update({ status, resolution: resolution??r.resolution??null, approved_by: status==='pending'?null:profile.id, approved_at: status==='pending'?null:new Date().toISOString() }).eq('id',r.id); setResolve(null); load(); }catch(e){ alert(e.message||String(e)); } }
-  const stChip=(s)=>{ s=(s||'pending').toLowerCase(); const cls=s==='approved'||s==='completed'||s==='done'?'bg-emerald-100 text-emerald-700':s==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s}</span>; };
-  const counts={ pending:rows.filter(r=>(r.status||'pending')==='pending').length, done:rows.filter(r=>['approved','completed','done'].includes(r.status)).length, rejected:rows.filter(r=>r.status==='rejected').length };
-  const shown=rows.filter(r=> statusFilter==='all' || (statusFilter==='done'?['approved','completed','done'].includes(r.status):(r.status||'pending')===statusFilter));
+  const norm=(s)=>{ s=(s||'pending').toLowerCase(); if(['approved','completed','done'].includes(s)) return 'done'; if(s==='rejected') return 'rejected'; return 'pending'; };
+  // one unified row model
+  const rows=[
+    ...leaves.map(l=>({ key:'L'+l.id, src:'leave', raw:l, emp:l.employee_id, type:'Leave', typeKey:'leave', sub:(LEAVE_TYPES.find(x=>x.key===l.leave_type)?.label||l.leave_type), date:l.start_date, details:`${fmtDate(l.start_date)}${l.end_date&&l.end_date!==l.start_date?`–${fmtDate(l.end_date)}`:''} · ${l.days||'?'}d · ${l.paid===false?'unpaid':'paid'}${l.reason?` · ${l.reason}`:''}`, status:l.status })),
+    ...filings.map(f=>({ key:'F'+f.id, src:'filing', raw:f, emp:f.employee_id, type:(FILING_KINDS.find(x=>x.key===f.kind)?.label||f.kind), typeKey:'filing', sub:(FILING_KINDS.find(x=>x.key===f.kind)?.label||f.kind), date:f.filing_date, details:`${fmtDate(f.filing_date)}${f.ot_hours?` · ${f.ot_hours}h OT`:''}${f.reason?` · ${f.reason}`:''}`, status:f.status })),
+    ...reqs.map(r=>({ key:'R'+r.id, src:'request', raw:r, emp:r.employee_id, type:(r.kind==='document'?'Document':'HR request'), typeKey:'request', sub:r.subject||'', date:(r.created_at||'').slice(0,10), details:`${r.subject||''}${r.details?` · ${r.details}`:''}${r.resolution?` · ↳ ${r.resolution}`:''}`, status:r.status })),
+  ].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  const ql=search.trim().toLowerCase();
+  const shown=rows.filter(r=> (statusFilter==='all'||norm(r.status)===statusFilter) && (typeFilter==='all'||r.typeKey===typeFilter) && (!ql||empName(r.emp).toLowerCase().includes(ql)));
+  const pend=rows.filter(r=>norm(r.status)==='pending');
+  const counts={ pending:pend.length, leave:pend.filter(r=>r.typeKey==='leave').length, filing:pend.filter(r=>r.typeKey==='filing').length, request:pend.filter(r=>r.typeKey==='request').length,
+    done:rows.filter(r=>norm(r.status)==='done').length, rejected:rows.filter(r=>norm(r.status)==='rejected').length };
+  const stChip=(s)=>{ const n=norm(s); const cls=n==='done'?'bg-emerald-100 text-emerald-700':n==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s||'pending'}</span>; };
+
+  async function approve(r){ if(!canAct) return; setBusy(r.key); try{
+    if(r.src==='leave'){ await setLeaveStatusShared(r.raw,'approved',profile.id); }
+    else if(r.src==='filing'){ await sb.from('attendance_filings').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString(), applied:true }).eq('id',r.raw.id); await applyFilingToDtr(r.raw, schedOf(r.emp), profile.id); }
+    else { setResolve(r); setBusy(''); return; }
+    await load();
+  }catch(e){ alert(e.message||String(e)); } setBusy(''); }
+  async function reject(r){ if(!canAct) return; setBusy(r.key); try{
+    if(r.src==='leave'){ await setLeaveStatusShared(r.raw,'rejected',profile.id); }
+    else if(r.src==='filing'){ await sb.from('attendance_filings').update({ status:'rejected', applied:false }).eq('id',r.raw.id); }
+    else { await sb.from('hr_requests').update({ status:'rejected', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',r.raw.id); }
+    await load();
+  }catch(e){ alert(e.message||String(e)); } setBusy(''); }
+  async function resolveReq(r, note){ setBusy('resolve'); try{ await sb.from('hr_requests').update({ status:'completed', resolution:note||null, approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',r.raw.id); setResolve(null); await load(); }catch(e){ alert(e.message||String(e)); } setBusy(''); }
+
+  const Pill=({k,label})=>(<button onClick={()=>setTypeFilter(k)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${typeFilter===k?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600'}`}>{label}</button>);
   return (<div className="p-6">
     <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
-      <h1 className="text-2xl font-bold">📨 Employee Requests</h1>
-      <p className="text-slate-500 text-sm">Document &amp; other HR requests employees filed from their portal. (Leave, OT, OB &amp; attendance corrections appear in Leave Tracker and Attendance Filings.)</p>
-      <div className="flex gap-1 mt-3">{[['pending',`Pending (${counts.pending})`],['done',`Resolved (${counts.done})`],['rejected',`Rejected (${counts.rejected})`],['all','All']].map(([k,l])=><button key={k} onClick={()=>setStatusFilter(k)} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${statusFilter===k?'bg-indigo-600 text-white':'text-slate-600 hover:bg-slate-200'}`}>{l}</button>)}</div>
+      <h1 className="text-2xl font-bold">✅ HR Approvals</h1>
+      <p className="text-slate-500 text-sm">Everything employees filed that’s waiting on you — leaves, overtime, official business, attendance corrections and document requests — in one queue.</p>
+      <div className="flex gap-2 mt-3 flex-wrap items-center">
+        {[['pending',`Pending (${counts.pending})`],['done',`Approved (${counts.done})`],['rejected',`Rejected (${counts.rejected})`],['all','All']].map(([k,l])=><button key={k} onClick={()=>setStatusFilter(k)} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${statusFilter===k?'bg-indigo-600 text-white':'text-slate-600 hover:bg-slate-200'}`}>{l}</button>)}
+        <span className="text-slate-300">|</span>
+        <Pill k="all" label="All types" /><Pill k="leave" label={`Leave ${counts.leave?`(${counts.leave})`:''}`} /><Pill k="filing" label={`Attendance ${counts.filing?`(${counts.filing})`:''}`} /><Pill k="request" label={`Documents ${counts.request?`(${counts.request})`:''}`} />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee…" className="input !py-1 text-sm w-auto ml-auto" />
+      </div>
     </div>
     {loading?<div className="text-center text-slate-400 py-10 text-sm">Loading…</div>:
-    <div className="bg-white border rounded-xl overflow-hidden"><table className="w-full text-sm">
-      <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Employee</th><th className="text-left px-4 py-2">Type</th><th className="text-left px-4 py-2">Subject</th><th className="text-left px-4 py-2">Details</th><th className="text-left px-4 py-2">Filed</th><th className="text-left px-4 py-2">Status</th>{canAct&&<th></th>}</tr></thead>
-      <tbody>{shown.length===0?<tr><td colSpan={canAct?7:6} className="text-center text-slate-400 py-8">No requests.</td></tr>:shown.map(r=>(<tr key={r.id} className="border-t hover:bg-slate-50 align-top">
-        <td className="px-4 py-2 font-medium">{empName(r.employee_id)}</td>
-        <td className="px-4 py-2 capitalize">{r.kind}</td>
-        <td className="px-4 py-2">{r.subject||'—'}</td>
-        <td className="px-4 py-2 text-xs text-slate-500 max-w-[240px]">{r.details||'—'}{r.resolution?<div className="text-emerald-600 mt-1">↳ {r.resolution}</div>:''}</td>
-        <td className="px-4 py-2 text-xs text-slate-500">{r.created_at?fmtDate(r.created_at):'—'}</td>
+    <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+      <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Employee</th><th className="text-left px-4 py-2">Request</th><th className="text-left px-4 py-2">Details</th><th className="text-left px-4 py-2">Status</th>{canAct&&<th className="text-right px-4 py-2">Action</th>}</tr></thead>
+      <tbody>{shown.length===0?<tr><td colSpan={canAct?5:4} className="text-center text-slate-400 py-8">Nothing here 🎉</td></tr>:shown.map(r=>(<tr key={r.key} className="border-t hover:bg-slate-50 align-top">
+        <td className="px-4 py-2 font-medium whitespace-nowrap">{empName(r.emp)}</td>
+        <td className="px-4 py-2"><span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 mr-1">{r.type}</span></td>
+        <td className="px-4 py-2 text-xs text-slate-600 max-w-[320px]">{r.details||'—'}</td>
         <td className="px-4 py-2">{stChip(r.status)}</td>
-        {canAct&&<td className="px-4 py-2 text-right whitespace-nowrap">{(r.status||'pending')==='pending' && <>
-          <button onClick={()=>setResolve(r)} className="text-xs text-emerald-700 font-semibold hover:underline mr-2">Resolve</button>
-          <button onClick={()=>act(r,'rejected')} className="text-xs text-rose-600 hover:underline">Reject</button></>}</td>}
+        {canAct&&<td className="px-4 py-2 text-right whitespace-nowrap">{norm(r.status)==='pending' ? <>
+          <button disabled={!!busy} onClick={()=>approve(r)} className="text-xs px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold mr-1 disabled:opacity-50">{busy===r.key?'…':(r.src==='request'?'Resolve':'Approve')}</button>
+          <button disabled={!!busy} onClick={()=>reject(r)} className="text-xs px-2.5 py-1 rounded border border-rose-300 text-rose-600 font-semibold disabled:opacity-50">Reject</button>
+        </> : <span className="text-[11px] text-slate-400">done</span>}</td>}
       </tr>))}</tbody>
-    </table></div>}
-    {resolve && <HRRequestResolveModal req={resolve} empName={empName(resolve.employee_id)} onClose={()=>setResolve(null)} onDone={(note)=>act(resolve,'completed',note)} />}
+    </table></div></div>}
+    {resolve && <HRRequestResolveModal req={resolve.raw} empName={empName(resolve.emp)} onClose={()=>setResolve(null)} onDone={(note)=>resolveReq(resolve,note)} />}
   </div>);
 }
 function HRRequestResolveModal({ req, empName, onClose, onDone }){
@@ -42562,6 +42600,54 @@ function minsBetweenHM(a,b){ const [ah,am]=String(a||'').split(':').map(Number);
 // PH OT crediting: the first FULL hour is required (anything < 1h credits 0), then
 // 30-minute increments. 30m→0, 60m→1, 75m→1, 90m→1.5, 120m→2, 150m→2.5.
 function creditOtHours(actualHours){ const min=Math.floor((Number(actualHours)||0)*60); if(min<60) return 0; return Math.round((1 + Math.floor((min-60)/30)*0.5)*100)/100; }
+// Apply an APPROVED attendance filing to the DTR as an approved (protected) day.
+// Module-level so both Attendance Filings and the HR Approvals page use the same code.
+async function applyFilingToDtr(f, sched, approverId){
+  const ds=f.filing_date; const base={ employee_id:f.employee_id, work_date:ds, cutoff_key:cutoffKeyForDate(ds), approved:true, approved_by:approverId, approved_at:new Date().toISOString(), source:'filing', updated_at:new Date().toISOString(), late_min:0, undertime_min:0 };
+  let row;
+  if(f.kind==='ob'){
+    row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Number(sched?.daily_hours||8), ot_hours:0, notes:`OB: ${f.reason||''}`.trim() };
+  } else if(f.kind==='coa'){
+    const inTs=hmToTs(ds,f.time_in?String(f.time_in).slice(0,5):null), outTs=hmToTs(ds,f.time_out?String(f.time_out).slice(0,5):null);
+    const brk=Number(sched?.break_minutes||0);
+    const worked = (f.time_in&&f.time_out)? Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5))-brk) : (Number(sched?.daily_hours||8)*60);
+    row={ ...base, status:'present', time_in:inTs, time_out:outTs, hours_worked:Math.round(worked/6)/10, ot_hours:0, notes:`COA (${f.coa_missing||'both'} missing): ${f.reason||''}`.trim() };
+  } else if(f.kind==='schedule_adjust'){
+    const workedMin = Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5)) - (f.with_break?60:0));
+    const daily=Number(sched?.daily_hours||8)*60;
+    const ot = Math.max(0, workedMin - daily);
+    row={ ...base, status:'present', time_in:hmToTs(ds,String(f.time_in).slice(0,5)), time_out:hmToTs(ds,String(f.time_out).slice(0,5)), hours_worked:Math.round(Math.min(workedMin,daily)/6)/10, ot_hours:Math.round((ot/60)*100)/100, notes:`${f.rest_day?'Rest-day work · ':''}Sched adj${f.with_break?' (w/ break)':' (no break)'}: ${f.reason||''}`.trim() };
+  } else if(f.kind==='offset'){
+    const oh=Number(f.offset_hours)|| (Number(sched?.daily_hours||8));
+    const daily=Number(sched?.daily_hours||8);
+    const isHalf=oh>0 && oh<=daily/2+0.01 && oh<daily;
+    row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Math.round(oh*10)/10, ot_hours:0, half_day:isHalf, notes:`Offset ${oh}h (${isHalf?'half-day':'whole-day'}): ${f.reason||''}`.trim() };
+  } else { // overtime
+    let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).limit(1); ex=r.data&&r.data[0]; }catch(_){}
+    const isEarly=f.ot_type==='early_in';
+    let credited = isEarly ? (Math.round((Number(f.ot_hours)||0)*100)/100) : creditOtHours(f.ot_hours);
+    const lateMin = ex?Number(ex.late_min||0):0;
+    const forfeited = !isEarly && lateMin>0;
+    if(forfeited) credited=0;
+    if(ex){
+      row={ ...base, status:ex.status||'present', time_in:ex.time_in, time_out:ex.time_out, hours_worked:ex.hours_worked, late_min:ex.late_min, undertime_min:ex.undertime_min, holiday_type:ex.holiday_type, ot_hours:credited, notes:`OT ${f.ot_type||'normal'}${f.special_case?' · special 12NN-1PM':''}${forfeited?' · FORFEITED (tardy)':''}: ${f.reason||''}`.trim() };
+    } else {
+      row={ ...base, status:'present', hours_worked:Number(sched?.daily_hours||8), ot_hours:credited, notes:`OT ${f.ot_type||'normal'}: ${f.reason||''}`.trim() };
+    }
+  }
+  await sb.from('dtr_days').upsert(row, { onConflict:'employee_id,work_date' });
+}
+// Approve/reject/undo a leave, applying the credit side-effects. Shared by Leave Tracker + Approvals.
+async function setLeaveStatusShared(l, status, approverId){
+  const prev=l.status;
+  await sb.from('hr_leaves').update({ status, approved_by: status==='approved'?approverId:null, approved_at: status==='approved'?new Date().toISOString():null }).eq('id', l.id);
+  const bucket=leaveBucketOf(l.leave_type); const days=Number(l.days)||leaveWorkingDays(l.start_date,l.end_date);
+  const creditable = l.paid!==false && bucket && days;
+  if(creditable){
+    if(status==='approved' && prev!=='approved') await applyLeaveBalanceDelta(l.employee_id, bucket, -days, approverId);
+    else if(prev==='approved' && status!=='approved') await applyLeaveBalanceDelta(l.employee_id, bucket, +days, approverId);
+  }
+}
 
 function AttendanceFilingsView({ profile, employees, reload }){
   const canManage = ['admin','agm','hr','hr_admin','production_supervisor'].includes(profile.role);
@@ -42581,42 +42667,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
   const schedOf=(empId)=>{ const e=(employees||[]).find(x=>x.id===empId); return schedules.find(s=>s.id===e?.schedule_id)||null; };
 
   // Apply an approved filing to the DTR as an approved day (protected from rebuild).
-  async function applyToDtr(f){
-    const sched=schedOf(f.employee_id);
-    const ds=f.filing_date; const base={ employee_id:f.employee_id, work_date:ds, cutoff_key:cutoffKeyForDate(ds), approved:true, approved_by:profile.id, approved_at:new Date().toISOString(), source:'filing', updated_at:new Date().toISOString(), late_min:0, undertime_min:0 };
-    let row;
-    if(f.kind==='ob'){
-      row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Number(sched?.daily_hours||8), ot_hours:0, notes:`OB: ${f.reason||''}`.trim() };
-    } else if(f.kind==='coa'){
-      const inTs=hmToTs(ds,f.time_in?String(f.time_in).slice(0,5):null), outTs=hmToTs(ds,f.time_out?String(f.time_out).slice(0,5):null);
-      const brk=Number(sched?.break_minutes||0);
-      const worked = (f.time_in&&f.time_out)? Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5))-brk) : (Number(sched?.daily_hours||8)*60);
-      row={ ...base, status:'present', time_in:inTs, time_out:outTs, hours_worked:Math.round(worked/6)/10, ot_hours:0, notes:`COA (${f.coa_missing||'both'} missing): ${f.reason||''}`.trim() };
-    } else if(f.kind==='schedule_adjust'){
-      const workedMin = Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5)) - (f.with_break?60:0));
-      const daily=Number(sched?.daily_hours||8)*60;
-      const ot = Math.max(0, workedMin - daily);
-      row={ ...base, status:'present', time_in:hmToTs(ds,String(f.time_in).slice(0,5)), time_out:hmToTs(ds,String(f.time_out).slice(0,5)), hours_worked:Math.round(Math.min(workedMin,daily)/6)/10, ot_hours:Math.round((ot/60)*100)/100, notes:`${f.rest_day?'Rest-day work · ':''}Sched adj${f.with_break?' (w/ break)':' (no break)'}: ${f.reason||''}`.trim() };
-    } else if(f.kind==='offset'){ // Sprout §3 — credit rendered offset hours (4h/8h) regardless of start time
-      const oh=Number(f.offset_hours)|| (Number(sched?.daily_hours||8));
-      const daily=Number(sched?.daily_hours||8);
-      const isHalf=oh>0 && oh<=daily/2+0.01 && oh<daily;
-      row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Math.round(oh*10)/10, ot_hours:0, half_day:isHalf, notes:`Offset ${oh}h (${isHalf?'half-day':'whole-day'}): ${f.reason||''}`.trim() };
-    } else { // overtime — credit per the rule; tardiness that day forfeits OT (normal/sat)
-      let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).limit(1); ex=r.data&&r.data[0]; }catch(_){}
-      const isEarly=f.ot_type==='early_in';
-      let credited = isEarly ? (Math.round((Number(f.ot_hours)||0)*100)/100) : creditOtHours(f.ot_hours);
-      const lateMin = ex?Number(ex.late_min||0):0;
-      const forfeited = !isEarly && lateMin>0;
-      if(forfeited) credited=0;
-      if(ex){
-        row={ ...base, status:ex.status||'present', time_in:ex.time_in, time_out:ex.time_out, hours_worked:ex.hours_worked, late_min:ex.late_min, undertime_min:ex.undertime_min, holiday_type:ex.holiday_type, ot_hours:credited, notes:`OT ${f.ot_type||'normal'}${f.special_case?' · special 12NN-1PM':''}${forfeited?' · FORFEITED (tardy)':''}: ${f.reason||''}`.trim() };
-      } else {
-        row={ ...base, status:'present', hours_worked:Number(sched?.daily_hours||8), ot_hours:credited, notes:`OT ${f.ot_type||'normal'}: ${f.reason||''}`.trim() };
-      }
-    }
-    await sb.from('dtr_days').upsert(row, { onConflict:'employee_id,work_date' });
-  }
+  async function applyToDtr(f){ await applyFilingToDtr(f, schedOf(f.employee_id), profile.id); }
   async function setStatus(f, status){
     if(!canManage) return;
     try{
@@ -56354,7 +56405,7 @@ function App(){
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
-      { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Employee Requests','📨'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       ADMIN_OFFICE_GROUP,
@@ -56434,7 +56485,7 @@ function App(){
     // Payroll + Budget Requests + their profile (for their e-signature).
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Employee Requests','📨'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
@@ -56447,7 +56498,7 @@ function App(){
     NAV = [
       { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       ADMIN_OFFICE_GROUP,
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Employee Requests','📨'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
@@ -56602,7 +56653,7 @@ function App(){
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
-      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Employee Requests','📨'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
+      { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
       { group:'Admin', items:[ ['settings','Settings','⚙️'] ] },
@@ -56791,7 +56842,7 @@ function App(){
         {view==='hr-home' && <HRHomeView profile={profile} employees={employees} hrLeaves={hrLeaves} hrReviewCycles={hrReviewCycles} hrReviews={hrReviews} hrMemos={hrMemos} hrJobs={hrJobs} rfps={rfps} setView={setView} onOpenRfp={(id)=>{ setView('rfps'); setInboxRfpId(id); }} />}
         {view==='hr-memos' && <HRMemoBoardView profile={profile} profiles={profiles} hrMemos={hrMemos} reload={loadAll} />}
         {view==='hr-leave' && <HRLeaveView profile={profile} profiles={profiles} employees={employees} hrLeaves={hrLeaves} leaveBalances={leaveBalances} leaveCashouts={leaveCashouts} rfps={rfps} reload={loadAll} />}
-        {view==='hr-requests' && <HRRequestsView profile={profile} employees={employees} />}
+        {view==='hr-requests' && <HRApprovalsView profile={profile} employees={employees} />}
         {view==='hr-relations' && <HRRelationsView profile={profile} profiles={profiles} employees={employees} hrCases={hrCases} hrMovements={hrMovements} hrEscalations={hrEscalations} openEscalationId={inboxEscalationId} onEscalationOpened={()=>setInboxEscalationId(null)} reload={loadAll} />}
         {view==='hr-engagements' && <HREngagementsView profile={profile} employees={employees} hrEngagements={hrEngagements} reload={loadAll} />}
         {view==='hr-loans' && <EmployeeLoansView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} bankAccounts={bankAccounts} reload={loadAll} />}
