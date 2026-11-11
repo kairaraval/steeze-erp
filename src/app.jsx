@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 943 · Finance Phase 2 (RFP month-end closure): a 🔖 Close / reconcile action on approved/pending RFPs lets Finance close requests already settled outside the OS — via an existing Check Voucher or Bank Transfer Voucher (link it), paid personally by the owner (flagged to reimburse), a duplicate/double-posting (linked to the original), or already reconciled — without creating a duplicate payment. Closed RFPs show a reason badge and drop out of the pay queue; an 'Owner reimbursements' filter lists ones to repay the owner.";
+const BUILD = "Live build 944 · Finance Phase 3 (Purchasing Input VAT + EWT): the VAT/withholding Purchasing already sets on a PO is now recognized in the GL at payment. New PO Requests for Payment snapshot the Input VAT + EWT; when paid, the voucher posts Dr Expense (ex-VAT) + Dr Input VAT (101011) · Cr EWT payable (201011) + Cr Cash (net of EWT) instead of lumping it all into the expense. The RFP detail shows the tax split for Finance to verify. Applies to new PO payments going forward.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -35784,6 +35784,11 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
         number, date: today, po_id: existing.id,
         supplier_id: existing.supplier_id, supplier_name: supplier?.company||'',
         amount: netPayable, particulars,
+        // Tax split captured by Purchasing on the PO → recognized in the GL at payment:
+        // Input VAT (debit 101011) and EWT payable (credit 201011) are split out so the
+        // expense is booked net of VAT and the supplier is paid net of withholding.
+        input_vat_amount: Math.round((Number(vatAmount)||0)*100)/100,
+        ewt_amount: Math.round((Number(whtAmount)||0)*100)/100,
         payment_method: f.payment_method||null, payment_method_detail: f.payment_method_detail||null,
         payment_terms: f.payment_terms||null,
         // Snapshot the bank details for Finance — the PO's one-off override wins,
@@ -35798,7 +35803,7 @@ function PurchaseOrderForm({ profile, profiles, allOrders, existing, fromPR, ite
       }).select().single();
       if(rErr) throw rErr;
       // Stamp PO with rfp_id
-      await sb.from('purchase_orders').update({ rfp_id: rfpData.id }).eq('id', existing.id);
+      await sb.from('purchase_orders').update({ rfp_id: rfpData.id, input_vat_amount: Math.round((Number(vatAmount)||0)*100)/100, ewt_amount: Math.round((Number(whtAmount)||0)*100)/100 }).eq('id', existing.id);
       setBusy(false);
       alert(`✅ ${number} created and sent to Accounting for payment (proof of transaction attached).`);
       onSaved();
@@ -39683,6 +39688,14 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           <div><div className="text-[10px] uppercase text-slate-400">Supplier</div><div>{rfp.supplier_name}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Amount</div><div className="font-bold text-lg">{peso(rfp.amount)}</div>{Number(rfp.amount_paid||0)>0 && rfp.status!=='paid' && <div className="text-[11px] text-amber-700">Paid {peso(rfp.amount_paid)} · Balance {peso(rfpBalance(rfp))}</div>}</div>
           <div><div className="text-[10px] uppercase text-slate-400">Method</div><div>{rfp.payment_method||'—'}{rfp.payment_method_detail?' · '+rfp.payment_method_detail:''}</div></div>
+          {(Number(rfp.input_vat_amount||0)>0 || Number(rfp.ewt_amount||0)>0) && (
+            <div className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+              <span className="uppercase text-[9px] font-bold text-slate-400 mr-2">Tax (from PO)</span>
+              {Number(rfp.input_vat_amount||0)>0 && <span className="mr-3">Input VAT <b className="text-slate-800">{peso(rfp.input_vat_amount)}</b></span>}
+              {Number(rfp.ewt_amount||0)>0 && <span className="mr-3">EWT withheld <b className="text-slate-800">{peso(rfp.ewt_amount)}</b> <span className="text-slate-400">(supplier paid net)</span></span>}
+              <span className="block mt-0.5 text-[10px] text-slate-400">Recognized in the GL when this is paid: Input VAT → {rfp.tax_is_services?'101010':'101011'}, EWT payable → {rfp.tax_is_services?'201012':'201011'}.</span>
+            </div>
+          )}
           <div><div className="text-[10px] uppercase text-slate-400">Terms</div><div>{rfp.payment_terms||'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400">Due</div><div>{rfp.due_date?fmtDate(rfp.due_date):'—'}</div></div>
         </div>
@@ -47490,7 +47503,8 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[], rfps=[] } = data;
+  const rfpById=new Map((rfps||[]).map(r=>[r.id,r]));
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
   let __seq=0;
@@ -47565,7 +47579,26 @@ function buildGLPostings(data){
       const e=b.ref_type==='expense'?eById.get(b.ref_id):null;
       if(v && Array.isArray(v.split_lines) && v.split_lines.length){
         v.split_lines.forEach(l=> push(b.date, l.account_code, l.debit, l.credit, 'CV', v.number, l.description, l.cost_center_id||v.cost_center_id, 'voucher', v.id));
-      } else if(v){ push(b.date, v.gl_account_code||categoryToAccountCode(v.expense_category), amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id, 'voucher', v.id); push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed', null, 'voucher', v.id); }
+      } else if(v){
+        const expAcct = v.gl_account_code||categoryToAccountCode(v.expense_category);
+        // Input VAT + EWT captured by Purchasing on the PO (snapshotted on the RFP).
+        // Split the payment so VAT is reclaimed as an asset and the withholding sits
+        // as a BIR payable: Dr Expense (ex-VAT) + Dr Input VAT · Cr EWT payable + Cr Cash.
+        const taxRfp = v.rfp_id ? rfpById.get(v.rfp_id) : null;
+        const iv = taxRfp ? (Number(taxRfp.input_vat_amount)||0) : 0;
+        const ewt = taxRfp ? (Number(taxRfp.ewt_amount)||0) : 0;
+        if(iv>0 || ewt>0){
+          const svc = !!(taxRfp && taxRfp.tax_is_services);
+          const expenseNet = Math.round((amt + ewt - iv)*100)/100; // amt = cash (net of EWT)
+          push(b.date, expAcct, expenseNet, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id, 'voucher', v.id);
+          if(iv>0) push(b.date, svc?'101010':'101011', iv, 0, 'CV', v.number, 'Input VAT', null, 'voucher', v.id);
+          if(ewt>0) push(b.date, svc?'201012':'201011', 0, ewt, 'CV', v.number, 'EWT withheld — payable to BIR', null, 'voucher', v.id);
+          push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed (net of EWT)', null, 'voucher', v.id);
+        } else {
+          push(b.date, expAcct, amt, 0, 'CV', v.number, v.particulars||v.payee, v.cost_center_id, 'voucher', v.id);
+          push(b.date, CASH_BANK, 0, amt, 'CV', v.number, 'Cash disbursed', null, 'voucher', v.id);
+        }
+      }
       else if(e){ push(b.date, e.gl_account_code||categoryToAccountCode(e.category), amt, 0, 'EXP', '', e.description||e.vendor, e.cost_center_id, 'expense', e.id); push(b.date, CASH_BANK, 0, amt, 'EXP', '', 'Cash disbursed', null, 'expense', e.id); }
       else if(b.ref_type==='cash_advance'){ push(b.date, CASH_HAND, amt, 0, 'PC', b.reference_number, 'Petty cash issued', null, 'bank_txn', b.id); push(b.date, CASH_BANK, 0, amt, 'PC', b.reference_number, '', null, 'bank_txn', b.id); }
       else { push(b.date, '401020', amt, 0, 'BANK', b.reference_number, b.description, null, 'bank_txn', b.id); push(b.date, CASH_BANK, 0, amt, 'BANK', b.reference_number, '', null, 'bank_txn', b.id); }
@@ -47616,8 +47649,8 @@ function finReportYears(postings){
   const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
 }
 
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders]);
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -47870,8 +47903,8 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
   );
 }
 function monLabelOf(m){ try{ const [y,mo]=String(m).split('-'); return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('en-PH',{month:'long',year:'numeric'}); }catch(_){ return m; } }
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, reload }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders]);
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, rfps, reload }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -55869,9 +55902,9 @@ function App(){
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} reload={loadAll} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
