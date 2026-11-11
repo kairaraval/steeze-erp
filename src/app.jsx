@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 945 · Payroll Phase 1 (Leave Management): all leave types with per-employee credit buckets — VL/EL (10), SL (5), Paternity (7), Solo Parent (7), Maternity (per law). HR assigns eligibility & credits per employee (entitled 0 = not eligible); a paid leave is blocked when there are no/insufficient credits; Paid vs Unpaid is explicit (unpaid never uses credits). Leaves now go Pending → Approve (credits deducted on approval) / Reject / Undo (restored). Balances monitor shows remaining/entitled across every bucket.";
+const BUILD = "Live build 946 · Payroll Phase 2 (Attendance Filings): new 📝 Attendance Filings screen for Official Business (OB), Certificate of Attendance (COA) and Schedule Adjustment (rest-day / with-break / adjusted in-out). HR/supervisor files, the approver validates, and on approval the filing writes an APPROVED DTR day (which the DTR build never overwrites) so it flows straight into payroll.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42063,6 +42063,162 @@ function computeDtrDay(punches, sched, dateStr, holiday, isRest){
 }
 function parseCsvText(text){ const lines=String(text).replace(/\r/g,'').split('\n').filter(l=>l.trim()); return lines.map(l=>{ const out=[]; let cur='',q=false; for(let i=0;i<l.length;i++){ const c=l[i]; if(c==='"'){ if(q&&l[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(c===','&&!q){ out.push(cur); cur=''; } else cur+=c; } out.push(cur); return out.map(s=>s.trim()); }); }
 
+/* ─────────── ATTENDANCE FILINGS (OB · COA · Schedule Adjustment) ───────────
+   HR/supervisor files on an employee's behalf; the approver validates. On
+   approval the filing writes an APPROVED dtr_day for that date — which the DTR
+   build never overwrites — so it flows straight into payroll. */
+const FILING_KINDS=[
+  { key:'ob',              label:'Official Business (OB)',  icon:'🧳', hint:'For official work outside the office (Sales / Logistics) when biometrics can’t be logged.' },
+  { key:'coa',             label:'Certificate of Attendance', icon:'📝', hint:'When an employee forgot to log in/out on the biometric. Needs a written explanation.' },
+  { key:'schedule_adjust', label:'Schedule Adjustment',     icon:'🗓️', hint:'Reporting on a rest day or working an adjusted schedule.' },
+];
+const filingKindMeta=(k)=>FILING_KINDS.find(x=>x.key===k)||FILING_KINDS[0];
+function cutoffKeyForDate(ds){ const [y,m,d]=ds.split('-').map(Number); return `${y}-${String(m).padStart(2,'0')}-H${d<=15?1:2}`; }
+function hmToTs(ds, hm){ return hm? `${ds}T${hm}:00+08:00` : null; }
+function minsBetweenHM(a,b){ const [ah,am]=String(a||'').split(':').map(Number); const [bh,bm]=String(b||'').split(':').map(Number); if([ah,am,bh,bm].some(x=>isNaN(x))) return 0; return Math.max(0,(bh*60+bm)-(ah*60+am)); }
+
+function AttendanceFilingsView({ profile, employees, reload }){
+  const canManage = ['admin','agm','hr','hr_admin','production_supervisor'].includes(profile.role);
+  const [rows,setRows]=useState([]);
+  const [schedules,setSchedules]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filing,setFiling]=useState(null);   // new filing {kind}
+  const [statusFilter,setStatusFilter]=useState('pending');
+  const [search,setSearch]=useState('');
+  const empName=(id)=>{ const e=(employees||[]).find(x=>x.id===id); return e?fullName(e):'(unknown)'; };
+  async function load(){ setLoading(true);
+    try{ const { data }=await sb.from('attendance_filings').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setRows(data||[]); }catch(_){ setRows([]); }
+    try{ const { data }=await sb.from('work_schedules').select('*').is('deleted_at',null); setSchedules(data||[]); }catch(_){ setSchedules([]); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[]);
+  const schedOf=(empId)=>{ const e=(employees||[]).find(x=>x.id===empId); return schedules.find(s=>s.id===e?.schedule_id)||null; };
+
+  // Apply an approved filing to the DTR as an approved day (protected from rebuild).
+  async function applyToDtr(f){
+    const sched=schedOf(f.employee_id);
+    const ds=f.filing_date; const base={ employee_id:f.employee_id, work_date:ds, cutoff_key:cutoffKeyForDate(ds), approved:true, approved_by:profile.id, approved_at:new Date().toISOString(), source:'filing', updated_at:new Date().toISOString(), late_min:0, undertime_min:0 };
+    let row;
+    if(f.kind==='ob'){
+      row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Number(sched?.daily_hours||8), ot_hours:0, notes:`OB: ${f.reason||''}`.trim() };
+    } else if(f.kind==='coa'){
+      const inTs=hmToTs(ds,f.time_in?String(f.time_in).slice(0,5):null), outTs=hmToTs(ds,f.time_out?String(f.time_out).slice(0,5):null);
+      const brk=Number(sched?.break_minutes||0);
+      const worked = (f.time_in&&f.time_out)? Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5))-brk) : (Number(sched?.daily_hours||8)*60);
+      row={ ...base, status:'present', time_in:inTs, time_out:outTs, hours_worked:Math.round(worked/6)/10, ot_hours:0, notes:`COA (${f.coa_missing||'both'} missing): ${f.reason||''}`.trim() };
+    } else { // schedule_adjust
+      const workedMin = Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5)) - (f.with_break?60:0));
+      const daily=Number(sched?.daily_hours||8)*60;
+      const ot = Math.max(0, workedMin - daily);
+      row={ ...base, status:'present', time_in:hmToTs(ds,String(f.time_in).slice(0,5)), time_out:hmToTs(ds,String(f.time_out).slice(0,5)), hours_worked:Math.round(Math.min(workedMin,daily)/6)/10, ot_hours:Math.round((ot/60)*100)/100, notes:`${f.rest_day?'Rest-day work · ':''}Sched adj${f.with_break?' (w/ break)':' (no break)'}: ${f.reason||''}`.trim() };
+    }
+    await sb.from('dtr_days').upsert(row, { onConflict:'employee_id,work_date' });
+  }
+  async function setStatus(f, status){
+    if(!canManage) return;
+    try{
+      await sb.from('attendance_filings').update({ status, approved_by: status==='approved'?profile.id:null, approved_at: status==='approved'?new Date().toISOString():null, applied: status==='approved' }).eq('id', f.id);
+      if(status==='approved') await applyToDtr(f);
+      load(); reload&&reload();
+    }catch(e){ alert(e.message||String(e)); }
+  }
+  async function del(f){ if(!confirm('Delete this filing?')) return; await sb.from('attendance_filings').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',f.id); load(); }
+  const ql=search.trim().toLowerCase();
+  const shown=rows.filter(r=> (statusFilter==='all'|| (r.status||'pending')===statusFilter) && (!ql || empName(r.employee_id).toLowerCase().includes(ql)));
+  const counts={ pending:rows.filter(r=>(r.status||'pending')==='pending').length, approved:rows.filter(r=>r.status==='approved').length, rejected:rows.filter(r=>r.status==='rejected').length };
+  const stChip=(s)=>{ s=s||'pending'; const cls=s==='approved'?'bg-emerald-100 text-emerald-700':s==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s}</span>; };
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">📝 Attendance Filings</h1><p className="text-slate-500 text-sm">Official Business, Certificate of Attendance &amp; Schedule Adjustment. Approved filings flow straight into the DTR &amp; payroll.</p></div>
+          {canManage && <div className="flex gap-2">{FILING_KINDS.map(k=><button key={k.key} onClick={()=>setFiling({ kind:k.key })} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ {k.label.split(' (')[0]}</button>)}</div>}
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+            {[['pending',`Pending (${counts.pending})`],['approved','Approved'],['rejected','Rejected'],['all','All']].map(([k,l])=>(
+              <button key={k} onClick={()=>setStatusFilter(k)} className={`px-3 py-1.5 rounded-md ${statusFilter===k?'bg-indigo-600 text-white font-semibold':'text-slate-600'}`}>{l}</button>))}
+          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee…" className="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[180px]" />
+        </div>
+      </div>
+      {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+          <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Details</th><th className="text-left px-3 py-2">Reason</th><th className="text-center px-3 py-2">Status</th><th></th>
+        </tr></thead>
+        <tbody>{shown.length===0 ? <tr><td colSpan="7" className="text-center text-slate-400 py-8">No filings{statusFilter!=='all'?` (${statusFilter})`:''}.</td></tr> : shown.map(f=>{ const m=filingKindMeta(f.kind); const st=f.status||'pending'; return (
+          <tr key={f.id} className="border-t hover:bg-slate-50">
+            <td className="px-3 py-2 font-medium">{empName(f.employee_id)}</td>
+            <td className="px-3 py-2 text-xs">{m.icon} {m.label.split(' (')[0]}</td>
+            <td className="px-3 py-2 text-xs">{fmtDate(f.filing_date)}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]" title={f.reason||''}>{f.reason||'—'}</td>
+            <td className="px-3 py-2 text-center">{stChip(st)}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap">
+              {canManage && st!=='approved' && <button onClick={()=>setStatus(f,'approved')} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">Approve</button>}
+              {canManage && st==='pending' && <button onClick={()=>setStatus(f,'rejected')} className="text-xs text-rose-600 hover:underline mr-2">Reject</button>}
+              {canManage && <button onClick={()=>del(f)} className="text-xs text-slate-400 hover:text-rose-500">✕</button>}
+            </td>
+          </tr>
+        ); })}</tbody>
+      </table></div></div>}
+      {filing && <AttendanceFilingModal kind={filing.kind} employees={employees} profile={profile} onClose={()=>setFiling(null)} onSaved={()=>{ setFiling(null); load(); }} />}
+    </div>
+  );
+}
+
+function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
+  const m=filingKindMeta(kind);
+  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both' });
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const up=(k,v)=>setF(s=>({...s,[k]:v}));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  async function save(){
+    if(!f.employee_id){ setMsg('Pick an employee.'); return; }
+    if(!f.filing_date){ setMsg('Set the date.'); return; }
+    if(kind==='schedule_adjust' && (!f.time_in || !f.time_out)){ setMsg('Set the adjusted time in and out.'); return; }
+    if(kind==='coa' && !(f.reason||'').trim()){ setMsg('A written explanation is required for a COA.'); return; }
+    setBusy(true); setMsg('');
+    const payload={ employee_id:f.employee_id, kind, filing_date:f.filing_date, reason:f.reason||null, status:'pending', created_by:profile.id,
+      time_in: (kind==='coa'||kind==='schedule_adjust') && f.time_in ? f.time_in : null,
+      time_out: (kind==='coa'||kind==='schedule_adjust') && f.time_out ? f.time_out : null,
+      rest_day: kind==='schedule_adjust' ? !!f.rest_day : false,
+      with_break: kind==='schedule_adjust' ? !!f.with_break : true,
+      coa_missing: kind==='coa' ? f.coa_missing : null };
+    const { error }=await sb.from('attendance_filings').insert(payload);
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    setBusy(false); onSaved&&onSaved();
+  }
+  return (
+    <Modal title={`${m.icon} File ${m.label}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">{m.hint}</div>
+        <TpLbl t="Employee *"><select className="input" value={f.employee_id} onChange={e=>up('employee_id',e.target.value)}><option value="">— pick an employee —</option>{activeEmps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{e.position?` · ${e.position}`:''}</option>)}</select></TpLbl>
+        <TpLbl t="Date *"><input type="date" className="input" value={f.filing_date} onChange={e=>up('filing_date',e.target.value)} /></TpLbl>
+        {kind==='coa' && (
+          <TpLbl t="Which punch is missing?"><select className="input" value={f.coa_missing} onChange={e=>up('coa_missing',e.target.value)}><option value="in">Time in</option><option value="out">Time out</option><option value="both">Both</option></select></TpLbl>
+        )}
+        {(kind==='coa'||kind==='schedule_adjust') && (
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t={kind==='coa'?'Actual time in':'Adjusted time in'}><input type="time" className="input" value={f.time_in} onChange={e=>up('time_in',e.target.value)} /></TpLbl>
+            <TpLbl t={kind==='coa'?'Actual time out':'Adjusted time out'}><input type="time" className="input" value={f.time_out} onChange={e=>up('time_out',e.target.value)} /></TpLbl>
+          </div>
+        )}
+        {kind==='schedule_adjust' && (
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-2 text-sm rounded-lg border p-2 cursor-pointer"><input type="checkbox" checked={f.rest_day} onChange={e=>up('rest_day',e.target.checked)} /> Reporting on a rest day</label>
+            <label className="flex items-center gap-2 text-sm rounded-lg border p-2 cursor-pointer"><input type="checkbox" checked={f.with_break} onChange={e=>up('with_break',e.target.checked)} /> With 1-hr lunch break</label>
+          </div>
+        )}
+        <TpLbl t={kind==='coa'?'Written explanation *':'Reason'}><textarea className="input min-h-[60px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder={kind==='ob'?'e.g. Client visit — JT International, whole day':kind==='coa'?'Explain why the punch is missing':'e.g. Asked to report on rest day for rush order'} /></TpLbl>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Filing…':'Submit filing'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 function AttendanceDtrView({ profile, employees, reload }){
   const canManage = ['admin','agm','hr','hr_admin'].includes(profile.role);
   const now=new Date();
@@ -54675,7 +54831,7 @@ function App(){
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-recruit','hr-templates',
-        'logistics','trip-tickets','delivery-receipts','payroll','attendance','pay-setup','payroll-run',
+        'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
       fallback = 'ops-command';
     } else if(profile.role==='assistant'){
@@ -54777,14 +54933,14 @@ function App(){
     } else if(profile.role==='hr'){
       // HR Department — own inbox + HR dashboard + whole HR module + Sewing
       // Payroll + Budget Requests + their profile (signature).
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','attendance-filings','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
         'assets','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'hr-home';
     } else if(profile.role==='hr_admin'){
       // HR Admin (Admin Office) — the new admin personnel. Owns the Admin Office
       // module + her own Request for Payment to Finance. Lands on Admin Home.
       // Still part of HR (full HR module) PLUS the Admin Office module.
-      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
+      allowed = new Set(['hr-home','inbox','my-tasks','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-loans','gov-loans','hr-payments','hr-recruit','hr-templates','payroll','attendance','attendance-filings','pay-setup','payroll-run','budgets','rfps','profile','trip-tickets',
         'admin-home','admin-directory','assets','admin-office','admin-pr','admin-rfp','admin-requests','admin-permits','admin-maintenance']);
       fallback = 'admin-home';
     } else if(profile.role==='logistics'){
@@ -55432,7 +55588,7 @@ function App(){
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       ADMIN_OFFICE_GROUP,
       PERSONAL_GROUP,
     ];
@@ -55511,7 +55667,7 @@ function App(){
     NAV = [
       { items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Logistics', items:[ ['trip-tickets','Trip Tickets','🎫'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       ADMIN_OFFICE_GROUP,
@@ -55524,7 +55680,7 @@ function App(){
       { items:[ ['admin-home','Admin Home','🗂'], ['hr-home','HR Dashboard','🧑‍💼'], ['inbox','Inbox','📥'], ['my-tasks','My Tasks','✅'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll','✂'] ] },
       { group:'Finance', items:[ ['rfps','Request for Payment','📝'], ['budgets','Budget Requests','💰'] ] },
       PERSONAL_GROUP,
     ];
@@ -55677,7 +55833,7 @@ function App(){
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
-      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
+      { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Runs','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
       { group:'HR', items:[ ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-payments','Request for Payment','🧾'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       ADMIN_OFFICE_GROUP,
       { group:'Reports', items:[ ['reports','Reports','📈'] ] },
@@ -55973,6 +56129,7 @@ function App(){
         {view==='admin-pr' && <AdminPurchaseRequestsView profile={profile} requests={requests} items={items} profiles={profiles} departments={departments} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
         {view==='pay-setup' && <PayrollSetupView profile={profile} employees={employees} profiles={profiles} reload={loadAll} />}
         {view==='attendance' && <AttendanceDtrView profile={profile} employees={employees} reload={loadAll} />}
+        {view==='attendance-filings' && <AttendanceFilingsView profile={profile} employees={employees} reload={loadAll} />}
         {view==='payroll-run' && <PayrollEngineView profile={profile} employees={employees} profiles={profiles} reload={loadAll} />}
         {view==='admin-requests' && <AdminRequestsView profile={profile} adminRequests={adminRequests} profiles={profiles} reload={loadAll} />}
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
