@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 954 · Payroll attendance fix (1000-row cap): the DTR grid and the payroll-run compute now page through attendance in 1000-row chunks. Before this, a full company cutoff (≈95 staff × 15 days > 1000 rows) was silently truncated by Supabase's per-request limit, so some employees showed 0 attendance / ₱0 pay even when their DTR was complete. Also removed a stray deleted_at filter on dtr_days that could blank out the dashboard's exception counts. Re-open Attendance or Recompute a run to see the corrected figures.";
+const BUILD = "Live build 955 · Employee self-service portal: your Profile page now has tabs where each person sees only their own records — My Attendance (today’s clock-in, next payday, and a month-by-month table of time-in / time-out / late / OT / status), My Payslips (released/approved runs with a full earnings-and-deductions breakdown), Leave (remaining balances + leave history), and My Requests (all attendance filings and leaves with their status). Resolved from your linked employee record; read-only.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25835,6 +25835,171 @@ function ChangePasswordCard({ profile }){
   );
 }
 
+// ───────────────────── EMPLOYEE SELF-SERVICE PORTAL ─────────────────────
+// Lives inside a person's Profile as tabs. Each signed-in user sees only their
+// own attendance, payslips, leave and HR requests (resolved from their linked
+// employee record). Read-only — filing happens through HR/the normal flows.
+function fmtClock(ts){ if(!ts) return '—'; try{ return new Date(ts).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Manila'}); }catch(_){ return '—'; } }
+const PORTAL_LEAVE=[['vl','Vacation / Emergency','vl_entitled','vl_remaining'],['sl','Sick','sl_entitled','sl_remaining'],['paternity','Paternity','paternity_entitled','paternity_remaining'],['solo_parent','Solo Parent','solo_parent_entitled','solo_parent_remaining'],['maternity','Maternity','maternity_entitled','maternity_remaining']];
+function EmployeePortal({ profile, tab }){
+  const [emp,setEmp]=useState(undefined); // undefined=loading, null=not linked
+  const [dtr,setDtr]=useState([]);
+  const [items,setItems]=useState([]);
+  const [runs,setRuns]=useState({});
+  const [bal,setBal]=useState(null);
+  const [leaves,setLeaves]=useState([]);
+  const [filings,setFilings]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const now=new Date();
+  const [ym,setYm]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
+  const [openSlip,setOpenSlip]=useState(null);
+
+  useEffect(()=>{ (async()=>{
+    let e=null;
+    try{ const { data }=await sb.from('employees').select('*').eq('profile_id',profile.id).is('deleted_at',null).limit(1); e=data&&data[0]; }catch(_){}
+    if(!e && profile.email){ try{ const { data }=await sb.from('employees').select('*').or(`work_email.eq.${profile.email},personal_email.eq.${profile.email}`).is('deleted_at',null).limit(1); e=data&&data[0]; }catch(_){} }
+    setEmp(e||null);
+    if(e){
+      try{ const { data }=await sb.from('payroll_items').select('*').eq('employee_id',e.id).order('created_at',{ascending:false}); setItems(data||[]);
+        const rids=[...new Set((data||[]).map(i=>i.run_id))];
+        if(rids.length){ const { data:rr }=await sb.from('payroll_runs').select('*').in('id',rids); const m={}; (rr||[]).forEach(r=>m[r.id]=r); setRuns(m); } }catch(_){}
+      try{ const { data }=await sb.from('leave_balances').select('*').eq('employee_id',e.id).order('cycle_start',{ascending:false}).limit(1); setBal(data&&data[0]||null); }catch(_){}
+      try{ const { data }=await sb.from('hr_leaves').select('*').eq('employee_id',e.id).order('start_date',{ascending:false}); setLeaves(data||[]); }catch(_){}
+      try{ const { data }=await sb.from('attendance_filings').select('*').eq('employee_id',e.id).is('deleted_at',null).order('filing_date',{ascending:false}); setFilings(data||[]); }catch(_){}
+    }
+    setLoading(false);
+  })(); },[profile.id]);
+
+  // attendance for the selected month
+  useEffect(()=>{ (async()=>{ if(!emp) return; const [y,m]=ym.split('-').map(Number); const start=`${ym}-01`; const end=`${ym}-${String(new Date(y,m,0).getDate()).padStart(2,'0')}`;
+    try{ const { data }=await sb.from('dtr_days').select('*').eq('employee_id',emp.id).gte('work_date',start).lte('work_date',end).order('work_date'); setDtr(data||[]); }catch(_){ setDtr([]); }
+  })(); },[emp,ym]);
+
+  if(loading) return <div className="text-center text-slate-400 py-10 text-sm">Loading your records…</div>;
+  if(!emp) return <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 text-sm text-amber-800">Your login isn’t linked to an employee record yet, so there’s no attendance or payroll to show. Ask HR to link your profile in Employees.</div>;
+
+  const stChip=(s)=>{ s=(s||'pending').toLowerCase(); const cls=s==='approved'||s==='completed'||s==='released'?'bg-emerald-100 text-emerald-700':s==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s}</span>; };
+  const dstat=(r)=>{ const map={present:['Complete','text-emerald-700'],absent:['Absent','text-rose-600'],leave:['Leave','text-sky-600'],holiday:['Holiday','text-amber-600'],rest:['Rest day','text-slate-400'],missing:['Missing time out','text-amber-600']}; return map[r.status]||[r.status||'—','text-slate-500']; };
+
+  // ---------- MY ATTENDANCE ----------
+  if(tab==='attendance'){
+    const today=dtr.find(d=>d.work_date===new Date().toISOString().slice(0,10));
+    const present=dtr.filter(d=>d.status==='present').length, absent=dtr.filter(d=>d.status==='absent').length;
+    const lateMin=dtr.reduce((a,d)=>a+Number(d.late_min||0),0), ot=dtr.reduce((a,d)=>a+Number(d.ot_hours||0),0);
+    const nextRun=Object.values(runs).sort((a,b)=>String(b.pay_date||'').localeCompare(String(a.pay_date||'')))[0];
+    return (<div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white border rounded-xl p-4"><div className="text-xs text-slate-500 font-semibold flex items-center gap-2">🕒 Attendance today</div>
+          {today?<div className="mt-1"><div className="text-lg font-bold text-emerald-700">{fmtClock(today.time_in)}{today.time_out?` – ${fmtClock(today.time_out)}`:''}</div><div className="text-xs text-slate-500">{dstat(today)[0]}{today.late_min?` · ${today.late_min}m late`:''}</div></div>:<div className="text-sm text-slate-400 mt-2">No record yet today</div>}</div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-xs text-slate-500 font-semibold">📅 Next payday</div><div className="text-lg font-bold mt-1">{nextRun?.pay_date?fmtDate(nextRun.pay_date):'—'}</div><div className="text-xs text-slate-500">Payslip available after release</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-xs text-slate-500 font-semibold">🌴 This month</div><div className="text-sm mt-1"><b className="text-emerald-700">{present}</b> present · <b className="text-rose-600">{absent}</b> absent · <b>{ot}</b>h OT · <b>{lateMin}</b>m late</div></div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b"><div className="font-bold">📅 My Attendance</div>
+          <input type="month" value={ym} onChange={e=>setYm(e.target.value)} className="input !py-1 text-sm w-auto" /></div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Day</th><th className="text-left px-4 py-2">Time in</th><th className="text-left px-4 py-2">Time out</th><th className="text-right px-4 py-2">Late</th><th className="text-right px-4 py-2">OT</th><th className="text-left px-4 py-2">Status</th></tr></thead>
+          <tbody>{dtr.length===0?<tr><td colSpan={6} className="text-center text-slate-400 py-6">No records this month.</td></tr>:dtr.map(d=>{ const[lbl,col]=dstat(d); return (
+            <tr key={d.id||d.work_date} className="border-t hover:bg-slate-50">
+              <td className="px-4 py-2 font-medium">{new Date(d.work_date+'T00:00:00').toLocaleDateString('en-PH',{weekday:'short',month:'short',day:'numeric'})}</td>
+              <td className="px-4 py-2">{fmtClock(d.time_in)}</td><td className="px-4 py-2">{fmtClock(d.time_out)}</td>
+              <td className="px-4 py-2 text-right text-rose-600">{d.late_min?`${d.late_min}m`:'—'}</td>
+              <td className="px-4 py-2 text-right">{d.ot_hours?`${d.ot_hours}h`:'—'}</td>
+              <td className={`px-4 py-2 font-semibold ${col}`}>{lbl}{d.half_day?' · ½':''}{d.approved?' ✓':''}</td>
+            </tr>); })}</tbody>
+        </table></div>
+      </div>
+    </div>);
+  }
+
+  // ---------- MY PAYSLIPS ----------
+  if(tab==='payslips'){
+    const visible=items.filter(i=>{ const r=runs[i.run_id]; return r && (r.payslips_released_at || r.status==='approved'); })
+      .sort((a,b)=>{ const ra=runs[a.run_id],rb=runs[b.run_id]; return String(rb?.period_start||'').localeCompare(String(ra?.period_start||'')); });
+    return (<div className="space-y-3">
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b font-bold">💵 My Payslips</div>
+        {visible.length===0?<div className="text-center text-slate-400 py-8 text-sm">No released payslips yet.</div>:
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Pay period</th><th className="text-right px-4 py-2">Gross</th><th className="text-right px-4 py-2">Deductions</th><th className="text-right px-4 py-2">Net pay</th><th className="text-left px-4 py-2">Status</th><th></th></tr></thead>
+          <tbody>{visible.map(i=>{ const r=runs[i.run_id]||{}; return (
+            <tr key={i.id} className="border-t hover:bg-slate-50">
+              <td className="px-4 py-2 font-medium">{fmtDate(r.period_start)} – {fmtDate(r.period_end)}</td>
+              <td className="px-4 py-2 text-right">{peso(i.gross)}</td>
+              <td className="px-4 py-2 text-right text-rose-600">{peso(i.total_deductions)}</td>
+              <td className="px-4 py-2 text-right font-bold text-emerald-700">{peso(i.net_pay)}</td>
+              <td className="px-4 py-2">{r.payslips_released_at?stChip('released'):stChip('approved')}</td>
+              <td className="px-4 py-2 text-right"><button onClick={()=>setOpenSlip({i,r})} className="text-xs px-2 py-1 rounded bg-indigo-600 text-white font-semibold">View</button></td>
+            </tr>); })}</tbody>
+        </table></div>}
+      </div>
+      {openSlip && <PayslipModal item={openSlip.i} run={openSlip.r} emp={emp} onClose={()=>setOpenSlip(null)} />}
+    </div>);
+  }
+
+  // ---------- LEAVE ----------
+  if(tab==='leave'){
+    return (<div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {PORTAL_LEAVE.map(([k,lbl,ent,rem])=>{ const e=Number(bal?.[ent]||0), r=Number(bal?.[rem]||0); if(e<=0 && r<=0) return null; return (
+          <div key={k} className="bg-white border rounded-xl p-4"><div className="text-xs text-slate-500 font-semibold">{lbl}</div><div className="text-2xl font-bold mt-1 text-emerald-700">{r}<span className="text-sm text-slate-400 font-normal"> / {e} days</span></div></div>); })}
+        {!bal && <div className="col-span-full text-sm text-slate-400">No leave credits set up yet.</div>}
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b font-bold">🌴 Leave history</div>
+        {leaves.length===0?<div className="text-center text-slate-400 py-8 text-sm">No leave filed yet.</div>:
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Type</th><th className="text-left px-4 py-2">Dates</th><th className="text-right px-4 py-2">Days</th><th className="text-left px-4 py-2">Paid</th><th className="text-left px-4 py-2">Status</th></tr></thead>
+          <tbody>{leaves.map(l=>(<tr key={l.id} className="border-t hover:bg-slate-50">
+            <td className="px-4 py-2 font-medium uppercase">{l.leave_type}</td>
+            <td className="px-4 py-2">{fmtDate(l.start_date)}{l.end_date&&l.end_date!==l.start_date?` – ${fmtDate(l.end_date)}`:''}</td>
+            <td className="px-4 py-2 text-right">{l.days||'—'}</td>
+            <td className="px-4 py-2">{l.paid?'Paid':'Unpaid'}</td>
+            <td className="px-4 py-2">{stChip(l.status)}</td></tr>))}</tbody>
+        </table></div>}
+      </div>
+    </div>);
+  }
+
+  // ---------- MY REQUESTS ----------
+  if(tab==='requests'){
+    const reqs=[
+      ...filings.map(f=>({ id:'f'+f.id, type:(FILING_KINDS.find(x=>x.key===f.kind)?.label||f.kind), date:f.filing_date, status:f.status, note:f.reason })),
+      ...leaves.map(l=>({ id:'l'+l.id, type:`Leave · ${String(l.leave_type||'').toUpperCase()}`, date:l.start_date, status:l.status, note:l.reason })),
+    ].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+    return (<div className="bg-white border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b font-bold">📝 My Requests</div>
+      {reqs.length===0?<div className="text-center text-slate-400 py-8 text-sm">You haven’t filed any requests.</div>:
+      <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-4 py-2">Type</th><th className="text-left px-4 py-2">Date</th><th className="text-left px-4 py-2">Details</th><th className="text-left px-4 py-2">Status</th></tr></thead>
+        <tbody>{reqs.map(r=>(<tr key={r.id} className="border-t hover:bg-slate-50">
+          <td className="px-4 py-2 font-medium">{r.type}</td>
+          <td className="px-4 py-2">{r.date?fmtDate(r.date):'—'}</td>
+          <td className="px-4 py-2 text-slate-500 text-xs max-w-[280px] truncate">{r.note||'—'}</td>
+          <td className="px-4 py-2">{stChip(r.status)}</td></tr>))}</tbody>
+      </table></div>}
+    </div>);
+  }
+  return null;
+}
+function PayslipModal({ item, run, emp, onClose }){
+  const earn=[['Basic pay',item.basic_pay],['Overtime',item.ot_pay],['Holiday / premium',item.holiday_pay],['Allowances',item.allowances],['Other earnings',item.other_earnings]].filter(r=>Number(r[1]||0)!==0);
+  const ded=[['Late / undertime',item.late_ut_ded],['SSS',item.sss_ee],['PhilHealth',item.philhealth_ee],['Pag-IBIG',item.pagibig_ee],['Withholding tax',item.tax],['Gov loans',item.gov_loan_ded],['Company loans',item.company_loan_ded],['Other deductions',item.other_ded]].filter(r=>Number(r[1]||0)!==0);
+  return (<Modal title={`Payslip · ${fmtDate(run.period_start)}–${fmtDate(run.period_end)}`} onClose={onClose}>
+    <div className="space-y-3 text-sm">
+      <div className="text-xs text-slate-500">{fullName(emp)}{emp.employee_number?` · ${emp.employee_number}`:''}{emp.department?` · ${emp.department}`:''}</div>
+      <div><div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Earnings</div>
+        {earn.map(([l,v])=><div key={l} className="flex justify-between py-0.5"><span>{l}</span><span>{peso(v)}</span></div>)}
+        <div className="flex justify-between py-0.5 font-semibold border-t mt-1 pt-1"><span>Gross</span><span>{peso(item.gross)}</span></div></div>
+      <div><div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Deductions</div>
+        {ded.length?ded.map(([l,v])=><div key={l} className="flex justify-between py-0.5 text-rose-600"><span>{l}</span><span>-{peso(v)}</span></div>):<div className="text-slate-400 text-xs">None</div>}
+        <div className="flex justify-between py-0.5 font-semibold border-t mt-1 pt-1"><span>Total deductions</span><span className="text-rose-600">-{peso(item.total_deductions)}</span></div></div>
+      <div className="flex justify-between py-2 px-3 bg-emerald-50 rounded-lg font-bold text-emerald-800"><span>Net pay</span><span>{peso(item.net_pay)}</span></div>
+      <div className="text-[10px] text-slate-400">{run.payslips_released_at?`Released ${fmtDate(run.payslips_released_at)}`:'Pending release'}{run.number?` · ${run.number}`:''}</div>
+    </div>
+  </Modal>);
+}
+
 function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, onSendToPR }){
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const won=mine.filter(l=>SOLD_STAGES.includes(l.stage));
@@ -25873,7 +26038,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
   const isAdmin=profile.role==='admin';
   const [tgtEditing,setTgtEditing]=useState(false); const [tgtDraft,setTgtDraft]=useState(''); const [tgtBusy,setTgtBusy]=useState(false);
   const [dealSearch,setDealSearch]=useState('');
-  const [profTab,setProfTab]=useState('overview'); // 'overview' | 'deals'
+  const [profTab,setProfTab]=useState(showSalesDash?'overview':'attendance'); // overview | deals | attendance | payslips | leave | requests
   async function saveTarget(){
     const amt=Number(tgtDraft)||0; setTgtBusy(true);
     const { error }=await sb.from('sales_targets').upsert({ profile_id:profile.id, ym, amount:amt, updated_by:profile.id, updated_at:new Date().toISOString() }, { onConflict:'profile_id,ym' });
@@ -25919,12 +26084,15 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
     <div className="p-6">
       <div className="flex items-center gap-3 mb-5"><Avatar profile={profile} /><div><h1 className="text-2xl font-bold text-slate-900">{profile.name}</h1><p className="text-slate-500 text-sm">{roleLabel(profile.role)} · {profile.email}</p></div></div>
 
-      {showSalesDash && (<>
-        <div className="inline-flex rounded-lg border bg-slate-100 p-0.5 text-sm mb-5">
-          <button onClick={()=>setProfTab('overview')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='overview'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>📊 Overview</button>
-          <button onClick={()=>setProfTab('deals')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='deals'?'bg-white shadow-sm text-emerald-700':'text-slate-600'}`}>💵 Closed deals {closedLines.length>0 && <span className="text-[10px] text-slate-400">({won.length})</span>}</button>
-        </div>
-      </>)}
+      <div className="flex flex-wrap gap-1 rounded-lg border bg-slate-100 p-0.5 text-sm mb-5 w-fit">
+        {showSalesDash && <button onClick={()=>setProfTab('overview')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='overview'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>📊 Overview</button>}
+        {showSalesDash && <button onClick={()=>setProfTab('deals')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='deals'?'bg-white shadow-sm text-emerald-700':'text-slate-600'}`}>💵 Closed deals {closedLines.length>0 && <span className="text-[10px] text-slate-400">({won.length})</span>}</button>}
+        <button onClick={()=>setProfTab('attendance')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='attendance'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🕒 My Attendance</button>
+        <button onClick={()=>setProfTab('payslips')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='payslips'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>💵 My Payslips</button>
+        <button onClick={()=>setProfTab('leave')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='leave'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🌴 Leave</button>
+        <button onClick={()=>setProfTab('requests')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='requests'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>📝 My Requests</button>
+      </div>
+      {['attendance','payslips','leave','requests'].includes(profTab) && <EmployeePortal profile={profile} tab={profTab} />}
 
       {showSalesDash && profTab==='overview' && (<>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
