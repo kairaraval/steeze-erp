@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 953 · Payroll Dashboard discoverability: the sidebar item is now named 'Payroll Dashboard' (was 'Payroll Runs') and opens on the dashboard by default, with the Runs list as a tab inside it. (Dashboard itself: cutoff cards, 5-stage stepper, register with needs-review filter, exceptions panel, by-department totals, bank-file + payslip-release actions.)";
+const BUILD = "Live build 954 · Payroll attendance fix (1000-row cap): the DTR grid and the payroll-run compute now page through attendance in 1000-row chunks. Before this, a full company cutoff (≈95 staff × 15 days > 1000 rows) was silently truncated by Supabase's per-request limit, so some employees showed 0 attendance / ₱0 pay even when their DTR was complete. Also removed a stray deleted_at filter on dtr_days that could blank out the dashboard's exception counts. Re-open Attendance or Recompute a run to see the corrected figures.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42097,6 +42097,23 @@ function hhmmToMin(s){ if(!s) return null; const m=String(s).match(/(\d{1,2}):(\
 function minToHHMM(m){ if(m==null) return '—'; const h=Math.floor(m/60), mm=m%60; return `${String(h).padStart(2,'0')}:${String(mm).padStart(2,'0')}`; }
 function dateRangeList(start,end){ const out=[]; let d=new Date(start+'T00:00:00'); const e=new Date(end+'T00:00:00'); while(d<=e){ out.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); } return out; }
 const DTR_STATUS_META={ present:['P','bg-emerald-100 text-emerald-700'], absent:['A','bg-rose-100 text-rose-700'], leave:['L','bg-sky-100 text-sky-700'], holiday:['H','bg-amber-100 text-amber-700'], rest:['R','bg-slate-100 text-slate-500'], missing:['!','bg-orange-100 text-orange-700'] };
+// Paginated DTR fetch — Supabase caps a single request at 1000 rows, and a full
+// cutoff for the whole company easily exceeds that (≈95 staff × 15 days). Page
+// through in 1000-row chunks so no employee's attendance is silently dropped.
+async function fetchDtrRange(start, end, cols){
+  const size=1000; let from=0; let all=[];
+  for(;;){
+    const { data, error }=await sb.from('dtr_days').select(cols||'*')
+      .gte('work_date',start).lte('work_date',end)
+      .order('employee_id',{ascending:true}).order('work_date',{ascending:true})
+      .range(from, from+size-1);
+    if(error) break;
+    all=all.concat(data||[]);
+    if(!data || data.length<size) break;
+    from+=size;
+  }
+  return all;
+}
 // Compute a day record from that employee's punches + schedule.
 function computeDtrDay(punches, sched, dateStr, holiday, isRest){
   const sorted=(punches||[]).slice().sort((a,b)=>new Date(a.punch_ts)-new Date(b.punch_ts));
@@ -42256,7 +42273,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
       const isHalf=oh>0 && oh<=daily/2+0.01 && oh<daily;
       row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Math.round(oh*10)/10, ot_hours:0, half_day:isHalf, notes:`Offset ${oh}h (${isHalf?'half-day':'whole-day'}): ${f.reason||''}`.trim() };
     } else { // overtime — credit per the rule; tardiness that day forfeits OT (normal/sat)
-      let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).is('deleted_at',null).limit(1); ex=r.data&&r.data[0]; }catch(_){}
+      let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).limit(1); ex=r.data&&r.data[0]; }catch(_){}
       const isEarly=f.ot_type==='early_in';
       let credited = isEarly ? (Math.round((Number(f.ot_hours)||0)*100)/100) : creditOtHours(f.ot_hours);
       const lateMin = ex?Number(ex.late_min||0):0;
@@ -42436,7 +42453,7 @@ function AttendanceDtrView({ profile, employees, reload }){
   async function loadPeriod(){
     setLoading(true);
     try{ const { data }=await sb.from('attendance_punches').select('*').gte('punch_ts',start+'T00:00:00+08:00').lte('punch_ts',end+'T23:59:59+08:00'); setPunches(data||[]); }catch(_){ setPunches([]); }
-    try{ const { data }=await sb.from('dtr_days').select('*').gte('work_date',start).lte('work_date',end); setDtr(data||[]); }catch(_){ setDtr([]); }
+    try{ const data=await fetchDtrRange(start,end); setDtr(data||[]); }catch(_){ setDtr([]); }
     setLoading(false);
   }
   useEffect(()=>{ loadRefs(); },[]);
@@ -42743,7 +42760,7 @@ function PayrollDashboardView({ runs, employees, profiles, profile, refs, latest
   const run=runs.find(r=>r.id===selId)||runs[0]||null;
   async function load(){ if(!run){ return; } setLoading(true);
     try{ const { data }=await sb.from('payroll_items').select('*').eq('run_id',run.id); setItems(data||[]); }catch(_){ setItems([]); }
-    try{ const { data }=await sb.from('dtr_days').select('employee_id,work_date,status,ot_hours,approved').gte('work_date',run.period_start).lte('work_date',run.period_end).is('deleted_at',null); setDtr(data||[]); }catch(_){ setDtr([]); }
+    try{ const data=await fetchDtrRange(run.period_start, run.period_end, 'employee_id,work_date,status,ot_hours,approved'); setDtr(data||[]); }catch(_){ setDtr([]); }
     try{ const { data }=await sb.from('attendance_filings').select('employee_id,kind,status,filing_date').gte('filing_date',run.period_start).lte('filing_date',run.period_end).is('deleted_at',null); setFilings(data||[]); }catch(_){ setFilings([]); }
     setLoading(false);
   }
@@ -43029,7 +43046,7 @@ function NewPayrollRunModal({ profile, employees, refs, latestTax, onClose, onCr
       const { data:run, error }=await sb.from('payroll_runs').insert({ number, cycle, period_start:start, period_end:end, cutoff_key:cutoffKey, pay_date:payDate||null, status:'draft', contrib_factor:Number(contrib)||0.5, prepared_by:profile.id, prepared_at:new Date().toISOString(), created_by:profile.id }).select().single();
       if(error) throw error;
       // load approved DTR for the period
-      const { data:dtr }=await sb.from('dtr_days').select('*').gte('work_date',start).lte('work_date',end);
+      const dtr=await fetchDtrRange(start,end);
       const dtrByEmp={}; (dtr||[]).forEach(r=>{ (dtrByEmp[r.employee_id]=dtrByEmp[r.employee_id]||[]).push(r); });
       const items=computePayrollItems(run, eligible, dtrByEmp, refs, latestTax);
       if(items.length){ const { error:ie }=await sb.from('payroll_items').insert(items); if(ie) throw ie; }
@@ -43082,7 +43099,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
   async function editItem(it, key, val){ if(locked) return; const v=Number(val)||0; let next={ ...it, [key]:v }; next=recalcNet(next); setItems(prev=>prev.map(x=>x.id===it.id?next:x)); await sb.from('payroll_items').update({ [key]:v, gross:next.gross, total_deductions:next.total_deductions, net_pay:next.net_pay, updated_at:new Date().toISOString() }).eq('id',it.id); }
   async function recompute(){ if(locked) return; if(!confirm('Recompute every employee from the current approved DTRs + statutory tables? This overwrites manual edits in this run.')) return; setBusy('recompute');
     const eligible=(employees||[]).filter(e=>items.some(i=>i.employee_id===e.id));
-    const { data:dtr }=await sb.from('dtr_days').select('*').gte('work_date',run.period_start).lte('work_date',run.period_end);
+    const dtr=await fetchDtrRange(run.period_start, run.period_end);
     const dtrByEmp={}; (dtr||[]).forEach(r=>{ (dtrByEmp[r.employee_id]=dtrByEmp[r.employee_id]||[]).push(r); });
     const fresh=computePayrollItems(run, eligible, dtrByEmp, refs, latestTax);
     for(const f of fresh){ const ex=items.find(i=>i.employee_id===f.employee_id); if(ex) await sb.from('payroll_items').update({ ...f, id:undefined, run_id:undefined, employee_id:undefined, updated_at:new Date().toISOString() }).eq('id',ex.id); }
