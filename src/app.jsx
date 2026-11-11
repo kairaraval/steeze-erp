@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 951 · Payroll run ↔ attendance engine integration: The payroll run now computes each person's holiday/rest-day premium, overtime pay and late/half-day deduction day-by-day through the §9 multiplier table and Phase-4/5 rules — so the computed payslip matches the DTR previews exactly. Covers all day types (ordinary / rest day / special / legal / double holiday incl. rest-day variants), the classification exemption from per-minute late (supervisory/managerial), half-day cuts, and no-work-no-pay on special holidays while legal holidays still pay 100% unworked.";
+const BUILD = "Live build 952 · Payroll Dashboard: a new default Dashboard tab in the Payroll module — pick a cutoff and see Employees / Gross / Deductions / Net cards plus employer contributions and total payroll cost, a 5-stage workflow stepper (Attendance Review → Calculation → Approval → Payment → Payslips), a searchable payroll register with an All / Needs-Review filter, a Needs-Attention panel (missing time logs, OT awaiting approval, deductions to verify), payroll-by-department totals, and an Approval & Payment panel that generates the bank file (CSV) and releases payslips. The Runs list moves under a second tab. Added bank-file / payslip-release milestones to payroll runs.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42659,6 +42659,7 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
   const [creating,setCreating]=useState(false);
   const [thirteenth,setThirteenth]=useState(false);
   const [loading,setLoading]=useState(true);
+  const [mainTab,setMainTab]=useState('dashboard'); // dashboard | runs
   // reference data for compute
   const [refs,setRefs]=useState({ schedules:[], holidays:[], tax:[], config:{}, govLoans:[], coLoans:[] });
   async function loadRuns(){ setLoading(true); try{ const { data }=await sb.from('payroll_runs').select('*').is('deleted_at',null).order('period_start',{ascending:false}).order('created_at',{ascending:false}); setRuns(data||[]); }catch(_){ setRuns([]); } setLoading(false); }
@@ -42679,13 +42680,21 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <div className="flex items-start justify-between flex-wrap gap-3">
-          <div><h1 className="text-2xl font-bold">💵 Payroll Runs</h1><p className="text-slate-500 text-sm">Gross-to-net from approved DTRs. Draft → reviewed → approved. Loan balances post only on approval; the CEO releases funds in the bank.</p></div>
+          <div><h1 className="text-2xl font-bold">💵 {mainTab==='dashboard'?'Payroll Dashboard':'Payroll Runs'}</h1><p className="text-slate-500 text-sm">{mainTab==='dashboard'?'Review attendance, resolve exceptions and move a cutoff through to payslips.':'Gross-to-net from approved DTRs. Draft → reviewed → approved. Loan balances post only on approval; the CEO releases funds in the bank.'}</p></div>
           <div className="flex gap-2">
             <button onClick={()=>setThirteenth(true)} className="px-3 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">📅 13th-month</button>
             {canPrepare && <button onClick={()=>setCreating(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New payroll run</button>}
           </div>
         </div>
+        <div className="flex gap-1 mt-3">
+          <button onClick={()=>setMainTab('dashboard')} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${mainTab==='dashboard'?'bg-indigo-600 text-white':'text-slate-600 hover:bg-slate-200'}`}>📊 Dashboard</button>
+          <button onClick={()=>setMainTab('runs')} className={`px-3 py-1.5 rounded-md text-sm font-semibold ${mainTab==='runs'?'bg-indigo-600 text-white':'text-slate-600 hover:bg-slate-200'}`}>📁 Runs{runs.length?` (${runs.length})`:''}</button>
+        </div>
       </div>
+      {mainTab==='dashboard' ? (
+        loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> :
+        <PayrollDashboardView runs={runs} employees={employees} profiles={profiles} profile={profile} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApprove={canApprove} onOpenRun={(r)=>{ setMainTab('runs'); setOpenRun(r); }} reloadRuns={loadRuns} />
+      ) : (<>
       {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : runs.length===0 ? (
         <div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No payroll runs yet. {canPrepare?'Create one to compute a cutoff.':''}</div>
       ) : (
@@ -42705,11 +42714,227 @@ function PayrollEngineView({ profile, employees, profiles, reload }){
           ); })}</tbody>
         </table></div>
       )}
+      </>)}
       {creating && <NewPayrollRunModal profile={profile} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setCreating(false)} onCreated={(run)=>{ setCreating(false); loadRuns(); setOpenRun(run); }} />}
       {thirteenth && <ThirteenthMonthModal profile={profile} employees={employees} onClose={()=>setThirteenth(false)} />}
       {openRun && <PayrollRunDetail run={openRun} profile={profile} employees={employees} profiles={profiles} refs={refs} latestTax={latestTax} canPrepare={canPrepare} canReview={canReview} canApprove={canApprove} onClose={()=>{ setOpenRun(null); loadRuns(); }} onChanged={loadRuns} />}
     </div>
   );
+}
+// ───────────────────────── PAYROLL DASHBOARD ─────────────────────────
+// Live command-centre for a cutoff: summary cards, the 5-stage workflow stepper,
+// the payroll register, exception queues, by-department totals and the approval /
+// payment panel. Reads the selected run's items + period attendance in real time.
+const PAYRUN_STEPS=['Attendance Review','Calculation','Approval','Payment','Payslips'];
+function mscBracket(base){ let m=Math.round((Number(base)||0)/500)*500; return Math.max(5000, Math.min(35000, m)); }
+function ecErFor(base){ return mscBracket(base)>=15000?30:10; }
+function PayrollDashboardView({ runs, employees, profiles, profile, refs, latestTax, canPrepare, canReview, canApprove, onOpenRun, reloadRuns }){
+  const isAccounting=['admin','accounting','accounting_officer','agm'].includes(profile.role);
+  const [selId,setSelId]=useState(runs[0]?.id||'');
+  const [items,setItems]=useState([]);
+  const [dtr,setDtr]=useState([]);
+  const [filings,setFilings]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [busy,setBusy]=useState('');
+  const [search,setSearch]=useState('');
+  const [dept,setDept]=useState('');
+  const [tab,setTab]=useState('all'); // all | review
+  useEffect(()=>{ if(!selId && runs[0]) setSelId(runs[0].id); },[runs]);
+  const run=runs.find(r=>r.id===selId)||runs[0]||null;
+  async function load(){ if(!run){ return; } setLoading(true);
+    try{ const { data }=await sb.from('payroll_items').select('*').eq('run_id',run.id); setItems(data||[]); }catch(_){ setItems([]); }
+    try{ const { data }=await sb.from('dtr_days').select('employee_id,work_date,status,ot_hours,approved').gte('work_date',run.period_start).lte('work_date',run.period_end).is('deleted_at',null); setDtr(data||[]); }catch(_){ setDtr([]); }
+    try{ const { data }=await sb.from('attendance_filings').select('employee_id,kind,status,filing_date').gte('filing_date',run.period_start).lte('filing_date',run.period_end).is('deleted_at',null); setFilings(data||[]); }catch(_){ setFilings([]); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); },[selId, run?.id]);
+  const empById=React.useMemo(()=>{ const m={}; (employees||[]).forEach(e=>m[e.id]=e); return m; },[employees]);
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.full_name||p.name||p.email||'—'):'—'; };
+
+  // ── exceptions in the period ──
+  const missingLogs=dtr.filter(d=>d.status==='missing' && !d.approved);
+  const missingEmpSet=new Set(missingLogs.map(d=>d.employee_id));
+  const otPending=filings.filter(f=>f.kind==='overtime' && (f.status||'pending')==='pending');
+  const otEmpSet=new Set(otPending.map(f=>f.employee_id));
+  const filingPending=filings.filter(f=>(f.status||'pending')==='pending');
+  const coLoansToVerify=(refs.coLoans||[]).filter(l=>(l.status||'')==='pending');
+  const needsReviewSet=new Set([...missingEmpSet, ...otEmpSet, ...filingPending.map(f=>f.employee_id)]);
+  const excTotal=missingLogs.length + otPending.length + coLoansToVerify.length;
+
+  // ── totals ──
+  const sum=(k)=>items.reduce((a,i)=>a+Number(i[k]||0),0);
+  const gross=pRound(sum('gross')), ded=pRound(sum('total_deductions')), net=pRound(sum('net_pay'));
+  const cf=Number(run?.contrib_factor)||0.5;
+  const sssT=latestTax('sss'), phT=latestTax('philhealth'), piT=latestTax('pagibig');
+  const employerContrib=pRound(items.reduce((a,i)=>{ const e=empById[i.employee_id]; if(!e) return a; const base=contribBase(e);
+    return a + (sssER(base,sssT)+philhealthER(base,phT)+pagibigER(base,piT)+ecErFor(base))*cf; },0));
+  const totalCost=pRound(gross+employerContrib);
+
+  // ── register rows ──
+  const rows=items.map(i=>{ const e=empById[i.employee_id]||{}; return {
+    id:i.id, emp:e, name:fullName(e)||e.nickname||'—', dept:e.department||'—',
+    basic:pRound(Number(i.basic_pay||0)+Number(i.holiday_pay||0)),
+    otAllow:pRound(Number(i.ot_pay||0)+Number(i.allowances||0)+Number(i.other_earnings||0)),
+    ded:Number(i.total_deductions||0), net:Number(i.net_pay||0),
+    review: needsReviewSet.has(i.employee_id) };
+  });
+  const depts=Array.from(new Set(rows.map(r=>r.dept))).filter(d=>d&&d!=='—').sort();
+  const ql=search.trim().toLowerCase();
+  const shown=rows.filter(r=> (tab==='all'||r.review) && (!dept||r.dept===dept) && (!ql || r.name.toLowerCase().includes(ql) || String(r.emp.employee_number||'').toLowerCase().includes(ql)));
+  const byDept=depts.map(d=>{ const rs=rows.filter(r=>r.dept===d); return { dept:d, n:rs.length, net:pRound(rs.reduce((a,r)=>a+r.net,0)) }; }).sort((a,b)=>b.net-a.net);
+
+  // ── stage ──
+  const st=run?.status||'draft';
+  const step = run?.payslips_released_at?6 : run?.bank_file_at?5 : st==='approved'?4 : st==='reviewed'?3 : excTotal>0?1:2;
+  const payDate=run?.pay_date;
+
+  async function setMilestone(patch, label){ if(!run) return; setBusy(label); try{ await sb.from('payroll_runs').update(patch).eq('id',run.id); reloadRuns&&reloadRuns(); }catch(e){ alert(e.message||String(e)); } setBusy(''); }
+  async function generateBankFile(){
+    if(!run) return;
+    const header=['Employee','Employee No','Bank','Account name','Account number','Net pay'];
+    const lines=[header.join(',')].concat(rows.map(r=>[r.name, r.emp.employee_number||'', r.emp.bank_name||'', r.emp.bank_account_name||r.name, r.emp.bank_account_number||'', r.net.toFixed(2)].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')));
+    await _deliverFile(new Blob(['﻿'+lines.join('\n')],{type:'text/csv;charset=utf-8'}), `bank-file-${run.number||'payroll'}.csv`, 'text/csv');
+    await setMilestone({ bank_file_at:new Date().toISOString(), bank_file_by:profile.id }, 'bank');
+  }
+  async function exportSummary(){
+    if(!run) return;
+    const header=['Employee','Department','Basic earned','OT & allowances','Deductions','Net pay','Status'];
+    const lines=[header.join(',')].concat(rows.map(r=>[r.name, r.dept, r.basic.toFixed(2), r.otAllow.toFixed(2), r.ded.toFixed(2), r.net.toFixed(2), r.review?'Needs review':'Ready'].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')));
+    await _deliverFile(new Blob(['﻿'+lines.join('\n')],{type:'text/csv;charset=utf-8'}), `payroll-summary-${run.number||'run'}.csv`, 'text/csv');
+  }
+
+  if(!run) return <div className="p-6"><div className="bg-white border border-dashed rounded-xl p-10 text-center text-slate-400 text-sm">No payroll runs yet. Create one from the Runs tab to see the dashboard.</div></div>;
+
+  const Card=({icon,label,value,sub,tone})=>(<div className={`rounded-xl border p-4 bg-white`}>
+    <div className="flex items-center gap-2 text-xs text-slate-500 font-semibold"><span className={`w-7 h-7 rounded-lg grid place-items-center ${tone}`}>{icon}</span>{label}</div>
+    <div className="text-2xl font-bold mt-2">{value}</div>{sub&&<div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}
+  </div>);
+
+  return (
+    <div className="space-y-4">
+      {/* period + actions */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <select value={selId} onChange={e=>setSelId(e.target.value)} className="input !py-1.5 text-sm font-semibold">
+            {runs.map(r=><option key={r.id} value={r.id}>{fmtDate(r.period_start)} – {fmtDate(r.period_end)} · {r.number||''}</option>)}
+          </select>
+          <span className={`text-[10px] px-2 py-1 rounded font-semibold ${(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[1]}`}>{(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[0]}</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={exportSummary} className="px-3 py-2 rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50">⬇ Export Summary</button>
+          <button onClick={()=>onOpenRun&&onOpenRun(run)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Review Payroll →</button>
+        </div>
+      </div>
+      <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-800 font-medium">📄 {(PAYRUN_STATUS[st]||PAYRUN_STATUS.draft)[0]} payroll{payDate?` · Payout ${fmtDate(payDate)}`:''}{run.number?` · ${run.number}`:''}</div>
+
+      {/* stepper */}
+      <div className="bg-white border rounded-xl p-3 flex items-center gap-1 overflow-x-auto">
+        {PAYRUN_STEPS.map((lbl,idx)=>{ const n=idx+1; const done=n<step, cur=n===step; return (
+          <React.Fragment key={lbl}>
+            <div className={`flex items-center gap-2 px-2 py-1 rounded-lg whitespace-nowrap ${cur?'bg-indigo-50':''}`}>
+              <span className={`w-6 h-6 rounded-full grid place-items-center text-[11px] font-bold ${done?'bg-emerald-500 text-white':cur?'bg-indigo-600 text-white':'bg-slate-200 text-slate-500'}`}>{done?'✓':n}</span>
+              <span className={`text-sm ${cur?'font-bold text-indigo-700':done?'text-slate-600':'text-slate-400'}`}>{lbl}</span>
+            </div>
+            {n<PAYRUN_STEPS.length && <span className="text-slate-300">›</span>}
+          </React.Fragment>
+        ); })}
+      </div>
+
+      {/* summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Card icon="👥" tone="bg-indigo-100" label="Employees Included" value={items.length} />
+        <Card icon="💰" tone="bg-emerald-100" label="Gross Pay" value={peso(gross)} />
+        <Card icon="🧾" tone="bg-rose-100" label="Total Deductions" value={peso(ded)} />
+        <Card icon="₱" tone="bg-teal-100" label="Net Pay" value={peso(net)} />
+      </div>
+      <div className="text-xs text-slate-500 text-center">Employer contributions <b>{peso(employerContrib)}</b> · Total payroll cost <b>{peso(totalCost)}</b></div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* register */}
+        <div className="lg:col-span-2 bg-white border rounded-xl p-4">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+            <div className="font-bold text-lg">🧾 Payroll Register</div>
+            <div className="flex rounded-lg border overflow-hidden text-sm">
+              <button onClick={()=>setTab('all')} className={`px-3 py-1.5 font-semibold ${tab==='all'?'bg-indigo-600 text-white':'bg-white text-slate-600'}`}>All</button>
+              <button onClick={()=>setTab('review')} className={`px-3 py-1.5 font-semibold ${tab==='review'?'bg-amber-500 text-white':'bg-white text-slate-600'}`}>Needs Review ({needsReviewSet.size})</button>
+            </div>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search employee (name or ID)" className="input !py-1.5 text-sm flex-1" />
+            <select value={dept} onChange={e=>setDept(e.target.value)} className="input !py-1.5 text-sm w-auto"><option value="">All Departments</option>{depts.map(d=><option key={d} value={d}>{d}</option>)}</select>
+          </div>
+          <div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-right px-3 py-2">Basic earned</th><th className="text-right px-3 py-2">OT & allow.</th><th className="text-right px-3 py-2">Deductions</th><th className="text-right px-3 py-2">Net pay</th><th className="text-center px-3 py-2">Status</th></tr></thead>
+            <tbody>{loading?<tr><td colSpan={7} className="text-center text-slate-400 py-6">Loading…</td></tr>: shown.length===0?<tr><td colSpan={7} className="text-center text-slate-400 py-6">No employees{tab==='review'?' need review 🎉':''}.</td></tr>: shown.map(r=>(
+              <tr key={r.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-medium">{r.name}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{r.dept}</td>
+                <td className="px-3 py-2 text-right">{peso(r.basic)}</td>
+                <td className="px-3 py-2 text-right">{peso(r.otAllow)}</td>
+                <td className="px-3 py-2 text-right text-rose-600">{peso(r.ded)}</td>
+                <td className="px-3 py-2 text-right font-semibold text-emerald-700">{peso(r.net)}</td>
+                <td className="px-3 py-2 text-center">{r.review?<span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">⚠ Needs review</span>:<span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">✓ Ready</span>}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+          <div className="text-[11px] text-slate-400 mt-2">Showing {shown.length} of {items.length} employees</div>
+        </div>
+
+        {/* needs attention */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3"><div className="font-bold text-lg">⚠️ Needs Attention</div><span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">{excTotal} exception{excTotal===1?'':'s'}</span></div>
+          <div className="space-y-2">
+            <ExcRow icon="📅" label="Missing time logs" n={missingLogs.length} tone="text-rose-600" />
+            <ExcRow icon="⏱️" label="Overtime awaiting approval" n={otPending.length} tone="text-amber-600" />
+            <ExcRow icon="🧾" label="Deductions to verify" n={coLoansToVerify.length} tone="text-indigo-600" />
+            {excTotal===0 && <div className="text-xs text-emerald-600 font-medium pt-1">No exceptions — this cutoff is clean. 🎉</div>}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-3">Resolve exceptions in <b>Attendance</b> & <b>Attendance Filings</b> before submitting for approval.</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* by department */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="font-bold text-lg mb-3">📊 Payroll by Department</div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Department</th><th className="text-right px-3 py-2">Employees</th><th className="text-right px-3 py-2">Net pay</th></tr></thead>
+            <tbody>{byDept.map(d=>(<tr key={d.dept} className="border-t"><td className="px-3 py-2">{d.dept}</td><td className="px-3 py-2 text-right">{d.n}</td><td className="px-3 py-2 text-right font-medium">{peso(d.net)}</td></tr>))}
+              <tr className="border-t bg-slate-50 font-bold"><td className="px-3 py-2">Total</td><td className="px-3 py-2 text-right">{items.length}</td><td className="px-3 py-2 text-right text-emerald-700">{peso(net)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* approval & payment */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="font-bold text-lg mb-3">✅ Approval & Payment</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <div className="text-slate-500">Prepared by</div><div className="font-semibold text-right">{run.prepared_by?nameOf(run.prepared_by):'—'}</div>
+            <div className="text-slate-500">Reviewed by</div><div className="font-semibold text-right">{run.reviewed_by?nameOf(run.reviewed_by):<span className="text-slate-300">Pending</span>}</div>
+            <div className="text-slate-500">Approved by</div><div className="font-semibold text-right">{run.agm_approved_by?nameOf(run.agm_approved_by):run.approved_by?nameOf(run.approved_by):<span className="text-slate-300">Pending</span>}</div>
+            <div className="col-span-2 border-t my-1"></div>
+            <div className="text-slate-500">Stage</div><div className="text-right"><span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${step>=4?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{step>=6?'Complete':PAYRUN_STEPS[Math.min(step,5)-1]}</span></div>
+            <div className="text-slate-500">Bank file</div><div className="text-right">{run.bank_file_at?<span className="text-emerald-600 font-semibold">Generated {fmtDate(run.bank_file_at)}</span>:<span className="text-slate-400">Not generated</span>}</div>
+            <div className="text-slate-500">Payslips</div><div className="text-right">{run.payslips_released_at?<span className="text-emerald-600 font-semibold">Released {fmtDate(run.payslips_released_at)}</span>:<span className="text-slate-400">Not released</span>}</div>
+          </div>
+          {isAccounting && (
+            <div className="flex gap-2 mt-3 pt-3 border-t">
+              <button disabled={st!=='approved'||!!busy} onClick={generateBankFile} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-40" title={st!=='approved'?'Run must be approved first':''}>{busy==='bank'?'Generating…':run.bank_file_at?'Re-generate bank file':'Generate bank file'}</button>
+              <button disabled={!run.bank_file_at||!!busy||!!run.payslips_released_at} onClick={()=>setMilestone({ payslips_released_at:new Date().toISOString(), payslips_released_by:profile.id }, 'release')} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-40">{run.payslips_released_at?'Payslips released ✓':busy==='release'?'Releasing…':'Release payslips'}</button>
+            </div>
+          )}
+          {st!=='approved' && !run.bank_file_at && <div className="text-[11px] text-slate-400 mt-2">Payment unlocks once the run is approved.</div>}
+        </div>
+      </div>
+      <div className="text-right text-[10px] text-slate-400">Live data · Role-based access</div>
+    </div>
+  );
+}
+function ExcRow({ icon, label, n, tone }){
+  return (<div className="flex items-center justify-between rounded-lg border px-3 py-2">
+    <div className="flex items-center gap-2 text-sm"><span>{icon}</span>{label}</div>
+    <div className={`text-sm font-bold ${n>0?tone:'text-slate-300'}`}>{n}</div>
+  </div>);
 }
 // Build payroll items for a run from approved DTRs + refs. Returns array of item rows.
 function computePayrollItems(run, emps, dtrByEmp, refs, latestTax){
