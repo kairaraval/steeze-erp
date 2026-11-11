@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 946 · Payroll Phase 2 (Attendance Filings): new 📝 Attendance Filings screen for Official Business (OB), Certificate of Attendance (COA) and Schedule Adjustment (rest-day / with-break / adjusted in-out). HR/supervisor files, the approver validates, and on approval the filing writes an APPROVED DTR day (which the DTR build never overwrites) so it flows straight into payroll.";
+const BUILD = "Live build 947 · Payroll Phase 3 (Overtime engine): Overtime is now an approval-gated filing (normal / early-in / Saturday incl. the 12NN–1PM special case). Credited OT follows the rule — first full hour required, then 30-min increments — and tardiness that day forfeits the OT. On approval the credited OT is written to the DTR day. Added an Early-in start time to work schedules.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41969,12 +41969,12 @@ function BirCard({ rows, canEdit, onSave, onNewVersion }){
 }
 function ScheduleModal({ sched, profile, onClose, onSaved }){
   const isEdit=!!sched?.id;
-  const [f,setF]=useState({ name:sched?.name||'', time_in:sched?.time_in||'08:00', time_out:sched?.time_out||'17:00', break_minutes:sched?.break_minutes??60, grace_minutes:sched?.grace_minutes??0, daily_hours:sched?.daily_hours??8, rest_days:sched?.rest_days||[0] });
+  const [f,setF]=useState({ name:sched?.name||'', time_in:sched?.time_in||'08:00', time_out:sched?.time_out||'17:00', break_minutes:sched?.break_minutes??60, grace_minutes:sched?.grace_minutes??0, daily_hours:sched?.daily_hours??8, early_in_time: sched?.early_in_time? String(sched.early_in_time).slice(0,5):'', rest_days:sched?.rest_days||[0] });
   const [busy,setBusy]=useState(false);
   const up=(k,v)=>setF(x=>({...x,[k]:v}));
   const toggleDay=(d)=>setF(x=>({...x,rest_days:(x.rest_days||[]).includes(d)?x.rest_days.filter(y=>y!==d):[...(x.rest_days||[]),d].sort()}));
   async function save(){ if(!f.name.trim()){ alert('Name the schedule.'); return; } setBusy(true);
-    const payload={ name:f.name.trim(), time_in:f.time_in||null, time_out:f.time_out||null, break_minutes:Number(f.break_minutes)||0, grace_minutes:Number(f.grace_minutes)||0, daily_hours:Number(f.daily_hours)||8, rest_days:f.rest_days||[] };
+    const payload={ name:f.name.trim(), time_in:f.time_in||null, time_out:f.time_out||null, break_minutes:Number(f.break_minutes)||0, grace_minutes:Number(f.grace_minutes)||0, daily_hours:Number(f.daily_hours)||8, early_in_time:f.early_in_time||null, rest_days:f.rest_days||[] };
     const { error }= isEdit ? await sb.from('work_schedules').update(payload).eq('id',sched.id) : await sb.from('work_schedules').insert({ ...payload, created_by:profile.id });
     setBusy(false); if(error){ alert(error.message); return; } onSaved();
   }
@@ -41987,6 +41987,7 @@ function ScheduleModal({ sched, profile, onClose, onSaved }){
         <TpLbl t="Break (min)"><input type="number" className="input" value={f.break_minutes} onChange={e=>up('break_minutes',e.target.value)} /></TpLbl>
         <TpLbl t="Grace (min)"><input type="number" className="input" value={f.grace_minutes} onChange={e=>up('grace_minutes',e.target.value)} /></TpLbl>
         <TpLbl t="Hours / day"><input type="number" step="0.5" className="input" value={f.daily_hours} onChange={e=>up('daily_hours',e.target.value)} /></TpLbl>
+        <TpLbl t="Early-in start (OT)"><input type="time" className="input" value={f.early_in_time} onChange={e=>up('early_in_time',e.target.value)} placeholder="e.g. 07:00" /></TpLbl>
       </div>
       <div><label className="text-[10px] uppercase font-semibold text-slate-400">Rest days</label><div className="flex gap-1 mt-1">{DOW.map((d,i)=>(<button key={i} onClick={()=>toggleDay(i)} className={`px-2 py-1 rounded text-xs font-semibold ${(f.rest_days||[]).includes(i)?'bg-indigo-600 text-white':'bg-slate-100 text-slate-600'}`}>{d}</button>))}</div></div>
       <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
@@ -42071,11 +42072,16 @@ const FILING_KINDS=[
   { key:'ob',              label:'Official Business (OB)',  icon:'🧳', hint:'For official work outside the office (Sales / Logistics) when biometrics can’t be logged.' },
   { key:'coa',             label:'Certificate of Attendance', icon:'📝', hint:'When an employee forgot to log in/out on the biometric. Needs a written explanation.' },
   { key:'schedule_adjust', label:'Schedule Adjustment',     icon:'🗓️', hint:'Reporting on a rest day or working an adjusted schedule.' },
+  { key:'overtime',        label:'Overtime (OT)',           icon:'⏱️', hint:'Approved OT only. First full hour is required, then 30-min increments. Tardiness that day forfeits OT.' },
 ];
+const OT_TYPES=[['normal','Normal OT (beyond shift)'],['early_in','Early-in OT'],['saturday','Saturday OT (production)']];
 const filingKindMeta=(k)=>FILING_KINDS.find(x=>x.key===k)||FILING_KINDS[0];
 function cutoffKeyForDate(ds){ const [y,m,d]=ds.split('-').map(Number); return `${y}-${String(m).padStart(2,'0')}-H${d<=15?1:2}`; }
 function hmToTs(ds, hm){ return hm? `${ds}T${hm}:00+08:00` : null; }
 function minsBetweenHM(a,b){ const [ah,am]=String(a||'').split(':').map(Number); const [bh,bm]=String(b||'').split(':').map(Number); if([ah,am,bh,bm].some(x=>isNaN(x))) return 0; return Math.max(0,(bh*60+bm)-(ah*60+am)); }
+// PH OT crediting: the first FULL hour is required (anything < 1h credits 0), then
+// 30-minute increments. 30m→0, 60m→1, 75m→1, 90m→1.5, 120m→2, 150m→2.5.
+function creditOtHours(actualHours){ const min=Math.floor((Number(actualHours)||0)*60); if(min<60) return 0; return Math.round((1 + Math.floor((min-60)/30)*0.5)*100)/100; }
 
 function AttendanceFilingsView({ profile, employees, reload }){
   const canManage = ['admin','agm','hr','hr_admin','production_supervisor'].includes(profile.role);
@@ -42106,11 +42112,23 @@ function AttendanceFilingsView({ profile, employees, reload }){
       const brk=Number(sched?.break_minutes||0);
       const worked = (f.time_in&&f.time_out)? Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5))-brk) : (Number(sched?.daily_hours||8)*60);
       row={ ...base, status:'present', time_in:inTs, time_out:outTs, hours_worked:Math.round(worked/6)/10, ot_hours:0, notes:`COA (${f.coa_missing||'both'} missing): ${f.reason||''}`.trim() };
-    } else { // schedule_adjust
+    } else if(f.kind==='schedule_adjust'){
       const workedMin = Math.max(0, minsBetweenHM(String(f.time_in).slice(0,5),String(f.time_out).slice(0,5)) - (f.with_break?60:0));
       const daily=Number(sched?.daily_hours||8)*60;
       const ot = Math.max(0, workedMin - daily);
       row={ ...base, status:'present', time_in:hmToTs(ds,String(f.time_in).slice(0,5)), time_out:hmToTs(ds,String(f.time_out).slice(0,5)), hours_worked:Math.round(Math.min(workedMin,daily)/6)/10, ot_hours:Math.round((ot/60)*100)/100, notes:`${f.rest_day?'Rest-day work · ':''}Sched adj${f.with_break?' (w/ break)':' (no break)'}: ${f.reason||''}`.trim() };
+    } else { // overtime — credit per the rule; tardiness that day forfeits OT (normal/sat)
+      let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).is('deleted_at',null).limit(1); ex=r.data&&r.data[0]; }catch(_){}
+      const isEarly=f.ot_type==='early_in';
+      let credited = isEarly ? (Math.round((Number(f.ot_hours)||0)*100)/100) : creditOtHours(f.ot_hours);
+      const lateMin = ex?Number(ex.late_min||0):0;
+      const forfeited = !isEarly && lateMin>0;
+      if(forfeited) credited=0;
+      if(ex){
+        row={ ...base, status:ex.status||'present', time_in:ex.time_in, time_out:ex.time_out, hours_worked:ex.hours_worked, late_min:ex.late_min, undertime_min:ex.undertime_min, holiday_type:ex.holiday_type, ot_hours:credited, notes:`OT ${f.ot_type||'normal'}${f.special_case?' · special 12NN-1PM':''}${forfeited?' · FORFEITED (tardy)':''}: ${f.reason||''}`.trim() };
+      } else {
+        row={ ...base, status:'present', hours_worked:Number(sched?.daily_hours||8), ot_hours:credited, notes:`OT ${f.ot_type||'normal'}: ${f.reason||''}`.trim() };
+      }
     }
     await sb.from('dtr_days').upsert(row, { onConflict:'employee_id,work_date' });
   }
@@ -42152,7 +42170,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
             <td className="px-3 py-2 font-medium">{empName(f.employee_id)}</td>
             <td className="px-3 py-2 text-xs">{m.icon} {m.label.split(' (')[0]}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(f.filing_date)}</td>
-            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:f.kind==='overtime'?`${(OT_TYPES.find(x=>x[0]===f.ot_type)?.[1]||'OT')} · ${f.ot_hours||0}h → credited ${f.ot_type==='early_in'?Number(f.ot_hours||0):creditOtHours(f.ot_hours)}h${f.special_case?' · special 12-1':''}`:'—'}</td>
             <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]" title={f.reason||''}>{f.reason||'—'}</td>
             <td className="px-3 py-2 text-center">{stChip(st)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -42170,7 +42188,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
 
 function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
   const m=filingKindMeta(kind);
-  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both' });
+  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(s=>({...s,[k]:v}));
   const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
@@ -42179,13 +42197,17 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
     if(!f.filing_date){ setMsg('Set the date.'); return; }
     if(kind==='schedule_adjust' && (!f.time_in || !f.time_out)){ setMsg('Set the adjusted time in and out.'); return; }
     if(kind==='coa' && !(f.reason||'').trim()){ setMsg('A written explanation is required for a COA.'); return; }
+    if(kind==='overtime' && !(Number(f.ot_hours)>0)){ setMsg('Enter the actual OT hours rendered.'); return; }
     setBusy(true); setMsg('');
     const payload={ employee_id:f.employee_id, kind, filing_date:f.filing_date, reason:f.reason||null, status:'pending', created_by:profile.id,
       time_in: (kind==='coa'||kind==='schedule_adjust') && f.time_in ? f.time_in : null,
       time_out: (kind==='coa'||kind==='schedule_adjust') && f.time_out ? f.time_out : null,
       rest_day: kind==='schedule_adjust' ? !!f.rest_day : false,
       with_break: kind==='schedule_adjust' ? !!f.with_break : true,
-      coa_missing: kind==='coa' ? f.coa_missing : null };
+      coa_missing: kind==='coa' ? f.coa_missing : null,
+      ot_type: kind==='overtime' ? f.ot_type : null,
+      ot_hours: kind==='overtime' ? (Number(f.ot_hours)||0) : null,
+      special_case: kind==='overtime' ? !!f.special_case : false };
     const { error }=await sb.from('attendance_filings').insert(payload);
     if(error){ setBusy(false); setMsg(error.message); return; }
     setBusy(false); onSaved&&onSaved();
@@ -42211,6 +42233,18 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
             <label className="flex items-center gap-2 text-sm rounded-lg border p-2 cursor-pointer"><input type="checkbox" checked={f.with_break} onChange={e=>up('with_break',e.target.checked)} /> With 1-hr lunch break</label>
           </div>
         )}
+        {kind==='overtime' && (<>
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="OT type"><select className="input" value={f.ot_type} onChange={e=>up('ot_type',e.target.value)}>{OT_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></TpLbl>
+            <TpLbl t="Actual OT hours rendered"><input type="number" step="0.25" min="0" className="input" value={f.ot_hours} onChange={e=>up('ot_hours',e.target.value)} placeholder="e.g. 2" /></TpLbl>
+          </div>
+          {f.ot_type==='saturday' && <label className="flex items-center gap-2 text-sm rounded-lg border p-2 cursor-pointer"><input type="checkbox" checked={f.special_case} onChange={e=>up('special_case',e.target.checked)} /> Special case: 12NN–1PM (worked through lunch) — needs careful review</label>}
+          <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">
+            {f.ot_type==='early_in'
+              ? <>Early-in OT is credited by the window rule (exactly at the early-in start = full; within 15 min = 30 min; later = none). Enter the credited hours above.</>
+              : <>Credited OT: <b>{creditOtHours(f.ot_hours)}</b> hr (first full hour required, then 30-min steps). <b className="text-rose-600">If the employee is tardy that day, OT is forfeited.</b></>}
+          </div>
+        </>)}
         <TpLbl t={kind==='coa'?'Written explanation *':'Reason'}><textarea className="input min-h-[60px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder={kind==='ob'?'e.g. Client visit — JT International, whole day':kind==='coa'?'Explain why the punch is missing':'e.g. Asked to report on rest day for rush order'} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Filing…':'Submit filing'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button></div>
