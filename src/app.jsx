@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 950 · Payroll Phase 6 (Fixed gov contributions + flexible offsetting): SSS / PhilHealth / Pag-IBIG are now fixed to each employee's registered contribution salary (or a pinned exact monthly amount) and no longer shrink for absences or undertime (Sprout §2) — set per person on Payroll Setup → Employee pay setup → Gov contributions. Added a flexible Offset filing (half-day 4h / whole-day 8h) that credits the day by actual hours rendered regardless of start time (Sprout §3); on approval it writes an approved DTR day.";
+const BUILD = "Live build 951 · Payroll run ↔ attendance engine integration: The payroll run now computes each person's holiday/rest-day premium, overtime pay and late/half-day deduction day-by-day through the §9 multiplier table and Phase-4/5 rules — so the computed payslip matches the DTR previews exactly. Covers all day types (ordinary / rest day / special / legal / double holiday incl. rest-day variants), the classification exemption from per-minute late (supervisory/managerial), half-day cuts, and no-work-no-pay on special holidays while legal holidays still pay 100% unworked.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42132,8 +42132,8 @@ function empDailyRate(emp){ const cur=Number(emp?.current_rate)||0; if(cur>0) re
 //  • Half-day → ½ × daily rate (supersedes per-minute).
 //  • Regular → (daily rate ÷ 8 ÷ 60) × late minutes.
 //  • Supervisory / Managerial → no per-minute deduction (half-day only, past 2h tardy).
-function lateDeductionFor(day, emp){
-  const rate=empDailyRate(emp); const half=!!day?.half_day || dayIsHalfDay(day, emp);
+function lateDeductionFor(day, emp, rateOverride){
+  const rate=Number(rateOverride)>0?Number(rateOverride):empDailyRate(emp); const half=!!day?.half_day || dayIsHalfDay(day, emp);
   if(!(rate>0)) return { amount:0, half_day:half, kind: half?'half_day':'none' };
   if(half) return { amount: Math.round(rate/2*100)/100, half_day:true, kind:'half_day' };
   if((emp?.pay_classification||'regular')!=='regular') return { amount:0, half_day:false, kind:'exempt' };
@@ -42167,8 +42167,8 @@ function dtrDayType(day, isRest){
 // two never double-count. Honours:
 //  • Legal (regular) holiday not worked → 100% of daily rate is still due.
 //  • Special / rest day not worked → "no work, no pay" (incl. a VL-only day): ₱0 premium.
-function computeDayPay(day, emp, isRest){
-  const rate=empDailyRate(emp); const hourly=rate/8;
+function computeDayPay(day, emp, isRest, rateOverride){
+  const rate=Number(rateOverride)>0?Number(rateOverride):empDailyRate(emp); const hourly=rate/8;
   const dt=dtrDayType(day, isRest); const m=DAY_TYPE_MULT[dt];
   const worked=Number(day?.hours_worked||0)>0;
   const halfFactor=(!!day?.half_day || dayIsHalfDay(day, emp)) ? 0.5 : 1;
@@ -42739,15 +42739,22 @@ function computePayrollItems(run, emps, dtrByEmp, refs, latestTax){
     dailyRate=pRound(dailyRate);
     const hourly=dailyRate/(dayHrs||8);
     const basic=pRound(dailyRate*workedDays);
-    const lateUt=pRound(((lateMin+utMin)/60)*hourly);
-    const ot=pRound(otHours*hourly*(mult.regular_ot||1.25));
-    // holiday pay
-    let holiday=0;
-    rows.forEach(r=>{ if(r.status!=='holiday'&&r.holiday_type!=='regular'&&r.holiday_type!=='special') return; const typ=r.holiday_type||(holSet[r.work_date]?.type); if(!typ) return; const worked=!!r.time_in;
-      if(typ==='regular'){ if(worked) holiday+=dailyRate*((mult.reg_holiday||2)-1); else if(!isDaily) holiday+=dailyRate*1; }
-      else if(typ==='special'){ if(worked) holiday+=dailyRate*((mult.special||1.3)-1); }
+    // Phase 5 §9 engine — per-day holiday/rest-day premium + OT pay, and the Phase-4
+    // per-day late / half-day deduction (honours classification exemption). Each uses
+    // the run's own dailyRate so payslip figures match the DTR previews exactly.
+    let holiday=0, ot=0, lateUt=0;
+    rows.forEach(r=>{
+      const rHol=r.holiday_type||holSet[r.work_date]?.type||null;
+      const rDow=new Date(r.work_date+'T00:00:00').getDay();
+      const rIsRest=restDays.has(rDow);
+      const dp=computeDayPay({ holiday_type:rHol, hours_worked:r.hours_worked, ot_hours:r.ot_hours, half_day:r.half_day }, e, rIsRest, dailyRate);
+      const worked=Number(r.hours_worked||0)>0 || !!r.time_in;
+      // Daily-paid staff: no "no-work" holiday pay (no-work-no-pay). Worked premiums always apply.
+      if(!(isDaily && !worked)) holiday+=dp.premium;
+      ot+=dp.ot_pay;
+      lateUt+=lateDeductionFor(r, e, dailyRate).amount;
     });
-    holiday=pRound(holiday);
+    holiday=pRound(holiday); ot=pRound(ot); lateUt=pRound(lateUt);
     const allowances=pRound((Number(e.allowances)||0)*pf);
     const gross=pRound(basic+ot+holiday+allowances);
     // Sprout §2 — contributions are fixed to the registered contribution salary (or a
