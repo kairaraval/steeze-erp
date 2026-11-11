@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 955 · Employee self-service portal: your Profile page now has tabs where each person sees only their own records — My Attendance (today’s clock-in, next payday, and a month-by-month table of time-in / time-out / late / OT / status), My Payslips (released/approved runs with a full earnings-and-deductions breakdown), Leave (remaining balances + leave history), and My Requests (all attendance filings and leaves with their status). Resolved from your linked employee record; read-only.";
+const BUILD = "Live build 956 · Profile Settings tab: added a ⚙️ Settings tab to the Profile that holds your e-signature setup and change-password — these used to sit at the bottom of every tab and now live only under Settings. (Also the employee self-service tabs from build 955: My Attendance, My Payslips, Leave, My Requests.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26091,6 +26091,7 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
         <button onClick={()=>setProfTab('payslips')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='payslips'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>💵 My Payslips</button>
         <button onClick={()=>setProfTab('leave')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='leave'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>🌴 Leave</button>
         <button onClick={()=>setProfTab('requests')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='requests'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>📝 My Requests</button>
+        <button onClick={()=>setProfTab('settings')} className={`px-4 py-1.5 rounded-md font-medium ${profTab==='settings'?'bg-white shadow-sm text-indigo-700':'text-slate-600'}`}>⚙️ Settings</button>
       </div>
       {['attendance','payslips','leave','requests'].includes(profTab) && <EmployeePortal profile={profile} tab={profTab} />}
 
@@ -26242,15 +26243,14 @@ function ProfileView({ profile, leads, clients, profiles, salesTargets, reload, 
         </div>
       )}
 
-      {!showSalesDash && (
-        <div className="bg-white border rounded-xl p-5 text-sm text-slate-500 mb-6">
-          Your profile page. Use the <strong>My E-Signature</strong> section below to set up your signature so it appears automatically on documents you approve.
+      {/* ⚙️ Settings — e-signature + change password, kept out of the way under their own tab. */}
+      {profTab==='settings' && (<>
+        <div className="bg-white border rounded-xl p-5 text-sm text-slate-500 mb-4">
+          Your personal settings. Set up your <strong>e-signature</strong> (it appears automatically on documents you approve) and change your <strong>password</strong>. Only you can see and edit these.
         </div>
-      )}
-
-      {/* Signature lives at the bottom so the sales progress shows first. */}
-      <MySignatureCard profile={profile} reload={reload} />
-      <ChangePasswordCard profile={profile} />
+        <MySignatureCard profile={profile} reload={reload} />
+        <ChangePasswordCard profile={profile} />
+      </>)}
     </div>
   );
 }
