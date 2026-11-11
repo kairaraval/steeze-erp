@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 948 · Payroll Phase 4 (Half-day & late computation): Tardiness/undertime now auto-flags a half-day when it reaches 2 h (cut-off 2PM Mon–Thu, 12NN Fri). Regular staff get a per-minute late deduction (Daily rate ÷ 8 ÷ 60); Supervisory & Managerial are exempt from per-minute late but still take the half-day cut. Added a Classification selector on Payroll Setup → Employee pay setup, a ½ badge + estimated deduction on the DTR grid, and a manual half-day override on the DTR day modal.";
+const BUILD = "Live build 949 · Payroll Phase 5 (Holiday & rest-day premiums + OT multipliers): Added the §9 pay-multiplier table (Ordinary / Rest day / Special / Legal / Double holiday, incl. rest-day variants, with Basic / OT / ND / NDOT factors). The DTR now shows each day's holiday/rest-day premium and OT pay (★ badge + tooltip on the grid, a premium line on the day modal). Honours the rules: no premium on a special holiday or rest day if the employee doesn't actually work (incl. VL-only days), while a regular/legal holiday still pays 100% when not worked. Added a 'Double holiday' type, a §8 holiday-on-Saturday compressed-week advisory banner (1h early-out Mon–Fri, no pay deduction), and a reference multiplier table on Payroll Setup → Rules & multipliers.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -41877,6 +41877,15 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
             <label className="flex items-center gap-2 mt-3 text-sm"><input disabled={!canTables} type="checkbox" checked={!!mult.pay_night_diff} onChange={e=>setMult('pay_night_diff',e.target.checked)} className="accent-indigo-600" /> Pay night differential ({mult.nd_start||'22:00'}–{mult.nd_end||'06:00'})</label>
             <div className="text-[10px] text-slate-400 mt-1">DOLE-standard defaults seeded. Edit to match exactly what you pay.</div>
           </div>
+          <div className="bg-white border rounded-xl p-4">
+            <div className="font-semibold text-sm mb-1">Overtime-pay multiplier table (reference · §9)</div>
+            <div className="text-[11px] text-slate-500 mb-2">These are the day-type multipliers the attendance engine applies on holidays and rest days (Basic × daily rate; OT / ND / NDOT × hourly). Validate against current DOLE rules before final payroll runs.</div>
+            <div className="overflow-x-auto"><table className="w-full text-xs">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1.5">Type of day</th><th className="text-right px-2 py-1.5">Basic</th><th className="text-right px-2 py-1.5">OT</th><th className="text-right px-2 py-1.5">ND</th><th className="text-right px-2 py-1.5">NDOT</th></tr></thead>
+              <tbody>{Object.values(DAY_TYPE_MULT).map(m=>(<tr key={m.label} className="border-t"><td className="px-2 py-1.5">{m.label}</td><td className="px-2 py-1.5 text-right tabular-nums">{m.basic.toFixed(3)}</td><td className="px-2 py-1.5 text-right tabular-nums">{m.ot.toFixed(3)}</td><td className="px-2 py-1.5 text-right tabular-nums">{m.nd.toFixed(3)}</td><td className="px-2 py-1.5 text-right tabular-nums">{m.ndot.toFixed(3)}</td></tr>))}</tbody>
+            </table></div>
+            <div className="text-[10px] text-slate-400 mt-2">On a <b>special</b> holiday or rest day, no premium is generated if the employee does not actually report to work (no-work-no-pay). On a <b>regular/legal</b> holiday, 100% holiday pay is still due even when not worked.</div>
+          </div>
         </div>
         );
       })()}
@@ -42009,7 +42018,7 @@ function HolidayModal({ hol, profile, onClose, onSaved }){
     <div className="space-y-3">
       <TpLbl t="Date"><input type="date" className="input" value={f.holiday_date} onChange={e=>up('holiday_date',e.target.value)} /></TpLbl>
       <TpLbl t="Name"><input className="input" value={f.name} onChange={e=>up('name',e.target.value)} /></TpLbl>
-      <TpLbl t="Type"><select className="input" value={f.type} onChange={e=>up('type',e.target.value)}><option value="regular">Regular holiday</option><option value="special">Special non-working</option></select></TpLbl>
+      <TpLbl t="Type"><select className="input" value={f.type} onChange={e=>up('type',e.target.value)}><option value="regular">Regular (legal) holiday</option><option value="special">Special non-working</option><option value="double">Double holiday</option></select></TpLbl>
       <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
     </div>
   </Modal>);
@@ -42087,6 +42096,61 @@ function lateDeductionFor(day, emp){
   if(half) return { amount: Math.round(rate/2*100)/100, half_day:true, kind:'half_day' };
   if((emp?.pay_classification||'regular')!=='regular') return { amount:0, half_day:false, kind:'exempt' };
   return { amount: Math.round((rate/8/60)*Number(day?.late_min||0)*100)/100, half_day:false, kind:'late' };
+}
+
+// ── Holiday / rest-day premium + OT pay engine (Phase 5 · §9 multiplier table) ──
+// Multipliers are × the daily (Basic) or hourly (OT/ND/NDOT) base. Validate vs DOLE
+// before final config — these are the figures supplied in the HR requirements.
+const DAY_TYPE_MULT={
+  ordinary:     { label:'Ordinary day',            basic:1.000, ot:1.250, nd:1.100, ndot:1.375 },
+  restday:      { label:'Rest day',                basic:1.300, ot:1.690, nd:1.430, ndot:1.859 },
+  special:      { label:'Special non-working',     basic:1.300, ot:1.690, nd:1.430, ndot:1.859 },
+  special_rest: { label:'Special holiday · rest day', basic:1.500, ot:1.950, nd:1.650, ndot:2.145 },
+  legal:        { label:'Legal (regular) holiday', basic:2.000, ot:2.600, nd:2.200, ndot:2.860 },
+  legal_rest:   { label:'Legal holiday · rest day', basic:2.600, ot:3.380, nd:2.860, ndot:3.718 },
+  double:       { label:'Double holiday',          basic:2.000, ot:3.900, nd:3.300, ndot:4.290 },
+  double_rest:  { label:'Double holiday · rest day', basic:2.900, ot:5.070, nd:4.290, ndot:5.577 },
+};
+// Map a DTR day (its holiday_type + whether it is the employee's rest day) to a §9 day type.
+function dtrDayType(day, isRest){
+  const ht=day?.holiday_type; // 'regular' (legal), 'special', 'double', or null
+  if(ht==='double')  return isRest?'double_rest':'double';
+  if(ht==='regular') return isRest?'legal_rest':'legal';
+  if(ht==='special') return isRest?'special_rest':'special';
+  return isRest?'restday':'ordinary';
+}
+// Peso value of the holiday/rest-day PREMIUM and the approved OT for one DTR day.
+// This is the uplift ON TOP of (or, when not worked, in place of) ordinary day pay —
+// the per-minute late / half-day cut from lateDeductionFor() is kept separate so the
+// two never double-count. Honours:
+//  • Legal (regular) holiday not worked → 100% of daily rate is still due.
+//  • Special / rest day not worked → "no work, no pay" (incl. a VL-only day): ₱0 premium.
+function computeDayPay(day, emp, isRest){
+  const rate=empDailyRate(emp); const hourly=rate/8;
+  const dt=dtrDayType(day, isRest); const m=DAY_TYPE_MULT[dt];
+  const worked=Number(day?.hours_worked||0)>0;
+  const halfFactor=(!!day?.half_day || dayIsHalfDay(day, emp)) ? 0.5 : 1;
+  let premium=0, premiumNote='';
+  if(worked){
+    // Uplift above the ordinary base they already earn from attendance.
+    premium=rate*(m.basic-1)*halfFactor;
+    premiumNote=`${m.label} worked · ${m.basic.toFixed(2)}×${halfFactor===0.5?' (half-day)':''}`;
+  } else if(dt==='legal'||dt==='legal_rest'||dt==='double'||dt==='double_rest'){
+    // Regular/legal holiday pay is due even when not worked.
+    premium=rate*(dt==='double'||dt==='double_rest'?2:1);
+    premiumNote=`${m.label} not worked · holiday pay due`;
+  } else {
+    premiumNote=dt==='ordinary'?'' : `${m.label} not worked · no premium (no work, no pay)`;
+  }
+  const otHours=Number(day?.ot_hours||0);
+  const otPay=otHours>0 ? hourly*m.ot*otHours : 0;
+  premium=Math.round(premium*100)/100; const ot=Math.round(otPay*100)/100;
+  return { day_type:dt, label:m.label, basic_mult:m.basic, ot_mult:m.ot, premium, ot_pay:ot, ot_hours:otHours, total:Math.round((premium+ot)*100)/100, note:premiumNote };
+}
+// §8 — detect a regular/special holiday that falls on a Saturday (compressed-workweek
+// adjustment week: 1h early-out Mon–Fri is allowed, with no holiday-pay deduction).
+function holidaySaturdays(holidays){
+  return (holidays||[]).filter(h=>{ const d=new Date((h.holiday_date||'')+'T00:00:00'); return d.getDay()===6; });
 }
 
 /* ─────────── ATTENDANCE FILINGS (OB · COA · Schedule Adjustment) ───────────
@@ -42387,6 +42451,7 @@ function AttendanceDtrView({ profile, employees, reload }){
       </div>
 
       {anyUnmapped && <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-3">Some punches have a biometric ID that isn't matched to an employee yet. Set each person's <b>Biometric ID</b> on Payroll Setup → Employee pay setup, then Build again.</div>}
+      {(()=>{ const satHols=dates.filter(ds=>holByDate[ds] && new Date(ds+'T00:00:00').getDay()===6).map(ds=>holByDate[ds]); if(!satHols.length) return null; return <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-xs text-sky-800 mb-3">🗓️ <b>Holiday on a Saturday this period:</b> {satHols.map(h=>h.name).join(', ')}. Under the compressed-workweek rule (§8), staff may leave <b>1 hour earlier Mon–Fri</b> that week to balance the Saturday hours — with <b>no deduction</b> to holiday pay or leave credits. If anyone works that Saturday, the day earns the applicable holiday + rest-day premium (set the status to present on that date).</div>; })()}
 
       {loading ? <div className="text-center text-slate-400 py-10 text-sm">Loading…</div> : (
         <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="text-xs">
@@ -42400,7 +42465,7 @@ function AttendanceDtrView({ profile, employees, reload }){
               <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-medium whitespace-nowrap">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname}{!e.schedule_id && <span className="ml-1 text-[9px] text-rose-400" title="No schedule assigned">⚠</span>}</td>
               {dates.map(ds=>{ const r=dtrIndex[e.id]?.[ds]; const meta=r?DTR_STATUS_META[r.status]:null; const dow=new Date(ds+'T00:00:00').getDay(); const sched=schedOf(e); const isRest=((sched?.rest_days)||[0]).includes(dow); return (
                 <td key={ds} onClick={()=>canManage&&setEditCell({ emp:e, date:ds, row:r })} className={`px-1 py-1 text-center ${canManage?'cursor-pointer hover:bg-indigo-50':''} ${holByDate[ds]?'bg-amber-50/40':isRest&&!r?'bg-slate-50':''}`}>
-                  {r ? (()=>{ const ded=lateDeductionFor(r,e); return <span title={`${r.status}${r.late_min?` · late ${r.late_min}m`:''}${r.undertime_min?` · UT ${r.undertime_min}m`:''}${r.ot_hours?` · OT ${r.ot_hours}h`:''}${r.half_day?' · HALF-DAY':''}${ded.amount>0?` · deduction ${peso(ded.amount)} (${ded.kind})`:''}`}><span className={`inline-block w-5 rounded text-[9px] font-bold ${meta?meta[1]:''}`}>{meta?meta[0]:'?'}</span>{r.half_day && <span className="text-rose-600 text-[8px] font-bold align-top" title="Half-day">½</span>}{r.approved && <span className="text-emerald-500 text-[8px] align-top">✓</span>}</span>; })() : <span className="text-slate-200">·</span>}
+                  {r ? (()=>{ const ded=lateDeductionFor(r,e); const dp=computeDayPay(r,e,isRest); const prem=dp.premium>0; return <span title={`${r.status}${r.late_min?` · late ${r.late_min}m`:''}${r.undertime_min?` · UT ${r.undertime_min}m`:''}${r.ot_hours?` · OT ${r.ot_hours}h`:''}${r.half_day?' · HALF-DAY':''}${ded.amount>0?` · deduction ${peso(ded.amount)} (${ded.kind})`:''}${dp.day_type!=='ordinary'?` · ${dp.label}`:''}${dp.premium>0?` · premium ${peso(dp.premium)}`:''}${dp.ot_pay>0?` · OT pay ${peso(dp.ot_pay)} (${dp.ot_mult}×)`:''}`}><span className={`inline-block w-5 rounded text-[9px] font-bold ${meta?meta[1]:''}`}>{meta?meta[0]:'?'}</span>{r.half_day && <span className="text-rose-600 text-[8px] font-bold align-top" title="Half-day">½</span>}{prem && <span className="text-amber-600 text-[8px] font-bold align-top" title={dp.label+' premium '+peso(dp.premium)}>★</span>}{r.approved && <span className="text-emerald-500 text-[8px] align-top">✓</span>}</span>; })() : <span className="text-slate-200">·</span>}
                 </td>
               ); })}
               <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="text-emerald-700 font-semibold">{sum.present}</span>/<span className="text-rose-600">{sum.absent}</span></td>
@@ -42452,6 +42517,7 @@ function DtrCellModal({ cell, profile, cutoffKey, onClose, onSaved }){
       </div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.half_day} onChange={e=>up('half_day',e.target.checked)} className="accent-rose-600" /> Half-day <span className="text-[11px] text-slate-400">(auto when tardiness{(emp?.pay_classification||'regular')==='regular'?' or undertime':''} ≥ 2 h · cut-off {new Date(date+'T00:00:00').getDay()===5?'12:00 NN (Fri)':'2:00 PM'})</span></label>
       <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">Classification: <b>{(PAY_CLASSES.find(x=>x[0]===(emp?.pay_classification||'regular'))||['','Regular'])[1]}</b> · daily rate <b>{peso(empDailyRate(emp))}</b> → est. deduction <b className={ded.amount>0?'text-rose-600':''}>{peso(ded.amount)}</b> <span className="text-slate-400">({ded.kind==='half_day'?'half-day':ded.kind==='exempt'?'exempt (sup/mgr)':ded.kind==='late'?'per-minute late':'none'})</span></div>
+      {(()=>{ const dayObj={ holiday_type:row?.holiday_type||null, hours_worked:(f.status==='present'||f.status==='missing')?8:0, ot_hours:Number(f.ot_hours)||0, half_day:!!f.half_day }; const isRest=(row?.status==='rest'||f.status==='rest'); const dp=computeDayPay(dayObj,emp,isRest); if(dp.day_type==='ordinary' && dp.premium===0 && dp.ot_pay===0) return null; return (<div className="text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-800">⭐ <b>{dp.label}</b> ({dp.basic_mult.toFixed(2)}×){dp.premium>0&&<> · premium <b>{peso(dp.premium)}</b></>}{dp.ot_pay>0&&<> · OT pay <b>{peso(dp.ot_pay)}</b> ({dp.ot_hours}h × {dp.ot_mult} mult)</>}{dp.note&&<div className="text-[10px] text-amber-600 mt-0.5">{dp.note}</div>}</div>); })()}
       {row?.approved && <div className="text-xs text-amber-600">This day is already approved — saving will keep it approved.</div>}
       <div className="flex gap-2 pt-2 border-t"><button disabled={busy} onClick={save} className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'Save'}</button>{row?.id&&<button onClick={del} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold">Clear</button>}<button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Cancel</button></div>
     </div>
