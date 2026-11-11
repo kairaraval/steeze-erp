@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 942 · Finance Phase 1b: the VAT-inclusive / client-withholds-CWT tickboxes now live on the sales manager's Lead edit in the pipeline and carry over to the Sales Order (with any VAT) automatically at Closed Won. They remain visible/adjustable on the SO for Accounting.";
+const BUILD = "Live build 943 · Finance Phase 2 (RFP month-end closure): a 🔖 Close / reconcile action on approved/pending RFPs lets Finance close requests already settled outside the OS — via an existing Check Voucher or Bank Transfer Voucher (link it), paid personally by the owner (flagged to reimburse), a duplicate/double-posting (linked to the original), or already reconciled — without creating a duplicate payment. Closed RFPs show a reason badge and drop out of the pay queue; an 'Owner reimbursements' filter lists ones to repay the owner.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -39287,6 +39287,8 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   const [sortDir,setSortDir]=useState('desc');
   const [page,setPage]=useState(1);
   const [groupBy,setGroupBy]=useState(false);
+  const [reimburseOnly,setReimburseOnly]=useState(false);
+  const reimburseCount = rfps.filter(r=>r.reimburse_owner && !r.reimbursed_at).length;
   const [menuFor,setMenuFor]=useState(null); // RFP id whose ⋯ menu is open
   const PER_PAGE=10;
   useEffect(()=>{ setPage(1); },[filter,search,sortKey,sortDir,groupBy]);
@@ -39322,7 +39324,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
   const payMethodLabel = (m)=> m==='bank_transfer'?'Bank Transfer' : m==='check'?'Check' : m==='cash'?'Cash' : m==='gcash'?'GCash' : (m? m.replace(/_/g,' ') : '—');
   // Filter (status card + search) → sort → optional supplier grouping → paginate.
   const q=search.trim().toLowerCase();
-  let list = rfps.filter(r=> (!filter||r.status===filter) && (!q || `${r.number||''} ${r.supplier_name||''} ${poNum(r)} ${r.amount||''}`.toLowerCase().includes(q)));
+  let list = rfps.filter(r=> (!filter||r.status===filter) && (!reimburseOnly || (r.reimburse_owner && !r.reimbursed_at)) && (!q || `${r.number||''} ${r.supplier_name||''} ${poNum(r)} ${r.amount||''}`.toLowerCase().includes(q)));
   const dir = sortDir==='asc'?1:-1;
   const sortVal=(r)=>{ switch(sortKey){ case 'number': return r.number||''; case 'due': return r.due_date||''; case 'supplier': return (r.supplier_name||'').toLowerCase(); case 'amount': return Number(r.amount||0); case 'status': return r.status||''; default: return r.date||''; } };
   list = list.slice().sort((a,b)=>{ const va=sortVal(a),vb=sortVal(b); if(va<vb) return -1*dir; if(va>vb) return 1*dir; return String(b.date||'').localeCompare(String(a.date||'')); });
@@ -39356,6 +39358,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search RFP #, supplier, PO #, or amount…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-full sm:w-80" />
         <div className="flex items-center gap-3">
           {canPay && <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={filter==='approved'} onChange={()=>setFilter(filter==='approved'?'':'approved')} /> Approved only</label>}
+          {reimburseCount>0 && <label className="flex items-center gap-1.5 text-xs text-teal-700 cursor-pointer font-semibold"><input type="checkbox" checked={reimburseOnly} onChange={e=>setReimburseOnly(e.target.checked)} /> Owner reimbursements ({reimburseCount})</label>}
           <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer"><input type="checkbox" checked={groupBy} onChange={e=>setGroupBy(e.target.checked)} /> Group by supplier</label>
         </div>
       </div>
@@ -39390,7 +39393,7 @@ function RFPsView({ profile, profiles, rfps, orders, suppliers, bankAccounts, vo
               <td className="px-3 py-2">{r.supplier_name||'—'}</td>
               <td className="px-3 py-2 text-xs font-mono">{poNum(r)||'—'}</td>
               <td className="px-3 py-2 text-right font-semibold">{peso(r.amount)}{r.status==='partial' && <div className="text-[10px] font-normal text-amber-700 mt-0.5">Paid {peso(r.amount_paid)} · Bal {peso(rfpBalance(r))}</div>}{r.bank_paid_bank_id && <div className="text-[10px] font-normal text-emerald-700 mt-0.5" title="The bank you paid this from">💳 {(bankAccounts||[]).find(b=>b.id===r.bank_paid_bank_id)?.bank_name||'our bank'}{r.bank_paid_reference?` · ${r.bank_paid_reference}`:''}</div>}</td>
-              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span></td>
+              <td className="px-3 py-2"><span className={`text-xs px-2 py-1 rounded font-medium ${meta.color}`}>{meta.label}</span>{r.closed_reason && <div className="mt-0.5"><span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600" title={`Closed/reconciled${r.closed_ref?` · ${r.closed_ref}`:''}${r.closed_note?` · ${r.closed_note}`:''}`}>🔖 {RFP_CLOSE_REASONS.find(x=>x.key===r.closed_reason)?.label||'reconciled'}</span>{r.reimburse_owner && !r.reimbursed_at && <span className="ml-1 text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">reimburse owner</span>}</div>}</td>
               <td className="px-3 py-2" onClick={(e)=>e.stopPropagation()}>{!ap ? <span className="text-[11px] text-slate-400">—</span> : (()=>{ const am=(Number(ap.amount_paid||0)>0 && ap.status==='for_payment') ? { label:'Partially Paid', color:'bg-amber-100 text-amber-800' } : apMeta(ap.status); return (
                 <div className="flex items-center gap-1.5">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${am.color}`}>{am.label}</span>
@@ -39450,6 +39453,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [notes,setNotes]=useState('');
   const [payMethod,setPayMethod]=useState(rfp.payment_method||'');
+  const [closing,setClosing]=useState(false);
   async function savePayMethod(v){ setPayMethod(v); try{ await sb.from('rfps').update({ payment_method:v||null }).eq('id', rfp.id); }catch(e){ setMsg(e.message||String(e)); } }
   const [showPO,setShowPO]=useState(false);
   const [poPrint,setPoPrint]=useState(false);
@@ -39893,11 +39897,94 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
           {(status==='approved'||status==='partial') && (isAccounting||isAdmin) && (
             <button onClick={()=>onPay(rfp)} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold">💰 {rfp.status==='partial'?`Pay balance (${peso(rfpBalance(rfp))})`:'Create Voucher & Pay'}</button>
           )}
+          {['approved','partial','pending_finance','pending_admin','pending_agm'].includes(status) && (isAccounting||isAdmin) && (
+            <button onClick={()=>setClosing(true)} disabled={busy} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 disabled:opacity-50" title="This RFP was already settled outside the OS (check voucher, bank transfer, paid by owner) or is a duplicate — close it without creating a duplicate payment.">🔖 Close / reconcile</button>
+          )}
         </div>
       </div>
+      {closing && <RfpCloseModal rfp={rfp} profile={profile} vouchers={vouchers} onClose={()=>setClosing(false)} onSaved={()=>{ setClosing(false); onSaved(); }} />}
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
       {showPayrollDoc && (rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+    </Modal>
+  );
+}
+
+// Close / reconcile an RFP that was already settled OUTSIDE the normal pay flow
+// (paid via an existing Check/Bank-Transfer Voucher, paid personally by the owner,
+// or a duplicate) so Accounting can finish month-end without double-paying. RFPs
+// don't post to the GL on their own, so closing one never duplicates an expense —
+// the real payment's voucher/bank txn already carries it.
+const RFP_CLOSE_REASONS = [
+  { key:'check_voucher',  label:'Already paid via Check Voucher',          toStatus:'paid',      needsVoucher:true },
+  { key:'bank_voucher',   label:'Already paid via Bank Transfer Voucher',  toStatus:'paid',      needsVoucher:true },
+  { key:'owner_paid',     label:'Paid personally by owner — to reimburse', toStatus:'paid',      reimburse:true },
+  { key:'duplicate',      label:'Duplicate / double-posting',              toStatus:'cancelled', needsRef:true },
+  { key:'reconciled',     label:'Already reconciled / no balance',         toStatus:'paid' },
+];
+function RfpCloseModal({ rfp, profile, vouchers, onClose, onSaved }){
+  const [reason,setReason]=useState('check_voucher');
+  const [voucherId,setVoucherId]=useState('');
+  const [ref,setRef]=useState('');
+  const [note,setNote]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const meta=RFP_CLOSE_REASONS.find(r=>r.key===reason)||RFP_CLOSE_REASONS[0];
+  // Candidate vouchers to link — most recent first; label by number · type · payee.
+  const vOpts=(vouchers||[]).filter(v=>!v.deleted_at).slice()
+    .sort((a,b)=>String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||'')))
+    .map(v=>({ value:v.id, label:`${v.number||'Voucher'} · ${v.type==='check'?'Check':v.type==='bank_transfer'?'Bank transfer':(v.type||'')} · ${v.payee||v.particulars||''} · ${peso(v.amount)}` }));
+  async function save(){
+    setBusy(true); setMsg('');
+    try{
+      const now=new Date().toISOString();
+      const patch={
+        status: meta.toStatus,
+        closed_reason: reason,
+        closed_ref: (meta.needsRef ? ref.trim() : (ref.trim()||null)) || null,
+        closed_note: note.trim()||null,
+        closed_by: profile.id,
+        closed_at: now,
+        reimburse_owner: !!meta.reimburse,
+      };
+      if(meta.toStatus==='paid'){ patch.paid_at = rfp.paid_at || now; patch.amount_paid = Number(rfp.amount)||0; }
+      if(meta.needsVoucher && voucherId){ patch.voucher_id = voucherId; }
+      const { error }=await sb.from('rfps').update(patch).eq('id', rfp.id);
+      if(error) throw error;
+      onSaved&&onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  return (
+    <Modal title={`🔖 Close / reconcile · ${rfp.number||'RFP'}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-slate-50 border rounded-lg p-2.5 text-xs text-slate-600">{rfp.supplier_name||'—'} · <b>{peso(rfp.amount)}</b>{rfp.particulars?` · ${String(rfp.particulars).slice(0,80)}`:''}</div>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[11px] text-amber-800">Use this when the RFP was already settled outside the normal pay flow. It closes the request without creating a duplicate payment — the real payment's voucher already records the expense.</div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500 font-semibold">Reason</label>
+          <select className="input mt-0.5" value={reason} onChange={e=>{ setReason(e.target.value); setVoucherId(''); }}>
+            {RFP_CLOSE_REASONS.map(r=><option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+        </div>
+        {meta.needsVoucher && (
+          <div>
+            <label className="text-[10px] uppercase text-slate-500 font-semibold">Link the existing voucher <span className="normal-case font-normal text-slate-400">(optional — or type a reference below)</span></label>
+            <SearchSelect value={voucherId} onChange={setVoucherId} options={vOpts} placeholder="Search a voucher…" allowClear />
+          </div>
+        )}
+        {meta.reimburse && <div className="bg-teal-50 border border-teal-200 rounded-lg p-2 text-[11px] text-teal-800">This will be flagged <b>to reimburse the owner</b> and listed under RFPs → <b>Owner reimbursements</b>. Raise the Bank Transfer Voucher to the owner from there.</div>}
+        <div>
+          <label className="text-[10px] uppercase text-slate-500 font-semibold">{meta.needsRef ? 'Original RFP # it duplicates *' : 'Reference (check #, transfer ref, etc.)'}</label>
+          <input className="input mt-0.5" value={ref} onChange={e=>setRef(e.target.value)} placeholder={meta.needsRef?'e.g. RFP-2026-09-012':'Optional reference'} />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase text-slate-500 font-semibold">Note</label>
+          <textarea className="input mt-0.5 min-h-[50px]" value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. Already closed via BTV; minimal balance 0.38 written off." />
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <div className="flex gap-2 pt-2 border-t">
+          <button disabled={busy || (meta.needsRef && !ref.trim())} onClick={save} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold disabled:opacity-50">{busy?'Closing…':'🔖 Close RFP'}</button>
+          <button onClick={onClose} className="py-2 px-4 rounded-lg bg-slate-200 text-slate-700 font-semibold">Cancel</button>
+        </div>
+      </div>
     </Modal>
   );
 }
@@ -54957,7 +55044,13 @@ function App(){
     </>}
   </div>;
 
-  const unreadInbox=mentions.filter(m=>!(m.read_by||[]).includes(profile.id)).length;
+  // Personal setting: hide approval-queue notifications from the Inbox (and its
+  // unread badge) for people who already watch their For-Approval page. They still
+  // see every item on that page + its nav badge — this only de-duplicates the Inbox.
+  const inboxMentions = (profile?.hide_approval_inbox)
+    ? mentions.filter(m=> !(m.source==='notification' && (m.link_view==='approvals' || m.link_view==='agm-approvals')))
+    : mentions;
+  const unreadInbox=inboxMentions.filter(m=>!(m.read_by||[]).includes(profile.id)).length;
   const liveDetail=detailLead?(leads.find(l=>l.id===detailLead.id)||detailLead):null;
   const prodActive=prodJobs.filter(j=>j.status!=='delivered').length;
   // Admin "For Approval" badge: RFPs at pending_admin + pending budget requests.
@@ -55671,7 +55764,7 @@ function App(){
         {view==='gov-loans' && <GovLoansView profile={profile} employees={employees} govLoans={govLoans} govLoanInstallments={govLoanInstallments} reload={loadAll} />}
         {view==='hr-recruit' && <HRRecruitmentView profile={profile} profiles={profiles} employees={employees} hrJobs={hrJobs} hrApplicants={hrApplicants} reload={loadAll} />}
         {view==='hr-orgchart' && <HROrgChartView profile={profile} employees={employees} />}
-        {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={mentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
+        {view==='inbox' && <Inbox profile={profile} profiles={profiles} clients={clients} leads={leads} graphicJobs={graphicJobs} printingJobs={printingJobs} productionJobs={prodJobs} sampleJobs={sampleJobs} salesOrders={salesOrders} mentions={inboxMentions} onOpen={openInboxItem} onGoToTask={openInboxTask} reload={loadAll} />}
         {view==='my-tasks' && <MyTasksView profile={profile} />}
         {view==='pipeline' && <Pipeline profile={profile} profiles={profiles} clients={clients} leads={leads} activityCounts={activityCounts} onOpenLead={setDetailLead} onNew={()=>setShowNew(true)} reload={loadAll} onOpenTechpack={openTechpackEdit} />}
         {view==='clients' && (selectedClient
