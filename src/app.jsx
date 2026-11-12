@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 963 · In-House Sewing Payroll — per-sewer PDF: each signed run now has a 📄 PDF button (Payroll → Signed runs) that opens a printable breakdown grouped by sewer — every sewer’s garment · operation · pcs × rate · amount, their subtotal, the run total, and the signature line. Save as PDF or print for records / payout.";
+const BUILD = "Live build 964 · In-House Sewing Payroll PDF — cleaner layout: split the cramped “Pcs × rate” column into separate Pcs and Rate columns (right-aligned, no wrapping) with fixed column widths, so the breakdown is easy to read and print.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32244,8 +32244,10 @@ function InhouseRunDoc({ data, profiles, onClose }){
         {groups.map((g,gi)=>(
           <div key={gi} className="mb-3 break-inside-avoid">
             <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">🧵 {g.name}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
-            <table className="w-full text-xs"><thead><tr className="text-[9px] uppercase text-slate-400"><th className="text-left px-2 py-0.5">Client</th><th className="text-left px-2 py-0.5">Project · Operation</th><th className="text-right px-2 py-0.5">Pcs × rate</th><th className="text-right px-2 py-0.5">Amount</th></tr></thead><tbody>
-              {g.rows.map(r=>(<tr key={r.id} className="border-b"><td className="px-2 py-1 font-medium">{r.client||'—'}</td><td className="px-2 py-1 text-slate-500">{[r.proj,r.op].filter(Boolean).join(' · ')||'—'}{r.ot?<span className="ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-700">OT</span>:''}</td><td className="px-2 py-1 text-right">{Number(r.pcs).toLocaleString()} × {peso(r.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(r.amt)}</td></tr>))}
+            <table className="w-full text-xs" style={{tableLayout:'fixed'}}>
+              <colgroup><col style={{width:'22%'}} /><col /><col style={{width:'10%'}} /><col style={{width:'15%'}} /><col style={{width:'15%'}} /></colgroup>
+              <thead><tr className="text-[9px] uppercase text-slate-400"><th className="text-left px-2 py-0.5">Client</th><th className="text-left px-2 py-0.5">Project · Operation</th><th className="text-right px-2 py-0.5">Pcs</th><th className="text-right px-2 py-0.5">Rate</th><th className="text-right px-2 py-0.5">Amount</th></tr></thead><tbody>
+              {g.rows.map(r=>(<tr key={r.id} className="border-b"><td className="px-2 py-1 font-medium align-top">{r.client||'—'}</td><td className="px-2 py-1 text-slate-500 align-top">{[r.proj,r.op].filter(Boolean).join(' · ')||'—'}{r.ot?<span className="ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-700">OT</span>:''}</td><td className="px-2 py-1 text-right align-top whitespace-nowrap tabular-nums">{Number(r.pcs).toLocaleString()}</td><td className="px-2 py-1 text-right align-top whitespace-nowrap tabular-nums">{peso(r.rate)}</td><td className="px-2 py-1 text-right align-top whitespace-nowrap font-semibold tabular-nums">{peso(r.amt)}</td></tr>))}
             </tbody></table>
           </div>
         ))}
