@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 961 · Evaluation fix — a second evaluator’s ratings can no longer be wiped: both raters (A & B) share one answers record, and previously a stale tab saving later would overwrite the other’s input. Saving now re-reads the latest version and MERGES, so each evaluator’s ratings and comments are preserved. (Ralph’s earlier B ratings on Ron’s eval were lost to this and need re-entering; after this build they’ll stick.)";
+const BUILD = "Live build 962 · Evaluations — each rater is now locked to their own column: Evaluator A can edit only the A ratings and comments, Evaluator B only the B side; the other column is read-only, so no one can accidentally change the other evaluator’s scores. HR/admin who aren’t a named rater can still edit both to assemble or correct. A banner at the top shows which column you’re on. (Builds on the build-961 merge-on-save fix that stops a stale tab wiping the other evaluator’s input.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19469,15 +19469,26 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
     await save(false, { status:'submitted', fields:{ submitted_at:now, submitted_by:profile.id }, notify: async(id)=>{ const hrIds=(profiles||[]).filter(p=>['hr','admin'].includes(p.role)).map(p=>p.id); const targets=[...new Set([...(review.created_by?[review.created_by]:[]), ...hrIds])].filter(x=>x&&x!==profile.id); if(targets.length) await sb.from('notifications').insert(targets.map(t=>({ recipient_id:t, actor_id:profile.id, text:`✅ ${(profile.name||profile.email||'A team leader')} submitted the evaluation of ${emp?fullName(emp):'an employee'} — ready for your review.`, link_view:'hr-reviews', ref_type:'eval_review', ref_id:id, type:'system' }))); } });
   }
 
-  const RateCell=({cid,k})=> (
+  // ── Column lock: each evaluator edits only THEIR column (A vs B). Overseers
+  // (admin / HR) who aren't a named rater can still edit both to assemble/fix.
+  const isOverseer = ['admin','hr','hr_admin'].includes(profile.role);
+  const amB = !!(f.reviewer_b_id && profile.id===f.reviewer_b_id);
+  const amA = !amB && !!(f.reviewer_id && profile.id===f.reviewer_id);
+  const canEditA = amA ? true : (amB ? false : isOverseer);
+  const canEditB = amB ? true : (amA ? false : isOverseer);
+  const myRole = amB ? 'Evaluator B' : amA ? 'Evaluator A' : isOverseer ? 'HR / reviewer' : 'Viewer';
+  const RateCell=({cid,k})=> { const locked = k==='a' ? !canEditA : !canEditB; return (
     <div className="flex gap-0.5">{[1,2,3,4,5].map(n=>{ const on=answers[cid]?.[k]===n; return (
-      <button key={n} type="button" onClick={()=>setRating(cid,k,n)} className={`w-7 h-7 rounded text-[11px] font-bold border ${on?'bg-indigo-600 text-white border-indigo-600':'bg-white border-slate-300 text-slate-600 hover:border-indigo-400'}`}>{n}</button>
+      <button key={n} type="button" disabled={locked} onClick={()=>{ if(!locked) setRating(cid,k,n); }} title={locked?'This column belongs to the other evaluator':''} className={`w-7 h-7 rounded text-[11px] font-bold border ${on?(locked?'bg-slate-400 text-white border-slate-400':'bg-indigo-600 text-white border-indigo-600'):`bg-white border-slate-300 text-slate-600 ${locked?'opacity-40 cursor-not-allowed':'hover:border-indigo-400'}`}`}>{n}</button>
     ); })}</div>
-  );
+  ); };
 
   return (
     <Modal title={`Evaluation — ${emp?fullName(emp):'employee'}`} onClose={onClose} xwide>
       <div className="space-y-3">
+        {two && <div className={`rounded-lg px-3 py-2 text-xs font-medium ${canEditA&&canEditB?'bg-indigo-50 text-indigo-700 border border-indigo-200':amA?'bg-sky-50 text-sky-700 border border-sky-200':amB?'bg-violet-50 text-violet-700 border border-violet-200':'bg-slate-50 text-slate-500 border'}`}>
+          {canEditA&&canEditB? `You're signed in as ${myRole} — you can edit both columns.` : amA? 'You are Evaluator A — you can edit only the A column. The B column is locked to the other evaluator.' : amB? 'You are Evaluator B — you can edit only the B column. The A column is locked to the other evaluator.' : 'View only — you are not an evaluator on this review.'}
+        </div>}
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm">
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Employee</div><div className="font-medium">{emp?fullName(emp):'—'}</div></div>
           <div><div className="text-[10px] uppercase text-slate-400 font-semibold">Position</div><div className="font-medium">{emp?.position||review.position||'—'}</div></div>
@@ -19541,16 +19552,16 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
         <div className="border rounded-lg p-3">
           <div className="text-[10px] uppercase text-indigo-600 font-semibold mb-1.5">Evaluator A{f.reviewer_id?` · ${(profiles||[]).find(p=>p.id===f.reviewer_id)?.name||''}`:''} — comments</div>
           <div className="grid md:grid-cols-2 gap-3">
-            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement} onChange={e=>up('areas_improvement',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
-            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points} onChange={e=>up('strong_points',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea disabled={!canEditA} value={f.areas_improvement} onChange={e=>up('areas_improvement',e.target.value)} className="input min-h-[70px] whitespace-pre-line disabled:bg-slate-50 disabled:text-slate-400" /></div>
+            <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea disabled={!canEditA} value={f.strong_points} onChange={e=>up('strong_points',e.target.value)} className="input min-h-[70px] whitespace-pre-line disabled:bg-slate-50 disabled:text-slate-400" /></div>
           </div>
         </div>
         {two && (
           <div className="border rounded-lg p-3">
             <div className="text-[10px] uppercase text-teal-600 font-semibold mb-1.5">Evaluator B{f.reviewer_b_id?` · ${(profiles||[]).find(p=>p.id===f.reviewer_b_id)?.name||''}`:''} — comments</div>
             <div className="grid md:grid-cols-2 gap-3">
-              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea value={f.areas_improvement_b} onChange={e=>up('areas_improvement_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
-              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea value={f.strong_points_b} onChange={e=>up('strong_points_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line" /></div>
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Areas for improvement</div><textarea disabled={!canEditB} value={f.areas_improvement_b} onChange={e=>up('areas_improvement_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line disabled:bg-slate-50 disabled:text-slate-400" /></div>
+              <div><div className="text-[10px] uppercase text-slate-400 font-semibold mb-1">Strong points to maintain</div><textarea disabled={!canEditB} value={f.strong_points_b} onChange={e=>up('strong_points_b',e.target.value)} className="input min-h-[70px] whitespace-pre-line disabled:bg-slate-50 disabled:text-slate-400" /></div>
             </div>
           </div>
         )}
