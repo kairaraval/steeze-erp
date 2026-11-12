@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 965 · In-House Sewing Payroll breakdown now shows to AGM & Finance: when reviewing the Request for Payment, there is a “View & check the In-House Sewing Payroll Sheet” button that opens the per-sewer breakdown (same printable PDF as the Signed-runs tab) — so approvers can check every sewer’s pcs × rate before approving or paying.";
+const BUILD = "Live build 966 · Fixed the client/project names on the In-House Sewing Payroll breakdown opened from an RFP — the loader was querying columns that don't exist (leads.client_name, clients.name), so it silently loaded nothing and every row showed “—”. Now it resolves each line's client (company) and project title correctly.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32279,10 +32279,10 @@ function InhouseRunRfpDoc({ rfp, profiles, onClose }){
       const { data:logs }=await sb.from('inhouse_sew_logs').select('*').eq('batch_id',b.id).is('deleted_at',null);
       const leadIds=[...new Set((logs||[]).map(l=>l.lead_id).filter(Boolean))];
       let leadById={}, cliById={};
-      if(leadIds.length){ const { data:ld }=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); (ld||[]).forEach(l=>leadById[l.id]=l);
+      if(leadIds.length){ const { data:ld }=await sb.from('leads').select('id,title,client_id').in('id',leadIds); (ld||[]).forEach(l=>leadById[l.id]=l);
         const cids=[...new Set(Object.values(leadById).map(l=>l.client_id).filter(Boolean))];
-        if(cids.length){ const { data:cl }=await sb.from('clients').select('id,company,name').in('id',cids); (cl||[]).forEach(c=>cliById[c.id]=c); } }
-      const clientOf=(l)=>{ const ld=leadById[l.lead_id]; if(!ld) return ''; return cliById[ld.client_id]?.company||cliById[ld.client_id]?.name||ld.client_name||''; };
+        if(cids.length){ const { data:cl }=await sb.from('clients').select('id,company').in('id',cids); (cl||[]).forEach(c=>cliById[c.id]=c); } }
+      const clientOf=(l)=>{ const ld=leadById[l.lead_id]; return ld?(cliById[ld.client_id]?.company||''):''; };
       const projOf=(l)=>leadById[l.lead_id]?.title||'';
       const m=new Map();
       (logs||[]).forEach(l=>{ const k=l.sewer_id||l.sewer_name||'—'; if(!m.has(k)) m.set(k,{ name:l.sewer_name||'Sewer', rows:[], pcs:0, amt:0 }); const g=m.get(k); const amt=Number(l.pcs||0)*Number(l.rate||0); g.rows.push({ id:l.id, client:clientOf(l), proj:projOf(l), op:l.op_name, pcs:Number(l.pcs||0), rate:Number(l.rate||0), amt, ot:l.overtime }); g.pcs+=Number(l.pcs||0); g.amt+=amt; });
