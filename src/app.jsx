@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 960 · Removed the unused “My Tasks” item from every sidebar.";
+const BUILD = "Live build 961 · Evaluation fix — a second evaluator’s ratings can no longer be wiped: both raters (A & B) share one answers record, and previously a stale tab saving later would overwrite the other’s input. Saving now re-reads the latest version and MERGES, so each evaluator’s ratings and comments are preserved. (Ralph’s earlier B ratings on Ron’s eval were lost to this and need re-entering; after this build they’ll stick.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -19422,11 +19422,30 @@ function EvalFillModal({ review, template, profile, profiles, employees, onClose
 
   async function save(markComplete, over){
     setBusy(true); setMsg('');
+    // ── Guard against one evaluator wiping the other's input ──
+    // Both raters (A & B) write into the same `answers` JSON + their own text
+    // fields. Re-read the latest saved copy and MERGE, so a stale tab can never
+    // erase ratings someone else saved in the meantime.
+    let mergedAnswers = answers;
+    const txt = { areas_improvement:f.areas_improvement, strong_points:f.strong_points, areas_improvement_b:f.areas_improvement_b, strong_points_b:f.strong_points_b };
+    if(review.id){
+      try{
+        const { data:fresh }=await sb.from('eval_reviews').select('answers,areas_improvement,strong_points,areas_improvement_b,strong_points_b').eq('id',review.id).single();
+        if(fresh){
+          const base=fresh.answers||{}; const out={ ...base };
+          Object.keys(answers||{}).forEach(cid=>{ out[cid]={ ...(base[cid]||{}), ...Object.fromEntries(Object.entries(answers[cid]||{}).filter(([k,v])=>v!=null)) }; });
+          mergedAnswers=out;
+          // keep each text field if the current form left it blank but a saved value exists
+          ['areas_improvement','strong_points','areas_improvement_b','strong_points_b'].forEach(k=>{ if(!((txt[k]||'').trim()) && fresh[k]) txt[k]=fresh[k]; });
+        }
+      }catch(_){}
+    }
+    const comp2=computeEval(tpl, mergedAnswers, two); const band2=evalBandOf(tpl, comp2.grand);
     const payload={ ...review, template_id:review.template_id||template?.id||null, template_name:tpl.name||review.template_name||null, position: emp?.position||review.position||null,
-      two_raters:two, answers, reviewer_id:f.reviewer_id||null, reviewer_b_id:f.reviewer_b_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
-      grand_score:Number(comp.grand.toFixed(3)), kpi_score: comp.catTotals['kpi']!=null?Number(comp.catTotals['kpi'].toFixed(3)):null, competency_score: comp.catTotals['competency']!=null?Number(comp.catTotals['competency'].toFixed(3)):null,
-      band_level:band?.level||null, band_result:band?.result||null,
-      areas_improvement:f.areas_improvement||null, strong_points:f.strong_points||null, areas_improvement_b:f.areas_improvement_b||null, strong_points_b:f.strong_points_b||null, employee_review:f.employee_review||null, outcome,
+      two_raters:two, answers:mergedAnswers, reviewer_id:f.reviewer_id||null, reviewer_b_id:f.reviewer_b_id||null, review_period:f.review_period||null, evaluation_date:f.evaluation_date||null, immediate_supervisor:f.immediate_supervisor||null, employment_status:f.employment_status||null,
+      grand_score:Number(comp2.grand.toFixed(3)), kpi_score: comp2.catTotals['kpi']!=null?Number(comp2.catTotals['kpi'].toFixed(3)):null, competency_score: comp2.catTotals['competency']!=null?Number(comp2.catTotals['competency'].toFixed(3)):null,
+      band_level:band2?.level||null, band_result:band2?.result||null,
+      areas_improvement:txt.areas_improvement||null, strong_points:txt.strong_points||null, areas_improvement_b:txt.areas_improvement_b||null, strong_points_b:txt.strong_points_b||null, employee_review:f.employee_review||null, outcome,
       status: (over&&over.status) || (markComplete?'completed':(f.status||'draft')), updated_at:new Date().toISOString(), ...((over&&over.fields)||{}) };
     delete payload.id;
     let error, savedId=review.id;
