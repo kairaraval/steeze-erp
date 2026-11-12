@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 964 · In-House Sewing Payroll PDF — cleaner layout: split the cramped “Pcs × rate” column into separate Pcs and Rate columns (right-aligned, no wrapping) with fixed column widths, so the breakdown is easy to read and print.";
+const BUILD = "Live build 965 · In-House Sewing Payroll breakdown now shows to AGM & Finance: when reviewing the Request for Payment, there is a “View & check the In-House Sewing Payroll Sheet” button that opens the per-sewer breakdown (same printable PDF as the Signed-runs tab) — so approvers can check every sewer’s pcs × rate before approving or paying.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32268,6 +32268,32 @@ function InhouseRunDoc({ data, profiles, onClose }){
     </div>
   </Modal>);
 }
+// RFP-side loader: given an in-house sewing payroll RFP, fetch its signed run +
+// logs, resolve client/project names, and render the per-sewer breakdown doc.
+function InhouseRunRfpDoc({ rfp, profiles, onClose }){
+  const [data,setData]=useState(null); const [err,setErr]=useState('');
+  useEffect(()=>{ (async()=>{
+    try{
+      const { data:bs }=await sb.from('inhouse_sew_batches').select('*').eq('rfp_id',rfp.id).is('deleted_at',null).limit(1);
+      const b=bs&&bs[0]; if(!b){ setErr('No signed run is linked to this payment.'); return; }
+      const { data:logs }=await sb.from('inhouse_sew_logs').select('*').eq('batch_id',b.id).is('deleted_at',null);
+      const leadIds=[...new Set((logs||[]).map(l=>l.lead_id).filter(Boolean))];
+      let leadById={}, cliById={};
+      if(leadIds.length){ const { data:ld }=await sb.from('leads').select('id,title,client_id,client_name').in('id',leadIds); (ld||[]).forEach(l=>leadById[l.id]=l);
+        const cids=[...new Set(Object.values(leadById).map(l=>l.client_id).filter(Boolean))];
+        if(cids.length){ const { data:cl }=await sb.from('clients').select('id,company,name').in('id',cids); (cl||[]).forEach(c=>cliById[c.id]=c); } }
+      const clientOf=(l)=>{ const ld=leadById[l.lead_id]; if(!ld) return ''; return cliById[ld.client_id]?.company||cliById[ld.client_id]?.name||ld.client_name||''; };
+      const projOf=(l)=>leadById[l.lead_id]?.title||'';
+      const m=new Map();
+      (logs||[]).forEach(l=>{ const k=l.sewer_id||l.sewer_name||'—'; if(!m.has(k)) m.set(k,{ name:l.sewer_name||'Sewer', rows:[], pcs:0, amt:0 }); const g=m.get(k); const amt=Number(l.pcs||0)*Number(l.rate||0); g.rows.push({ id:l.id, client:clientOf(l), proj:projOf(l), op:l.op_name, pcs:Number(l.pcs||0), rate:Number(l.rate||0), amt, ot:l.overtime }); g.pcs+=Number(l.pcs||0); g.amt+=amt; });
+      const groups=Array.from(m.values()).sort((a,c)=>String(a.name).localeCompare(String(c.name)));
+      setData({ b, groups, rfp });
+    }catch(e){ setErr(e.message||String(e)); }
+  })(); },[rfp.id]);
+  if(err) return <Modal title="In-House Sewing Payroll" onClose={onClose}><div className="text-sm text-rose-600 py-4">{err}</div></Modal>;
+  if(!data) return <Modal title="In-House Sewing Payroll" onClose={onClose}><div className="text-sm text-slate-400 py-6 text-center">Loading breakdown…</div></Modal>;
+  return <InhouseRunDoc data={data} profiles={profiles} onClose={onClose} />;
+}
 function InhouseOpsSetupModal({ job, garments, onClose, onSave }){
   const [rows,setRows]=useState([{ op_name:'', rate:'', target_qty:'' }]);
   const [gid,setGid]=useState('');
@@ -40229,10 +40255,10 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
         {rfp.particulars && <div className="bg-slate-50 border rounded p-2 text-xs"><div className="font-semibold mb-0.5">Particulars</div>{rfp.particulars}</div>}
 
         {/* Subcon Sewing payroll — the signed supporting document (supervisor + AGM + Admin). */}
-        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting') && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting'||rfp.origin==='inhouse_sewing') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase text-violet-700">{rfp.origin==='subli_cutting'?'🔪 Subli Cutting Payroll Sheet':rfp.origin==='subcon_cutting'?'🔪 Subcon Cutting Payroll Sheet':'🧵 Subcon Payroll Sheet'}</div>
+              <div className="text-xs font-semibold uppercase text-violet-700">{rfp.origin==='inhouse_sewing'?'🧵 In-House Sewing Payroll Sheet':rfp.origin==='subli_cutting'?'🔪 Subli Cutting Payroll Sheet':rfp.origin==='subcon_cutting'?'🔪 Subcon Cutting Payroll Sheet':'🧵 Subcon Payroll Sheet'}</div>
               <div className="text-[12px] text-slate-600 truncate">The signed per-subcon payroll breakdown — the supporting document for this payment. Open it to review &amp; print before approving.</div>
             </div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
@@ -40445,7 +40471,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       {closing && <RfpCloseModal rfp={rfp} profile={profile} vouchers={vouchers} onClose={()=>setClosing(false)} onSaved={()=>{ setClosing(false); onSaved(); }} />}
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
-      {showPayrollDoc && (rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -40678,9 +40704,9 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
           {Number(rfp.amount_paid||0)>0 && <div className="mb-1">Already paid <strong>{peso(rfp.amount_paid)}</strong> of {peso(rfp.amount)} · Balance <strong>{peso(rfpBalance(rfp))}</strong>.</div>}
           Paying <strong>{peso(f.amount)}</strong> to <strong>{rfp.supplier_name}</strong>. You can change the amount below to pay partially — the RFP stays “Partially Paid” with the balance shown until it's fully settled.
         </div>
-        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting') && (
+        {(rfp.origin==='subcon_payroll'||rfp.origin==='subcon_cutting'||rfp.origin==='subli_cutting'||rfp.origin==='inhouse_sewing') && (
           <div className="border rounded-lg bg-violet-50 border-violet-200 p-2.5 flex items-center justify-between gap-3">
-            <div className="text-xs text-violet-800">{rfp.origin==='subli_cutting'?<>🔪 This is a <b>subli cutting payroll</b> — open the signed payroll sheet to check the per-cutter breakdown before paying.</>:rfp.origin==='subcon_cutting'?<>🔪 This is a <b>subcon cutting payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>:<>🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>}</div>
+            <div className="text-xs text-violet-800">{rfp.origin==='inhouse_sewing'?<>🧵 This is an <b>in-house sewing payroll</b> — open the signed payroll sheet to check the per-sewer breakdown before paying.</>:rfp.origin==='subli_cutting'?<>🔪 This is a <b>subli cutting payroll</b> — open the signed payroll sheet to check the per-cutter breakdown before paying.</>:rfp.origin==='subcon_cutting'?<>🔪 This is a <b>subcon cutting payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>:<>🧵 This is a <b>subcon sewing payroll</b> — open the signed payroll sheet to check the per-subcon breakdown before paying.</>}</div>
             <button onClick={()=>setShowPayrollDoc(true)} className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-violet-600 text-white font-semibold hover:bg-violet-700">📄 View payroll sheet</button>
           </div>
         )}
@@ -40770,7 +40796,7 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
       </div>
-      {showPayrollDoc && (rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -42168,7 +42194,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
 
         {/* ── Controls (not printed) ── */}
         <div className="no-print space-y-3">
-          {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting'||data.origin==='subli_cutting') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='subli_cutting'?'🔪 View & check the Subli Cutting Payroll Sheet':data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
+          {kind==='rfp' && (data.origin==='subcon_payroll'||data.origin==='subcon_cutting'||data.origin==='subli_cutting'||data.origin==='inhouse_sewing') && <button onClick={()=>setShowPayrollDoc(true)} className="w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">{data.origin==='inhouse_sewing'?'🧵 View & check the In-House Sewing Payroll Sheet':data.origin==='subli_cutting'?'🔪 View & check the Subli Cutting Payroll Sheet':data.origin==='subcon_cutting'?'🔪 View & check the Subcon Cutting Payroll Sheet':'🧵 View & check the Subcon Payroll Sheet'}</button>}
           {nAtt>0 && <div className="border rounded-lg p-3 bg-slate-50">
             <div className="text-xs font-semibold text-slate-600 mb-2">📎 {nAtt} receipt{nAtt===1?'':'s'} / supporting document{nAtt===1?'':'s'} — tap to view before approving</div>
             <AttachmentList attachments={allAtts} inline />
@@ -42182,7 +42208,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
           </div>
         </div>
       </div>
-      {showPayrollDoc && (data.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (data.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
