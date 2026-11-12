@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 962 · Evaluations — each rater is now locked to their own column: Evaluator A can edit only the A ratings and comments, Evaluator B only the B side; the other column is read-only, so no one can accidentally change the other evaluator’s scores. HR/admin who aren’t a named rater can still edit both to assemble or correct. A banner at the top shows which column you’re on. (Builds on the build-961 merge-on-save fix that stops a stale tab wiping the other evaluator’s input.)";
+const BUILD = "Live build 963 · In-House Sewing Payroll — per-sewer PDF: each signed run now has a 📄 PDF button (Payroll → Signed runs) that opens a printable breakdown grouped by sewer — every sewer’s garment · operation · pcs × rate · amount, their subtotal, the run total, and the signature line. Save as PDF or print for records / payout.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -31880,6 +31880,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
   const [logFor,setLogFor]=useState(null);          // { op } log pcs
   const [editingOp,setEditingOp]=useState(null);    // inline edit op
   const [signing,setSigning]=useState(false);
+  const [docRun,setDocRun]=useState(null);   // { b, groups, rfp } for the per-sewer PDF
   const [opExpand,setOpExpand]=useState({});
   const num=(n)=>Number(n||0).toLocaleString();
 
@@ -32166,9 +32167,9 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
 
           {payrollSub==='runs' && (runs.length===0 ? <div className="bg-white rounded-xl border p-10 text-center text-slate-400 text-sm">No signed runs yet.</div> :
             <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th></tr></thead>
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-right px-3 py-2">Breakdown</th></tr></thead>
               <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
-                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td></tr>
+                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td><td className="px-3 py-2 text-right"><button onClick={()=>{ const brows=(logs||[]).filter(l=>l.batch_id===b.id && !l.deleted_at); const m=new Map(); brows.forEach(l=>{ const k=l.sewer_id||l.sewer_name||'—'; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push({ id:l.id, client:clientNm(l.job_id,l.lead_id), proj:projNm(l.lead_id,l.job_id), op:l.op_name, pcs:Number(l.pcs||0), rate:Number(l.rate||0), amt:amtOf(l), ot:l.overtime }); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); const groups=Array.from(m.values()).sort((a,c)=>String(a.name).localeCompare(String(c.name))); setDocRun({ b, groups, rfp:r }); }} className="text-xs px-2 py-1 rounded bg-slate-800 text-white font-semibold">📄 PDF</button></td></tr>
               ); })}</tbody>
             </table></div>)}
         </div>
@@ -32216,11 +32217,55 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
       {sampleMakerFor && <InhouseSampleMakerModal project={sampleMakerFor} sewers={sewers} onClose={()=>setSampleMakerFor(null)} onSave={(vals)=>saveSampleMaker(sampleMakerFor, vals)} />}
       {editingOp && <InhouseOpEditModal op={editingOp} onClose={()=>setEditingOp(null)} onSave={(patch)=>updateOp(editingOp, patch)} />}
       {signing && <InhouseSewSignModal rows={(logs||[]).filter(l=>l.status==='sent' && !l.batch_id)} sewers={sewers} jobs={jobs} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
+      {docRun && <InhouseRunDoc data={docRun} profiles={profiles} onClose={()=>setDocRun(null)} />}
     </div>
   );
 }
 
 // Set up a project's operations — load from a garment template, then edit/add.
+// Printable per-sewer breakdown for a signed In-House Sewing run.
+function InhouseRunDoc({ data, profiles, onClose }){
+  const { b, groups, rfp }=data;
+  const pById=(id)=>(profiles||[]).find(p=>p.id===id);
+  const totalPcs=groups.reduce((t,g)=>t+g.pcs,0), totalAmt=groups.reduce((t,g)=>t+g.amt,0);
+  const signer=pById(b.signed_by);
+  return (<Modal title={`In-House Sewing Payroll · ${b.number}`} onClose={onClose} wide>
+    <div className="space-y-3">
+      <div className="no-print flex justify-end gap-2">
+        <button onClick={()=>{ const n=document.getElementById('ihr-sheet'); if(n) saveNodeAsPdf(n, `In-House Sewing Payroll - ${b.number}`); }} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📄 Save PDF</button>
+        <button onClick={()=>printAs(`In-House Sewing Payroll - ${b.number}`)} className="hidden sm:inline-flex px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+      </div>
+      <style>{`@media print{ body *{visibility:hidden !important;} #ihr-sheet,#ihr-sheet *{visibility:visible !important;} #ihr-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div id="ihr-sheet" className="bg-white p-2" style={{color:'#222'}}>
+        <div className="flex items-center justify-between border-b pb-2 mb-3">
+          <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">In-House Sewing Payroll</div></div>
+          <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{b.number}</div><div>{fmtDate(String(b.signed_at||b.created_at||'').slice(0,10))}</div>{rfp&&<div className="font-mono">{rfp.number}</div>}</div>
+        </div>
+        {groups.map((g,gi)=>(
+          <div key={gi} className="mb-3 break-inside-avoid">
+            <div className="flex items-center justify-between bg-slate-50 px-2 py-1 border-b"><span className="font-bold text-sm">🧵 {g.name}</span><span className="text-xs">{Number(g.pcs).toLocaleString()} pcs · {peso(g.amt)}</span></div>
+            <table className="w-full text-xs"><thead><tr className="text-[9px] uppercase text-slate-400"><th className="text-left px-2 py-0.5">Client</th><th className="text-left px-2 py-0.5">Project · Operation</th><th className="text-right px-2 py-0.5">Pcs × rate</th><th className="text-right px-2 py-0.5">Amount</th></tr></thead><tbody>
+              {g.rows.map(r=>(<tr key={r.id} className="border-b"><td className="px-2 py-1 font-medium">{r.client||'—'}</td><td className="px-2 py-1 text-slate-500">{[r.proj,r.op].filter(Boolean).join(' · ')||'—'}{r.ot?<span className="ml-1 text-[8px] uppercase font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-700">OT</span>:''}</td><td className="px-2 py-1 text-right">{Number(r.pcs).toLocaleString()} × {peso(r.rate)}</td><td className="px-2 py-1 text-right font-semibold">{peso(r.amt)}</td></tr>))}
+            </tbody></table>
+          </div>
+        ))}
+        <div className="flex items-center justify-between border-t-2 border-black pt-2 mt-2 text-sm font-bold"><span>TOTAL · {groups.length} sewer(s) · {Number(totalPcs).toLocaleString()} pcs</span><span>{peso(totalAmt)}</span></div>
+        <div className="grid grid-cols-2 gap-6 mt-10">
+          <div className="text-center">
+            <div className="relative border-b border-slate-500 h-16 flex items-end justify-center overflow-hidden">{signer?.signature_data && <img src={signer.signature_data} alt="signature" className="max-h-[58px] max-w-full object-contain mb-0.5" />}</div>
+            <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Prepared &amp; signed by</div>
+            <div className="text-[11px] text-slate-700">{b.prepared_sig||signer?.name||'—'}{b.signed_at?` · ${fmtDate(String(b.signed_at).slice(0,10))}`:''}</div>
+          </div>
+          <div className="text-center">
+            <div className="relative border-b border-slate-500 h-16"></div>
+            <div className="text-[10px] uppercase font-bold mt-1 tracking-wider">Received by</div>
+            <div className="text-[11px] text-slate-400">Finance / Cash custodian</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Modal>);
+}
 function InhouseOpsSetupModal({ job, garments, onClose, onSave }){
   const [rows,setRows]=useState([{ op_name:'', rate:'', target_qty:'' }]);
   const [gid,setGid]=useState('');
