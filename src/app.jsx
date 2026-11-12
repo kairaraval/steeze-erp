@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 966 · Fixed the client/project names on the In-House Sewing Payroll breakdown opened from an RFP — the loader was querying columns that don't exist (leads.client_name, clients.name), so it silently loaded nothing and every row showed “—”. Now it resolves each line's client (company) and project title correctly.";
+const BUILD = "Live build 967 · In-House Sewing Payroll marked as a weekly reference + “processed” tracking: the breakdown now says clearly it is the basic weekly sewing pay for accounting’s reference (deductions & final net are done in the regular payroll run). Accounting can tap “Manual payroll” or “Paid via payroll” on the sheet to record that it was processed — stamping who & when — and a ✅ badge then shows on the Signed-runs list, the sheet and the RFP so everyone knows it is done.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -32169,7 +32169,7 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
             <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-slate-50 text-[10px] uppercase text-slate-400 border-b"><tr><th className="text-left px-3 py-2">Run</th><th className="text-left px-3 py-2">Signed by</th><th className="text-right px-3 py-2">Pcs</th><th className="text-right px-3 py-2">Amount</th><th className="text-left px-3 py-2">Status</th><th className="text-right px-3 py-2">Breakdown</th></tr></thead>
               <tbody>{runs.map(b=>{ const r=rfpFor(b); const paid=r&&r.status==='paid'; const lbl=paid?'Paid':(r?('RFP '+(r.number||'')+' · '+r.status):b.status); return (
-                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span></td><td className="px-3 py-2 text-right"><button onClick={()=>{ const brows=(logs||[]).filter(l=>l.batch_id===b.id && !l.deleted_at); const m=new Map(); brows.forEach(l=>{ const k=l.sewer_id||l.sewer_name||'—'; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push({ id:l.id, client:clientNm(l.job_id,l.lead_id), proj:projNm(l.lead_id,l.job_id), op:l.op_name, pcs:Number(l.pcs||0), rate:Number(l.rate||0), amt:amtOf(l), ot:l.overtime }); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); const groups=Array.from(m.values()).sort((a,c)=>String(a.name).localeCompare(String(c.name))); setDocRun({ b, groups, rfp:r }); }} className="text-xs px-2 py-1 rounded bg-slate-800 text-white font-semibold">📄 PDF</button></td></tr>
+                <tr key={b.id} className="border-t"><td className="px-3 py-2 font-mono text-xs">{b.number}</td><td className="px-3 py-2 text-xs">{b.prepared_sig||(profiles||[]).find(x=>x.id===b.signed_by)?.name||'—'}</td><td className="px-3 py-2 text-right">{num(b.total_pcs)}</td><td className="px-3 py-2 text-right font-semibold">{peso(b.total_amount)}</td><td className="px-3 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${paid?'bg-emerald-100 text-emerald-700':'bg-sky-100 text-sky-700'}`}>{lbl}</span>{b.processed_at&&<span className="ml-1 text-[10px] px-1.5 py-0.5 rounded font-semibold bg-emerald-100 text-emerald-700" title={`Processed by accounting · ${fmtDate(String(b.processed_at).slice(0,10))}`}>✅ {b.processed_method==='manual'?'Manual payroll':'Paid via payroll'}</span>}</td><td className="px-3 py-2 text-right"><button onClick={()=>{ const brows=(logs||[]).filter(l=>l.batch_id===b.id && !l.deleted_at); const m=new Map(); brows.forEach(l=>{ const k=l.sewer_id||l.sewer_name||'—'; if(!m.has(k)) m.set(k,{ name:l.sewer_name||sewerNm(l.sewer_id), rows:[], pcs:0, amt:0 }); const g=m.get(k); g.rows.push({ id:l.id, client:clientNm(l.job_id,l.lead_id), proj:projNm(l.lead_id,l.job_id), op:l.op_name, pcs:Number(l.pcs||0), rate:Number(l.rate||0), amt:amtOf(l), ot:l.overtime }); g.pcs+=Number(l.pcs||0); g.amt+=amtOf(l); }); const groups=Array.from(m.values()).sort((a,c)=>String(a.name).localeCompare(String(c.name))); setDocRun({ b, groups, rfp:r }); }} className="text-xs px-2 py-1 rounded bg-slate-800 text-white font-semibold">📄 PDF</button></td></tr>
               ); })}</tbody>
             </table></div>)}
         </div>
@@ -32217,29 +32217,53 @@ function InhouseSewingView({ profile, profiles, leads, clients, prodJobs, rfps, 
       {sampleMakerFor && <InhouseSampleMakerModal project={sampleMakerFor} sewers={sewers} onClose={()=>setSampleMakerFor(null)} onSave={(vals)=>saveSampleMaker(sampleMakerFor, vals)} />}
       {editingOp && <InhouseOpEditModal op={editingOp} onClose={()=>setEditingOp(null)} onSave={(patch)=>updateOp(editingOp, patch)} />}
       {signing && <InhouseSewSignModal rows={(logs||[]).filter(l=>l.status==='sent' && !l.batch_id)} sewers={sewers} jobs={jobs} profile={profile} onClose={()=>setSigning(false)} onSaved={()=>{ setSigning(false); load(); reload&&reload(); }} />}
-      {docRun && <InhouseRunDoc data={docRun} profiles={profiles} onClose={()=>setDocRun(null)} />}
+      {docRun && <InhouseRunDoc data={docRun} profiles={profiles} profile={profile} onClose={()=>setDocRun(null)} />}
     </div>
   );
 }
 
 // Set up a project's operations — load from a garment template, then edit/add.
 // Printable per-sewer breakdown for a signed In-House Sewing run.
-function InhouseRunDoc({ data, profiles, onClose }){
-  const { b, groups, rfp }=data;
+function InhouseRunDoc({ data, profiles, profile, onClose }){
+  const { b:b0, groups, rfp }=data;
+  const [b,setB]=useState(b0);
+  const [busy,setBusy]=useState('');
   const pById=(id)=>(profiles||[]).find(p=>p.id===id);
   const totalPcs=groups.reduce((t,g)=>t+g.pcs,0), totalAmt=groups.reduce((t,g)=>t+g.amt,0);
   const signer=pById(b.signed_by);
+  const canProcess=['admin','accounting','accounting_officer','agm'].includes(profile?.role);
+  const procName=b.processed_by?(pById(b.processed_by)?.name||'Accounting'):'';
+  async function markProcessed(method){ if(!profile) return; setBusy(method);
+    const patch={ processed_at:new Date().toISOString(), processed_by:profile.id, processed_method:method };
+    try{ const { error }=await sb.from('inhouse_sew_batches').update(patch).eq('id',b.id); if(error) throw error; setB(x=>({...x,...patch})); }
+    catch(e){ alert(e.message||String(e)); } setBusy('');
+  }
+  async function undoProcessed(){ if(!confirm('Mark this run as NOT yet processed?')) return; setBusy('undo');
+    const patch={ processed_at:null, processed_by:null, processed_method:null };
+    try{ await sb.from('inhouse_sew_batches').update(patch).eq('id',b.id); setB(x=>({...x,...patch})); }catch(e){ alert(e.message||String(e)); } setBusy('');
+  }
+  const methodLabel=b.processed_method==='manual'?'Manual payroll':b.processed_method==='payroll'?'Paid via payroll':'Processed';
   return (<Modal title={`In-House Sewing Payroll · ${b.number}`} onClose={onClose} wide>
     <div className="space-y-3">
-      <div className="no-print flex justify-end gap-2">
-        <button onClick={()=>{ const n=document.getElementById('ihr-sheet'); if(n) saveNodeAsPdf(n, `In-House Sewing Payroll - ${b.number}`); }} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📄 Save PDF</button>
-        <button onClick={()=>printAs(`In-House Sewing Payroll - ${b.number}`)} className="hidden sm:inline-flex px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+      <div className="no-print rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">📌 <b>Reference only.</b> This is the signed basic weekly sewing pay. Government deductions, loans and final net pay are handled in the regular payroll run — this sheet is accounting’s reference, not the final payslip.</div>
+      <div className="no-print flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          {b.processed_at
+            ? <span className="inline-flex items-center gap-2 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-800">✅ {methodLabel} · {procName} · {fmtDate(String(b.processed_at).slice(0,10))}{canProcess && <button onClick={undoProcessed} disabled={!!busy} className="ml-1 text-emerald-600 hover:text-rose-600 underline">undo</button>}</span>
+            : canProcess
+              ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Mark as processed:</span><button disabled={!!busy} onClick={()=>markProcessed('manual')} className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy==='manual'?'…':'Manual payroll'}</button><button disabled={!!busy} onClick={()=>markProcessed('payroll')} className="text-xs px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy==='payroll'?'…':'Paid via payroll'}</button></div>
+              : <span className="text-xs text-slate-400">Not yet processed by accounting.</span>}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>{ const n=document.getElementById('ihr-sheet'); if(n) saveNodeAsPdf(n, `In-House Sewing Payroll - ${b.number}`); }} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">📄 Save PDF</button>
+          <button onClick={()=>printAs(`In-House Sewing Payroll - ${b.number}`)} className="hidden sm:inline-flex px-4 py-2 rounded-lg border text-sm font-semibold hover:bg-slate-50">🖨 Print</button>
+        </div>
       </div>
       <style>{`@media print{ body *{visibility:hidden !important;} #ihr-sheet,#ihr-sheet *{visibility:visible !important;} #ihr-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
       <div id="ihr-sheet" className="bg-white p-2" style={{color:'#222'}}>
         <div className="flex items-center justify-between border-b pb-2 mb-3">
-          <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">In-House Sewing Payroll</div></div>
-          <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{b.number}</div><div>{fmtDate(String(b.signed_at||b.created_at||'').slice(0,10))}</div>{rfp&&<div className="font-mono">{rfp.number}</div>}</div>
+          <div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">In-House Sewing Payroll · <span className="text-slate-400">basic weekly pay (reference)</span></div></div>
+          <div className="text-right text-xs text-slate-500"><div className="font-mono text-slate-700">{b.number}</div><div>{fmtDate(String(b.signed_at||b.created_at||'').slice(0,10))}</div>{rfp&&<div className="font-mono">{rfp.number}</div>}{b.processed_at&&<div className="text-emerald-700 font-semibold">✅ {methodLabel} · {fmtDate(String(b.processed_at).slice(0,10))}</div>}</div>
         </div>
         {groups.map((g,gi)=>(
           <div key={gi} className="mb-3 break-inside-avoid">
@@ -32270,7 +32294,7 @@ function InhouseRunDoc({ data, profiles, onClose }){
 }
 // RFP-side loader: given an in-house sewing payroll RFP, fetch its signed run +
 // logs, resolve client/project names, and render the per-sewer breakdown doc.
-function InhouseRunRfpDoc({ rfp, profiles, onClose }){
+function InhouseRunRfpDoc({ rfp, profiles, profile, onClose }){
   const [data,setData]=useState(null); const [err,setErr]=useState('');
   useEffect(()=>{ (async()=>{
     try{
@@ -32292,7 +32316,7 @@ function InhouseRunRfpDoc({ rfp, profiles, onClose }){
   })(); },[rfp.id]);
   if(err) return <Modal title="In-House Sewing Payroll" onClose={onClose}><div className="text-sm text-rose-600 py-4">{err}</div></Modal>;
   if(!data) return <Modal title="In-House Sewing Payroll" onClose={onClose}><div className="text-sm text-slate-400 py-6 text-center">Loading breakdown…</div></Modal>;
-  return <InhouseRunDoc data={data} profiles={profiles} onClose={onClose} />;
+  return <InhouseRunDoc data={data} profiles={profiles} profile={profile} onClose={onClose} />;
 }
 function InhouseOpsSetupModal({ job, garments, onClose, onSave }){
   const [rows,setRows]=useState([{ op_name:'', rate:'', target_qty:'' }]);
@@ -40471,7 +40495,7 @@ function RFPModal({ rfp, profile, profiles, orders, suppliers, vouchers, chartAc
       {closing && <RfpCloseModal rfp={rfp} profile={profile} vouchers={vouchers} onClose={()=>setClosing(false)} onSaved={()=>{ setClosing(false); onSaved(); }} />}
       {poPrint && po && <POPrintView po={po} suppliers={suppliers} profile={profile} profiles={profiles} onClose={()=>setPoPrint(false)} />}
       {cashoutPrint && cashoutRow && <LeaveCashoutPrintView row={cashoutRow} preparer={cashoutPreparer} onClose={()=>setCashoutPrint(false)} />}
-      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} profile={profile} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -40796,7 +40820,7 @@ function VoucherFormModal({ rfp, profile, profiles, vouchers, bankAccounts, supp
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'💰 Issue voucher & mark paid'}</button>
       </div>
-      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (rfp.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={rfp} profiles={profiles} profile={profile} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : rfp.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={rfp} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
@@ -42208,7 +42232,7 @@ function AGMReviewModal({ review, profile, profiles, items, onClose, onApprove, 
           </div>
         </div>
       </div>
-      {showPayrollDoc && (data.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
+      {showPayrollDoc && (data.origin==='inhouse_sewing' ? <InhouseRunRfpDoc rfp={data} profiles={profiles} profile={profile} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subli_cutting' ? <SubliCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : data.origin==='subcon_cutting' ? <SubconCutPayrollDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} /> : <SubconPayrollRfpDoc rfp={data} profiles={profiles} onClose={()=>setShowPayrollDoc(false)} />)}
     </Modal>
   );
 }
