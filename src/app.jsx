@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 968 · Department purchase request approvals now flow Admin Office (Geziel) → AGM → Admin → Purchasing. Every new request (sales or department) starts in the Admin Office queue and notifies Geziel; after she clears it, it goes to the AGM's approvals; after the AGM, it lands in the Admin's approvals; only then does it release to Purchasing. Before, sales requests skipped straight to the Admin and department ones skipped Geziel — so the AGM never saw them. Eunice's PR-95781 was routed back to the start of the chain.";
+const BUILD = "Live build 969 · Purchasing receive fix: receiving supplier goods now requires each line to be matched to (or create) an inventory item, so the receipt actually credits on-hand — this stops the bug where supplier receipts never raised stock and issuing later went negative. Receiving also now links the Purchase Request to the PO, marks the lines received, and flips the request to Fulfilled when fully received (and to Ordered on partial), so the Purchase Request tab finally updates when goods arrive.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36712,10 +36712,25 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function setRecv(i,v){ setRec(rec.map((r,j)=>{ if(j!==i) return r; const recv=v; const auto = r.lead_id ? recv : 0; return {...r, receive_now:recv, issue_now:auto}; })); }
   function setIssue(i,v){ setRec(rec.map((r,j)=>j===i?{...r,issue_now:v}:r)); }
+  // Match a line to an inventory item so receiving actually credits on-hand.
+  function setItemLink(i,itemId){ setRec(rec.map((r,j)=>j===i?{...r,item_id:itemId||null}:r)); }
+  const itemOptions=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))).map(it=>({ value:it.id, label:`${it.name}${it.color?' · '+it.color:''}${it.unit?` (${it.unit})`:''}` }));
+  async function quickCreateItem(i){
+    const r=rec[i]; const name=(r.description||'').trim();
+    if(!name){ setMsg('This line has no description to name a new inventory item.'); return; }
+    try{ const payload={ name, unit:r.unit||null, qty:0 }; if(po.supplier_id) payload.supplier_id=po.supplier_id;
+      const { data, error }=await sb.from('items').insert(payload).select('id').single(); if(error) throw error;
+      setItemLink(i, data.id); setMsg(`Created inventory item “${name}”. It will be credited on receive.`);
+    }catch(e){ setMsg('Create item failed: '+(e.message||String(e))); }
+  }
   async function save(){
     const toPost=rec.filter(r=>Number(r.receive_now)>0 || Number(r.issue_now)>0);
     if(!toPost.length){ setMsg('Enter at least one quantity to receive.'); return; }
     for(const r of rec){ if(Number(r.issue_now)>0 && Number(r.issue_now)>Number(r.receive_now||0)){ setMsg('You can’t issue more to a project than you receive now.'); return; } }
+    // Every line being received MUST be linked to an inventory item, otherwise the
+    // stock movement credits nothing and on-hand goes wrong (the supplier-receipt bug).
+    const unmatched=rec.filter(r=>Number(r.receive_now)>0 && !r.item_id);
+    if(unmatched.length){ setMsg(`Match to an inventory item (or create one) before receiving: ${unmatched.map(u=>u.description||'item').join(', ')}.`); return; }
     setBusy(true); setMsg('');
     try{
       for(const r of rec){
@@ -36729,17 +36744,22 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
       const any=newLines.some(l=>Number(l.qty_received||0)>0);
       const status = fully?'received':(any?'partial':(po.status||'open'));
       const {error}=await sb.from('purchase_orders').update({ lines:newLines.map(({receive_now,issue_now,...rest})=>rest), status, received_at: fully?todayManila():po.received_at }).eq('id',po.id); if(error) throw error;
-      // Reflect received qty back on the source PR lines (partial fulfilment visibility).
+      // Reflect received qty back on the source PR lines (partial fulfilment visibility)
+      // AND link the PR to this PO + flip to Fulfilled when fully received, so the
+      // Purchase Request tab actually updates when supplier goods arrive.
       const byPR=new Map();
-      rec.forEach(r=>{ const rn=Number(r.receive_now)||0; if(rn>0 && r.pr_id!=null && r.pr_line_idx!=null){ if(!byPR.has(r.pr_id)) byPR.set(r.pr_id,[]); byPR.get(r.pr_id).push({ idx:r.pr_line_idx, recv:rn }); } });
+      rec.forEach(r=>{ const rn=Number(r.receive_now)||0; if(rn>0 && r.pr_id!=null && r.pr_line_idx!=null){ if(!byPR.has(r.pr_id)) byPR.set(r.pr_id,[]); byPR.get(r.pr_id).push({ idx:r.pr_line_idx, recv:rn, item_id:r.item_id||null }); } });
       for(const [prId, upds] of byPR){
-        try{ const { data:prRow }=await sb.from('purchase_requests').select('lines,status').eq('id',prId).maybeSingle();
+        try{ const { data:prRow }=await sb.from('purchase_requests').select('lines,status,linked_po_id').eq('id',prId).maybeSingle();
           if(prRow){
-            const pl=(prRow.lines||[]).map((l,i)=>{ const u=upds.find(x=>x.idx===i); return u?{...l, qty_received:(Number(l.qty_received)||0)+u.recv}:l; });
-            // When every buy line is fully received, the PR is Fulfilled.
+            const pl=(prRow.lines||[]).map((l,i)=>{ const u=upds.find(x=>x.idx===i); return u?{...l, qty_received:(Number(l.qty_received)||0)+u.recv, linked_po_id: l.linked_po_id||po.id, item_id: l.item_id||u.item_id||null }:l; });
             const fullyRecv = pl.length>0 && pl.every(l=> (Number(l.qty_received)||0) >= (Number(l.qty)||0));
-            const patch = { lines:pl };
-            if(fullyRecv && prRow.status==='ordered') patch.status='fulfilled_stock';
+            const anyRecv = pl.some(l=> (Number(l.qty_received)||0) > 0);
+            const patch = { lines:pl, linked_po_id: prRow.linked_po_id||po.id };
+            // Mark Fulfilled on full receipt regardless of the PR's current stage
+            // (as long as it isn't already closed/cancelled/rejected).
+            if(fullyRecv && !['fulfilled_stock','cancelled','rejected'].includes(prRow.status)) patch.status='fulfilled_stock';
+            else if(anyRecv && ['department_request','agm_review','admin_review','manual_request','submitted','approved'].includes(prRow.status)) patch.status='ordered';
             await sb.from('purchase_requests').update(patch).eq('id',prId);
           }
         }catch(_){}
@@ -36756,7 +36776,14 @@ function PurchaseOrderReceive({ po, items, profile, onClose, onSaved }){
           <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Project</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Recv'd</th><th className="text-right px-3 py-2">Receive now</th>{anyProject && <th className="text-right px-3 py-2">Issue to project</th>}</tr></thead>
           <tbody>{rec.map((r,i)=>{ const it=items.find(x=>x.id===r.item_id); const remaining=Math.max(0,Number(r.qty||0)-Number(r.qty_received||0)); return (
             <tr key={i} className="border-t">
-              <td className="px-3 py-2">{it?.name||r.description}{r.item_id ? '' : <span className="text-[10px] text-amber-600 ml-1">(no inventory link)</span>}</td>
+              <td className="px-3 py-2">
+                <div className="font-medium">{it?.name||r.description}</div>
+                {!r.item_id && <div className="mt-1 flex items-center gap-1">
+                  <div className="min-w-[180px]"><SearchSelect value={''} onChange={(v)=>setItemLink(i, v)} options={itemOptions} placeholder="🔗 Match to inventory item…" className="text-xs" /></div>
+                  <button type="button" onClick={()=>quickCreateItem(i)} className="text-[11px] px-2 py-1 rounded border bg-white font-semibold hover:bg-slate-50 whitespace-nowrap" title="Create a new inventory item from this description">＋ New item</button>
+                </div>}
+                {r.item_id && !po.lines?.[i]?.item_id && <span className="text-[10px] text-emerald-600">✓ linked to inventory</span>}
+              </td>
               <td className="px-3 py-2 text-xs text-slate-600">{r.project_title ? <span title={r.client_name||''}>📁 {r.project_title}</span> : <span className="text-slate-400">— general stock —</span>}</td>
               <td className="px-3 py-2 text-right">{r.qty}</td>
               <td className="px-3 py-2 text-right">{r.qty_received||0}</td>
