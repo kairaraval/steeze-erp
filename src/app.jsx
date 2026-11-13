@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 969 · Purchasing receive fix: receiving supplier goods now requires each line to be matched to (or create) an inventory item, so the receipt actually credits on-hand — this stops the bug where supplier receipts never raised stock and issuing later went negative. Receiving also now links the Purchase Request to the PO, marks the lines received, and flips the request to Fulfilled when fully received (and to Ordered on partial), so the Purchase Request tab finally updates when goods arrive.";
+const BUILD = "Live build 970 · Payroll fixes: (1) Biometric import now reads flash-drive/USB exports properly — tab- and space-separated files, .dat/.txt with no header, and more date-time formats — so the Import button appears and punches actually save (before, the reader only handled comma-CSV, so nothing imported). (2) Attendance Filings now has Undertime (records approved undertime minutes on the day) and Leave (files a leave that posts to the Leave Tracker for approval).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42748,6 +42748,8 @@ const FILING_KINDS=[
   { key:'schedule_adjust', label:'Schedule Adjustment',     icon:'🗓️', hint:'Reporting on a rest day or working an adjusted schedule.' },
   { key:'overtime',        label:'Overtime (OT)',           icon:'⏱️', hint:'Approved OT only. First full hour is required, then 30-min increments. Tardiness that day forfeits OT.' },
   { key:'offset',          label:'Offset',                  icon:'🔁', hint:'Credit offsetting hours already rendered — half-day (4h) or whole-day (8h) — recognised by actual hours regardless of start time (Sprout §3).' },
+  { key:'undertime',       label:'Undertime',               icon:'⏳', hint:'Record an approved early-out / undertime for a day, with the minutes and a reason.' },
+  { key:'leave',           label:'Leave',                   icon:'📅', hint:'File a leave for an employee. On approval it also posts to the Leave Tracker and deducts credits if paid.' },
 ];
 const OT_TYPES=[['normal','Normal OT (beyond shift)'],['early_in','Early-in OT'],['saturday','Saturday OT (production)']];
 const OFFSET_HOURS=[['4','Half-day offset (4 hours)'],['8','Whole-day offset (8 hours)']];
@@ -42780,6 +42782,10 @@ async function applyFilingToDtr(f, sched, approverId){
     const daily=Number(sched?.daily_hours||8);
     const isHalf=oh>0 && oh<=daily/2+0.01 && oh<daily;
     row={ ...base, status:'present', time_in:null, time_out:null, hours_worked:Math.round(oh*10)/10, ot_hours:0, half_day:isHalf, notes:`Offset ${oh}h (${isHalf?'half-day':'whole-day'}): ${f.reason||''}`.trim() };
+  } else if(f.kind==='undertime'){
+    let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).limit(1); ex=r.data&&r.data[0]; }catch(_){}
+    const ut=Number(f.undertime_min)||0;
+    row={ ...base, status:ex?.status||'present', time_in:ex?.time_in||null, time_out:ex?.time_out||null, hours_worked: ex?.hours_worked ?? Number(sched?.daily_hours||8), late_min: ex?.late_min||0, undertime_min:ut, ot_hours: ex?.ot_hours||0, half_day: ut>=120, notes:`Undertime ${ut}m: ${f.reason||''}`.trim() };
   } else { // overtime
     let ex=null; try{ const r=await sb.from('dtr_days').select('*').eq('employee_id',f.employee_id).eq('work_date',ds).limit(1); ex=r.data&&r.data[0]; }catch(_){}
     const isEarly=f.ot_type==='early_in';
@@ -42864,7 +42870,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
             <td className="px-3 py-2 font-medium">{empName(f.employee_id)}</td>
             <td className="px-3 py-2 text-xs">{m.icon} {m.label.split(' (')[0]}</td>
             <td className="px-3 py-2 text-xs">{fmtDate(f.filing_date)}</td>
-            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:f.kind==='overtime'?`${(OT_TYPES.find(x=>x[0]===f.ot_type)?.[1]||'OT')} · ${f.ot_hours||0}h → credited ${f.ot_type==='early_in'?Number(f.ot_hours||0):creditOtHours(f.ot_hours)}h${f.special_case?' · special 12-1':''}`:f.kind==='offset'?`${Number(f.offset_hours)===4?'Half-day':'Whole-day'} offset · ${f.offset_hours||0}h`:'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500">{f.kind==='coa'?`Missing ${f.coa_missing||'both'}${f.time_in?` · in ${String(f.time_in).slice(0,5)}`:''}${f.time_out?` · out ${String(f.time_out).slice(0,5)}`:''}`:f.kind==='schedule_adjust'?`${f.rest_day?'Rest day · ':''}${f.time_in?String(f.time_in).slice(0,5):'—'}–${f.time_out?String(f.time_out).slice(0,5):'—'} · ${f.with_break?'w/ break':'no break'}`:f.kind==='overtime'?`${(OT_TYPES.find(x=>x[0]===f.ot_type)?.[1]||'OT')} · ${f.ot_hours||0}h → credited ${f.ot_type==='early_in'?Number(f.ot_hours||0):creditOtHours(f.ot_hours)}h${f.special_case?' · special 12-1':''}`:f.kind==='offset'?`${Number(f.offset_hours)===4?'Half-day':'Whole-day'} offset · ${f.offset_hours||0}h`:f.kind==='undertime'?`Undertime · ${f.undertime_min||0}m`:'—'}</td>
             <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]" title={f.reason||''}>{f.reason||'—'}</td>
             <td className="px-3 py-2 text-center">{stChip(st)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -42882,7 +42888,7 @@ function AttendanceFilingsView({ profile, employees, reload }){
 
 function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
   const m=filingKindMeta(kind);
-  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false, offset_hours:'8' });
+  const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false, offset_hours:'8', undertime_min:'', leave_type:'vacation', end_date:todayManila(), leave_paid:true });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(s=>({...s,[k]:v}));
   const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
@@ -42893,7 +42899,16 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
     if(kind==='coa' && !(f.reason||'').trim()){ setMsg('A written explanation is required for a COA.'); return; }
     if(kind==='overtime' && !(Number(f.ot_hours)>0)){ setMsg('Enter the actual OT hours rendered.'); return; }
     if(kind==='offset' && !(Number(f.offset_hours)>0)){ setMsg('Pick the offset amount.'); return; }
+    if(kind==='undertime' && !(Number(f.undertime_min)>0)){ setMsg('Enter the undertime minutes.'); return; }
     setBusy(true); setMsg('');
+    // Leave is its own record — post to the Leave Tracker (hr_leaves) so it deducts credits.
+    if(kind==='leave'){
+      const lt=leaveTypeMeta(f.leave_type); const bucket=lt?.bucket; const rem=bucket?0:0;
+      const days=leaveWorkingDays(f.filing_date, f.end_date||f.filing_date);
+      const { error }=await sb.from('hr_leaves').insert({ employee_id:f.employee_id, leave_type:f.leave_type, start_date:f.filing_date, end_date:f.end_date||f.filing_date, reason:f.reason||null, days, paid:!!f.leave_paid, status:'pending', created_by:profile.id });
+      if(error){ setBusy(false); setMsg(error.message); return; }
+      setBusy(false); onSaved&&onSaved(); return;
+    }
     const payload={ employee_id:f.employee_id, kind, filing_date:f.filing_date, reason:f.reason||null, status:'pending', created_by:profile.id,
       time_in: (kind==='coa'||kind==='schedule_adjust') && f.time_in ? f.time_in : null,
       time_out: (kind==='coa'||kind==='schedule_adjust') && f.time_out ? f.time_out : null,
@@ -42903,7 +42918,8 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
       ot_type: kind==='overtime' ? f.ot_type : null,
       ot_hours: kind==='overtime' ? (Number(f.ot_hours)||0) : null,
       special_case: kind==='overtime' ? !!f.special_case : false,
-      offset_hours: kind==='offset' ? (Number(f.offset_hours)||0) : null };
+      offset_hours: kind==='offset' ? (Number(f.offset_hours)||0) : null,
+      undertime_min: kind==='undertime' ? (Number(f.undertime_min)||0) : null };
     const { error }=await sb.from('attendance_filings').insert(payload);
     if(error){ setBusy(false); setMsg(error.message); return; }
     setBusy(false); onSaved&&onSaved();
@@ -42944,6 +42960,16 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
         {kind==='offset' && (<>
           <TpLbl t="Offset amount"><select className="input" value={f.offset_hours} onChange={e=>up('offset_hours',e.target.value)}>{OFFSET_HOURS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></TpLbl>
           <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">The offset is recognised by the <b>actual hours rendered</b> — {Number(f.offset_hours)===4?'half-day (4h)':'whole-day (8h)'} — regardless of what time it started (Sprout §3). On approval the chosen date is credited as {Number(f.offset_hours)===4?'a half-day':'a full day'} present.</div>
+        </>)}
+        {kind==='undertime' && (<>
+          <TpLbl t="Undertime (minutes)"><input type="number" min="1" className="input" value={f.undertime_min} onChange={e=>up('undertime_min',e.target.value)} placeholder="e.g. 60" /></TpLbl>
+          <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">On approval the undertime is recorded on that day’s DTR (≥2 h undertime makes it a half-day for regular staff).</div>
+        </>)}
+        {kind==='leave' && (<>
+          <TpLbl t="Leave type"><select className="input" value={f.leave_type} onChange={e=>up('leave_type',e.target.value)}>{LEAVE_TYPES.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select></TpLbl>
+          <TpLbl t="To (end date)"><input type="date" className="input" value={f.end_date} onChange={e=>up('end_date',e.target.value)} /></TpLbl>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!f.leave_paid} onChange={e=>up('leave_paid',e.target.checked)} className="accent-indigo-600" /> Paid leave (deducts credits on approval)</label>
+          <div className="text-xs bg-slate-50 border rounded-lg px-3 py-2 text-slate-600">{leaveWorkingDays(f.filing_date, f.end_date||f.filing_date)} working day(s). This posts to the <b>Leave Tracker</b> as pending for approval.</div>
         </>)}
         <TpLbl t={kind==='coa'?'Written explanation *':'Reason'}><textarea className="input min-h-[60px]" value={f.reason} onChange={e=>up('reason',e.target.value)} placeholder={kind==='ob'?'e.g. Client visit — JT International, whole day':kind==='coa'?'Explain why the punch is missing':kind==='offset'?'e.g. Offsetting hours rendered last Saturday':'e.g. Asked to report on rest day for rush order'} /></TpLbl>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
@@ -43139,30 +43165,55 @@ function PunchImportModal({ profile, devices, employees, enrollMap, onClose, onS
   const [deviceId,setDeviceId]=useState('');
   function onFile(ev){ const f=ev.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>setText(String(r.result||'')); r.readAsText(f); }
   function doParse(){
-    const rows=parseCsvText(text); if(rows.length<1){ setMsg('Nothing to parse.'); return; }
-    // Detect header
-    let body=rows; const head=rows[0].map(h=>h.toLowerCase());
-    const hasHeader=head.some(h=>/enroll|employee|id|date|time|punch|direction|in\/out|state/.test(h));
-    let idx={ enroll:0, datetime:-1, date:1, time:2, dir:-1 };
-    if(hasHeader){ body=rows.slice(1);
+    const raw=String(text).replace(/\r/g,'');
+    const lines=raw.split('\n').filter(l=>l.trim());
+    if(!lines.length){ setMsg('Nothing to parse.'); return; }
+    // Detect the delimiter the export uses: biometric flash exports are usually
+    // TAB-separated (or fixed spacing) with no header; our old reader only did CSV.
+    const sample=lines.find(l=>l.trim())||'';
+    const splitLine = sample.includes('\t') ? (l=>l.split('\t').map(s=>s.trim()))
+      : sample.includes(',') ? (l=>parseCsvText(l)[0]||[])
+      : /\s{2,}/.test(sample) ? (l=>l.trim().split(/\s{2,}/))
+      : (l=>l.trim().split(/\s+/));
+    const allRows=lines.map(splitLine);
+    const first=allRows[0]||[];
+    const head=first.map(h=>String(h).toLowerCase());
+    const firstIsHeader = head.some(h=>/enroll|employee|user|pin|ac-?no|date|time|punch|direction|in\/?out|state|status/.test(h)) && !/^\d+$/.test(String(first[0]||'').trim());
+    let idx={ enroll:0, datetime:-1, date:-1, time:-1, dir:-1 };
+    let body=allRows;
+    if(firstIsHeader){ body=allRows.slice(1);
       const find=(...keys)=>head.findIndex(h=>keys.some(k=>h.includes(k)));
-      idx.enroll=Math.max(0,find('enroll','employee','userid','user id','pin','ac-no','ac no','id'));
-      idx.datetime=find('datetime','timestamp','date/time','punch time','time');
-      idx.date=find('date'); idx.time=find('time'); idx.dir=find('direction','in/out','state','status');
+      idx.enroll=Math.max(0,find('enroll','employee','user','userid','pin','ac-no','ac no','id'));
+      idx.datetime=find('datetime','timestamp','date/time','date time','punch time','log time','check');
+      idx.date=find('date'); idx.time=head.findIndex(h=>h==='time'||/\btime\b/.test(h)); idx.dir=find('direction','in/out','inout','state','status','type','attendance');
+    }
+    const looksDate=(s)=>/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(s)||/\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(s);
+    const looksTime=(s)=>/\d{1,2}:\d{2}/.test(s);
+    function toIso(ts){ if(!ts) return null; const t=String(ts).trim();
+      let d=new Date(t.replace(' ','T')); if(isNaN(d)) d=new Date(t); if(isNaN(d)) return null;
+      // No timezone marker in the string → treat as Manila local time (+08:00).
+      if(!/[zZ]|[+-]\d{2}:?\d{2}$/.test(t)){ const d2=new Date(t.replace(' ','T')+'+08:00'); if(!isNaN(d2)) return d2.toISOString(); }
+      return d.toISOString();
     }
     const parsed=[]; const unmapped=new Set();
     for(const r of body){ if(!r.length||!r.join('').trim()) continue;
-      const enroll=String(r[idx.enroll]||'').trim(); if(!enroll) continue;
+      const enroll=String(r[idx.enroll]||'').trim(); if(!enroll || /enroll|user|pin|^id$/i.test(enroll)) continue;
       let ts=null;
-      if(idx.datetime>=0 && r[idx.datetime]){ ts=r[idx.datetime]; }
-      else if(idx.date>=0 && r[idx.date]){ ts=`${r[idx.date]} ${idx.time>=0?(r[idx.time]||''):''}`.trim(); }
-      if(!ts) continue;
-      const d=new Date(ts.replace(' ','T')); if(isNaN(d)){ const d2=new Date(ts); if(isNaN(d2)) continue; }
-      const iso=isNaN(new Date(ts.replace(' ','T')))? new Date(ts).toISOString() : new Date(ts.replace(' ','T')+(/[+Z]/.test(ts)?'':'+08:00')).toISOString();
-      const dir=(String(r[idx.dir]||'').toLowerCase().includes('out'))?'out':(String(r[idx.dir]||'').toLowerCase().includes('in')?'in':'unknown');
+      if(idx.datetime>=0 && r[idx.datetime]) ts=String(r[idx.datetime]).trim();
+      else if(idx.date>=0 && r[idx.date]){ ts=`${r[idx.date]} ${idx.time>=0&&r[idx.time]?r[idx.time]:''}`.trim(); }
+      else { // no header / unknown layout: find the date (and adjacent time) token
+        for(let k=1;k<r.length;k++){ const cell=String(r[k]||'').trim();
+          if(looksDate(cell)){ ts = (!looksTime(cell) && r[k+1] && looksTime(String(r[k+1]))) ? `${cell} ${String(r[k+1]).trim()}` : cell; break; }
+          if(looksTime(cell) && k>1 && looksDate(String(r[k-1]))){ ts=`${String(r[k-1]).trim()} ${cell}`; break; }
+        }
+      }
+      const iso=toIso(ts); if(!iso) continue;
+      const dirCell=String(r[idx.dir]||'').toLowerCase();
+      const dir=dirCell.includes('out')||dirCell==='1'?'out':(dirCell.includes('in')||dirCell==='0'?'in':'unknown');
       const eid=enrollMap[enroll]||null; if(!eid) unmapped.add(enroll);
       parsed.push({ enroll_id:enroll, employee_id:eid, punch_ts:iso, direction:dir, source:'csv', device_id:deviceId||null, raw:{ csv:r } });
     }
+    if(parsed.length===0){ setMsg(`Couldn't read any punches. First line read as [${(first||[]).slice(0,6).join(' | ')}] — make sure each row has an ID and a date/time. If it's a .dat/.txt export, paste it as-is (tabs are fine).`); setPreview({ parsed:[], unmapped:[] }); return; }
     setPreview({ parsed, unmapped:Array.from(unmapped) }); setMsg(`${parsed.length} punch${parsed.length===1?'':'es'} ready${unmapped.size?` · ${unmapped.size} unmatched ID(s)`:''}.`);
   }
   async function save(){ if(!preview||!preview.parsed.length) return; setBusy(true);
@@ -43173,7 +43224,7 @@ function PunchImportModal({ profile, devices, employees, enrollMap, onClose, onS
     <div className="space-y-3">
       <div className="text-xs text-slate-500 bg-slate-50 border rounded p-2">Export the log from your biometric and paste or upload it. Expected columns (header auto-detected): an <b>enrollment/employee ID</b>, a <b>date+time</b> (or separate date & time), and optionally <b>direction</b> (in/out). IDs are matched to employees by the Biometric ID set on Payroll Setup.</div>
       {devices.length>0 && <TpLbl t="From device (optional)"><select className="input" value={deviceId} onChange={e=>setDeviceId(e.target.value)}><option value="">—</option>{devices.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></TpLbl>}
-      <input type="file" accept=".csv,.txt" onChange={onFile} className="text-xs" />
+      <input type="file" accept=".csv,.txt,.dat,.tsv" onChange={onFile} className="text-xs" />
       <textarea value={text} onChange={e=>setText(e.target.value)} rows={6} className="input font-mono text-xs" placeholder={"enroll_id,datetime,direction\n1024,2026-11-03 08:01,in\n1024,2026-11-03 17:05,out"} />
       <div className="flex gap-2"><button onClick={doParse} className="px-3 py-2 rounded-lg border font-semibold text-sm hover:bg-slate-50">Preview</button>{preview&&preview.parsed.length>0&&<button disabled={busy} onClick={save} className="px-3 py-2 rounded-lg bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50">{busy?'Importing…':`Import ${preview.parsed.length} punches`}</button>}</div>
       {msg && <div className="text-xs text-slate-600">{msg}</div>}
