@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 967 · In-House Sewing Payroll marked as a weekly reference + “processed” tracking: the breakdown now says clearly it is the basic weekly sewing pay for accounting’s reference (deductions & final net are done in the regular payroll run). Accounting can tap “Manual payroll” or “Paid via payroll” on the sheet to record that it was processed — stamping who & when — and a ✅ badge then shows on the Signed-runs list, the sheet and the RFP so everyone knows it is done.";
+const BUILD = "Live build 968 · Department purchase request approvals now flow Admin Office (Geziel) → AGM → Admin → Purchasing. Every new request (sales or department) starts in the Admin Office queue and notifies Geziel; after she clears it, it goes to the AGM's approvals; after the AGM, it lands in the Admin's approvals; only then does it release to Purchasing. Before, sales requests skipped straight to the Admin and department ones skipped Geziel — so the AGM never saw them. Eunice's PR-95781 was routed back to the start of the chain.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -34718,6 +34718,8 @@ function StockLineStrip({ item, line, reservations, onPullFromStock, onReserve, 
 const PR_STATUSES=[
   { key:'manual_request', label:'Sales Manual Requests', color:'bg-fuchsia-100 text-fuchsia-700' },
   { key:'department_request', label:'Department Requests', color:'bg-cyan-100 text-cyan-700' },
+  { key:'agm_review', label:'Awaiting AGM', color:'bg-sky-100 text-sky-700' },
+  { key:'admin_review', label:'Awaiting Admin', color:'bg-orange-100 text-orange-700' },
   { key:'submitted', label:'To Review', color:'bg-amber-100 text-amber-700' },
   { key:'approved',  label:'For Materials Queue',  color:'bg-emerald-100 text-emerald-700' },
   { key:'ordered',   label:'Ordered',   color:'bg-indigo-100 text-indigo-700' },
@@ -34726,11 +34728,14 @@ const PR_STATUSES=[
   { key:'rejected',  label:'Rejected',  color:'bg-rose-100 text-rose-700' },
 ];
 // Statuses that represent a new, not-yet-actioned request awaiting approval.
-const PR_AWAITING = ['submitted','manual_request','department_request'];
+const PR_AWAITING = ['submitted','manual_request','department_request','agm_review','admin_review'];
 // Sales-side roles whose manual requests go to "Sales Manual Requests"; everyone
 // else's "Request for Purchasing" lands in "Department Requests".
 const PR_SALES_ROLES = ['admin','manager','sales_representative','assistant'];
-function prManualStatusForRole(role){ return PR_SALES_ROLES.includes(role) ? 'manual_request' : 'department_request'; }
+// All purchasing requests now start in the Admin Office queue and move
+// Admin Office (Geziel) → AGM → Admin → Purchasing. So every new manual/department
+// request begins as a 'department_request'.
+function prManualStatusForRole(role){ return 'department_request'; }
 function prMeta(k){ return PR_STATUSES.find(s=>s.key===k)||PR_STATUSES[0]; }
 // The 5-stage purchasing pipeline:
 //   Manual Request (manual PRs) → To Review (sampling + closed-won auto PRs) →
@@ -34776,12 +34781,9 @@ function RequestForPurchasingModal({ profile, items, onClose, onSaved }){
       const payload={ number:'PR-'+Date.now().toString().slice(-5), date:todayManila(), requested_by:profile.id, dept_id:null, urgency:'normal', status:dest, justification:(justification.trim()|| `Request for purchasing by ${profile.name||profile.email}`), lines, linked_lead_id:null };
       const { data, error }=await sb.from('purchase_requests').insert(payload).select().single();
       if(error) throw error;
-      // Department requests go to Purchasing + the AGM (who approves them) — not the admins.
-      // Sales manual requests keep notifying Purchasing + admin as before.
-      const notifyRoles = dest==='department_request'
-        ? ['purchasing','purchasing_admin','purchasing_personnel','agm']
-        : ['purchasing','purchasing_admin','purchasing_personnel','admin'];
-      try{ const { data:pur }=await sb.from('profiles').select('id').in('role',notifyRoles); const notes=(pur||[]).filter(p=>p.id!==profile.id).map(p=>({ recipient_id:p.id, actor_id:profile.id, type:'system', text:`🛒 New ${dest==='department_request'?'department':'sales'} purchase request from ${profile.name||profile.email}${lines[0]?` — ${lines[0].description}`:''}`, link_view:'requests', ref_type:'purchase_request', ref_id:data.id })); if(notes.length) await sb.from('notifications').insert(notes); }catch(_){}
+      // All purchase requests start at the Admin Office (Geziel) — the first approver
+      // in the chain Admin Office → AGM → Admin → Purchasing.
+      try{ const { data:pur }=await sb.from('profiles').select('id').in('role',['hr_admin']); const notes=(pur||[]).filter(p=>p.id!==profile.id).map(p=>({ recipient_id:p.id, actor_id:profile.id, type:'system', text:`🛒 New purchase request from ${profile.name||profile.email}${lines[0]?` — ${lines[0].description}`:''} · awaiting your review`, link_view:'admin-pr', ref_type:'purchase_request', ref_id:data.id })); if(notes.length) await sb.from('notifications').insert(notes); }catch(_){}
       setBusy(false); onSaved && onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
   }
@@ -35088,21 +35090,17 @@ function PurchaseIntakeForm({ profile, onClose, onSaved }){
       const line={ description:f.item.trim(), sku:'', item_id:null, qty:Number(f.qty)||1, unit:f.unit||null, est_cost:0, link:'', notes:'' };
       const payload={
         number, date:todayManila(), requested_by:profile.id, dept_id:null,
-        urgency:f.urgency, status:'manual_request', source:'manual',
+        urgency:f.urgency, status:'department_request', source:'manual',
         justification:`Manual request by ${profile.name||profile.email}${f.needed_by?` · needed by ${f.needed_by}`:''}${f.details?` — ${f.details}`:''}`,
         approver_note:'', lines:[line], attachments,
       };
       const { data:prRow, error }=await sb.from('purchase_requests').insert(payload).select().single();
       if(error) throw error;
-      // Notify the Purchasing team in their inbox.
+      // Route to the Admin Office (Geziel) — first approver in the chain.
       try {
-        const { data:purchasers }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel']);
-        const mentionIds=(purchasers||[]).map(p=>p.id).filter(id=>id!==profile.id);
-        if(mentionIds.length){
-          await sb.from('pr_activity').insert({ pr_id: prRow?.id||null, actor_id: profile.id, type:'system',
-            text:`🛒 New manual request ${prRow?.number||''} — ${f.item.trim()}${f.qty?` (${f.qty}${f.unit?' '+f.unit:''})`:''} from ${profile.name||profile.email}`,
-            mentions: mentionIds });
-        }
+        const { data:office }=await sb.from('profiles').select('id').in('role',['hr_admin']);
+        const ids=(office||[]).map(p=>p.id).filter(id=>id!==profile.id);
+        if(ids.length) await sb.from('notifications').insert(ids.map(id=>({ recipient_id:id, actor_id:profile.id, type:'system', text:`🛒 New purchase request ${prRow?.number||''} from ${profile.name||profile.email} — ${f.item.trim()} · awaiting your review`, link_view:'admin-pr', ref_type:'purchase_request', ref_id:prRow?.id })));
       } catch(_){}
       setBusy(false); onSaved && onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -43859,9 +43857,9 @@ function AdminPurchaseRequestsView({ profile, requests, items, profiles, departm
   const rows=(tab==='pending'?pending:processed).filter(matches).sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
 
   async function approve(pr, note){
-    const { error }=await sb.from('purchase_requests').update({ status:'submitted', office_approved_by:profile.id, office_approved_at:new Date().toISOString(), office_note:(note&&note.trim())||null }).eq('id',pr.id);
+    const { error }=await sb.from('purchase_requests').update({ status:'agm_review', office_approved_by:profile.id, office_approved_at:new Date().toISOString(), office_note:(note&&note.trim())||null }).eq('id',pr.id);
     if(error){ alert(error.message); return; }
-    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`✅ Department request ${pr.number||''} approved by Admin Office — ready for Purchasing to review.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm']); const notif=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`📝 Department request ${pr.number||''} cleared by Admin Office — awaiting your approval.`, link_view:'agm-approvals', ref_type:'purchase_request', ref_id:pr.id })); if(notif.length) await sb.from('notifications').insert(notif); }catch(_){}
     setReview(null); reload&&reload();
   }
   async function reject(pr, note){
@@ -43965,7 +43963,7 @@ function AdminPRReviewModal({ pr, items, nameOf, lineName, projectOf, estTotal, 
 function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, cashAdvances, pcReplenishments, items, reload }){
   const [review,setReview]=useState(null);   // { kind, data }
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
-  const deptPRs = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request');
+  const deptPRs = (requests||[]).filter(r=>!r.deleted_at && r.status==='agm_review');
   const agmRfps = (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm');
   const budgetLiqs = (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm');
   const caLiqs = (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm');
@@ -43978,7 +43976,7 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   const stamp=()=>new Date().toISOString();
   const nn=(s)=>(s&&String(s).trim())||null;
   // Purchase requests
-  async function approvePR(pr, note){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['purchasing','purchasing_admin','purchasing_personnel'], `✅ Department request ${pr.number||''} approved by AGM — ready for Purchasing to review.`, 'requests','purchase_request',pr.id); reload&&reload(); }
+  async function approvePR(pr, note){ const { error }=await sb.from('purchase_requests').update({ status:'admin_review', agm_approved_by:profile.id, agm_approved_at:stamp(), agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `📝 Department request ${pr.number||''} approved by AGM — awaiting your final approval.`, 'approvals','purchase_request',pr.id); reload&&reload(); }
   async function returnPR(pr, note){ note = note===undefined ? prompt('Return this request to the department. What needs fixing?') : note; if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', agm_note:nn(note) }).eq('id',pr.id); if(error){ alert(error.message); return; } reload&&reload(); }
   // RFPs
   async function approveRFP(r, note){
@@ -44134,7 +44132,7 @@ function LiquidationDocsModal({ kind, data, profiles, onClose }){
   );
 }
 
-function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, cashAdvances, reload }){
+function ApprovalsView({ profile, profiles, employees, rfps, requests, budgetRequests, orders, suppliers, bankAccounts, vouchers, salesOrders, soPayments, hrMemos, hrLoans, hrMovements, costCenters, leaveCashouts, leaveBalances, cashAdvances, reload }){
   const [openRfp,setOpenRfp]=useState(null);
   const [liqDocs,setLiqDocs]=useState(null); // { kind, data } — view a liquidation's receipts before posting
   const [payingBank,setPayingBank]=useState(null); // RFP being marked paid — pick which of our banks
@@ -44193,6 +44191,16 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
   }
   const memoWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const pendingRfps = (rfps||[]).filter(r => r.status==='pending_admin');
+  // Department purchase requests awaiting Admin's final approval (after Admin Office → AGM).
+  const pendingDeptPRs = (profile.role==='admin') ? (requests||[]).filter(r => !r.deleted_at && r.status==='admin_review') : [];
+  const prWho=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+  const prLines=(pr)=> Array.isArray(pr.lines)?pr.lines:[];
+  async function approveDeptPR(pr){ const { error }=await sb.from('purchase_requests').update({ status:'submitted', approver_note:`Admin-approved by ${profile.name||profile.email}` }).eq('id',pr.id); if(error){ alert(error.message); return; }
+    try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`✅ Purchase request ${pr.number||''} approved (Admin Office → AGM → Admin) — ready for Purchasing to process.`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+    reload&&reload(); }
+  async function returnDeptPR(pr){ const note=prompt('Return this request. What needs fixing?'); if(note===null) return; const { error }=await sb.from('purchase_requests').update({ status:'rejected', approver_note:(note||'').trim()||'Returned by Admin' }).eq('id',pr.id); if(error){ alert(error.message); return; }
+    try{ if(pr.requested_by && pr.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:pr.requested_by, actor_id:profile.id, type:'system', text:`↩ Your purchase request ${pr.number||''} was returned by Admin: ${(note||'').trim().slice(0,90)}`, link_view:'requests', ref_type:'purchase_request', ref_id:pr.id }); }catch(_){}
+    reload&&reload(); }
   // Batch admin sign-off: tick several RFPs and approve them all at once.
   const [selRfp,setSelRfp]=useState(()=>new Set());
   const [batchBusy,setBatchBusy]=useState(false);
@@ -44474,6 +44482,29 @@ function ApprovalsView({ profile, profiles, employees, rfps, budgetRequests, ord
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Department purchase requests — final Admin approval (Admin Office → AGM → Admin) */}
+      {pendingDeptPRs.length>0 && (
+        <div className="bg-white border rounded-xl overflow-hidden mb-4">
+          <div className="px-4 py-3 bg-cyan-50 border-b border-cyan-200 flex items-center justify-between">
+            <div className="font-semibold text-cyan-900">🛒 Department Purchase Requests <span className="text-cyan-600 font-normal text-xs ml-1">· {pendingDeptPRs.length} awaiting your final approval</span></div>
+            <div className="text-xs text-cyan-700">Cleared by Admin Office &amp; AGM — your approval releases it to Purchasing.</div>
+          </div>
+          <div className="divide-y">{pendingDeptPRs.map(pr=>{ const lines=prLines(pr); const qty=lines.reduce((s,l)=>s+(Number(l.qty)||0),0); return (
+            <div key={pr.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+              <div className="flex-1 min-w-[220px]">
+                <div className="font-medium">{pr.number||'PR'} · by {prWho(pr.requested_by||pr.created_by)}</div>
+                <div className="text-xs text-slate-500">{lines.length} item{lines.length===1?'':'s'} · {qty} pc{qty===1?'':'s'}{pr.urgency&&pr.urgency!=='normal'?` · ${pr.urgency}`:''}{pr.justification?` · ${pr.justification.slice(0,60)}`:''}</div>
+                <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-[36rem]">{lines.map(l=>`${l.description||'item'} ×${l.qty||1}`).join(', ')}</div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={()=>returnDeptPR(pr)} className="px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">Return</button>
+                <button onClick={()=>approveDeptPR(pr)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve</button>
+              </div>
+            </div>
+          ); })}</div>
         </div>
       )}
 
@@ -57036,7 +57067,7 @@ function App(){
         {view==='logistics' && <DailyLogistics profile={profile} profiles={profiles} clients={clients} openDeliveryId={inboxDeliveryId} onConsumedDelivery={()=>setInboxDeliveryId(null)} />}
         {view==='trip-tickets' && <TripTicketsView profile={profile} />}
         {/* Finance Sprint 1 routes — all read from loadAll() state and update via reload */}
-        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} cashAdvances={cashAdvances} reload={loadAll} />}
+        {view==='approvals' && <ApprovalsView profile={profile} profiles={profiles} employees={employees} rfps={rfps} requests={requests} budgetRequests={budgetRequests} orders={orders} suppliers={suppliers} bankAccounts={bankAccounts} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} hrMemos={hrMemos} hrLoans={hrLoans} hrMovements={hrMovements} costCenters={costCenters} leaveCashouts={leaveCashouts} leaveBalances={leaveBalances} cashAdvances={cashAdvances} reload={loadAll} />}
         {view==='agm-approvals' && <AGMApprovalsView profile={profile} profiles={profiles} requests={requests} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} pcReplenishments={pcReplenishments} items={items} reload={loadAll} />}
         {view==='fin-home' && <FinanceHomeView profile={profile} profiles={profiles} rfps={rfps} vouchers={vouchers} salesOrders={salesOrders} soPayments={soPayments} expenses={expenses} budgetRequests={budgetRequests} bankAccounts={bankAccounts} bankTransactions={bankTransactions} orders={orders} navTo={navTo} onGoToPayments={()=>{ setView('sales-orders'); setJumpToPayments(true); }} />}
         {view==='prod-home' && <ProductionSupervisorHomeView profile={profile} profiles={profiles} prodJobs={prodJobs} sampleJobs={sampleJobs} graphicJobs={graphicJobs} printingJobs={printingJobs} embroideryJobs={embroideryJobs} knittingJobs={knittingJobs} leads={leads} deptActivityCounts={deptActivityCounts} navTo={navTo} />}
