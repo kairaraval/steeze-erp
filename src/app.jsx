@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 970 · Payroll fixes: (1) Biometric import now reads flash-drive/USB exports properly — tab- and space-separated files, .dat/.txt with no header, and more date-time formats — so the Import button appears and punches actually save (before, the reader only handled comma-CSV, so nothing imported). (2) Attendance Filings now has Undertime (records approved undertime minutes on the day) and Leave (files a leave that posts to the Leave Tracker for approval).";
+const BUILD = "Live build 971 · Cleanup: removed the Payment Calendar view from the Finance module, and removed the 'For Bank Payment' section from the admin Approvals view.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -44641,61 +44641,6 @@ function ApprovalsView({ profile, profiles, employees, rfps, requests, budgetReq
         )}
       </div>
 
-      {/* For Bank Payment — approved RFPs awaiting the actual bank transaction (admin/owner only) */}
-      {profile.role==='admin' && (
-      <div className="bg-white border rounded-xl overflow-hidden mb-4">
-        <div className="px-4 py-3 bg-teal-50 border-b border-teal-200 flex items-center justify-between flex-wrap gap-1">
-          <div className="font-semibold text-teal-900">🏦 For Bank Payment <span className="text-teal-600 font-normal text-xs ml-1">· {forBankPayment.length} to pay</span></div>
-          {selBank.size>0 ? (
-            <div className="flex items-center gap-2">
-              <select value={bankPayBank} onChange={e=>setBankPayBank(e.target.value)} className="text-xs border rounded-lg px-2 py-1.5"><option value="">Paid from bank…</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
-              <button onClick={markSelectedBankPaid} disabled={batchBusy} className="text-xs px-3 py-1.5 rounded-lg bg-teal-600 text-white font-semibold hover:bg-teal-700 disabled:opacity-50">{batchBusy?'Marking…':`✓ Mark ${selBank.size} paid`}</button>
-            </div>
-          ) : <div className="text-xs text-teal-700">You approved these — process the payment in your bank, then click Done.</div>}
-        </div>
-        {forBankPayment.length===0 ? (
-          <div className="px-4 py-6 text-center text-slate-400 text-sm">Nothing to pay. Approved RFPs that still need a bank payment show up here.</div>
-        ) : (<>
-          <table className="hidden md:table w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
-              <th className="px-3 py-2 w-8"><input type="checkbox" checked={allSel(forBankPayment,selBank)} onChange={()=>setSelBank(()=> allSel(forBankPayment,selBank)?new Set():new Set(forBankPayment.map(r=>r.id)))} className="accent-teal-600" title="Select all" /></th>
-              <th className="text-left px-3 py-2">RFP#</th>
-              <th className="text-left px-3 py-2">Approved</th>
-              <th className="text-left px-3 py-2">Supplier</th>
-              <th className="text-left px-3 py-2">Pay to (bank)</th>
-              <th className="text-right px-3 py-2">Amount</th>
-              <th></th>
-            </tr></thead>
-            <tbody>{forBankPayment.map(r=>{
-              const po=orders.find(o=>o.id===r.po_id);
-              const waited = r.admin_approved_at ? Math.floor((Date.now()-new Date(r.admin_approved_at).getTime())/86400000) : 0;
-              const bankLine = [r.bank_name, r.bank_account_number].filter(Boolean).join(' · ');
-              return (
-                <tr key={r.id} className="border-t hover:bg-teal-50/40">
-                  <td className="px-3 py-2"><input type="checkbox" checked={selBank.has(r.id)} onChange={()=>toggleBank(r.id)} className="accent-teal-600" /></td>
-                  <td className="px-3 py-2 font-mono text-xs cursor-pointer" onClick={()=>setOpenRfp(r)}>{r.number}{r.status==='partial' && <span className="ml-1 text-[9px] uppercase font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700">partial</span>}</td>
-                  <td className="px-3 py-2 text-xs">{fmtDate(r.admin_approved_at)} <span className={`ml-1 ${waited>=3?'text-rose-600 font-semibold':'text-slate-400'}`}>· {waited===0?'today':waited+'d ago'}</span></td>
-                  <td className="px-3 py-2">{r.supplier_name||'—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500">{bankLine|| (r.payment_method||'—')}</td>
-                  <td className="px-3 py-2 text-right font-bold text-rose-700">{peso(r.amount)}</td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={()=>markBankPaid(r)} className="text-xs px-2.5 py-1 rounded bg-teal-600 text-white font-semibold hover:bg-teal-700">✓ Done (paid)</button><button onClick={()=>cancelBankPayment(r)} className="ml-1.5 text-xs px-2.5 py-1 rounded border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50">Cancel</button></td>
-                </tr>
-              );
-            })}</tbody>
-          </table>
-          <div className="md:hidden divide-y border-t">{forBankPayment.map(r=>{
-            const po=orders.find(o=>o.id===r.po_id);
-            const bankLine = [r.bank_name, r.bank_account_number].filter(Boolean).join(' · ');
-            return (
-              <ApprovalMRow key={r.id} title={r.number} sub={r.supplier_name||'—'} meta={`${bankLine||r.payment_method||''} · approved ${fmtDate(r.admin_approved_at)}`} amount={peso(r.amount)}>
-                <button onClick={()=>markBankPaid(r)} className="flex-1 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold">✓ Done (paid)</button>
-                <button onClick={()=>cancelBankPayment(r)} className="py-2 px-3 rounded-lg border border-rose-300 text-rose-600 text-sm font-semibold">Cancel</button>
-              </ApprovalMRow>
-            );
-          })}</div>
-        </>)}
-      </div>
-      )}
 
       {/* Liquidations the AGM approved — awaiting your final sign-off */}
       {(liqBudgets.length>0 || liqCAs.length>0) && (
@@ -55890,7 +55835,7 @@ function App(){
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
-        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','payment-calendar','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
+        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
@@ -55978,7 +55923,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','payment-calendar','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -56574,7 +56519,6 @@ function App(){
     ['fin-home','Home','💼'],
     ['cash-position','Cash Position','💎'],
     ['cash-flow','Cash Flow','📈'],
-    ['payment-calendar','Payment Calendar','🗓'],
     ['estimates','Estimates','🧾'],
     ['sales-orders','Sales Orders','📜'],
     ['invoices','Invoices','🧾'],
@@ -56646,7 +56590,7 @@ function App(){
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['payment-calendar','Payment Calendar','🗓'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
+      { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
@@ -57169,7 +57113,6 @@ function App(){
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
-        {view==='payment-calendar' && <PaymentCalendarView profile={profile} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} vouchers={vouchers} suppliers={suppliers} calendarEvents={calendarEvents} reload={loadAll} />}
         {view==='pnl' && <PnLView salesOrders={salesOrders} soPayments={soPayments} orders={orders} expenses={expenses} vouchers={vouchers} bankTransactions={bankTransactions} cashAdvances={cashAdvances} />}
         {view==='bir' && <BIRHelpersView profile={profile} orders={orders} salesOrders={salesOrders} suppliers={suppliers} vouchers={vouchers} />}
         {view==='sales-orders' && <SalesOrdersView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} invoices={invoices} bankAccounts={bankAccounts} clients={clients} leads={leads} salesCommissions={salesCommissions} soActivityCounts={soActivityCounts} openPaymentsTab={jumpToPayments} onPaymentsTabOpened={()=>setJumpToPayments(false)} reload={loadAll} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} onOpenLead={(l)=>setDetailLead(l)} />}
