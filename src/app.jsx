@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 973 · Consistent name order: every employee list across the app — attendance, payroll register/payslips, remittance, payout, 13th-month, and production rosters — now sorts alphabetically by LAST name, then first name (Abdon, Lorelie before Tobias, Aira).";
+const BUILD = "Live build 974 · Consistent name order (fixes a crash in the payroll Register print): every employee list across the app — attendance, payroll register/payslips, remittance, payout, 13th-month, and production rosters — now sorts alphabetically by LAST name, then first name (Abdon, Lorelie before Tobias, Aira).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -43807,7 +43807,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
         <div className="text-[10px] text-slate-400">Tip: edit any cell before review to override a computed figure (the net recomputes live). Recompute rebuilds from the approved DTRs. SSS/PHIC/HDMF/Tax come from the editable statutory tables at ×{run.contrib_factor}.</div>
       </div>
       {slip && <PayslipModal item={slip} run={run} emp={empById(slip.employee_id)} onClose={()=>setSlip(null)} />}
-      {printReg && <PayrollRegisterModal run={run} items={items} empName={empName} onClose={()=>setPrintReg(false)} />}
+      {printReg && <PayrollRegisterModal run={run} items={items} empName={empName} employees={employees} onClose={()=>setPrintReg(false)} />}
       {printRemit && <PayrollRemittanceModal run={run} items={items} employees={employees} refs={refs} latestTax={latestTax} onClose={()=>setPrintRemit(false)} />}
       {printPayout && <PayrollPayoutModal run={run} items={items} employees={employees} onClose={()=>setPrintPayout(false)} />}
     </Modal>
@@ -43831,7 +43831,8 @@ function PayslipModal({ item, run, emp, onClose }){
     </div>
   </Modal>);
 }
-function PayrollRegisterModal({ run, items, empName, onClose }){
+function PayrollRegisterModal({ run, items, empName, employees, onClose }){
+  const empById=(id)=>(employees||[]).find(e=>e.id===id);
   const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const t=(k)=>items.reduce((a,i)=>a+Number(i[k]||0),0);
   return (<Modal title={`Payroll register · ${run.number}`} onClose={onClose} xwide>
