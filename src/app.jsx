@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 975 · Payroll search: added an employee search box to the Attendance/DTR view, the Payroll Run register, and Payroll Setup → Employee pay setup, so you can quickly find anyone to review or adjust.";
+const BUILD = "Live build 976 · Performance: the app no longer downloads thousands of activity rows on every load — comment counts (leads, jobs, sales orders), the 'my leads' signal, and the item-name catalog are now computed on the server. Each login ships ~10,000 fewer rows, so the OS stays fast under heavy simultaneous use.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1480,16 +1480,11 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
   const [itemOptions,setItemOptions]=useState([]);
   useEffect(()=>{ let alive=true; (async()=>{
     try {
-      const [lds,est] = await Promise.all([
-        fetchAll(()=>sb.from('leads').select('items')),
-        fetchAll(()=>sb.from('estimates').select('items')),
-      ]);
+      const { data:cat }=await sb.rpc('item_type_catalog');
       const map=new Map();
-      for(const row of [...(lds.data||[]), ...(est.data||[])]){
-        for(const it of (row.items||[])){
-          const name=(it&&(it.itemType||it.item_type)||'').trim();
-          if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
-        }
+      for(const row of (cat||[])){
+        const name=(row&&row.name||'').trim();
+        if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
       }
       if(alive) setItemOptions([...map.values()].sort((a,b)=>a.localeCompare(b)));
     } catch(_){}
@@ -2150,16 +2145,11 @@ function EstimateModal({ profile, lead, client, clients, onClose, reload, canEdi
     // used — powers the Item <datalist> so staff pick from a dropdown but can
     // still type a brand-new item that isn't on the list yet.
     try {
-      const [est,lds] = await Promise.all([
-        sb.from('estimates').select('items'),
-        sb.from('leads').select('items'),
-      ]);
+      const { data:cat }=await sb.rpc('item_type_catalog');
       const map = new Map(); // lowercase -> display (first-seen casing)
-      for(const row of [...(est.data||[]), ...(lds.data||[])]){
-        for(const it of (row.items||[])){
-          const name=(it&&(it.itemType||it.item_type)||'').trim();
-          if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
-        }
+      for(const row of (cat||[])){
+        const name=(row&&row.name||'').trim();
+        if(name){ const k=name.toLowerCase(); if(!map.has(k)) map.set(k,name); }
       }
       if(alive) setItemOptions([...map.values()].sort((a,b)=>a.localeCompare(b)));
     } catch(_){}
@@ -6751,8 +6741,8 @@ function SalesRepHomeView({ profile, profiles, leads, clients, prodJobs, sampleJ
     setTkLoading(false);
     if(!useActivitySignal){ setMyLeadIds(new Set()); return; }
     try{
-      const { data:act }=await fetchAllRows('lead_activity','lead_id,actor_id');
-      const mine=new Set((act||[]).filter(r=>r.actor_id===me && r.lead_id).map(r=>r.lead_id));
+      const { data:act }=await fetchAll(()=>sb.from('lead_activity').select('lead_id').eq('actor_id',me));
+      const mine=new Set((act||[]).filter(r=>r.lead_id).map(r=>r.lead_id));
       setMyLeadIds(mine);
     }catch(_){ setMyLeadIds(new Set()); }
   })(); },[profile.id]);
@@ -55676,8 +55666,8 @@ function App(){
       Promise.resolve({data:null}),  /* leads (~1.2MB) — already streamed above; skip the duplicate download */
       sb.from('lead_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
       sb.from('dept_job_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
-      fetchAll(()=>sb.from('lead_activity').select('lead_id').eq('type','comment')),
-      fetchAll(()=>sb.from('dept_job_activity').select('job_id,job_type').eq('type','comment')),
+      sb.rpc('lead_comment_counts'),
+      sb.rpc('dept_comment_counts'),
       fetchAll(()=>sb.from('production_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
       fetchAll(()=>sb.from('graphic_design_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
       fetchAll(()=>sb.from('printing_jobs').select('*').is('deleted_at', null).order('created_at',{ ascending:false })),
@@ -55740,7 +55730,7 @@ function App(){
       // (so the per-SO comment count badge can render in the SO modal).
       // Graceful empty fallback if SQL hasn't been run yet.
       sb.from('sales_order_activity').select('*').contains('mentions',[me]).order('created_at',{ ascending:false }).limit(100),
-      fetchAll(()=>sb.from('sales_order_activity').select('sales_order_id').eq('type','comment')),
+      sb.rpc('so_comment_counts'),
       // Sales commissions ledger (graceful empty if SQL not yet run).
       fetchAll(()=>sb.from('sales_commissions').select('*').order('earned_at',{ ascending:false })),
       // Sewing board (graceful empty if SQL not yet run).
@@ -55769,12 +55759,12 @@ function App(){
     let mktMentions=[];
     try { const mkt = await sb.from('marketing_content_activity').select('*').contains('mentions',[me]).order('created_at',{ascending:false}).limit(100); mktMentions = (mkt && !mkt.error ? (mkt.data||[]) : []).map(r=>({ ...r, source:'marketing' })); } catch(_){}
     setMentions([...leadMentions,...deptMentions,...soMentions,...prMentions,...noteMentions,...mktMentions].sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')));
-    const counts={}; (ac.data||[]).forEach(r=>{ counts[r.lead_id]=(counts[r.lead_id]||0)+1; }); setActivityCounts(counts);
+    const counts={}; (ac.data||[]).forEach(r=>{ counts[r.lead_id]=Number(r.n)||0; }); setActivityCounts(counts);
     // Same pattern but for dept-job activity. Key is job_id (uuid) so it
     // works across production / graphic / printing / sampling boards.
-    const dCounts={}; (dac.data||[]).forEach(r=>{ dCounts[r.job_id]=(dCounts[r.job_id]||0)+1; }); setDeptActivityCounts(dCounts);
+    const dCounts={}; (dac.data||[]).forEach(r=>{ dCounts[r.job_id]=Number(r.n)||0; }); setDeptActivityCounts(dCounts);
     // Per-SO comment counts (graceful empty if SQL hasn't run yet).
-    const soCounts={}; (soac && !soac.error ? (soac.data||[]) : []).forEach(r=>{ soCounts[r.sales_order_id]=(soCounts[r.sales_order_id]||0)+1; }); setSoActivityCounts(soCounts);
+    const soCounts={}; (soac && !soac.error ? (soac.data||[]) : []).forEach(r=>{ soCounts[r.sales_order_id]=Number(r.n)||0; }); setSoActivityCounts(soCounts);
     setProdJobs(pj.data||[]); setGraphicJobs(gj.data||[]); setPrintingJobs(prj.data||[]);
     // Graceful empty fallback for the two new boards — fail-safe if SQL hasn't been run.
     setEmbroideryJobs(emb && !emb.error ? (emb.data||[]) : []);
