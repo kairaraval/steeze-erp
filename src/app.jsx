@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 974 · Consistent name order (fixes a crash in the payroll Register print): every employee list across the app — attendance, payroll register/payslips, remittance, payout, 13th-month, and production rosters — now sorts alphabetically by LAST name, then first name (Abdon, Lorelie before Tobias, Aira).";
+const BUILD = "Live build 975 · Payroll search: added an employee search box to the Attendance/DTR view, the Payroll Run register, and Payroll Setup → Employee pay setup, so you can quickly find anyone to review or adjust.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -42332,6 +42332,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
   const [editHol,setEditHol]=useState(null);
   const [govEmp,setGovEmp]=useState(null);
   const [emps,setEmps]=useState([]);
+  const [empQ,setEmpQ]=useState('');
   async function load(){
     setLoading(true);
     try{ const { data }=await sb.from('work_schedules').select('*').is('deleted_at',null).order('name'); setSchedules(data||[]); }catch(_){ setSchedules([]); }
@@ -42468,10 +42469,17 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
       {/* ───── Employee pay setup ───── */}
       {tab==='employees' && (
         <div className="space-y-3">
-          <div className="text-xs text-slate-500">Assign each employee a schedule, pay cycle, pay basis and biometric enrollment ID. {emps.length} active employee{emps.length===1?'':'s'}.</div>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs text-slate-500">Assign each employee a schedule, pay cycle, pay basis and biometric enrollment ID. {emps.length} active employee{emps.length===1?'':'s'}.</div>
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+              <input value={empQ} onChange={e=>setEmpQ(e.target.value)} placeholder="Search employee…" className="border rounded-lg pl-8 pr-7 py-1.5 text-sm w-56" />
+              {empQ && <button onClick={()=>setEmpQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm">✕</button>}
+            </div>
+          </div>
           <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
             <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Schedule</th><th className="text-left px-3 py-2">Pay cycle</th><th className="text-left px-3 py-2">Pay basis</th><th className="text-left px-3 py-2">Classification</th><th className="text-left px-3 py-2">Biometric ID</th><th className="text-left px-3 py-2">Gov contributions</th></tr></thead>
-            <tbody>{emps.slice().sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`)).map(e=>(
+            <tbody>{emps.slice().filter(e=>!empQ.trim()||`${e.first_name||''} ${e.last_name||''} ${e.nickname||''} ${e.department||''} ${e.employee_number||''}`.toLowerCase().includes(empQ.trim().toLowerCase())).sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`)).map(e=>(
               <tr key={e.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-medium">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—'}{e.employee_number?<span className="text-[10px] text-slate-400 ml-1 font-mono">{e.employee_number}</span>:null}</td>
                 <td className="px-3 py-2 text-xs text-slate-500">{e.department||'—'}</td>
@@ -43045,6 +43053,7 @@ function AttendanceDtrView({ profile, employees, reload }){
   const [importOpen,setImportOpen]=useState(false);
   const [deviceOpen,setDeviceOpen]=useState(null); // device or 'new'
   const [editCell,setEditCell]=useState(null);     // { emp, date, row }
+  const [q,setQ]=useState('');
 
   // Period → [start,end] date strings.
   const monthEnd=new Date(year, month+1, 0).getDate();
@@ -43054,6 +43063,7 @@ function AttendanceDtrView({ profile, employees, reload }){
   const dates=dateRangeList(start,end);
 
   const activeEmps=(employees||[]).filter(e=>!e.deleted_at && e.is_active!==false).sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`));
+  const shownEmps=q.trim() ? activeEmps.filter(e=>`${e.first_name||''} ${e.last_name||''} ${e.nickname||''}`.toLowerCase().includes(q.trim().toLowerCase())) : activeEmps;
   const enrollMap=React.useMemo(()=>{ const m={}; activeEmps.forEach(e=>{ if(e.biometric_enroll_id) m[String(e.biometric_enroll_id)]=e.id; }); return m; },[employees]);
   const schedOf=(e)=>schedules.find(s=>s.id===e.schedule_id)||null;
   const holByDate=React.useMemo(()=>{ const m={}; holidays.forEach(h=>{ m[h.holiday_date]=h; }); return m; },[holidays]);
@@ -43132,6 +43142,11 @@ function AttendanceDtrView({ profile, employees, reload }){
           )}
           <button onClick={()=>shiftPeriod(1)} className="px-2 py-1.5 rounded-lg border bg-white text-sm">▶</button>
           {canManage && (dtr||[]).length>0 && <button onClick={approveAll} className="ml-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✓ Approve cutoff</button>}
+          <div className="relative ml-auto">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search employee…" className="border rounded-lg pl-8 pr-7 py-1.5 text-sm w-48" />
+            {q && <button onClick={()=>setQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm">✕</button>}
+          </div>
         </div>
       </div>
 
@@ -43145,7 +43160,7 @@ function AttendanceDtrView({ profile, employees, reload }){
             {dates.map(d=>{ const dd=new Date(d+'T00:00:00'); const hol=holByDate[d]; return <th key={d} className={`px-1 py-2 text-center ${hol?'text-amber-600':''}`} title={hol?hol.name:''}>{dd.getDate()}<div className="text-[8px] font-normal">{DOW[dd.getDay()]}</div></th>; })}
             <th className="px-2 py-2 text-center">P/A</th><th className="px-2 py-2 text-right">Late</th><th className="px-2 py-2 text-right">OT</th>{canManage&&<th></th>}
           </tr></thead>
-          <tbody>{activeEmps.map(e=>{ const sum=empSummary(e); const allApproved=dates.every(ds=>{ const r=dtrIndex[e.id]?.[ds]; return !r || r.approved; }) && dates.some(ds=>dtrIndex[e.id]?.[ds]); return (
+          <tbody>{shownEmps.map(e=>{ const sum=empSummary(e); const allApproved=dates.every(ds=>{ const r=dtrIndex[e.id]?.[ds]; return !r || r.approved; }) && dates.some(ds=>dtrIndex[e.id]?.[ds]); return (
             <tr key={e.id} className="border-t hover:bg-slate-50">
               <td className="px-2 py-1.5 sticky left-0 bg-white z-10 font-medium whitespace-nowrap">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname}{!e.schedule_id && <span className="ml-1 text-[9px] text-rose-400" title="No schedule assigned">⚠</span>}</td>
               {dates.map(ds=>{ const r=dtrIndex[e.id]?.[ds]; const meta=r?DTR_STATUS_META[r.status]:null; const dow=new Date(ds+'T00:00:00').getDay(); const sched=schedOf(e); const isRest=((sched?.rest_days)||[0]).includes(dow); return (
@@ -43725,6 +43740,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
   const [printRemit,setPrintRemit]=useState(false);
   const [printPayout,setPrintPayout]=useState(false);
   const [st,setSt]=useState(run.status);
+  const [q,setQ]=useState('');
   const locked = st==='approved';
   const empById=(id)=>(employees||[]).find(e=>e.id===id);
   const empName=(id)=>{ const e=empById(id); return e?[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—':'—'; };
@@ -43783,6 +43799,13 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
           </div>
         </div>
         {st==='approved' && <div className="text-xs bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">AGM approved — figures are locked and loan balances posted. The CEO views the final payroll; the bank transfer is released outside the OS.</div>}
+        {items.length>0 && (
+          <div className="relative max-w-xs">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search employee…" className="w-full border rounded-lg pl-8 pr-7 py-1.5 text-sm" />
+            {q && <button onClick={()=>setQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm">✕</button>}
+          </div>
+        )}
         {loading ? <div className="text-center text-slate-400 py-8 text-sm">Loading…</div> : items.length===0 ? <div className="text-center text-slate-400 py-8 text-sm">No employees in this run.</div> : (
           <div className="overflow-x-auto border rounded-lg"><table className="text-xs whitespace-nowrap">
             <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr>
@@ -43790,7 +43813,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
               {COLS.map(([k,l])=><th key={k} className="text-right px-2 py-1.5">{l}</th>)}
               <th className="text-right px-2 py-1.5">Gross</th><th className="text-right px-2 py-1.5">Deduct</th><th className="text-right px-2 py-1.5 font-bold">Net</th><th></th>
             </tr></thead>
-            <tbody>{items.slice().sort((a,b)=>byEmpName(empById(a.employee_id)||{},empById(b.employee_id)||{})).map(it=>(
+            <tbody>{items.slice().filter(it=>!q.trim()||empName(it.employee_id).toLowerCase().includes(q.trim().toLowerCase())).sort((a,b)=>byEmpName(empById(a.employee_id)||{},empById(b.employee_id)||{})).map(it=>(
               <tr key={it.id} className="border-t hover:bg-slate-50">
                 <td className="px-2 py-1 sticky left-0 bg-white font-medium">{empName(it.employee_id)}</td>
                 <td className="px-2 py-1 text-right text-slate-500">{Number(it.days_worked||0)}/{Number(it.days_in_period||0)}</td>
