@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 972 · Dashboard: the Open Pipeline Value card is now clickable — opens a ranked list of every open lead (biggest value first) showing the client, the sales manager, and the current status, so you can see where to push.";
+const BUILD = "Live build 973 · Consistent name order: every employee list across the app — attendance, payroll register/payslips, remittance, payout, 13th-month, and production rosters — now sorts alphabetically by LAST name, then first name (Abdon, Lorelie before Tobias, Aira).";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -5867,7 +5867,7 @@ function DeptDailyLogModal({ job, process, profile, employees, onClose }){
   const [busy,setBusy]=useState(false);
   let staff=(employees||[]).filter(e=> e.is_active!==false && outputStaffMatch(process,e));
   if(staff.length===0) staff=(employees||[]).filter(e=> e.is_active!==false);
-  staff=staff.slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  staff=staff.slice().sort((a,b)=>byEmpName(a,b));
   const wordDone = process==='printing'?'printed':process==='embroidery'?'embroidered':'knitted';
   async function loadLogs(){ const { data }=await sb.from('process_output_logs').select('*').eq('worklist_id',job.id).eq('process',process).is('deleted_at',null).order('log_date',{ascending:false}).order('created_at',{ascending:false}); setLogs(data||[]); }
   useEffect(()=>{ loadLogs(); },[job.id]);
@@ -9035,7 +9035,7 @@ function SewingBoard({ profile, profiles, employees, jobs, leads, reload, openTe
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('sewing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.sewing_job_id]=replByJob[r.sewing_job_id]||[]).push(r); });
   // Sewers = active employees whose position mentions "sew" (Sewer, Sewing Head, Button Sew).
-  const sewers=(employees||[]).filter(e=> e.is_active!==false && /sew/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const sewers=(employees||[]).filter(e=> e.is_active!==false && /sew/i.test(String(e.position||''))).sort((a,b)=>byEmpName(a,b));
   const q=search.trim().toLowerCase();
   const filtered=jobs.filter(j=>{ if(!q) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(SEWING_STATUSES.find(s=>s.key===j.status)||{}).label||''; const itemList=(j.items||[]).map(it=>`${it.itemType||''} ${it.quantity||''}`).join(' '); return [j.number,j.client_name,j.item,j.sewer_name,j.notes,st,l?.title,l?.client_name,l?.po_number,l?.techpack_number,itemList].filter(Boolean).join(' ').toLowerCase().includes(q); });
 
@@ -9561,7 +9561,7 @@ function PackingBoard({ profile, profiles, employees, jobs, leads, reload, openT
   const [colSort, cycleColSort]=useBoardSort('packColSort');
   useEffect(()=>{ let live=true; (async()=>{ const { data } = await sb.from('packing_replacements').select('*').order('created_at',{ascending:false}); if(live) setReplacements(data||[]); })(); return ()=>{ live=false; }; },[bump, jobs.length]);
   const replByJob={}; replacements.forEach(r=>{ (replByJob[r.packing_job_id]=replByJob[r.packing_job_id]||[]).push(r); });
-  const packers=(employees||[]).filter(e=> e.is_active!==false && /pack/i.test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const packers=(employees||[]).filter(e=> e.is_active!==false && /pack/i.test(String(e.position||''))).sort((a,b)=>byEmpName(a,b));
   const q=search.trim().toLowerCase();
   const filtered=jobs.filter(j=>{ if(!q) return true; const l=j.lead_id?(leads||[]).find(x=>x.id===j.lead_id):null; const st=(PACKING_STATUSES.find(s=>s.key===j.status)||{}).label||''; const itemList=(j.items||[]).map(it=>`${it.itemType||''} ${it.quantity||''}`).join(' '); return [j.number,j.client_name,j.item,j.notes,st,l?.title,l?.client_name,l?.po_number,l?.techpack_number,itemList].filter(Boolean).join(' ').toLowerCase().includes(q); });
 
@@ -14923,7 +14923,7 @@ function ProcessReportModal({ w, profile, profiles, employees, leads, subcons, p
   // Daily output log — pressing boards only. Each entry: date + machine +
   // operators + pcs done that day (tracks daily capacity on big projects).
   const showPress=isPressingProcess(process);
-  const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffMatch(process, e)).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const pressStaff=(employees||[]).filter(e=> e.is_active!==false && pressingStaffMatch(process, e)).sort((a,b)=>byEmpName(a,b));
   const [logs,setLogs]=useState([]);
   const emptyLog={ log_date:todayManila(), machine:'', operators:[], qty:'', notes:'', item_label:'' };
   const [lf,setLf]=useState(emptyLog);
@@ -15222,7 +15222,7 @@ function SortingBatchModal({ batch, worklistItem, projItems, process, title, pro
   const [releasedBy,setReleasedBy]=useState(Array.isArray(batch?.released_by)?batch.released_by:[]);
   const [notes,setNotes]=useState(batch?.notes||'');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const staff=(employees||[]).filter(e=> e.is_active!==false && sortingStaffRegex(process).test(String(e.position||''))).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const staff=(employees||[]).filter(e=> e.is_active!==false && sortingStaffRegex(process).test(String(e.position||''))).sort((a,b)=>byEmpName(a,b));
   const subconList=(subcons||[]).filter(s=>!s.deleted_at && s.active!==false).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   function setSize(i,k,v){ setSizes(a=>a.map((s,x)=>x===i?{...s,[k]:v}:s)); }
   function setTrim(i,k,v){ setTrims(a=>a.map((t,x)=>x===i?{...t,[k]:v}:t)); }
@@ -15631,7 +15631,7 @@ function HrEscalationModal({ init, profile, profiles, employees, onClose, onSave
   const [reason,setReason]=useState('');
   const [details,setDetails]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
-  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>byEmpName(a,b));
   async function save(){
     if(!subject.trim()){ setMsg('Add a subject.'); return; }
     setBusy(true); setMsg('');
@@ -17697,6 +17697,11 @@ const DOC_TYPES = [
   { key:'other',       label:'Other' },
 ];
 function fullName(e){ return [e.first_name, e.middle_name, e.last_name].filter(Boolean).join(' '); }
+// Canonical sort key for an employee: LAST name, then first, then middle — so
+// every list across the app (attendance, payroll, reports, production rosters)
+// orders people the same way (Abdon, Lorelie before Tobias, Aira).
+function empSortKey(e){ e=e||{}; return [e.last_name, e.first_name, e.middle_name].map(x=>String(x||'').trim().toLowerCase()).join(' '); }
+function byEmpName(a,b){ return empSortKey(a).localeCompare(empSortKey(b)); }
 
 // Regularization date = hire_date + 6 months (PH probation max)
 function regularizationDeadline(e){
@@ -17723,7 +17728,7 @@ function SalaryReportView({ profile, employees }){
     .filter(e=> !search || `${fullName(e)} ${e.position||''} ${e.department||''}`.toLowerCase().includes(search.toLowerCase()))
     .map(e=>({ e, basic:Number(e.basic_salary||0), allow:Number(e.allowances||0) }))
     .map(r=>({ ...r, monthly: r.basic + r.allow }))
-    .sort((a,b)=> String(a.e.department||'').localeCompare(String(b.e.department||'')) || fullName(a.e).localeCompare(fullName(b.e)));
+    .sort((a,b)=> String(a.e.department||'').localeCompare(String(b.e.department||'')) || byEmpName(a.e,b.e));
   const tBasic=rows.reduce((s,r)=>s+r.basic,0);
   const tAllow=rows.reduce((s,r)=>s+r.allow,0);
   const tMonthly=rows.reduce((s,r)=>s+r.monthly,0);
@@ -19336,7 +19341,7 @@ function JobRoleEvaluations({ profile, profiles, employees, evalTemplates, evalR
 function EvalStartModal({ employees, templates, onClose, onStart }){
   const [empId,setEmpId]=useState(''); const [tplId,setTplId]=useState('');
   const [period,setPeriod]=useState('');
-  const active=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const active=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>byEmpName(a,b));
   const emp=active.find(e=>e.id===empId);
   // Suggest the template whose position matches the employee.
   const suggested = emp ? (templates||[]).find(t=>(t.position||'').toLowerCase()===(emp.position||'').toLowerCase()) : null;
@@ -20722,7 +20727,7 @@ function HRLeaveView({ profile, profiles, employees, hrLeaves, leaveBalances, le
 function LeaveBalancesPanel({ profile, employees, leaveBalances, canEdit, reload }){
   const [q,setQ]=useState('');
   const [edit,setEdit]=useState(null);   // employee being edited
-  const emps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const emps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>byEmpName(a,b));
   const ql=q.trim().toLowerCase();
   const rows=emps.filter(e=>!ql || fullName(e).toLowerCase().includes(ql) || (e.department||'').toLowerCase().includes(ql));
   return (
@@ -21041,7 +21046,7 @@ function LeaveForm({ leave, employees, profile, leaveBalances, onClose, onSaved 
   const [f,setF]=useState(leave ? { ...leave, paid: leave.paid!==false } : { employee_id:'', leave_type:'vacation', start_date:'', end_date:'', reason:'', paid:true });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
-  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>byEmpName(a,b));
   const meta=leaveTypeMeta(f.leave_type);
   const bal=balanceOfEmp(leaveBalances, f.employee_id);
   const days=leaveWorkingDays(f.start_date, f.end_date);
@@ -21419,7 +21424,7 @@ function MovementFormModal({ movement, employees, profile, onPrint, onClose, onS
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(p=>({...p,[k]:v}));
   const upN=(k,v)=>setNpa(p=>({...p,[k]:v}));
-  const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).slice().sort((a,b)=>byEmpName(a,b));
   // Multi-employee / whole-department NPA (new records only) — mirrors the NTE
   // flow. One NPA record is filed per selected employee, each pulling their own
   // "previous" values + NPA "from" fields automatically.
@@ -21703,7 +21708,7 @@ function CaseFormModal({ caseRow, employees, profile, onPrint, onClose, onSaved 
     setReviewStatus('checked');
     await persistActivity([...activity, entry], { review_status:'checked' });
   }
-  const activeEmps=(employees||[]).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).slice().sort((a,b)=>byEmpName(a,b));
   // Distinct departments (for the "add whole department" picker).
   const deptList=Array.from(new Set((employees||[]).map(e=>String(e.department||'').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
   function addDept(dept){
@@ -22462,7 +22467,7 @@ function GovLoanFormModal({ profile, employees, existing, onClose, onSaved }){
   const isEdit=!!existing;
   const [f,setF]=useState(existing || { employee_id:'', department:'', agency:'SSS', loan_type:'Salary Loan', reference_no:'', date_granted:'', loan_amount:'', monthly_amortization:'', num_months:'', deduction_start_date:'', remarks:'', document_url:null });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(''); const [uploading,setUploading]=useState(false);
-  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').slice().sort((a,b)=>byEmpName(a,b));
   function up(k,v){ setF(p=>({...p,[k]:v})); }
   function onEmp(id){ const e=(employees||[]).find(x=>x.id===id); up('employee_id',id); if(e && e.department && !f.department) up('department', e.department); }
   async function onDoc(file){ if(!file) return; setUploading(true); setMsg('');
@@ -42934,7 +42939,7 @@ function AttendanceFilingModal({ kind, employees, profile, onClose, onSaved }){
   const [f,setF]=useState({ employee_id:'', filing_date:todayManila(), reason:'', time_in:'', time_out:'', rest_day:false, with_break:true, coa_missing:'both', ot_type:'normal', ot_hours:'', special_case:false, offset_hours:'8', undertime_min:'', leave_type:'vacation', end_date:todayManila(), leave_paid:true });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const up=(k,v)=>setF(s=>({...s,[k]:v}));
-  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>fullName(a).localeCompare(fullName(b)));
+  const activeEmps=(employees||[]).filter(e=>e.status!=='resigned'&&e.status!=='terminated').sort((a,b)=>byEmpName(a,b));
   async function save(){
     if(!f.employee_id){ setMsg('Pick an employee.'); return; }
     if(!f.filing_date){ setMsg('Set the date.'); return; }
@@ -43785,7 +43790,7 @@ function PayrollRunDetail({ run, profile, employees, profiles, refs, latestTax, 
               {COLS.map(([k,l])=><th key={k} className="text-right px-2 py-1.5">{l}</th>)}
               <th className="text-right px-2 py-1.5">Gross</th><th className="text-right px-2 py-1.5">Deduct</th><th className="text-right px-2 py-1.5 font-bold">Net</th><th></th>
             </tr></thead>
-            <tbody>{items.slice().sort((a,b)=>empName(a.employee_id).localeCompare(empName(b.employee_id))).map(it=>(
+            <tbody>{items.slice().sort((a,b)=>byEmpName(empById(a.employee_id)||{},empById(b.employee_id)||{})).map(it=>(
               <tr key={it.id} className="border-t hover:bg-slate-50">
                 <td className="px-2 py-1 sticky left-0 bg-white font-medium">{empName(it.employee_id)}</td>
                 <td className="px-2 py-1 text-right text-slate-500">{Number(it.days_worked||0)}/{Number(it.days_in_period||0)}</td>
@@ -43834,7 +43839,7 @@ function PayrollRegisterModal({ run, items, empName, onClose }){
       <div className="text-center"><div className="font-extrabold tracking-wide">STEEZE CORPORATION — PAYROLL REGISTER</div><div className="text-[11px] text-slate-500">{(run.cycle||'').replace('_','-')} · {fmtDate(run.period_start)}–{fmtDate(run.period_end)}</div></div>
       <div className="overflow-x-auto border rounded"><table className="w-full text-[11px] whitespace-nowrap">
         <thead className="bg-slate-50 text-[9px] uppercase text-slate-400"><tr><th className="text-left px-2 py-1">Employee</th><th className="text-right px-2 py-1">Gross</th><th className="text-right px-2 py-1">SSS</th><th className="text-right px-2 py-1">PHIC</th><th className="text-right px-2 py-1">HDMF</th><th className="text-right px-2 py-1">Tax</th><th className="text-right px-2 py-1">Loans</th><th className="text-right px-2 py-1">Deduct</th><th className="text-right px-2 py-1">Net</th></tr></thead>
-        <tbody>{items.slice().sort((a,b)=>empName(a.employee_id).localeCompare(empName(b.employee_id))).map(i=>(<tr key={i.id} className="border-t"><td className="px-2 py-1">{empName(i.employee_id)}</td><td className="px-2 py-1 text-right">{num(i.gross)}</td><td className="px-2 py-1 text-right">{num(i.sss_ee)}</td><td className="px-2 py-1 text-right">{num(i.philhealth_ee)}</td><td className="px-2 py-1 text-right">{num(i.pagibig_ee)}</td><td className="px-2 py-1 text-right">{num(i.tax)}</td><td className="px-2 py-1 text-right">{num(Number(i.gov_loan_ded||0)+Number(i.company_loan_ded||0))}</td><td className="px-2 py-1 text-right text-rose-600">{num(i.total_deductions)}</td><td className="px-2 py-1 text-right font-bold text-emerald-700">{num(i.net_pay)}</td></tr>))}</tbody>
+        <tbody>{items.slice().sort((a,b)=>byEmpName(empById(a.employee_id)||{},empById(b.employee_id)||{})).map(i=>(<tr key={i.id} className="border-t"><td className="px-2 py-1">{empName(i.employee_id)}</td><td className="px-2 py-1 text-right">{num(i.gross)}</td><td className="px-2 py-1 text-right">{num(i.sss_ee)}</td><td className="px-2 py-1 text-right">{num(i.philhealth_ee)}</td><td className="px-2 py-1 text-right">{num(i.pagibig_ee)}</td><td className="px-2 py-1 text-right">{num(i.tax)}</td><td className="px-2 py-1 text-right">{num(Number(i.gov_loan_ded||0)+Number(i.company_loan_ded||0))}</td><td className="px-2 py-1 text-right text-rose-600">{num(i.total_deductions)}</td><td className="px-2 py-1 text-right font-bold text-emerald-700">{num(i.net_pay)}</td></tr>))}</tbody>
         <tfoot><tr className="border-t bg-slate-50 font-bold"><td className="px-2 py-1">Total</td><td className="px-2 py-1 text-right">{num(t('gross'))}</td><td className="px-2 py-1 text-right">{num(t('sss_ee'))}</td><td className="px-2 py-1 text-right">{num(t('philhealth_ee'))}</td><td className="px-2 py-1 text-right">{num(t('pagibig_ee'))}</td><td className="px-2 py-1 text-right">{num(t('tax'))}</td><td className="px-2 py-1 text-right">{num(t('gov_loan_ded')+t('company_loan_ded'))}</td><td className="px-2 py-1 text-right">{num(t('total_deductions'))}</td><td className="px-2 py-1 text-right text-emerald-700">{num(t('net_pay'))}</td></tr></tfoot>
       </table></div>
       <div className="flex gap-2 pt-2 border-t no-print"><button onClick={()=>window.print()} className="flex-1 py-2 rounded-lg bg-slate-800 text-white font-semibold">🖨 Print</button><button onClick={onClose} className="py-2 px-4 rounded-lg border font-semibold">Close</button></div>
@@ -43849,7 +43854,7 @@ function PayrollRemittanceModal({ run, items, employees, refs, latestTax, onClos
   const nm=(id)=>{ const e=empById(id); return e?[e.last_name,e.first_name].filter(Boolean).join(', ')||e.nickname||'—':'—'; };
   const num=(n)=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const [tab,setTab]=useState('sss');
-  const rows=items.slice().sort((a,b)=>nm(a.employee_id).localeCompare(nm(b.employee_id))).map(it=>{ const e=empById(it.employee_id); const mb=empMonthlyBasic(e);
+  const rows=items.slice().sort((a,b)=>byEmpName(empById(a.employee_id)||{},empById(b.employee_id)||{})).map(it=>{ const e=empById(it.employee_id); const mb=empMonthlyBasic(e);
     return { id:it.employee_id, name:nm(it.employee_id),
       sss_no:e?.sss||'', ph_no:e?.philhealth||'', pi_no:e?.pagibig||'', tin:e?.tin||'',
       sss_ee:Number(it.sss_ee||0), sss_er:pRound(sssER(mb,sss)*cf),
@@ -43925,7 +43930,7 @@ function ThirteenthMonthModal({ profile, employees, onClose }){
       if(!ids.length){ setRows([]); setMsg('No approved payroll runs found for '+year+'.'); setBusy(false); return; }
       const { data:its }=await sb.from('payroll_items').select('employee_id,basic_pay').in('run_id',ids);
       const m={}; (its||[]).forEach(i=>{ m[i.employee_id]=(m[i.employee_id]||0)+Number(i.basic_pay||0); });
-      const list=Object.entries(m).map(([id,basic])=>({ id, name:nm(id), basic, thirteenth:pRound(basic/12) })).sort((a,b)=>a.name.localeCompare(b.name));
+      const list=Object.entries(m).map(([id,basic])=>({ id, name:nm(id), basic, thirteenth:pRound(basic/12) })).sort((a,b)=>byEmpName(empById(a.id)||{},empById(b.id)||{}));
       setRows(list); setBusy(false);
     }catch(e){ setBusy(false); setMsg('Failed: '+(e.message||e)); }
   }
